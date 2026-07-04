@@ -609,7 +609,11 @@ function writeToChildStdin(child: ChildProcess, server: McpServerRecord, payload
  * ERR_STREAM_DESTROYED) emitted asynchronously is caught and logged as a
  * child-disconnect rather than escalating to an unhandled error event.
  */
-function attachChildStdinErrorHandler(child: ChildProcess, server: McpServerRecord): void {
+function attachChildStdinErrorHandler(
+  child: ChildProcess,
+  server: McpServerRecord,
+  onError?: (error: Error) => void,
+): void {
   if (!child.stdin) {
     return;
   }
@@ -620,6 +624,24 @@ function attachChildStdinErrorHandler(child: ChildProcess, server: McpServerReco
       code: error.code,
       err: error.message,
     });
+    onError?.(createMcpChildStreamError(server, "stdin", error));
+  });
+}
+
+function createMcpChildStreamError(server: McpServerRecord, streamName: "stdin" | "stdout" | "stderr", error: Error) {
+  return new Error(`MCP server ${server.label} ${streamName} stream failed: ${error.message}`, { cause: error });
+}
+
+function attachChildOutputErrorHandlers(
+  child: ChildProcess,
+  server: McpServerRecord,
+  onError: (error: Error) => void,
+): void {
+  child.stdout?.on("error", (error) => {
+    onError(createMcpChildStreamError(server, "stdout", error));
+  });
+  child.stderr?.on("error", (error) => {
+    onError(createMcpChildStreamError(server, "stderr", error));
   });
 }
 
@@ -663,10 +685,6 @@ async function withStdioMcpClient<T>(
     windowsHide: true,
     timeout: Math.ceil(timeoutMs * 1.5),
   });
-  // Catch EPIPE/ERR_STREAM_DESTROYED on stdin so a child that exits between
-  // spawn and write surfaces as a transport failure rather than crashing the
-  // gateway via an unhandled stream 'error' event.
-  attachChildStdinErrorHandler(child, server);
   const pending = new Map<
     number,
     {
@@ -687,6 +705,18 @@ async function withStdioMcpClient<T>(
       pending.delete(id);
     }
   };
+  const failStream = (reason: Error) => {
+    if (!closed) {
+      closed = true;
+      rejectAll(reason);
+      terminateChild(child, server);
+    }
+  };
+
+  // Catch EPIPE/ERR_STREAM_DESTROYED on stdin so a child that exits between
+  // spawn and write surfaces as a transport failure rather than crashing the
+  // gateway via an unhandled stream 'error' event.
+  attachChildStdinErrorHandler(child, server, failStream);
 
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
@@ -723,6 +753,7 @@ async function withStdioMcpClient<T>(
       stderrBuffer += chunk.slice(0, MCP_STDERR_MAX_BYTES - stderrBuffer.length);
     }
   });
+  attachChildOutputErrorHandlers(child, server, failStream);
   child.on("error", (error) => {
     rejectAll(error);
   });
@@ -1470,7 +1501,9 @@ export const __internal = {
   MCP_HTTP_RESPONSE_BODY_MAX_BYTES,
   MCP_HTTP_RESPONSE_READ_TIMEOUT_MS,
   MCP_TERMINATE_GRACE_MS,
+  attachChildOutputErrorHandlers,
   attachChildStdinErrorHandler,
+  createMcpChildStreamError,
   isChildStdinWritable,
   resolveSpawnCommand,
   resolveSpawnSpec,

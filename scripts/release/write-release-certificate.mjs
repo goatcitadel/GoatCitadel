@@ -121,6 +121,55 @@ const PARITY_CLOSURE_CHECKS = [
   },
 ];
 
+const OPERATOR_TRUTH_PROOF_CHECKS = [
+  {
+    key: "capabilityCatalogDecisionEvidence",
+    label: "Capability catalog snapshot and runtime decision evidence",
+    lane: "verify:operator:proof",
+    required: true,
+    evidenceRefs: [
+      "runtime_decision_traces.kind=capability_profile_frozen",
+      "capability_catalog_snapshots",
+      "Code Mode run capability profile UI",
+    ],
+  },
+  {
+    key: "librarySkillsDoctor",
+    label: "Library Skills trust and doctor signals",
+    lane: "verify:operator:proof",
+    required: true,
+    evidenceRefs: ["Library Skills trust doctor", "Library Skills provenance doctor", "Library Skills tool scope"],
+  },
+  {
+    key: "memoryProvenanceSummary",
+    label: "Memory provenance summary",
+    lane: "verify:memory:truth",
+    required: false,
+    evidenceRefs: ["Library Memory provenance summary", "verify:memory:truth"],
+    advisory: "Narrow provenance summary only; no new memory authority is claimed without fresh runtime proof.",
+  },
+  {
+    key: "releasePackageProof",
+    label: "Release certificate and package proof scripts",
+    lane: "verify:operator:proof",
+    required: true,
+    evidenceRefs: [
+      "scripts/release/write-release-certificate.mjs",
+      "scripts/release/assemble-release-package.mjs",
+      "scripts/release/release-certificate-proof.test.mjs",
+    ],
+  },
+  {
+    key: "providerMetadataRefresh",
+    label: "Provider metadata refresh",
+    lane: "verify:runtime:truth",
+    required: false,
+    evidenceRefs: ["runtime doctor unsupported gap"],
+    unsupportedGap:
+      "No same-day live provider metadata proof is attached; release evidence records this gap instead of adding a provider family.",
+  },
+];
+
 const args = parseArgs(process.argv.slice(2));
 const version = normalizeVersion(args.version);
 const tagName = args.tag ?? process.env.GITHUB_REF_NAME ?? `v${version}`;
@@ -182,6 +231,12 @@ const certificate = {
     coveredLanes: RELEASE_PROOF_COVERED_LANES,
     directOnlyLanes: REQUIRED_LANE_SPECS.filter((lane) => !lane.releaseProofCovered).map((lane) => lane.name),
   },
+  operatorTruthProof: buildOperatorTruthProof({
+    commit,
+    requiredLanes,
+    exactShaStatus,
+    proofBundle,
+  }),
   hostileSandboxWindowsClaim,
   parityClosure: buildParityClosureVerdict({
     commit,
@@ -485,6 +540,50 @@ function buildParityClosureVerdict({
     checks,
     assetCount: releaseAssets.length,
     proofBundleSha256: proofBundle?.sha256 ?? null,
+    blockers,
+  };
+}
+
+function buildOperatorTruthProof({ commit, requiredLanes, exactShaStatus, proofBundle }) {
+  const checks = OPERATOR_TRUTH_PROOF_CHECKS.map((check) => {
+    const lane = requiredLanes.find((item) => item.name === check.lane);
+    const proofRun = lane ? selectProofRun(lane) : null;
+    const exactShaMatched = Boolean(commit && proofRun?.headSha === commit);
+    const lanePassed = lane?.status === "success" && exactShaMatched;
+    const status = check.unsupportedGap ? "unsupported_gap" : lanePassed ? "passed" : lane ? "blocked" : "missing";
+    return {
+      ...check,
+      status,
+      laneStatus: lane?.status ?? "missing",
+      workflowRunUrl: lane?.workflowRunUrl ?? null,
+      proofWorkflowFile: lane?.proofWorkflowFile ?? lane?.workflowFile ?? null,
+      proofSource: lane?.proofSource ?? null,
+      exactShaMatched,
+      proofHeadSha: proofRun?.headSha ?? null,
+    };
+  });
+  const blockers = checks
+    .filter((check) => check.required && check.status !== "passed")
+    .map((check) => `${check.label}: ${check.laneStatus}`);
+  if (exactShaStatus.status !== "matched") {
+    blockers.push(`Exact-SHA proof: ${exactShaStatus.status}`);
+  }
+  if (!proofBundle?.sha256) {
+    blockers.push("Release proof package: missing");
+  }
+  return {
+    verdict: blockers.length === 0 ? "operator-proof-ready" : "operator-proof-blocked",
+    targetCommit: commit,
+    generatedFrom: "release-certificate",
+    checks,
+    unsupportedGaps: checks
+      .filter((check) => check.status === "unsupported_gap")
+      .map((check) => ({ key: check.key, label: check.label, unsupportedGap: check.unsupportedGap })),
+    advisories: checks
+      .filter((check) => check.advisory)
+      .map((check) => ({ key: check.key, label: check.label, advisory: check.advisory })),
+    proofBundleSha256: proofBundle?.sha256 ?? null,
+    exactShaStatus: exactShaStatus.status,
     blockers,
   };
 }

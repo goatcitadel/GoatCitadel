@@ -59,6 +59,7 @@ import {
   LibrarySectionShell,
   LibrarySelectableList,
 } from "../shared/library-primitives";
+import { describeSkillSourceDisposition, formatSkillImportPosture } from "./library-skill-trust-format";
 
 export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
   const [selectedSkillId, setSelectedSkillId] = useState("");
@@ -248,6 +249,7 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
                       meta: selectedSkill.pinned ? "Pinned" : "Not pinned",
                       tone: selectedSkill.lastUsedAt ? "info" : "neutral",
                     },
+                    ...buildSkillDoctorSignals(selectedSkill),
                   ]}
                 />
                 <LibraryCodeBlock label="Instruction body">
@@ -354,6 +356,52 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
 
 export type SkillPostureFilter = "all" | "callable" | "review" | SkillListItem["state"];
 
+export interface SkillDoctorSignal {
+  id: string;
+  label: string;
+  value: string;
+  description: string;
+  meta?: string;
+  tone: "neutral" | "info" | "success" | "warning" | "danger";
+}
+
+export function buildSkillDoctorSignals(skill: SkillListItem): SkillDoctorSignal[] {
+  const reviewNeeded = Boolean(skill.reviewWarning || !skill.callable || skill.state === "disabled");
+  const provenance = describeSkillProvenance(skill);
+  return [
+    {
+      id: "trust-doctor",
+      label: "Trust doctor",
+      value: reviewNeeded ? "Review needed" : "Ready",
+      description:
+        skill.reviewWarning ??
+        (skill.callable
+          ? "Callable posture is visible with trust label and lifecycle context attached."
+          : "Skill remains inspectable until lifecycle and trust evidence make it callable."),
+      meta: skill.trustLabel ?? "No trust label",
+      tone: reviewNeeded ? "warning" : "success",
+    },
+    {
+      id: "provenance-doctor",
+      label: "Provenance",
+      value: provenance.value,
+      description: provenance.description,
+      meta: provenance.meta,
+      tone: provenance.tone,
+    },
+    {
+      id: "tool-doctor",
+      label: "Tool scope",
+      value: `${skill.declaredTools.length} declared`,
+      description: skill.declaredTools.length
+        ? "Declared tools are visible before runtime policy gates actual calls."
+        : "No declared tools are advertised by this skill.",
+      meta: skill.requires.length ? `${skill.requires.length} requirements` : "No requirements",
+      tone: skill.declaredTools.length ? "info" : "neutral",
+    },
+  ];
+}
+
 export function filterSkillList(
   skills: SkillListItem[],
   input: { query?: string; posture?: SkillPostureFilter },
@@ -392,6 +440,35 @@ export function filterSkillList(
       .toLowerCase();
     return haystack.includes(query);
   });
+}
+
+function describeSkillProvenance(
+  skill: SkillListItem,
+): Pick<SkillDoctorSignal, "value" | "description" | "meta" | "tone"> {
+  const sourceRef = skill.lifecycle?.provenance?.sourceRef;
+  const sourceProvider = skill.lifecycle?.provenance?.sourceProvider;
+  if (sourceRef || sourceProvider) {
+    return {
+      value: sourceProvider ?? "Recorded",
+      description: sourceRef ? `Lifecycle provenance references ${sourceRef}.` : "Lifecycle provenance is recorded.",
+      meta: skill.lifecycle?.provenance?.source,
+      tone: "success",
+    };
+  }
+  if (skill.lifecycleState) {
+    return {
+      value: "Lifecycle only",
+      description: "Lifecycle state is recorded, but no source reference is attached.",
+      meta: skill.lifecycleState,
+      tone: "info",
+    };
+  }
+  return {
+    value: "Unmanaged",
+    description: "Loaded from disk without lifecycle provenance attached.",
+    meta: skill.source,
+    tone: "warning",
+  };
 }
 
 function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; onNotice: (notice: Notice) => void }) {
@@ -898,79 +975,4 @@ function ProposalTrustReviewPanel({
       ) : null}
     </div>
   );
-}
-
-function describeSkillSourceDisposition(item: {
-  installability?: string;
-  skillFamily?: string;
-  tags?: string[];
-  name?: string;
-}) {
-  if (item.installability === "not_installable") {
-    return "Rejected";
-  }
-  const family = item.skillFamily?.toLowerCase() ?? "";
-  const conditionalFamilies = new Set([
-    "openclaw_experiment",
-    "github_connector_playbook",
-    "google_cli_oauth",
-    "copy_humanizer",
-    "canvas_a2ui",
-  ]);
-  if (conditionalFamilies.has(family) || item.installability === "installable") {
-    return "Conditional install";
-  }
-  const referenceOnlyFamilies = new Set([
-    "auto_updates",
-    "global_search_broker",
-    "proactive_automation",
-    "automation_designer",
-    "decision_journal",
-    "typed_memory_ontology",
-    "frontend_review_guidance",
-    "voice_transcription",
-  ]);
-  if (referenceOnlyFamilies.has(family)) {
-    return "Reference only";
-  }
-  const nativeOverlapFamilies = new Set([
-    "harness_engineering",
-    "capability_evolution",
-    "browser_automation",
-    "cloudflare_dns",
-    "skill_vetting",
-    "multi_agent_swarm",
-  ]);
-  if (nativeOverlapFamilies.has(family)) {
-    return "Native overlap";
-  }
-  if (item.installability === "review_only") {
-    return "Reference only";
-  }
-  const haystack = [family, item.name, ...(item.tags ?? [])].filter(Boolean).join(" ").toLowerCase();
-  if (/native|overlap|vetting|capability|browser_automation|multi_agent_swarm/.test(haystack)) {
-    return "Native overlap";
-  }
-  return "Reference only";
-}
-
-function formatSkillImportPosture(details: unknown) {
-  const record = readRecord(details);
-  const disposition = readRecord(record.scriptDisposition);
-  const scriptAction = typeof disposition.action === "string" ? disposition.action : "none";
-  const mappings = Array.isArray(record.externalToolMappings) ? record.externalToolMappings : [];
-  const mappedCount = mappings.filter((item) => readRecord(item).disposition === "mapped").length;
-  const provenance = readRecord(record.provenance);
-  const nonCallable = provenance.nonCallableUntilActivated === true ? "non-callable" : "provenance pending";
-  const compatibility = readRecord(record.compatibility);
-  const compatibilitySources = Array.isArray(compatibility.sources)
-    ? compatibility.sources.filter((item): item is string => typeof item === "string")
-    : [];
-  const callability = typeof compatibility.callability === "string" ? compatibility.callability : "review_only";
-  const compatibilityLabel = compatibilitySources.length ? compatibilitySources.join(", ") : "skill_md";
-  return `${nonCallable}; scripts ${scriptAction}; tools ${mappedCount}/${mappings.length} mapped; compatibility ${callability} (${compatibilityLabel})`;
-}
-
-function readRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }

@@ -73,6 +73,20 @@ describe("RuntimeDecisionTraceRepository", () => {
       createdAt: "2026-06-18T00:00:01.000Z",
     });
     repo.append({
+      decisionId: "decision-capability",
+      kind: "capability_profile_frozen",
+      scope: {
+        workspaceId: "default",
+        runId: "run-1",
+        approvalId: "approval-1",
+      },
+      selected: "Freeze Code Mode capability profile",
+      rationale: "The operator approval needs immutable catalog evidence.",
+      signals: [{ source: "capability", key: "callable_count", value: 3 }],
+      evidenceRefs: [{ refType: "capability_snapshot", refId: "cap-snap-1" }],
+      createdAt: "2026-06-18T00:00:03.000Z",
+    });
+    repo.append({
       decisionId: "decision-other",
       kind: "direct_answer",
       scope: { sessionId: "session-2", turnId: "turn-2" },
@@ -93,8 +107,16 @@ describe("RuntimeDecisionTraceRepository", () => {
     const byRun = repo.list({ runId: "run-1" });
     assert.deepEqual(
       byRun.map((item) => item.decisionId),
-      ["decision-1", "decision-2"],
+      ["decision-1", "decision-2", "decision-capability"],
     );
+
+    const byApproval = repo.list({ approvalId: "approval-1" });
+    assert.deepEqual(
+      byApproval.map((item) => item.decisionId),
+      ["decision-capability"],
+    );
+    assert.equal(byApproval[0]?.kind, "capability_profile_frozen");
+    assert.equal(byApproval[0]?.evidenceRefs[0]?.refType, "capability_snapshot");
 
     const byTool = repo.list({ toolRunId: "tool-1" });
     assert.deepEqual(

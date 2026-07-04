@@ -142,6 +142,44 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it("rejects dangerous settings payload keys before runtime mutation", async () => {
+    const updateSettings = vi.fn((input: Record<string, unknown>) => input);
+
+    app = Fastify();
+    app.decorate("services", { settings: { updateSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      headers: { "content-type": "application/json" },
+      payload: '{"features":{"prototype":{"polluted":true}}}',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "Unsafe config key is not allowed: features.prototype" });
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects dangerous auth settings payload keys before runtime mutation", async () => {
+    const updateSettings = vi.fn((input: Record<string, unknown>) => input);
+
+    app = Fastify();
+    app.decorate("services", { settings: { updateSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/auth/settings",
+      headers: { "content-type": "application/json" },
+      payload: '{"prototype":{"mode":"none"}}',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "Unsafe config key is not allowed: prototype" });
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it("routes canonical personality catalog APIs to settings services", async () => {
     const catalog = {
       defaultPersonalityId: "operator",

@@ -30,6 +30,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
   compareCodeModeRuns: vi.fn(),
+  fetchCapabilityCatalogSnapshot: vi.fn(async () => null),
   fetchCodeModeExecutionBackends: vi.fn(),
   fetchCodeModeRun: vi.fn(),
   fetchCodeModeRuns: vi.fn(),

@@ -15,6 +15,9 @@ import type {
   CodeModeRunRecord,
   PendingApprovalAction,
   PermissionProfileRecord,
+  RuntimeDecisionTraceAppendInput,
+  RuntimeDecisionTraceQuery,
+  RuntimeDecisionTraceRecord,
   ToolPolicyActorContext,
   ToolCatalogEntry,
   ToolInvokeRequest,
@@ -111,6 +114,59 @@ describe("CapabilitySystemService", () => {
     };
     expect(manifest.wrappers).toHaveLength(1);
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
+  });
+
+  it("records capability profile decision evidence for Code Mode run creation", async () => {
+    const harness = await createHarness({
+      toolCatalog: [
+        createTool("tool.safe_read"),
+        createTool("tool.inspect_project", {
+          readOnly: true,
+          deterministic: true,
+          codeModeAllowed: true,
+        }),
+      ],
+    });
+    harness.storage.chatTurnTraces.create({ turnId: "turn-1", sessionId: "session-1" });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "default",
+    });
+
+    const [decision] = harness.storage.runtimeDecisionTraces.list({ runId: run.runId });
+    expect(decision).toMatchObject({
+      kind: "capability_profile_frozen",
+      scope: {
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+        approvalId: run.approvalId,
+      },
+      evidenceRefs: expect.arrayContaining([
+        expect.objectContaining({
+          refType: "capability_snapshot",
+          refId: run.capabilitySnapshotId,
+        }),
+        expect.objectContaining({
+          refType: "approval",
+          refId: run.approvalId,
+        }),
+      ]),
+    });
+    expect(decision?.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "capability", key: "snapshot_id", value: run.capabilitySnapshotId }),
+        expect.objectContaining({ source: "capability", key: "callable_count", value: 2 }),
+        expect.objectContaining({ source: "capability", key: "callable_tools", value: 2 }),
+        expect.objectContaining({ source: "policy", key: "sandbox_available", value: false }),
+      ]),
+    );
   });
 
   it("validates Code Mode source as syntax instead of rejecting comments and strings", async () => {
@@ -2382,6 +2438,23 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("normalizes Code Mode child stream errors with run and stream attribution", () => {
+    const streamError = __internal.createCodeModeChildStreamError(
+      "code-run-stream-error",
+      "stdout",
+      new Error("pipe broke"),
+    );
+
+    expect(__internal.normalizeCodeModeIpcError(streamError)).toEqual({
+      code: "CODE_MODE_CHILD_STREAM_ERROR",
+      message: "CODE_MODE_CHILD_STREAM_ERROR: Code Mode child stdout stream failed: pipe broke",
+      details: {
+        runId: "code-run-stream-error",
+        stream: "stdout",
+      },
+    });
+  });
+
   it("does not rewrite completed Code Mode runs when stale approval replay is attempted", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -4007,6 +4080,7 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
   const proposals = new Map<string, CapabilityProposalRecord>();
   const proposalEvents = new Map<string, CapabilityProposalEventRecord[]>();
   const codeModeRuns = new Map<string, CodeModeRunRecord>();
+  const runtimeDecisionRecords: RuntimeDecisionTraceRecord[] = [];
   const candidateVersions = new Map<string, CandidateSkillVersionRecord>();
   const pendingActions = new Map<string, PendingApprovalAction>();
   const systemSettings = new Map<string, { key: string; value: unknown; updatedAt: string }>();
@@ -4217,6 +4291,39 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         codeModeRuns.set(input.runId, next);
         return next;
       },
+    },
+    runtimeDecisionTraces: {
+      append: vi.fn((input: RuntimeDecisionTraceAppendInput): RuntimeDecisionTraceRecord => {
+        const record: RuntimeDecisionTraceRecord = {
+          decisionId: input.decisionId ?? `decision-${runtimeDecisionRecords.length + 1}`,
+          kind: input.kind,
+          scope: input.scope,
+          selected: input.selected,
+          rationale: input.rationale,
+          alternatives: input.alternatives ?? [],
+          signals: input.signals ?? [],
+          evidenceRefs: input.evidenceRefs ?? [],
+          previousDecisionId: input.previousDecisionId,
+          planRevision: input.planRevision,
+          latencyMs: input.latencyMs,
+          createdAt: input.createdAt ?? "2026-04-10T00:00:00.000Z",
+        };
+        runtimeDecisionRecords.push(record);
+        return record;
+      }),
+      list: vi.fn((query: RuntimeDecisionTraceQuery = {}) => {
+        const limit =
+          typeof query.limit === "number" && Number.isFinite(query.limit)
+            ? Math.max(1, Math.min(500, Math.floor(query.limit)))
+            : 100;
+        return runtimeDecisionRecords
+          .filter((record) => (query.workspaceId ? record.scope.workspaceId === query.workspaceId : true))
+          .filter((record) => (query.sessionId ? record.scope.sessionId === query.sessionId : true))
+          .filter((record) => (query.turnId ? record.scope.turnId === query.turnId : true))
+          .filter((record) => (query.runId ? record.scope.runId === query.runId : true))
+          .filter((record) => (query.approvalId ? record.scope.approvalId === query.approvalId : true))
+          .slice(0, limit);
+      }),
     },
     candidateSkillVersions: {
       upsert(record: CandidateSkillVersionRecord) {

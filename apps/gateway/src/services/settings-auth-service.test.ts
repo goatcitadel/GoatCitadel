@@ -382,6 +382,25 @@ describe("settings-auth-service durable settings", () => {
     expect(getSettings(host).features.durableKernelV1Enabled).toBe(true);
   });
 
+  it("ignores inherited settings mutation fields and rejects dangerous own keys", () => {
+    const host = buildHost();
+    const inheritedInput = Object.create({ budgetMode: "power" });
+
+    const settings = updateSettings(host, inheritedInput as never);
+
+    expect(settings.budgetMode).toBe("balanced");
+    expect(host.persistBudgetsConfig).not.toHaveBeenCalled();
+
+    const dangerousInput: Record<string, unknown> = {};
+    Object.defineProperty(dangerousInput, "__proto__", {
+      enumerable: true,
+      value: { budgetMode: "power" },
+    });
+    expect(() => updateSettings(host, dangerousInput as never)).toThrow(
+      "Unsafe config key is not allowed: settings.__proto__",
+    );
+  });
+
   it("accepts legacy tool profile names when the profile map is empty", () => {
     const host = buildHost();
     host.config.toolPolicy.profiles = {};

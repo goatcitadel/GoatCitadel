@@ -219,6 +219,25 @@ describe("syncUnifiedConfig", () => {
     await expect(syncUnifiedConfig(root)).rejects.toThrow("Invalid section for cron-jobs.json");
   });
 
+  it("rejects dangerous unified config keys before syncing split files", async () => {
+    const root = await makeTempRoot();
+    await seedSplitFiles(root);
+    const unifiedPath = path.join(root, "config", "goatcitadel.json");
+    const splitPath = path.join(root, "config", "assistant.config.json");
+    const before = await readFile(splitPath, "utf8");
+
+    await writeFile(
+      unifiedPath,
+      '{"version":1,"assistant":{"defaultToolProfile":"coding","__proto__":{"polluted":true}}}',
+      "utf8",
+    );
+
+    await expect(syncUnifiedConfig(root)).rejects.toThrow(
+      "Unsafe config key in config/goatcitadel.json: assistant.config.json.__proto__",
+    );
+    await expect(readFile(splitPath, "utf8")).resolves.toBe(before);
+  });
+
   it("warns before overriding a newer split config with unified values", async () => {
     const root = await makeTempRoot();
     const configDir = path.join(root, "config");

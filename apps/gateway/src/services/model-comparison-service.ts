@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   ModelComparisonCreateRequest,
+  ModelComparisonAdvisoryNextAction,
   ModelComparisonJudgment,
   ModelComparisonJudgeRequest,
   ModelComparisonPromptResult,
@@ -54,15 +55,15 @@ export class ModelComparisonService {
       createdAt: now,
       updatedAt: now,
     };
-    return this.deps.repository.create(run);
+    return this.withAdvisory(this.deps.repository.create(run));
   }
 
   public listComparisons(limit = 50): { items: ModelComparisonRun[] } {
-    return { items: this.deps.repository.list(limit) };
+    return { items: this.deps.repository.list(limit).map((run) => this.withAdvisory(run)) };
   }
 
   public getComparison(comparisonId: string): ModelComparisonRun {
-    return this.deps.repository.get(comparisonId);
+    return this.withAdvisory(this.deps.repository.get(comparisonId));
   }
 
   public addJudgment(comparisonId: string, input: ModelComparisonJudgeRequest): ModelComparisonJudgment {
@@ -157,6 +158,10 @@ export class ModelComparisonService {
   private nowIso(): string {
     return (this.deps.clock?.() ?? new Date()).toISOString();
   }
+
+  private withAdvisory(run: ModelComparisonRun): ModelComparisonRun {
+    return { ...run, advisory: buildModelComparisonAdvisory(run) };
+  }
 }
 
 function assignBlindLabels(
@@ -196,4 +201,48 @@ function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {
     return undefined;
   }
   return Math.max(0, finishedAt - startedAt);
+}
+
+function buildModelComparisonAdvisory(run: ModelComparisonRun): ModelComparisonRun["advisory"] {
+  const responseCount = run.results.filter((result) => Boolean(result.responseText?.trim())).length;
+  const errorCount = run.results.filter((result) => Boolean(result.error?.trim())).length;
+  const missingResultCount = Math.max(0, run.results.length - responseCount - errorCount);
+  const recommendedNextAction = resolveAdvisoryNextAction(run, responseCount, missingResultCount);
+  return {
+    posture: "advisory_only",
+    label: "MoA-style advisory comparison",
+    summary: `${run.candidates.length} candidate model${run.candidates.length === 1 ? "" : "s"} across ${
+      run.testIds.length
+    } prompt-pack test${run.testIds.length === 1 ? "" : "s"}; ${responseCount}/${run.results.length} responses are available for blind review.`,
+    executionStyle: "single_turn_harness",
+    candidateCount: run.candidates.length,
+    testCount: run.testIds.length,
+    resultCount: run.results.length,
+    responseCount,
+    missingResultCount,
+    judgmentCount: run.judgments.length,
+    recommendedNextAction,
+    safetyNotes: [
+      "This record compares existing prompt-pack outputs and operator judgments.",
+      "It does not start live provider execution or change routing by itself.",
+      "Use governed Assembly or Cowork runs for live multi-model execution with approvals and budgets.",
+    ],
+  };
+}
+
+function resolveAdvisoryNextAction(
+  run: ModelComparisonRun,
+  responseCount: number,
+  missingResultCount: number,
+): ModelComparisonAdvisoryNextAction {
+  if (run.results.length === 0 || missingResultCount > 0) {
+    return "run_prompt_pack";
+  }
+  if (responseCount > 0 && run.judgments.length === 0) {
+    return "save_judgment";
+  }
+  if (run.judgments.length > 0) {
+    return "ready_for_synthesis";
+  }
+  return "review_outputs";
 }

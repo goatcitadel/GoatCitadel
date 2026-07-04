@@ -2609,6 +2609,11 @@ describe("MissionThreadedControllerHost", () => {
     await renderHost({ lockSurface: true, surface: "cowork" });
     await selectDefaultSession();
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.delegationRun).toBeNull();
+    expect(
+      latestSurfaceInput?.activeSessionSurfaceProps?.notices.some((notice) =>
+        notice.content.includes("Background handoff visible from the session run table: agentic-run-1"),
+      ),
+    ).toBe(true);
 
     setupMocks();
     mockSelectedTurn = selectedTurn;

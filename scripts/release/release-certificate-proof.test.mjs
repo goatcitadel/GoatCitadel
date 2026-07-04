@@ -158,6 +158,21 @@ test("release certificate records parity closure gates for top 1.0 parity gaps",
   assert.match(workflow, /laneScript:\s*verify:extensions:package/);
 });
 
+test("release certificate records operator truth proof and provider metadata gaps", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  assert.match(writer, /const OPERATOR_TRUTH_PROOF_CHECKS = \[/);
+  assert.match(writer, /runtime_decision_traces\.kind=capability_profile_frozen/);
+  assert.match(writer, /Capability catalog snapshot and runtime decision evidence/);
+  assert.match(writer, /Library Skills trust and doctor signals/);
+  assert.match(writer, /Memory provenance summary/);
+  assert.match(writer, /Release certificate and package proof scripts/);
+  assert.match(writer, /Provider metadata refresh/);
+  assert.match(writer, /unsupportedGap:/);
+  assert.match(writer, /instead of adding a provider family/);
+  assert.match(writer, /operatorTruthProof:\s*buildOperatorTruthProof/);
+  assert.match(writer, /verdict:\s*blockers\.length === 0 \? "operator-proof-ready" : "operator-proof-blocked"/);
+});
+
 test("release certificate requires hostile sandbox proof from the exact-SHA release lane", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
   const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);

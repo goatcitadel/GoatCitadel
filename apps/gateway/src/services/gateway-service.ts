@@ -7328,6 +7328,12 @@ export class GatewayService {
     return this.capabilitySystemService.listSkills();
   }
 
+  public createCapabilityProposal(
+    input: Parameters<CapabilitySystemService["createProposal"]>[0],
+  ): CapabilityProposalRecord {
+    return this.capabilitySystemService.createProposal(input);
+  }
+
   /**
    * Callable tool/skill catalog for the base agent system prompt's
    * "what you can do" index (P0-#2). Cheap, in-memory read of the callable

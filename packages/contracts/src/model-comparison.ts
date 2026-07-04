@@ -35,6 +35,27 @@ export interface ModelComparisonJudgment {
   createdAt: string;
 }
 
+export type ModelComparisonAdvisoryNextAction =
+  | "run_prompt_pack"
+  | "review_outputs"
+  | "save_judgment"
+  | "ready_for_synthesis";
+
+export interface ModelComparisonAdvisorySummary {
+  posture: "advisory_only";
+  label: string;
+  summary: string;
+  executionStyle: "single_turn_harness";
+  candidateCount: number;
+  testCount: number;
+  resultCount: number;
+  responseCount: number;
+  missingResultCount: number;
+  judgmentCount: number;
+  recommendedNextAction: ModelComparisonAdvisoryNextAction;
+  safetyNotes: string[];
+}
+
 export interface ModelComparisonRun {
   comparisonId: string;
   packId: string;
@@ -44,6 +65,7 @@ export interface ModelComparisonRun {
   testIds: string[];
   results: ModelComparisonPromptResult[];
   judgments: ModelComparisonJudgment[];
+  advisory?: ModelComparisonAdvisorySummary;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

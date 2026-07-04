@@ -26,6 +26,17 @@ describe("ModelComparisonService", () => {
     expect(run.results).toHaveLength(4);
     expect(run.results[0]?.runId).toBeUndefined();
     expect(run.results[0]?.error).toBeUndefined();
+    expect(run.advisory).toMatchObject({
+      posture: "advisory_only",
+      label: "MoA-style advisory comparison",
+      candidateCount: 2,
+      testCount: 2,
+      resultCount: 4,
+      responseCount: 0,
+      missingResultCount: 4,
+      judgmentCount: 0,
+      recommendedNextAction: "run_prompt_pack",
+    });
   });
 
   it("selects requested prompt-pack tests and links latest matching prompt-pack runs", () => {
@@ -59,6 +70,11 @@ describe("ModelComparisonService", () => {
       (result) => result.testId === "test-b" && result.candidateId === run.candidates[1]?.candidateId,
     );
     expect(placeholder?.runId).toBeUndefined();
+    expect(service.getComparison(run.comparisonId).advisory).toMatchObject({
+      responseCount: 1,
+      missingResultCount: 3,
+      recommendedNextAction: "run_prompt_pack",
+    });
   });
 
   it("persists judgments only for comparison tests and candidates", () => {
@@ -86,7 +102,19 @@ describe("ModelComparisonService", () => {
     });
 
     expect(judgment.judgmentId).toBe("judgment-1");
-    expect(service.getComparison(run.comparisonId).judgments).toEqual([judgment]);
+    expect(service.getComparison(run.comparisonId)).toMatchObject({
+      judgments: [
+        expect.objectContaining({
+          judgmentId: judgment.judgmentId,
+          testId: "test-a",
+          reviewerId: "operator",
+        }),
+      ],
+      advisory: {
+        judgmentCount: 1,
+        recommendedNextAction: "run_prompt_pack",
+      },
+    });
     expect(() =>
       service.addJudgment(run.comparisonId, {
         testId: "missing-test",

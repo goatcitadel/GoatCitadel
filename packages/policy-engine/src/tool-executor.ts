@@ -105,6 +105,7 @@ const TRUST_RESTRICTIVENESS: Record<ToolExecutionTrustLevel, number> = {
   mixed_untrusted: 2,
   untrusted_external: 3,
 };
+const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export interface ToolExecutorRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
@@ -1855,8 +1856,9 @@ async function commsInvoke(request: ToolInvokeRequest, config: ToolPolicyConfig,
   const grantAllowlist = resolveExecutionGrantAllowedHosts(request, storage);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = storage.integrationConnections.get(connectionId);
+  const connectionConfig = record(connection.config);
   const target =
-    asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connection.config) ?? connection.key;
+    asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connectionConfig) ?? connection.key;
   const message = asString(args.message) ?? "";
   const queued = storage.commsDeliveries.createQueued({
     connectionId,
@@ -1866,19 +1868,19 @@ async function commsInvoke(request: ToolInvokeRequest, config: ToolPolicyConfig,
   });
   try {
     if (toolName === "gmail.read") {
-      const records = await gmailRead(connection.config, args, config.sandbox.networkAllowlist, grantAllowlist);
+      const records = await gmailRead(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", records };
     }
     if (toolName === "calendar.list") {
-      const records = await calendarList(connection.config, args, config.sandbox.networkAllowlist, grantAllowlist);
+      const records = await calendarList(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
     const providerMessageId = await executeCommsTool(
       toolName,
       connection.key,
-      connection.config,
+      connectionConfig,
       args,
       config.sandbox.networkAllowlist,
       grantAllowlist,
@@ -1896,7 +1898,7 @@ async function commsInvoke(request: ToolInvokeRequest, config: ToolPolicyConfig,
   } catch (error) {
     const errorMessage = (error as Error).message;
     const deliveryStatus = classifyChannelDeliveryFailure(errorMessage);
-    storage.commsDeliveries.markFailed(queued.deliveryId, errorMessage);
+    storage.commsDeliveries.markFailed(queued.deliveryId, errorMessage, new Date().toISOString(), deliveryStatus);
     return {
       ...queued,
       status: "failed",
@@ -1910,6 +1912,21 @@ async function commsInvoke(request: ToolInvokeRequest, config: ToolPolicyConfig,
 
 function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {
   const normalized = message.toLowerCase();
+  if (
+    [
+      "partial_channel_delivery_sent",
+      "unknown_after_send",
+      "unknown external outcome",
+      "unknown_external_outcome",
+      "manual reconciliation",
+      "manual_reconciliation_required",
+      "may have been sent",
+      "external boundary may have been crossed",
+      "external boundary crossed",
+    ].some((term) => normalized.includes(term))
+  ) {
+    return "manual_reconciliation_required";
+  }
   if (["408", "429", "502", "503", "504"].some((status) => normalized.includes(status))) {
     return "degraded";
   }
@@ -1922,11 +1939,57 @@ function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus 
   }
   if (
     (normalized.includes("missing") && normalized.includes("url")) ||
+    (normalized.includes("missing") &&
+      ["token", "target", "channel", "chat", "recipient", "phone number"].some((term) => normalized.includes(term))) ||
     ["not supported", "does not support", "unavailable", "not configured"].some((term) => normalized.includes(term))
   ) {
     return "not_available";
   }
   return "degraded";
+}
+
+function channelUnknownAfterSendError(operation: string, detail: string): Error {
+  return new Error(
+    `${operation} unknown_after_send: external boundary may have been crossed; manual reconciliation required. ${detail}`,
+  );
+}
+
+function throwChannelUnknownAfterSend(operation: string, detail: string): never {
+  throw channelUnknownAfterSendError(operation, detail);
+}
+
+function throwChannelProviderFailure(operation: string, response: Response, detail?: string): never {
+  const suffix = detail?.trim() ? `: ${detail.trim()}` : "";
+  const message = `${operation} failed (${response.status})${suffix}`;
+  if (response.status >= 500) {
+    throwChannelUnknownAfterSend(operation, message);
+  }
+  throw new Error(message);
+}
+
+function throwChannelBoundaryError(operation: string, error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isPreChannelBoundaryError(message)) {
+    throw error instanceof Error ? error : new Error(message);
+  }
+  throwChannelUnknownAfterSend(operation, message);
+}
+
+function isPreChannelBoundaryError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return [
+    "allowlist",
+    "blocked",
+    "unsafe",
+    "forbidden",
+    "unauthorized",
+    "http or https",
+    "missing",
+    "not supported",
+    "does not support",
+    "requires",
+    "invalid",
+  ].some((term) => normalized.includes(term));
 }
 
 async function executeCommsTool(
@@ -2003,15 +2066,20 @@ async function executeCommsTool(
     throw new Error("Missing webhook URL");
   }
   const payload = { text: renderedMessage, target, payload: record(args.payload) };
-  const res = await fetchAllowlisted(
-    webhookUrl,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-    allowlist,
-    undefined,
-    grantAllowlist,
-  );
+  let res: { response: Response; finalUrl: string };
+  try {
+    res = await fetchAllowlisted(
+      webhookUrl,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+      allowlist,
+      undefined,
+      grantAllowlist,
+    );
+  } catch (error) {
+    throwChannelBoundaryError(toolName, error);
+  }
   if (!res.response.ok) {
-    throw new Error(`${toolName} failed (${res.response.status})`);
+    throwChannelProviderFailure(toolName, res.response);
   }
   return `${toolName}-${Date.now()}`;
 }
@@ -2172,22 +2240,27 @@ async function slackSend(
         "Slack webhook connections do not support inline attachments; use a bot token connection instead",
       );
     }
-    const res = await fetchAllowlisted(
-      webhookUrl,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: renderedMessage,
-          ...(blocks ? { blocks } : {}),
-        }),
-      },
-      allowlist,
-      undefined,
-      grantAllowlist,
-    );
+    let res: { response: Response; finalUrl: string };
+    try {
+      res = await fetchAllowlisted(
+        webhookUrl,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: renderedMessage,
+            ...(blocks ? { blocks } : {}),
+          }),
+        },
+        allowlist,
+        undefined,
+        grantAllowlist,
+      );
+    } catch (error) {
+      throwChannelBoundaryError("slack.send", error);
+    }
     if (!res.response.ok) {
-      throw new Error(`slack.send failed (${res.response.status})`);
+      throwChannelProviderFailure("slack.send", res.response);
     }
     return `slack-webhook-${Date.now()}`;
   }
@@ -2208,28 +2281,36 @@ async function slackSend(
   let parentTs: string | undefined;
   let uploadChannelId = channel;
   if (message.trim() || urlAttachments.length > 0) {
-    const res = await fetchAllowlisted(
-      "https://slack.com/api/chat.postMessage",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json; charset=utf-8",
+    let res: { response: Response; finalUrl: string };
+    try {
+      res = await fetchAllowlisted(
+        "https://slack.com/api/chat.postMessage",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            channel,
+            text: renderedMessage,
+            ...(blocks ? { blocks } : {}),
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          }),
         },
-        body: JSON.stringify({
-          channel,
-          text: renderedMessage,
-          ...(blocks ? { blocks } : {}),
-          ...(threadTs ? { thread_ts: threadTs } : {}),
-        }),
-      },
-      allowlist,
-      undefined,
-      grantAllowlist,
-    );
+        allowlist,
+        undefined,
+        grantAllowlist,
+      );
+    } catch (error) {
+      throwChannelBoundaryError("slack.send", error);
+    }
     const bodyText = await res.response.text();
     const body = parseJsonRecord(bodyText);
     if (!res.response.ok || body.ok === false) {
+      if (!res.response.ok) {
+        throwChannelProviderFailure("slack.send", res.response, asString(body.error));
+      }
       throw new Error(`slack.send failed (${res.response.status})${body.error ? `: ${body.error}` : ""}`);
     }
     parentTs = asString(body.ts) ?? parentTs;
@@ -2243,15 +2324,26 @@ async function slackSend(
   }
   let uploadedFileId: string | undefined;
   for (const [index, attachment] of inlineAttachments.entries()) {
-    uploadedFileId = await slackUploadAttachment(
-      token,
-      uploadChannelId,
-      attachment,
-      index,
-      allowlist,
-      grantAllowlist,
-      threadTs ?? parentTs,
-    );
+    try {
+      uploadedFileId = await slackUploadAttachment(
+        token,
+        uploadChannelId,
+        attachment,
+        index,
+        allowlist,
+        grantAllowlist,
+        threadTs ?? parentTs,
+      );
+    } catch (error) {
+      if (parentTs) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throwChannelUnknownAfterSend(
+          "slack.send",
+          `partial_channel_delivery_sent: message ${parentTs} was sent before attachment ${index + 1} failed. ${detail}`,
+        );
+      }
+      throw error;
+    }
   }
 
   return parentTs ?? uploadedFileId ?? `slack-${Date.now()}`;
@@ -2354,19 +2446,24 @@ async function discordSend(
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
   const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist, grantAllowlist);
   if (webhookUrl) {
-    const res = await fetchAllowlisted(
-      appendDiscordWebhookQuery(webhookUrl, "wait", "true"),
-      {
-        method: "POST",
-        headers: discordRequest.headers,
-        body: discordRequest.body,
-      },
-      allowlist,
-      undefined,
-      grantAllowlist,
-    );
+    let res: { response: Response; finalUrl: string };
+    try {
+      res = await fetchAllowlisted(
+        appendDiscordWebhookQuery(webhookUrl, "wait", "true"),
+        {
+          method: "POST",
+          headers: discordRequest.headers,
+          body: discordRequest.body,
+        },
+        allowlist,
+        undefined,
+        grantAllowlist,
+      );
+    } catch (error) {
+      throwChannelBoundaryError("discord.send", error);
+    }
     if (!res.response.ok) {
-      throw new Error(`discord.send failed (${res.response.status})`);
+      throwChannelProviderFailure("discord.send", res.response);
     }
     const body = parseJsonRecord(await res.response.text());
     return asString(body.id) ?? `discord-webhook-${Date.now()}`;
@@ -2380,23 +2477,28 @@ async function discordSend(
   if (!channelId) {
     throw new Error("Missing Discord channel target");
   }
-  const res = await fetchAllowlisted(
-    `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${token}`,
-        ...(discordRequest.headers ?? {}),
+  let res: { response: Response; finalUrl: string };
+  try {
+    res = await fetchAllowlisted(
+      `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${token}`,
+          ...(discordRequest.headers ?? {}),
+        },
+        body: discordRequest.body,
       },
-      body: discordRequest.body,
-    },
-    allowlist,
-    undefined,
-    grantAllowlist,
-  );
+      allowlist,
+      undefined,
+      grantAllowlist,
+    );
+  } catch (error) {
+    throwChannelBoundaryError("discord.send", error);
+  }
   const bodyText = await res.response.text();
   if (!res.response.ok) {
-    throw new Error(`discord.send failed (${res.response.status})`);
+    throwChannelProviderFailure("discord.send", res.response, bodyText);
   }
   const body = parseJsonRecord(bodyText);
   return asString(body.id) ?? `discord-${Date.now()}`;
@@ -2800,17 +2902,28 @@ async function telegramSend(
     caption = undefined;
   }
   for (const [index, attachment] of attachments.entries()) {
-    lastMessageId = await telegramSendAttachment(
-      config,
-      allowlist,
-      token,
-      chatId,
-      attachment,
-      index,
-      caption,
-      index === 0 ? replyToMessageId : undefined,
-      grantAllowlist,
-    );
+    try {
+      lastMessageId = await telegramSendAttachment(
+        config,
+        allowlist,
+        token,
+        chatId,
+        attachment,
+        index,
+        caption,
+        index === 0 ? replyToMessageId : undefined,
+        grantAllowlist,
+      );
+    } catch (error) {
+      if (lastMessageId) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throwChannelUnknownAfterSend(
+          "telegram.send",
+          `partial_channel_delivery_sent: message ${lastMessageId} was sent before attachment ${index + 1} failed. ${detail}`,
+        );
+      }
+      throw error;
+    }
     caption = undefined;
   }
   return lastMessageId ?? `telegram-${Date.now()}`;
@@ -2951,6 +3064,9 @@ async function telegramSendText(
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
   if (!res.response.ok || body.ok === false) {
+    if (!res.response.ok) {
+      throwChannelProviderFailure("telegram.send", res.response, asString(body.description));
+    }
     throw new Error(`telegram.send failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
   }
   const result = record(body.result);
@@ -3022,6 +3138,9 @@ async function telegramSendAttachment(
   const bodyText = await res.response.text();
   const payload = parseJsonRecord(bodyText);
   if (!res.response.ok || payload.ok === false) {
+    if (!res.response.ok) {
+      throwChannelProviderFailure("telegram.send", res.response, asString(payload.description));
+    }
     throw new Error(
       `telegram.send failed (${res.response.status})${payload.description ? `: ${payload.description}` : ""}`,
     );
@@ -3222,16 +3341,27 @@ async function whatsappSend(
 
   for (let index = 0; index < richAttachments.length; index += 1) {
     const attachment = richAttachments[index] as ChannelAttachment;
-    providerMessageId = await whatsappSendAttachment(
-      baseUrl,
-      phoneNumberId,
-      accessToken,
-      recipient,
-      attachment,
-      index,
-      allowlist,
-      grantAllowlist,
-    );
+    try {
+      providerMessageId = await whatsappSendAttachment(
+        baseUrl,
+        phoneNumberId,
+        accessToken,
+        recipient,
+        attachment,
+        index,
+        allowlist,
+        grantAllowlist,
+      );
+    } catch (error) {
+      if (providerMessageId) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throwChannelUnknownAfterSend(
+          "whatsapp.send",
+          `partial_channel_delivery_sent: message ${providerMessageId} was sent before attachment ${index + 1} failed. ${detail}`,
+        );
+      }
+      throw error;
+    }
   }
 
   if (!providerMessageId) {
@@ -5441,6 +5571,9 @@ async function whatsappSendPayload(
   if (!res.response.ok || Object.keys(record(body.error)).length > 0) {
     const errorBody = record(body.error);
     const detail = asString(errorBody.message) ?? bodyText.trim();
+    if (!res.response.ok) {
+      throwChannelProviderFailure("whatsapp.send", res.response, detail);
+    }
     throw new Error(`whatsapp.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
   }
   const messages = Array.isArray(body.messages)
@@ -5534,6 +5667,9 @@ async function whatsappUploadAttachment(
   if (!res.response.ok || Object.keys(record(body.error)).length > 0) {
     const errorBody = record(body.error);
     const detail = asString(errorBody.message) ?? bodyText.trim();
+    if (!res.response.ok) {
+      throwChannelProviderFailure("whatsapp.send", res.response, detail);
+    }
     throw new Error(`whatsapp.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
   }
   return required(body.id, "WhatsApp uploaded media id");
@@ -5811,9 +5947,9 @@ function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSigna
 }
 
 function secretFrom(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
-  const direct = asString(config[directKey]);
+  const direct = asString(readOwn(config, directKey));
   if (direct) return direct;
-  const envName = asString(config[envKey]);
+  const envName = asString(readOwn(config, envKey));
   if (!envName) return undefined;
   const envValue = process.env[envName];
   return envValue?.trim() || undefined;
@@ -5861,7 +5997,18 @@ function scoreLexical(query: string, candidate: string): number {
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    if (UNSAFE_OBJECT_KEYS.has(key)) {
+      continue;
+    }
+    out[key] = (value as Record<string, unknown>)[key];
+  }
+  return out;
+}
+
+function readOwn(config: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(config, key) ? config[key] : undefined;
 }
 
 function asString(value: unknown): string | undefined {

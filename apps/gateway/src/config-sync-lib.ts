@@ -17,6 +17,7 @@ const SECTION_TARGETS: SectionTarget[] = [
   { aliases: ["llm", "llmProviders", "llm-providers"], filename: "llm-providers.json" },
   { aliases: ["cronJobs", "cron", "cron-jobs"], filename: "cron-jobs.json" },
 ];
+const UNSAFE_CONFIG_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export interface UnifiedConfigSyncResult {
   unifiedPath: string;
@@ -138,28 +139,44 @@ function parseJson(raw: string, filePath: string): unknown {
 function normalizeSection(value: unknown, filename: string): unknown {
   if (filename === "cron-jobs.json") {
     if (Array.isArray(value)) {
-      return { jobs: value };
+      return { jobs: sanitizeConfigSectionValue(value, filename) };
     }
     if (!isRecord(value)) {
       throw new Error(`Invalid section for ${filename} in config/goatcitadel.json (expected object or array)`);
     }
-    return value;
+    return sanitizeConfigSectionValue(value, filename);
   }
 
   if (!isRecord(value)) {
     throw new Error(`Invalid section for ${filename} in config/goatcitadel.json (expected object)`);
   }
-  return value;
+  return sanitizeConfigSectionValue(value, filename);
 }
 
 function readSection(payload: Record<string, unknown>, aliases: string[]): unknown {
   for (const alias of aliases) {
-    const value = payload[alias];
-    if (value !== undefined) {
-      return value;
+    if (Object.prototype.hasOwnProperty.call(payload, alias)) {
+      return payload[alias];
     }
   }
   return undefined;
+}
+
+function sanitizeConfigSectionValue(value: unknown, pathLabel: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => sanitizeConfigSectionValue(item, `${pathLabel}[${index}]`));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    if (UNSAFE_CONFIG_KEYS.has(key)) {
+      throw new Error(`Unsafe config key in config/goatcitadel.json: ${pathLabel}.${key}`);
+    }
+    out[key] = sanitizeConfigSectionValue(value[key], `${pathLabel}.${key}`);
+  }
+  return out;
 }
 
 async function writeJsonIfChanged(filePath: string, data: unknown): Promise<boolean> {

@@ -3214,17 +3214,124 @@ describe("tool executor channel failure coverage", () => {
       /Missing webhook URL/i,
     );
 
-    await expectFailed(
-      executeTool(
-        request("channel.send", { connectionId: "generic-fail", message: "fail" }),
-        commsConfig,
-        commsStorage({
-          connectionId: "generic-fail",
-          key: "custom",
-          config: { webhookUrl: "https://example.com/generic-fail" },
-        }),
-      ),
-      /channel\.send failed \(503\)/i,
+    const genericFailStorage = commsStorage({
+      connectionId: "generic-fail",
+      key: "custom",
+      config: { webhookUrl: "https://example.com/generic-fail" },
+    });
+    const genericFailure = await executeTool(
+      request("channel.send", { connectionId: "generic-fail", message: "fail" }),
+      commsConfig,
+      genericFailStorage,
+    );
+    expect(genericFailure).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+    });
+    expect(String(genericFailure.error ?? "")).toMatch(/channel\.send failed \(503\)/i);
+    expect(genericFailStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
+      "delivery-generic-fail",
+      expect.stringMatching(/unknown_after_send/i),
+      expect.any(String),
+      "manual_reconciliation_required",
+    );
+  });
+
+  it("marks partial rich-channel sends for manual reconciliation in the durable ledger", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/chat.postMessage") {
+        return new Response(JSON.stringify({ ok: true, ts: "1712345678.000100", channel: "C123" }), { status: 200 });
+      }
+      if (url === "https://slack.com/api/files.getUploadURLExternal") {
+        return new Response(JSON.stringify({ ok: false, error: "upload_unavailable" }), { status: 500 });
+      }
+      if (url.endsWith("/sendMessage")) {
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1001 } }), { status: 200 });
+      }
+      if (url.endsWith("/sendPhoto")) {
+        return new Response(JSON.stringify({ ok: false, description: "media down" }), { status: 500 });
+      }
+      if (url === "https://graph.facebook.com/v23.0/phone-1/messages") {
+        const payload = JSON.parse(String(init?.body ?? "{}")) as { type?: string };
+        if (payload.type === "text") {
+          return new Response(JSON.stringify({ messages: [{ id: "wamid.text-1" }] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ error: { message: "media down" } }), { status: 500 });
+      }
+      throw new Error(`Unexpected partial-send URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "slack.com", "api.telegram.org", "graph.facebook.com");
+
+    const slackStorage = commsStorage({
+      connectionId: "slack-partial",
+      key: "slack",
+      config: { botToken: "xoxb-test", defaultChannel: "C123" },
+    });
+    const slackResult = await executeTool(
+      request("slack.send", {
+        connectionId: "slack-partial",
+        message: "posted before upload",
+        attachments: [{ title: "evidence.txt", dataBase64: Buffer.from("evidence").toString("base64") }],
+      }),
+      commsConfig,
+      slackStorage,
+    );
+    expect(slackResult).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(String(slackResult.error ?? "")).toContain("partial_channel_delivery_sent");
+    expect(slackStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
+      "delivery-slack-partial",
+      expect.stringContaining("partial_channel_delivery_sent"),
+      expect.any(String),
+      "manual_reconciliation_required",
+    );
+
+    const telegramStorage = commsStorage({
+      connectionId: "telegram-partial",
+      key: "telegram",
+      config: { botToken: "telegram-token", defaultChatId: "chat-1" },
+    });
+    const telegramResult = await executeTool(
+      request("telegram.send", {
+        connectionId: "telegram-partial",
+        message: "t".repeat(1025),
+        attachments: [{ url: "https://example.com/photo.png", mimeType: "image/png" }],
+      }),
+      commsConfig,
+      telegramStorage,
+    );
+    expect(telegramResult).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(String(telegramResult.error ?? "")).toContain("message 1001 was sent before attachment 1 failed");
+    expect(telegramStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
+      "delivery-telegram-partial",
+      expect.stringContaining("partial_channel_delivery_sent"),
+      expect.any(String),
+      "manual_reconciliation_required",
+    );
+
+    const whatsappStorage = commsStorage({
+      connectionId: "whatsapp-partial",
+      key: "whatsapp",
+      config: { accessToken: "whatsapp-token", phoneNumberId: "phone-1", defaultTarget: "+15551234567" },
+    });
+    const whatsappResult = await executeTool(
+      request("whatsapp.send", {
+        connectionId: "whatsapp-partial",
+        message: "sent before media",
+        attachments: [{ url: "https://example.com/photo.png", mimeType: "image/png" }],
+      }),
+      commsConfig,
+      whatsappStorage,
+    );
+    expect(whatsappResult).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(String(whatsappResult.error ?? "")).toContain("message wamid.text-1 was sent before attachment 1 failed");
+    expect(whatsappStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
+      "delivery-whatsapp-partial",
+      expect.stringContaining("partial_channel_delivery_sent"),
+      expect.any(String),
+      "manual_reconciliation_required",
     );
   });
 

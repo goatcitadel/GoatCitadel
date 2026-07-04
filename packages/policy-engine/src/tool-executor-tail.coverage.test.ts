@@ -572,7 +572,7 @@ describe("tool executor tail coverage", () => {
     );
     expect(missingSlackToken).toMatchObject({
       status: "failed",
-      deliveryStatus: "degraded",
+      deliveryStatus: "not_available",
       fallbackReason: "Missing Slack bot token",
     });
   });

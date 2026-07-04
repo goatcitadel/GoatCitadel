@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  CapabilityCatalogSnapshotRecord,
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
@@ -21,6 +22,7 @@ import type {
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import {
   compareCodeModeRuns,
+  fetchCapabilityCatalogSnapshot,
   fetchCodeModeExecutionBackends,
   fetchCodeModeRun,
   fetchCodeModeRunArtifact,
@@ -75,6 +77,35 @@ const CODE_MODE_ARTIFACT_KINDS: Array<{ kind: CodeModeRunArtifactKind; label: st
   { kind: "aider_stdout", label: "Aider stdout" },
   { kind: "aider_stderr", label: "Aider stderr" },
 ];
+
+export interface CapabilitySnapshotProfileSummary {
+  snapshotId: string;
+  inspectableCount: number;
+  callableCount: number;
+  callableToolCount: number;
+  callableSkillCount: number;
+  inspectableOnlyCount: number;
+  reviewWarningCount: number;
+  createdAt: string;
+}
+
+export function summarizeCapabilitySnapshotProfile(
+  snapshot: CapabilityCatalogSnapshotRecord | null | undefined,
+): CapabilitySnapshotProfileSummary | null {
+  if (!snapshot) {
+    return null;
+  }
+  return {
+    snapshotId: snapshot.snapshotId,
+    inspectableCount: snapshot.inspectableEntries.length,
+    callableCount: snapshot.callableEntries.length,
+    callableToolCount: snapshot.callableEntries.filter((entry) => entry.kind === "tool").length,
+    callableSkillCount: snapshot.callableEntries.filter((entry) => entry.kind === "skill").length,
+    inspectableOnlyCount: snapshot.inspectableEntries.length - snapshot.callableEntries.length,
+    reviewWarningCount: snapshot.inspectableEntries.filter((entry) => Boolean(entry.reviewWarning)).length,
+    createdAt: snapshot.createdAt,
+  };
+}
 
 function readStoredFilePanePercent(): number {
   if (typeof window === "undefined") {
@@ -773,6 +804,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
+  const [capabilitySnapshot, setCapabilitySnapshot] = useState<CapabilityCatalogSnapshotRecord | null>(null);
+  const [capabilitySnapshotLoading, setCapabilitySnapshotLoading] = useState(false);
+  const [capabilitySnapshotError, setCapabilitySnapshotError] = useState<string | null>(null);
   const [selectedArtifactKind, setSelectedArtifactKind] = useState<CodeModeRunArtifactKind>("source");
   const [artifactPreview, setArtifactPreview] = useState<CodeModeRunArtifactPreview | null>(null);
   const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
@@ -836,6 +870,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   );
   const selectedRunDetail = runDetail?.runId === selectedRunSummary?.runId ? runDetail : null;
   const selectedRunApprovalId = selectedRunDetail?.approvalId ?? selectedRunSummary?.approvalId;
+  const capabilityProfile = useMemo(() => summarizeCapabilitySnapshotProfile(capabilitySnapshot), [capabilitySnapshot]);
   const reviewPacket = useMemo(() => {
     const validation = summarizeValidationForReview(workbenchState?.validationStatus, output, visibleRunItems.length);
     const intent =
@@ -1380,6 +1415,42 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       cancelled = true;
     };
   }, [selectedRunScope, selectedRunSummary?.runId]);
+
+  useEffect(() => {
+    const snapshotId = selectedRunDetail?.capabilitySnapshotId;
+    if (!snapshotId) {
+      setCapabilitySnapshot(null);
+      setCapabilitySnapshotError(null);
+      setCapabilitySnapshotLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setCapabilitySnapshotLoading(true);
+    setCapabilitySnapshotError(null);
+    setCapabilitySnapshot(null);
+    fetchCapabilityCatalogSnapshot(snapshotId)
+      .then((snapshot) => {
+        if (!cancelled) {
+          setCapabilitySnapshot(snapshot);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setCapabilitySnapshot(null);
+          setCapabilitySnapshotError(
+            error instanceof Error ? error.message : "Unable to load frozen capability snapshot.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCapabilitySnapshotLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunDetail?.capabilitySnapshotId]);
 
   useEffect(() => {
     setCompareBaselineRunId((current) => {
@@ -2345,6 +2416,61 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                           <p>{formatArtifactPath(selectedRunDetail.stderrArtifact)}</p>
                         </li>
                       </ul>
+                      <section className="mc-next-workbench-output-preview">
+                        <div className="mc-next-panel-list-head">
+                          <strong>Capability profile</strong>
+                          <span>
+                            {capabilitySnapshotLoading ? "loading" : capabilityProfile ? "frozen" : "missing"}
+                          </span>
+                        </div>
+                        {capabilitySnapshotError ? (
+                          <div className="mc-next-panel-banner warning">
+                            Capability snapshot unavailable: {capabilitySnapshotError}
+                          </div>
+                        ) : null}
+                        {capabilityProfile ? (
+                          <ul className="mc-next-context-list">
+                            <li>
+                              <strong>Snapshot</strong>
+                              <p>{capabilityProfile.snapshotId}</p>
+                            </li>
+                            <li>
+                              <strong>Captured</strong>
+                              <p>{formatRunTimestamp(capabilityProfile.createdAt)}</p>
+                            </li>
+                            <li>
+                              <strong>Inspectable</strong>
+                              <p>{capabilityProfile.inspectableCount}</p>
+                            </li>
+                            <li>
+                              <strong>Callable</strong>
+                              <p>{capabilityProfile.callableCount}</p>
+                            </li>
+                            <li>
+                              <strong>Callable tools</strong>
+                              <p>{capabilityProfile.callableToolCount}</p>
+                            </li>
+                            <li>
+                              <strong>Callable skills</strong>
+                              <p>{capabilityProfile.callableSkillCount}</p>
+                            </li>
+                            <li>
+                              <strong>Inspect only</strong>
+                              <p>{capabilityProfile.inspectableOnlyCount}</p>
+                            </li>
+                            <li>
+                              <strong>Review warnings</strong>
+                              <p>{capabilityProfile.reviewWarningCount}</p>
+                            </li>
+                          </ul>
+                        ) : capabilitySnapshotLoading ? (
+                          <p className="mc-next-workbench-empty">Loading frozen capability catalog...</p>
+                        ) : (
+                          <p className="mc-next-workbench-empty">
+                            This run has not loaded frozen capability profile evidence.
+                          </p>
+                        )}
+                      </section>
                       <section className="mc-next-workbench-output-preview">
                         <div className="mc-next-panel-list-head">
                           <strong>Artifact inspect</strong>

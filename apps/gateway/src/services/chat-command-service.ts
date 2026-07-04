@@ -18,6 +18,8 @@ import type {
   ChatSessionRecord,
   ChatThinkingLevel,
   ChatWebMode,
+  CapabilityProposalKind,
+  CapabilityProposalRecord,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   MemoryItemRecord,
@@ -59,6 +61,14 @@ export interface ChatCommandDependencies {
     costTier?: McpServerRecord["costTier"];
     policy?: McpServerRecord["policy"];
   }): McpServerRecord;
+  createCapabilityProposal(input: {
+    proposalKind: CapabilityProposalKind;
+    title: string;
+    summary: string;
+    payload: Record<string, unknown>;
+    candidateId?: string;
+    activationTargetId?: string;
+  }): CapabilityProposalRecord;
   disconnectMcpServer(serverId: string): McpServerRecord;
   getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
   getMemoryMaintenanceStatus(workspaceId: string): {
@@ -329,6 +339,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     },
     { command: "/retrieval", usage: "/retrieval standard|layered", description: "Set retrieval routing mode." },
     { command: "/reflect", usage: "/reflect off|on", description: "Toggle reflection retry mode." },
+    {
+      command: "/learn",
+      usage: "/learn <capability gap or reusable workflow>",
+      description: "Create a governed learning proposal without activating a skill.",
+    },
     { command: "/research", usage: "/research <query>", description: "Run quick research for current session." },
     {
       command: "/delegate",
@@ -776,6 +791,46 @@ export async function parseChatCommand(
       args,
       prefs,
       message: `Reflection mode set to ${reflectionMode}.`,
+    };
+  }
+
+  if (command === "/learn") {
+    const request = args.join(" ").trim();
+    if (!request) {
+      return { ok: false, command, args, message: "Usage: /learn <capability gap or reusable workflow>" };
+    }
+    const workspaceId = deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(sessionId).workspaceId);
+    const proposal = deps.createCapabilityProposal({
+      proposalKind: "skill",
+      title: buildLearnCommandProposalTitle(request),
+      summary: `Governed learning proposal from chat: ${truncateCommandLine(request, 180)}`,
+      payload: {
+        proposalType: "learn_command_capability_proposal",
+        source: {
+          command,
+          sessionId,
+          workspaceId,
+        },
+        request,
+        governance: {
+          proposalOnly: true,
+          directMemoryWrite: false,
+          directSkillInstall: false,
+          directCallableActivation: false,
+          activationRequired: "operator_review",
+        },
+        suggestedNextSteps: [
+          "Review the proposal in the capability catalog.",
+          "Create or attach an inspectable candidate before enabling any callable skill.",
+          "Apply normal approval, provenance, and policy checks before activation.",
+        ],
+      },
+    });
+    return {
+      ok: true,
+      command,
+      args,
+      message: `Created governed learning proposal ${proposal.proposalId}. Review-only: no memory was written, no skill was installed, and nothing was made callable.`,
     };
   }
 
@@ -1417,6 +1472,18 @@ function truncateLookupLine(value: string): string {
 
 function resolveCommandActor(options: ChatCommandOptions | undefined): string {
   return options?.resolvedBy?.trim() || options?.authActorId?.trim() || options?.operatorId?.trim() || "chat-command";
+}
+
+function buildLearnCommandProposalTitle(request: string): string {
+  return `Learn: ${truncateCommandLine(request, 72)}`;
+}
+
+function truncateCommandLine(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 function formatDelegationCommandStatus(status: string | undefined): string {

@@ -1305,6 +1305,72 @@ describe("executeTool", () => {
     });
   });
 
+  it("ignores inherited channel connection config keys when resolving secrets and targets", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const inheritedConfig = Object.create({
+      botToken: "xoxb-inherited",
+      defaultChannel: "#inherited",
+    }) as Record<string, unknown>;
+    const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
+      deliveryId: "delivery-inherited-config",
+      status: "queued",
+      channelKey: input.channelKey,
+      target: input.target,
+      createdAt: "2026-03-18T00:00:00.000Z",
+      updatedAt: "2026-03-18T00:00:00.000Z",
+    }));
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack-inherited",
+          key: "slack",
+          config: inheritedConfig,
+        })),
+      },
+      commsDeliveries: {
+        createQueued: queuedSpy,
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-slack-inherited",
+          message: "Inherited config must not authorize delivery.",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-inherited",
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({ target: "slack" }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-inherited-config",
+      expect.stringContaining("Missing Slack"),
+      expect.any(String),
+      "not_available",
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "not_available",
+    });
+  });
+
   it("keeps matched grant host constraints enforced across webhook redirects", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(
@@ -1365,7 +1431,12 @@ describe("executeTool", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith("https://allowed.example/hook", expect.any(Object));
-    expect(markFailed).toHaveBeenCalledWith("delivery-webhook", expect.stringMatching(/allowlisted/i));
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-webhook",
+      expect.stringMatching(/allowlisted/i),
+      expect.any(String),
+      "blocked",
+    );
     expect(result).toMatchObject({
       status: "failed",
       deliveryStatus: "blocked",
@@ -1445,7 +1516,12 @@ describe("executeTool", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).not.toHaveBeenCalledWith("https://other.example/file.txt", expect.any(Object));
-    expect(markFailed).toHaveBeenCalledWith("delivery-attachment", expect.stringMatching(/allowlisted/i));
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-attachment",
+      expect.stringMatching(/allowlisted/i),
+      expect.any(String),
+      "blocked",
+    );
     expect(result).toMatchObject({
       status: "failed",
       deliveryStatus: "blocked",
@@ -1506,7 +1582,12 @@ describe("executeTool", () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(markFailed).toHaveBeenCalledWith("delivery-line", expect.stringMatching(/allowlisted/i));
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-line",
+      expect.stringMatching(/allowlisted/i),
+      expect.any(String),
+      "blocked",
+    );
     expect(result).toMatchObject({
       status: "failed",
       deliveryStatus: "blocked",
@@ -1568,7 +1649,12 @@ describe("executeTool", () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(markFailed).toHaveBeenCalledWith("delivery-slack-react", expect.stringMatching(/allowlisted/i));
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-slack-react",
+      expect.stringMatching(/allowlisted/i),
+      expect.any(String),
+      "blocked",
+    );
     expect(result).toMatchObject({
       status: "failed",
       deliveryStatus: "blocked",
@@ -1630,7 +1716,12 @@ describe("executeTool", () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(markFailed).toHaveBeenCalledWith("delivery-gmail", expect.stringMatching(/allowlisted/i));
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-gmail",
+      expect.stringMatching(/allowlisted/i),
+      expect.any(String),
+      "blocked",
+    );
     expect(result).toMatchObject({
       status: "failed",
       deliveryStatus: "blocked",

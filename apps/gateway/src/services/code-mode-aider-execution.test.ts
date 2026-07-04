@@ -157,6 +157,57 @@ describe("code-mode-aider-execution", () => {
     expect(persisted.find((item) => item.filename === "stderr.log")?.content).toBe(result.stderr);
   });
 
+  it("records stdout and stderr stream errors as adapter failures", async () => {
+    for (const stream of ["stdout", "stderr"] as const) {
+      const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), `goat-aider-${stream}-stream-error-`));
+      tempRoots.push(runTempRoot);
+      const terminateProcessTree = vi.fn();
+
+      const result = await executeCodeModeAiderAdapter({
+        runId: `code-run-aider-${stream}-stream-error`,
+        runTempRoot,
+        language: "javascript",
+        source: "return { ok: true };",
+        requestMarkdown: "Capture stream failures.",
+        aiderAdapter: {
+          enabled: true,
+          image: "ghcr.io/goatcitadel/aider-adapter:preview",
+        },
+        dockerBackend: {
+          enabled: true,
+          image: "ghcr.io/goatcitadel/code-mode-runner:preview",
+        },
+        persister: fakePersister([]),
+        terminateProcessTree: terminateProcessTree as never,
+        spawnCommand: vi.fn(() =>
+          fakeChild({
+            stdoutError: stream === "stdout" ? new Error("stdout exploded") : undefined,
+            stderrError: stream === "stderr" ? new Error("stderr exploded") : undefined,
+            close: false,
+          }),
+        ) as never,
+      });
+
+      expect(terminateProcessTree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          label: `Aider adapter ${stream} stream error`,
+          context: { runId: `code-run-aider-${stream}-stream-error` },
+        }),
+      );
+      expect(result).toMatchObject({
+        failed: true,
+        outcome: "failed",
+        errorCode: "AIDER_STREAM_ERROR",
+        error: `Aider adapter ${stream} stream failed: ${stream} exploded`,
+        errorDetails: expect.objectContaining({
+          stream,
+          processTreeCleanup: "requested",
+          processTreeCleanupConfirmed: false,
+        }),
+      });
+    }
+  });
+
   it("uses process-tree cleanup and records timeout evidence", async () => {
     const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-timeout-"));
     tempRoots.push(runTempRoot);
@@ -396,6 +447,8 @@ function fakeChild(input: {
   close?: boolean;
   pid?: number;
   error?: Error;
+  stdoutError?: Error;
+  stderrError?: Error;
 }) {
   const child = new EventEmitter() as EventEmitter & {
     stdout: PassThrough;
@@ -420,6 +473,14 @@ function fakeChild(input: {
   setImmediate(async () => {
     if (input.error) {
       child.emit("error", input.error);
+      return;
+    }
+    if (input.stdoutError) {
+      child.stdout.emit("error", input.stdoutError);
+      return;
+    }
+    if (input.stderrError) {
+      child.stderr.emit("error", input.stderrError);
       return;
     }
     await input.beforeClose?.();

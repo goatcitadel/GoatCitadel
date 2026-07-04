@@ -3200,6 +3200,7 @@ function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string 
 const OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.4";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
+const CODEX_IMAGE_RESPONSE_READ_TIMEOUT_MS = 60_000;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
 const MAX_IMAGE_DATA_URL_BASE64_CHARS = 64 * 1024 * 1024;
@@ -3245,7 +3246,11 @@ async function adaptOpenAICodexImageResponse(
   response: Response,
   model: string,
 ): Promise<ImageGenerationResponse["data"]> {
-  const body = await readLimitedResponseBodyText(response, MAX_CODEX_IMAGE_SSE_BYTES);
+  const body = await readBoundedResponseText(response, {
+    maxBytes: MAX_CODEX_IMAGE_SSE_BYTES,
+    timeoutMs: CODEX_IMAGE_RESPONSE_READ_TIMEOUT_MS,
+    label: "OpenAI Codex image generation",
+  });
   const events = parseOpenAICodexImageEvents(body);
   const failure = events.find((event) => event.type === "response.failed" || event.type === "error");
   if (failure) {
@@ -3281,42 +3286,6 @@ async function adaptOpenAICodexImageResponse(
     throw new Error(`OpenAI Codex image generation returned no images for ${model}.`);
   }
   return results.slice(0, 4);
-}
-
-async function readLimitedResponseBodyText(response: Response, maxBytes: number): Promise<string> {
-  if (!response.body) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > maxBytes) {
-      throw new Error("OpenAI Codex image generation response exceeded size limit.");
-    }
-    return text;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let byteLength = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (value) {
-        byteLength += value.byteLength;
-        if (byteLength > maxBytes) {
-          throw new Error("OpenAI Codex image generation response exceeded size limit.");
-        }
-        chunks.push(decoder.decode(value, { stream: !done }));
-      }
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        return chunks.join("");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown>> {

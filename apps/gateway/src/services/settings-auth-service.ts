@@ -326,7 +326,10 @@ export interface UpdateSettingsInput {
   features?: Partial<RuntimeSettings["features"]>;
 }
 
-export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateSettingsInput): RuntimeSettings {
+const UNSAFE_CONFIG_MUTATION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: UpdateSettingsInput): RuntimeSettings {
+  const input = sanitizeConfigMutationInput(rawInput, "settings") as UpdateSettingsInput;
   deps.assertDeploymentProfileUpdate(input);
   deps.assertFirecrawlRuntimeUpdate(input);
 
@@ -677,8 +680,9 @@ export function getAuthRuntimeSettings(deps: SettingsRuntimeDependencies): AuthR
 
 export function updateAuthSettings(
   deps: SettingsRuntimeDependencies,
-  input: AuthSettingsUpdateInput,
+  rawInput: AuthSettingsUpdateInput,
 ): AuthRuntimeSettings {
+  const input = sanitizeConfigMutationInput(rawInput, "auth") as AuthSettingsUpdateInput;
   const currentAuth = deps.config.assistant.auth;
   const nextAuth: GatewayRuntimeConfig["assistant"]["auth"] = {
     ...currentAuth,
@@ -715,6 +719,23 @@ export function updateAuthSettings(
   deps.config.assistant.auth.basic.username = nextAuth.basic.username;
   deps.config.assistant.auth.basic.password = nextAuth.basic.password;
   return getAuthRuntimeSettings(deps);
+}
+
+function sanitizeConfigMutationInput(value: unknown, pathLabel: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => sanitizeConfigMutationInput(item, `${pathLabel}[${index}]`));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    if (UNSAFE_CONFIG_MUTATION_KEYS.has(key)) {
+      throw new Error(`Unsafe config key is not allowed: ${pathLabel}.${key}`);
+    }
+    out[key] = sanitizeConfigMutationInput((value as Record<string, unknown>)[key], `${pathLabel}.${key}`);
+  }
+  return out;
 }
 
 function assertAuthModeHasEffectiveCredential(plan: AuthRuntimeSettings["plan"]): void {

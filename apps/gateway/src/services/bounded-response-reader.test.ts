@@ -50,6 +50,27 @@ describe("readBoundedResponseText", () => {
     ).resolves.toBe("hello world");
   });
 
+  it("times out and cancels stalled streaming bodies", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => undefined);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(
+      readBoundedResponseText(new Response(stream), { maxBytes: 64, timeoutMs: 10, label: "stalled provider" }),
+    ).rejects.toMatchObject({
+      name: "BoundedResponseReadError",
+      code: "body_timeout",
+      label: "stalled provider",
+    } satisfies Partial<BoundedResponseReadError>);
+    expect(cancelled).toBe(true);
+  });
+
   it("parses bounded JSON successfully", async () => {
     await expect(
       readBoundedResponseJson<{ ok: boolean }>(new Response(JSON.stringify({ ok: true })), {

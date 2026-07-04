@@ -3369,6 +3369,75 @@ describe("LlmService", () => {
     );
   });
 
+  it("rejects OpenAI Codex image responses whose content-length exceeds the bounded reader limit", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("", {
+          status: 200,
+          headers: {
+            "content-length": String(64 * 1024 * 1024 + 1),
+            "content-type": "text/event-stream",
+          },
+        }),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.generateImage({
+          providerId: "openai-codex",
+          prompt: "Generate a bounded response proof",
+          responseFormat: "b64_json",
+        }),
+      ).rejects.toThrow("OpenAI Codex image generation response body exceeded 67108864 bytes");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rejects malformed OpenAI Codex image response bodies", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(["data: {not-json}", "data: [DONE]", ""].join("\n\n"), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.generateImage({
+          providerId: "openai-codex",
+          prompt: "Generate malformed response proof",
+          responseFormat: "b64_json",
+        }),
+      ).rejects.toThrow("OpenAI Codex image generation returned no images");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("rejects malformed provider image base64 and data URLs", async () => {
     const service = new LlmService(
       {

@@ -184,6 +184,41 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
           >
             {selectedComparison ? (
               <>
+                {selectedComparison.advisory ? (
+                  <>
+                    <LibraryMetricGrid
+                      items={[
+                        {
+                          label: "Posture",
+                          value: "Advisory only",
+                          meta: selectedComparison.advisory.label,
+                        },
+                        {
+                          label: "Responses",
+                          value: `${selectedComparison.advisory.responseCount}/${selectedComparison.advisory.resultCount}`,
+                          meta:
+                            selectedComparison.advisory.missingResultCount > 0
+                              ? `${selectedComparison.advisory.missingResultCount} missing`
+                              : "Ready for review",
+                        },
+                        {
+                          label: "Next action",
+                          value: formatAdvisoryNextAction(selectedComparison.advisory.recommendedNextAction),
+                          meta: `${selectedComparison.advisory.judgmentCount} judgment${selectedComparison.advisory.judgmentCount === 1 ? "" : "s"}`,
+                        },
+                      ]}
+                    />
+                    <LibraryActionList
+                      items={selectedComparison.advisory.safetyNotes.map((note, index) => ({
+                        id: `advisory-note-${index}`,
+                        label: index === 0 ? "Comparison boundary" : index === 1 ? "Runtime effect" : "Execution path",
+                        description: note,
+                        meta: selectedComparison.advisory?.summary,
+                      }))}
+                      maxHeight=""
+                    />
+                  </>
+                ) : null}
                 <LibraryActionCardGrid
                   items={selectedComparison.candidates.map((candidate) => ({
                     id: candidate.candidateId,
@@ -313,4 +348,20 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
 function labelForResult(candidateId: string, comparison: ModelComparisonRun): string {
   const candidate = comparison.candidates.find((item) => item.candidateId === candidateId);
   return candidate ? `${candidate.blindLabel} - ${candidate.model}` : candidateId;
+}
+
+function formatAdvisoryNextAction(
+  action: NonNullable<ModelComparisonRun["advisory"]>["recommendedNextAction"],
+): string {
+  switch (action) {
+    case "run_prompt_pack":
+      return "Run pack";
+    case "save_judgment":
+      return "Save judgment";
+    case "ready_for_synthesis":
+      return "Synthesize";
+    case "review_outputs":
+    default:
+      return "Review outputs";
+  }
 }

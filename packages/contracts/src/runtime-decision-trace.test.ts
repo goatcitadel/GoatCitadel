@@ -15,6 +15,7 @@ describe("runtime decision trace contracts", () => {
     expect(kinds.has("workflow_choice")).toBe(true);
     expect(kinds.has("execution_plan_revised")).toBe(true);
     expect(kinds.has("tool_approval_required")).toBe(true);
+    expect(kinds.has("capability_profile_frozen")).toBe(true);
     expect(kinds.has("approval_resolved")).toBe(true);
     expect(kinds.has("durable_checkpoint")).toBe(true);
     expect(kinds.has("unknown")).toBe(true);

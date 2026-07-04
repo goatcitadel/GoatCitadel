@@ -243,6 +243,33 @@ const updateSettingsSchema = z.object({
     .optional(),
 });
 
+const unsafeConfigPayloadKeys = new Set(["__proto__", "prototype", "constructor"]);
+
+function findUnsafeConfigPayloadKey(value: unknown, path: string[] = []): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const unsafe = findUnsafeConfigPayloadKey(value[index], [...path, String(index)]);
+      if (unsafe) {
+        return unsafe;
+      }
+    }
+    return undefined;
+  }
+  for (const key of Object.keys(value)) {
+    if (unsafeConfigPayloadKeys.has(key)) {
+      return [...path, key].join(".") || key;
+    }
+    const unsafe = findUnsafeConfigPayloadKey((value as Record<string, unknown>)[key], [...path, key]);
+    if (unsafe) {
+      return unsafe;
+    }
+  }
+  return undefined;
+}
+
 const timelineSummaryQuerySchema = z.object({
   eventLimit: z.coerce.number().int().positive().max(300).default(60),
   sessionLimit: z.coerce.number().int().positive().max(120).default(24),
@@ -560,6 +587,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch("/api/v1/settings", async (request, reply) => {
+    const unsafeKey = findUnsafeConfigPayloadKey(request.body);
+    if (unsafeKey) {
+      return reply.code(400).send({ error: `Unsafe config key is not allowed: ${unsafeKey}` });
+    }
     const parsed = updateSettingsSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -577,6 +608,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch("/api/v1/auth/settings", async (request, reply) => {
+    const unsafeKey = findUnsafeConfigPayloadKey(request.body);
+    if (unsafeKey) {
+      return reply.code(400).send({ error: `Unsafe config key is not allowed: ${unsafeKey}` });
+    }
     const parsed = authUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

@@ -17,7 +17,9 @@ const spawnMock = vi.mocked(spawn);
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
 const {
+  attachChildOutputErrorHandlers,
   attachChildStdinErrorHandler,
+  createMcpChildStreamError,
   isChildStdinWritable,
   terminateChild,
   writeToChildStdin,
@@ -83,12 +85,16 @@ function createFakeChild(options: FakeChildOptions = {}): {
 } {
   const emitter = new EventEmitter();
   const stdin = new FakeStdin();
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
   const kill = vi.fn(() => true);
   const child = {
     pid: "pid" in options ? options.pid : 4242,
     exitCode: options.exitCode ?? null,
     signalCode: options.signalCode ?? null,
     stdin,
+    stdout,
+    stderr,
     kill,
     once: (event: string, listener: (...args: unknown[]) => void) => emitter.once(event, listener),
     on: (event: string, listener: (...args: unknown[]) => void) => emitter.on(event, listener),
@@ -176,6 +182,28 @@ describe("mcp runtime stdin write hardening (INFRA-002)", () => {
 
     // Without a listener this would crash the process as an unhandled 'error'.
     expect(() => stdin.emit("error", epipe)).not.toThrow();
+  });
+
+  it("converts asynchronous stdout and stderr stream errors into attributed MCP failures", () => {
+    const { child } = createFakeChild();
+    const failures: string[] = [];
+    attachChildOutputErrorHandlers(child, TEST_SERVER, (error) => failures.push(error.message));
+
+    expect(() => {
+      child.stdout?.emit("error", new Error("stdout pipe broke"));
+      child.stderr?.emit("error", new Error("stderr pipe broke"));
+    }).not.toThrow();
+
+    expect(failures).toEqual([
+      "MCP server Lifecycle MCP stdout stream failed: stdout pipe broke",
+      "MCP server Lifecycle MCP stderr stream failed: stderr pipe broke",
+    ]);
+  });
+
+  it("builds stream failure messages with server attribution", () => {
+    expect(createMcpChildStreamError(TEST_SERVER, "stdin", new Error("write EPIPE")).message).toBe(
+      "MCP server Lifecycle MCP stdin stream failed: write EPIPE",
+    );
   });
 });
 

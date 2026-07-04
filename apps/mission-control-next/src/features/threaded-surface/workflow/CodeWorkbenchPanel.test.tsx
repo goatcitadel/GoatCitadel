@@ -24,6 +24,7 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactVi
 
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
   compareCodeModeRuns: vi.fn(async () => null),
+  fetchCapabilityCatalogSnapshot: vi.fn(async () => null),
   fetchCodeModeExecutionBackends: vi.fn(async () => ({ backends: [] })),
   fetchCodeModeRun: vi.fn(async () => null),
   fetchCodeModeRunArtifact: vi.fn(async () => null),
@@ -35,7 +36,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
   fetchAgenticRuntimeAvailability: vi.fn(async () => null),
 }));
 
-import { NextCodeWorkbenchPanel } from "./CodeWorkbenchPanel";
+import { NextCodeWorkbenchPanel, summarizeCapabilitySnapshotProfile } from "./CodeWorkbenchPanel";
 
 function buildCodePanel(overrides: Record<string, unknown> = {}) {
   const noop = vi.fn();
@@ -171,5 +172,69 @@ describe("NextCodeWorkbenchPanel more-menu Escape handling", () => {
     // The more-menu was never opened, so its `useEffect` never registers a
     // "keydown" listener at all (it early-returns while `moreMenuOpen` is false).
     expect(addEventListener.mock.calls.find(([type]) => type === "keydown")).toBeUndefined();
+  });
+});
+
+describe("summarizeCapabilitySnapshotProfile", () => {
+  it("summarizes frozen callable and inspect-only catalog evidence", () => {
+    expect(
+      summarizeCapabilitySnapshotProfile({
+        snapshotId: "cap-snap-1",
+        createdAt: "2026-07-04T12:00:00.000Z",
+        callableEntries: [
+          {
+            capabilityId: "tool:fs.read",
+            kind: "tool",
+            category: "built_in",
+            title: "fs.read",
+            summary: "Read files",
+            callable: true,
+          },
+          {
+            capabilityId: "skill:review",
+            kind: "skill",
+            category: "project_local",
+            title: "Review",
+            summary: "Review code",
+            callable: true,
+          },
+        ],
+        inspectableEntries: [
+          {
+            capabilityId: "tool:fs.read",
+            kind: "tool",
+            category: "built_in",
+            title: "fs.read",
+            summary: "Read files",
+            callable: true,
+          },
+          {
+            capabilityId: "skill:review",
+            kind: "skill",
+            category: "project_local",
+            title: "Review",
+            summary: "Review code",
+            callable: true,
+          },
+          {
+            capabilityId: "proposal:write",
+            kind: "proposal",
+            category: "self_generated",
+            title: "Write helper",
+            summary: "Pending proposal",
+            callable: false,
+            reviewWarning: "Inspectable only until activation.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      snapshotId: "cap-snap-1",
+      inspectableCount: 3,
+      callableCount: 2,
+      callableToolCount: 1,
+      callableSkillCount: 1,
+      inspectableOnlyCount: 1,
+      reviewWarningCount: 1,
+    });
   });
 });

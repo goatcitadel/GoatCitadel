@@ -553,6 +553,44 @@ export function formatThreadedRunStateSummary(
   return label ? `Run: ${label}` : undefined;
 }
 
+export function formatAgenticBackgroundHandoffSummary(
+  agenticRunTree: AgenticRunTreeResponse | null | undefined,
+  visibleDelegationRun: MissionControlActiveSessionSurfaceProps["delegationRun"] | null | undefined,
+): string | undefined {
+  if (!agenticRunTree?.runId || visibleDelegationRun) {
+    return undefined;
+  }
+  const status = getAgenticTreeRootNode(agenticRunTree)?.status;
+  return status ? `Run: background handoff ${formatAgenticTreeStatus(status)}` : "Run: background handoff visible";
+}
+
+export function formatAgenticBackgroundHandoffNotice(
+  agenticRunTree: AgenticRunTreeResponse | null | undefined,
+  visibleDelegationRun: MissionControlActiveSessionSurfaceProps["delegationRun"] | null | undefined,
+): string | undefined {
+  if (!agenticRunTree?.runId || visibleDelegationRun) {
+    return undefined;
+  }
+  const rootNode = getAgenticTreeRootNode(agenticRunTree);
+  const label = rootNode?.label?.trim() || agenticRunTree.runId;
+  const status = rootNode?.status ? ` is ${formatAgenticTreeStatus(rootNode.status)}` : " is visible";
+  const childCount = agenticRunTree.nodes.filter((node) => node.kind === "task" || node.kind === "subagent").length;
+  const childCopy = childCount > 0 ? ` with ${childCount} child ${childCount === 1 ? "item" : "items"}` : "";
+  return `Background handoff visible from the session run table: ${label} (${agenticRunTree.runId})${status}${childCopy}. Open Cowork details for the full lineage.`;
+}
+
+function getAgenticTreeRootNode(agenticRunTree: AgenticRunTreeResponse) {
+  return (
+    agenticRunTree.nodes.find((node) => node.kind === "run" && node.id === agenticRunTree.runId) ??
+    agenticRunTree.nodes.find((node) => node.kind === "run") ??
+    agenticRunTree.nodes[0]
+  );
+}
+
+function formatAgenticTreeStatus(status: string): string {
+  return status.replaceAll("_", " ");
+}
+
 export function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null): boolean {
   return preflight?.fallbackResult === "local_to_cloud" || preflight?.fallbackResult === "cloud_to_local";
 }
@@ -1946,10 +1984,20 @@ export function MissionThreadedControllerHost({
       : activeDelegationRun;
   const visibleRunStateLabel = formatThreadedRunStateLabel(activeWorkflowTurn, visibleDelegationRun);
   const visibleRunStateSummary = formatThreadedRunStateSummary(activeWorkflowTurn, visibleDelegationRun);
+  const backgroundHandoffRunStateSummary = formatAgenticBackgroundHandoffSummary(agenticRunTree, visibleDelegationRun);
   const lifecycleNotices = useMemo<ChatThreadNotice[]>(() => {
     const notices: ChatThreadNotice[] = [];
     const activeTrace = activeWorkflowTurn?.trace;
     const timestamp = activeWorkflowTurn?.assistantMessage?.timestamp ?? new Date().toISOString();
+    const backgroundHandoffNotice = formatAgenticBackgroundHandoffNotice(agenticRunTree, visibleDelegationRun);
+    if (backgroundHandoffNotice) {
+      notices.push({
+        id: `lifecycle-agentic-handoff-${agenticRunTree?.runId ?? "active"}`,
+        tone: "neutral",
+        content: backgroundHandoffNotice,
+        timestamp: agenticRunTree?.generatedAt ?? timestamp,
+      });
+    }
     if (activeTrace?.routing.fallbackUsed) {
       notices.push({
         id: `lifecycle-fallback-${activeWorkflowTurn?.turnId ?? "active"}`,
@@ -2010,7 +2058,7 @@ export function MissionThreadedControllerHost({
       });
     }
     return notices;
-  }, [activeWorkflowTurn, agenticRunTree, orchestrationCheckpoints]);
+  }, [activeWorkflowTurn, agenticRunTree, orchestrationCheckpoints, visibleDelegationRun]);
   const coworkViewModel = useMemo(
     () =>
       deriveCoworkRunViewModel({
@@ -2053,7 +2101,7 @@ export function MissionThreadedControllerHost({
           gatewayStatus?.detail ??
           "Mission Control has not received shell gateway status for this threaded surface yet.",
         approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
-        runStateSummary: visibleRunStateSummary,
+        runStateSummary: visibleRunStateSummary ?? backgroundHandoffRunStateSummary,
         activeModeLabel: activeModePreset.label,
         providerModelSummary: effectiveProviderModelSummary,
         requestedProviderModelSummary,
@@ -2080,6 +2128,7 @@ export function MissionThreadedControllerHost({
       runtimeSummary,
       runtimeTone,
       selectionSourceSummary,
+      backgroundHandoffRunStateSummary,
       visibleRunStateSummary,
       workTrust,
       workspaceName,

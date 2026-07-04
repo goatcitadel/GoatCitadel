@@ -11,7 +11,9 @@ import type { Storage } from "@goatcitadel/storage";
 // driven per-test via `mocked.spawnResult`.
 type SpawnResult = { stdout?: string; stderr?: string; exitCode?: number | null; error?: Error };
 
-function makeSpawnChild(result: SpawnResult): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
+function makeSpawnChild(
+  result: SpawnResult,
+): EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter } {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
     stdout: EventEmitter;
@@ -223,7 +225,7 @@ describe("tool executor edge coverage", () => {
     );
     expect(degraded).toMatchObject({
       status: "failed",
-      deliveryStatus: "degraded",
+      deliveryStatus: "manual_reconciliation_required",
     });
 
     const blocked = await executeTool(

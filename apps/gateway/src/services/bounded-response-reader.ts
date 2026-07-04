@@ -122,7 +122,7 @@ async function readBodyChunkWithDeadline(
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   const remainingMs = deadlineMs - Date.now();
   if (remainingMs <= 0) {
-    await cancelBodyReader(reader);
+    void cancelBodyReader(reader);
     throw createBodyTimeoutError(options);
   }
   let timer: NodeJS.Timeout | undefined;
@@ -131,8 +131,8 @@ async function readBodyChunkWithDeadline(
       reader.read(),
       new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
         timer = setTimeout(() => {
-          void cancelBodyReader(reader);
           reject(createBodyTimeoutError(options));
+          void cancelBodyReader(reader);
         }, remainingMs);
       }),
     ]);

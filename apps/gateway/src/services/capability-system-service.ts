@@ -44,6 +44,7 @@ import type {
   ToolCatalogEntry,
   LocalOperatorOverrideRecord,
   PermissionProfileRecord,
+  RuntimeDecisionTraceAppendInput,
   PermissionSurface,
   ToolPolicyActorContext,
   ToolInvokeRequest,
@@ -1141,6 +1142,14 @@ export class CapabilitySystemService {
       throw new Error(`Code Mode run ${runId} registration failed before storage returned a row.`);
     }
 
+    this.recordCodeModeCapabilityProfileDecision({
+      run: stored,
+      snapshot,
+      sandbox,
+      executionBackend,
+      createdAt,
+    });
+
     this.options.publishRealtime("code_mode_run_created", "capabilities", {
       runId: stored.runId,
       approvalId: stored.approvalId,
@@ -1155,6 +1164,135 @@ export class CapabilitySystemService {
       autonomousActivation: stored.autonomousActivation,
     });
     return this.hydrateCodeModeRunForRead(stored);
+  }
+
+  private recordCodeModeCapabilityProfileDecision(input: {
+    run: CodeModeRunRecord;
+    snapshot: CapabilityCatalogSnapshotRecord;
+    sandbox: CodeModeSandboxMetadata;
+    executionBackend: CodeModeRunExecutionBackendRef;
+    createdAt: string;
+  }): void {
+    const runtimeDecisionTraces = this.options.storage.runtimeDecisionTraces as
+      | { append: (record: RuntimeDecisionTraceAppendInput) => unknown }
+      | undefined;
+    if (!runtimeDecisionTraces) {
+      return;
+    }
+    const callableToolCount = countCatalogEntries(input.snapshot.callableEntries, "tool");
+    const callableSkillCount = countCatalogEntries(input.snapshot.callableEntries, "skill");
+    const reviewWarningCount = input.snapshot.inspectableEntries.filter((entry) => Boolean(entry.reviewWarning)).length;
+    const trace: RuntimeDecisionTraceAppendInput = {
+      kind: "capability_profile_frozen",
+      scope: {
+        workspaceId: input.run.workspaceId,
+        sessionId: input.run.sessionId,
+        turnId: input.run.turnId,
+        runId: input.run.runId,
+        approvalId: input.run.approvalId,
+      },
+      selected: `Froze capability profile ${input.snapshot.snapshotId} for Code Mode approval.`,
+      rationale:
+        "Code Mode v1 captures the inspectable and callable catalog, policy posture, sandbox metadata, and execution backend before approval so operator review uses immutable evidence.",
+      signals: [
+        {
+          source: "capability",
+          key: "snapshot_id",
+          value: input.snapshot.snapshotId,
+          weight: "strong",
+          evidence: {
+            refType: "capability_snapshot",
+            refId: input.snapshot.snapshotId,
+            label: "Frozen capability catalog",
+          },
+        },
+        {
+          source: "capability",
+          key: "inspectable_count",
+          value: input.snapshot.inspectableEntries.length,
+          weight: "informational",
+        },
+        {
+          source: "capability",
+          key: "callable_count",
+          value: input.snapshot.callableEntries.length,
+          weight: "strong",
+        },
+        { source: "capability", key: "callable_tools", value: callableToolCount, weight: "informational" },
+        { source: "capability", key: "callable_skills", value: callableSkillCount, weight: "informational" },
+        {
+          source: "capability",
+          key: "inspectable_only_count",
+          value: input.snapshot.inspectableEntries.length - input.snapshot.callableEntries.length,
+          weight: "informational",
+        },
+        {
+          source: "capability",
+          key: "review_warning_count",
+          value: reviewWarningCount,
+          weight: reviewWarningCount > 0 ? "weak" : "informational",
+        },
+        {
+          source: "policy",
+          key: "permission_profile",
+          value: input.run.permissionProfileId ?? "default",
+          weight: "strong",
+        },
+        {
+          source: "policy",
+          key: "local_operator_override",
+          value: input.run.localOperatorOverrideId ?? "none",
+          weight: input.run.localOperatorOverrideId ? "strong" : "informational",
+        },
+        {
+          source: "policy",
+          key: "sandbox_available",
+          value: input.sandbox.available,
+          weight: input.sandbox.available ? "strong" : "blocking",
+        },
+        {
+          source: "policy",
+          key: "execution_backend",
+          value: input.executionBackend.backendId,
+          weight: "strong",
+        },
+        {
+          source: "approval",
+          key: "approval_id",
+          value: input.run.approvalId ?? null,
+          weight: input.run.approvalId ? "strong" : "weak",
+        },
+      ],
+      alternatives: [
+        {
+          label: "Use live callable catalog during execution",
+          outcome: "blocked",
+          reasonNotChosen: "A mutable catalog would not match the operator approval evidence.",
+          blockedBy: "immutable capability snapshot required",
+        },
+        {
+          label: "Skip capability profile evidence",
+          outcome: "blocked",
+          reasonNotChosen: "The operator could not audit which tools and skills were callable for the run.",
+          blockedBy: "Code Mode approval truth contract",
+        },
+      ],
+      evidenceRefs: [
+        { refType: "capability_snapshot", refId: input.snapshot.snapshotId, label: "Frozen capability catalog" },
+        { refType: "run", refId: input.run.runId, label: "Code Mode run" },
+        ...(input.run.approvalId
+          ? [{ refType: "approval" as const, refId: input.run.approvalId, label: "Code Mode approval" }]
+          : []),
+        ...(input.run.sessionId ? [{ refType: "session" as const, refId: input.run.sessionId }] : []),
+        ...(input.run.turnId ? [{ refType: "turn" as const, refId: input.run.turnId }] : []),
+      ],
+      createdAt: input.createdAt,
+    };
+    try {
+      runtimeDecisionTraces.append(trace);
+    } catch (error) {
+      void error;
+    }
   }
 
   private prepareCodeModeAutonomousActivation(input: {
@@ -2413,6 +2551,7 @@ export class CapabilitySystemService {
     const stdout = createBoundedCapture();
     const stderr = createBoundedCapture();
     let stdioJsonBuffer = "";
+    let childStreamFailure: ReturnType<typeof createCodeModeChildStreamError> | undefined;
     const runAbortController = new AbortController();
     const abortChild = (reason?: string) => {
       const message = reason ?? `Code Mode run ${input.runId} was aborted.`;
@@ -2432,8 +2571,6 @@ export class CapabilitySystemService {
         }
       }, 200).unref();
     };
-    child.stderr?.on("data", (chunk: Buffer | string) => stderr.append(chunk));
-
     const pendingRequests = new Map<
       string,
       {
@@ -2449,8 +2586,10 @@ export class CapabilitySystemService {
           return false;
         }
         try {
-          child.stdin.write(`${JSON.stringify(message)}\n`, () => {
-            // The child may exit while an async wrapper call is finishing.
+          child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
+            if (error) {
+              failChildStream("stdin", error);
+            }
           });
           return true;
         } catch {
@@ -2498,6 +2637,20 @@ export class CapabilitySystemService {
         pending.reject(error);
       }
       pendingRequests.clear();
+    };
+
+    const failChildStream = (streamName: "stdin" | "stdout" | "stderr", error: Error): void => {
+      if (childStreamFailure) {
+        return;
+      }
+      childStreamFailure = createCodeModeChildStreamError(input.runId, streamName, error);
+      settlePending(childStreamFailure);
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort(normalizeCodeModeIpcError(childStreamFailure));
+      }
+      if (!child.killed) {
+        child.kill();
+      }
     };
 
     const handleChildMessage = (message: unknown) => {
@@ -2604,8 +2757,10 @@ export class CapabilitySystemService {
 
     if (launchTransport === "node_ipc") {
       child.stdout?.on("data", (chunk: Buffer | string) => stdout.append(chunk));
+      child.stdout?.on("error", (error: Error) => failChildStream("stdout", error));
       child.on("message", handleChildMessage);
     } else {
+      child.stdin?.on("error", (error: Error) => failChildStream("stdin", error));
       child.stdout?.on("data", (chunk: Buffer | string) => {
         stdioJsonBuffer += String(chunk);
         let newlineIndex = stdioJsonBuffer.indexOf("\n");
@@ -2626,11 +2781,18 @@ export class CapabilitySystemService {
           newlineIndex = stdioJsonBuffer.indexOf("\n");
         }
       });
+      child.stdout?.on("error", (error: Error) => failChildStream("stdout", error));
     }
+    child.stderr?.on("data", (chunk: Buffer | string) => stderr.append(chunk));
+    child.stderr?.on("error", (error: Error) => failChildStream("stderr", error));
 
     const exitPromise = new Promise<void>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => {
+        if (childStreamFailure) {
+          reject(childStreamFailure);
+          return;
+        }
         if (pendingRequests.size > 0) {
           settlePending(
             new Error(`Code Mode child exited before replying (code=${code ?? "null"}, signal=${signal ?? "null"}).`),
@@ -2645,6 +2807,9 @@ export class CapabilitySystemService {
     });
 
     const sendRequest = <TResult>(method: string, params: Record<string, unknown>): Promise<TResult> => {
+      if (childStreamFailure) {
+        return Promise.reject(childStreamFailure);
+      }
       const id = `rpc-${randomUUID()}`;
       const message = {
         jsonrpc: "2.0",
@@ -3290,6 +3455,10 @@ function summarizeInstructionBody(body: string): string {
     .map((entry) => entry.trim())
     .find(Boolean);
   return line ?? "Skill instructions";
+}
+
+function countCatalogEntries(entries: CapabilityCatalogEntry[], kind: CapabilityCatalogEntry["kind"]): number {
+  return entries.filter((entry) => entry.kind === kind).length;
 }
 
 function resolveManagedRoot(rootDir: string, configuredPath: string): string {
@@ -4199,6 +4368,25 @@ function normalizeRunResult(result: unknown): Record<string, unknown> {
   return { value: result };
 }
 
+function createCodeModeChildStreamError(
+  runId: string,
+  streamName: "stdin" | "stdout" | "stderr",
+  error: Error,
+): {
+  code: "CODE_MODE_CHILD_STREAM_ERROR";
+  message: string;
+  details: Record<string, unknown>;
+} {
+  return {
+    code: "CODE_MODE_CHILD_STREAM_ERROR",
+    message: `Code Mode child ${streamName} stream failed: ${error.message}`,
+    details: {
+      runId,
+      stream: streamName,
+    },
+  };
+}
+
 function normalizeCodeModeIpcError(error: unknown): {
   code?: string;
   message: string;
@@ -4437,6 +4625,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export const __internal = {
   createMinimalSyntheticEnv,
+  createCodeModeChildStreamError,
+  normalizeCodeModeIpcError,
   // Exposed for tests asserting the single execution chokepoint: a self-authored
   // skill must be non-callable while `candidate` and callable only once a
   // governed activation flips it to `approved`/`trusted`.

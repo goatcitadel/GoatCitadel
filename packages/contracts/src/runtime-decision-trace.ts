@@ -20,6 +20,7 @@ export const RUNTIME_DECISION_KINDS = [
   "tool_blocked",
   "tool_approval_required",
   "tool_failed",
+  "capability_profile_frozen",
   "approval_requested",
   "approval_resolved",
   "approval_expired",

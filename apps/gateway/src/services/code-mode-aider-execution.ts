@@ -203,7 +203,7 @@ interface AiderChildExecution {
   stderrTruncated: boolean;
   mutableArtifactsSafe: boolean;
   failure?: {
-    code: "AIDER_TIMEOUT" | "AIDER_ABORTED" | "AIDER_PROCESS_ERROR";
+    code: "AIDER_TIMEOUT" | "AIDER_ABORTED" | "AIDER_PROCESS_ERROR" | "AIDER_STREAM_ERROR";
     message: string;
     details: Record<string, unknown>;
   };
@@ -337,8 +337,36 @@ function waitForAiderChild(
     child.stdout?.on("data", (chunk: Buffer | string) => {
       stdout.append(chunk);
     });
+    child.stdout?.on("error", (error: Error) => {
+      requestTermination("Aider adapter stdout stream error", {
+        exitCode: -1,
+        failure: {
+          code: "AIDER_STREAM_ERROR",
+          message: `Aider adapter stdout stream failed: ${error.message}`,
+          details: {
+            runId: options.runId,
+            stream: "stdout",
+            processTreeCleanup: "requested",
+          },
+        },
+      });
+    });
     child.stderr?.on("data", (chunk: Buffer | string) => {
       stderr.append(chunk);
+    });
+    child.stderr?.on("error", (error: Error) => {
+      requestTermination("Aider adapter stderr stream error", {
+        exitCode: -1,
+        failure: {
+          code: "AIDER_STREAM_ERROR",
+          message: `Aider adapter stderr stream failed: ${error.message}`,
+          details: {
+            runId: options.runId,
+            stream: "stderr",
+            processTreeCleanup: "requested",
+          },
+        },
+      });
     });
     child.on("error", (error) => {
       requestTermination("Aider adapter process error", {

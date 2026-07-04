@@ -122,6 +122,16 @@ function createDeps(): ChatCommandDependencies {
     connectMcpServer: vi.fn(async (serverId: string) => ({ serverId, status: "connected" })),
     disconnectMcpServer: vi.fn((serverId: string) => ({ serverId, status: "disconnected" })),
     createMcpServer: vi.fn((input) => ({ serverId: "mcp-new", status: "disconnected", ...input })),
+    createCapabilityProposal: vi.fn(() => ({
+      proposalId: "proposal-learn-1",
+      proposalKind: "skill",
+      status: "proposed",
+      title: "Learn: reusable review workflow",
+      summary: "Governed learning proposal from chat: reusable review workflow",
+      payload: {},
+      createdAt: "2026-05-14T00:00:00.000Z",
+      updatedAt: "2026-05-14T00:00:00.000Z",
+    })),
     resolveChatToolApproval: vi.fn(async () => ({})),
     getPersonalityCatalog: vi.fn(() => ({ defaultPersonalityId: "default", items: [] })),
     setDefaultPersonality: vi.fn(),
@@ -137,6 +147,7 @@ describe("chat command runtime dispatch", () => {
 
     expect(commands.has("/speed")).toBe(true);
     expect(commands.has("/subagents")).toBe(true);
+    expect(commands.has("/learn")).toBe(true);
     expect(commands.has("/undo")).toBe(true);
   });
 
@@ -160,6 +171,7 @@ describe("chat command runtime dispatch", () => {
       "/proactive suggest",
       "/retrieval layered",
       "/reflect on",
+      "/learn reusable release review workflow",
       "/research release blockers",
       "/delegate QA,Ops :: verify the release",
       "/pipeline triage :: sort the inbox",
@@ -208,6 +220,38 @@ describe("chat command runtime dispatch", () => {
     expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-2", "reject", {
       resolvedBy: "chat-command",
     });
+  });
+
+  it("creates governed /learn proposals without memory writes or skill activation", async () => {
+    const deps = createDeps();
+
+    await expect(
+      parseChatCommand(deps, "session-1", "/learn turn repeated PR reviews into a governed skill"),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: expect.stringContaining("Created governed learning proposal proposal-learn-1"),
+    });
+
+    expect(deps.createCapabilityProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposalKind: "skill",
+        title: "Learn: turn repeated PR reviews into a governed skill",
+        payload: expect.objectContaining({
+          proposalType: "learn_command_capability_proposal",
+          request: "turn repeated PR reviews into a governed skill",
+          governance: expect.objectContaining({
+            proposalOnly: true,
+            directMemoryWrite: false,
+            directSkillInstall: false,
+            directCallableActivation: false,
+            activationRequired: "operator_review",
+          }),
+        }),
+      }),
+    );
+    expect(deps.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+    expect(deps.installSkillImport).not.toHaveBeenCalled();
+    expect(deps.setSkillState).not.toHaveBeenCalled();
   });
 
   it("defaults /undo to one turn, bounds the count, and stamps the operator", async () => {
