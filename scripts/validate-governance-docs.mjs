@@ -625,10 +625,16 @@ for (const route of NEXT_VISUAL_REGRESSION_MANIFEST) {
   }
 }
 
+// The root package carries the released product-line version (0.1.0 RC since
+// 2026-07-04); workspace packages stay on their independently published 1.0.0
+// line. A deliberate version bump must update this pin in the same change.
+const expectedPackageVersions = { "package.json": "0.1.0-rc.1" };
+
 for (const relPath of workspacePackageFiles) {
   const parsed = JSON.parse(await readFile(path.join(root, relPath), "utf8"));
-  if (parsed.version !== "1.0.0") {
-    errors.push(`${relPath} must declare version 1.0.0 for the GoatCitadel 1.0 release branch.`);
+  const expectedVersion = expectedPackageVersions[relPath] ?? "1.0.0";
+  if (parsed.version !== expectedVersion) {
+    errors.push(`${relPath} must declare version ${expectedVersion} for the GoatCitadel release line.`);
   }
   if (/--passWithNoTests/.test(JSON.stringify(parsed.scripts ?? {}))) {
     errors.push(`${relPath} must not use --passWithNoTests in release-bearing package test scripts.`);
