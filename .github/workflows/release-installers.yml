@@ -350,20 +350,24 @@ jobs:
           }
           if (Get-AppxPackage GoatCitadel.MissionControl.Windows) { throw "GoatCitadel package identity remained registered after uninstall." }
           if (Test-Path $desktop) { throw "Installed desktop executable remained after uninstall at $desktop" }
+          # The uninstaller removes the immutable payload (app/, bin/) and deliberately
+          # preserves mutable operator state (runtime-root/, config/, data/, workspaces/):
+          # the packaged home lives inside the install dir, and uninstall must never
+          # destroy user data. The desktop-host phase above seeds that state on first
+          # boot, so an install-dir-must-be-empty assert only ever passed when the host
+          # was killed before seeding finished. Assert the immutable payload is gone;
+          # list preserved state for transparency, then scrub it for runner hygiene.
+          foreach ($payloadEntry in @("app", "bin")) {
+            $payloadPath = Join-Path $installDir $payloadEntry
+            if (Test-Path $payloadPath) {
+              $sample = (Get-ChildItem -LiteralPath $payloadPath -Recurse -Force -File -ErrorAction SilentlyContinue | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
+              throw "Uninstall left immutable payload at $payloadPath`n$sample"
+            }
+          }
           if (Test-Path $installDir) {
-            $remainingFiles = Get-ChildItem -LiteralPath $installDir -Recurse -Force -File -ErrorAction SilentlyContinue
-            if ($remainingFiles) {
-              $sample = ($remainingFiles | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
-              throw "Installer left files after uninstall in $installDir`n$sample"
-            }
-            Get-ChildItem -LiteralPath $installDir -Recurse -Force -Directory -ErrorAction SilentlyContinue |
-              Sort-Object FullName -Descending |
-              Remove-Item -Force -ErrorAction SilentlyContinue
-            $remaining = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue
-            if ($remaining) {
-              $sample = ($remaining | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
-              throw "Installer left non-empty directories after uninstall in $installDir`n$sample"
-            }
+            Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "Mutable state preserved by uninstall (expected): $($_.FullName)" }
+            Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
           }
 
       - name: Write SHA-256 checksum
