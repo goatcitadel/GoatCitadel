@@ -30,7 +30,7 @@ const requiredFiles = [
 ];
 
 const requiredHeadings = {
-  "CHANGELOG.md": ["# Changelog", "## [Unreleased]", "## [1.0.0]"],
+  "CHANGELOG.md": ["# Changelog", "## [Unreleased]", "## [0.1.0-rc.1]", "## [1.0.0]"],
   "AGENTS.md": ["# AGENTS.md - GoatCitadel", "## Current Product Truth", "## Agent Roles", "## Safety Boundaries (Non-Overridable)"],
   "CONTRIBUTING.md": ["# Contributing to GoatCitadel", "## Quality Gates", "## Governance Docs Policy"],
   "SECURITY.md": ["# Security Policy", "## Reporting a Vulnerability", "## Security Invariants"],
@@ -267,10 +267,20 @@ if (!/contractVerified/i.test(readme)) {
   errors.push("README.md must describe backup verify as reporting contractVerified minimum-set truth.");
 }
 if (/late beta/i.test(readme) || /release-0\.9/i.test(readme) || /before `1\.0`/i.test(readme)) {
-  errors.push("README.md must not describe GoatCitadel as beta or pre-1.0.");
+  errors.push("README.md must not describe GoatCitadel as late-beta or resurrect the retired 0.9 pre-release line.");
 }
-if (!/release-1\.0\.0/i.test(readme)) {
-  errors.push("README.md must expose the 1.0.0 release badge.");
+// The published product line is the 0.1.0 release candidate (single GitHub
+// prerelease `GoatCitadel 0.1.0 RC`, tag 0.1.0-rc.1); the `1.0` contract docs
+// remain the product-scope vocabulary. A deliberate release renumber must
+// update the badge, the Release line row, and these assertions together.
+if (!/release-0\.1\.0--rc\.1/i.test(readme)) {
+  errors.push("README.md must expose the 0.1.0-rc.1 release-candidate badge.");
+}
+if (/release-1\.0\.0/i.test(readme) || /latest published release is `v1\.0\.0`/i.test(readme)) {
+  errors.push("README.md must not claim v1.0.0 as the current published release line.");
+}
+if (!/published release line is the `0\.1\.0-rc\.1` release candidate/i.test(readme)) {
+  errors.push("README.md must name the 0.1.0-rc.1 release candidate as the published release line.");
 }
 if (!/offline_restore_required/i.test(readme) || !/offline-only/i.test(readme)) {
   errors.push("README.md must describe filesystem-backed restore as offline-only and name the offline_restore_required live-route response.");

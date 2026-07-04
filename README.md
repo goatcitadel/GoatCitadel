@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://goatcitadel.app"><img alt="Website" src="https://img.shields.io/badge/website-goatcitadel.app-22d3ee?style=for-the-badge"></a>
-  <a href="./CHANGELOG.md"><img alt="Release" src="https://img.shields.io/badge/release-1.0.0-1ec8a5?style=for-the-badge"></a>
+  <a href="./CHANGELOG.md"><img alt="Release" src="https://img.shields.io/badge/release-0.1.0--rc.1-1ec8a5?style=for-the-badge"></a>
   <a href="./apps/mission-control-next"><img alt="Mission Control Next" src="https://img.shields.io/badge/ui-Mission%20Control%20Next-0f172a?style=for-the-badge"></a>
   <a href="./apps/gateway"><img alt="Fastify Gateway" src="https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge"></a>
   <a href="./package.json"><img alt="pnpm monorepo" src="https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge"></a>
@@ -174,7 +174,7 @@ Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Chat
 | Models | The shipped model catalog spans Anthropic (including `claude-opus-4-8` and `fable-5`), OpenAI, Google, GLM, Moonshot, and Perplexity, with capability-selected per-step model routing inside orchestration and `llama.cpp` as a first-class guided local runtime option. |
 | Mesh | `packages/mesh-core` readiness is evidence-gated by `verify:mesh:readiness`, covering join-token, mTLS/tailnet posture, leases, owner failover, replication offsets, Settings visibility, and Gateway diagnostics. |
 | MCP | Local `stdio` servers and the built-in Approval Inbox path are the visible runtime-invokable MCP surface; generic remote HTTP/SSE transports are gated behind an explicit experimental flag. Governed remote records support no-auth, token-env, and OAuth2 with OS secret-store token refs, refresh near expiry, `Authorization: Bearer ...` injection, and redacted audit/errors; missing tokens surface as `needs_auth`, expired tokens surface as `expired` and remain blocked until reconnect/refresh. Durable runs are exposed as MCP Tasks (list/get/cancel), and MCP elicitations route into the Approval Inbox. |
-| Release line | The latest published release is `v1.0.0`. The workspace is renumbered to `0.1.0-rc.1` for the release-candidate installer rebuild, and installer/DMG/tarball artifact names plus embedded release manifests carry the RC version. |
+| Release line | The published release line is the `0.1.0-rc.1` release candidate, shipped as the GitHub prerelease `GoatCitadel 0.1.0 RC`. The earlier `v1.0.0` tag remains in git history, and installer/DMG/tarball artifact names plus embedded release manifests carry the RC version. |
 | Desktop/installers | Windows x64 and arm64 installer paths are part of the product shape. macOS arm64 has an experimental ad-hoc-signed DMG lane for friend smoke only; macOS/Linux release artifacts are development-only until their workflow matrices produce signed proof. Public-trust signed EXE/DMG distribution requires exact-SHA proof plus release evidence; unsigned or ad-hoc convenience installers must be labeled as such. |
 | Docker | Docker is a supported local/shared-host runtime boundary. It does not replace auth, approvals, path jails, allowlists, or policy. |
 
@@ -450,7 +450,7 @@ pnpm verify:visual:regression
 
 Safe public claims today:
 
-- GoatCitadel `1.0.0` is defined by [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md) and backed by [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md).
+- The GoatCitadel `1.0` product contract is defined by [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md) and backed by [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md); the published release line delivering that contract is the `0.1.0-rc.1` release candidate.
 - Chat, Cowork, and Code are distinct governed modes of one unified Work surface, backed by shared runtime foundations, with per-turn automatic routing and operator override.
 - Citadels are the operator-facing governance model: Citadel → workspace → project scope resolution is fail-closed, Gatehouse Ward `deny` and `require_approval` effects are enforced at the policy gate on every tool invocation, Vault secrets are sealed per Citadel behind the OS keychain, and Blueprints export/import without secrets.
 - Durable execution owns the shipped mission-session resumable flow set, including bounded policy-gated sub-agent fan-out via `agent.fanout` and planner-declared parallel workers.
