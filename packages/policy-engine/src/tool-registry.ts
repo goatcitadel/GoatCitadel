@@ -162,7 +162,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
         subtasks: {
           type: "array",
           minItems: 1,
-          maxItems: 3,
+          maxItems: SUBAGENT_FANOUT_MAX_SUBTASKS,
           items: {
             type: "object",
             properties: {

@@ -266,10 +266,15 @@ describe("createSubagentFanoutExecutor", () => {
       subtaskCount: number;
       completedCount: number;
       failedCount: number;
+      runId: string;
       results: Array<Record<string, unknown>>;
     };
 
     expect(runDelegatedStep).toHaveBeenCalledTimes(3);
+    // Turn attribution contract: the fan-out runId is derived from the
+    // prepared turn the executor was bound to (the entry service rebinds the
+    // executor for reflection retries so this stays accurate).
+    expect(result.runId).toMatch(/^subagent-fanout:turn-parent:/);
     expect(seenSteps.every((step) => step.role === "worker")).toBe(true);
     expect(seenSteps.every((step) => step.mode === "cowork" || step.mode === "code" || step.mode === "chat")).toBe(
       true,

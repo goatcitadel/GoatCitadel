@@ -280,22 +280,23 @@ async function runAgentSendChatMessageLlmPath(
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   const mode = resolvePreparedTurnMode(prepared);
   // R3-8: expose the turn-scoped `agent.fanout` executor for the lifetime of
-  // this buffered turn (covers the reflection retry too — same session, same
-  // prepared context). Gated on the turn's own eligibility so a delegated
+  // this buffered turn. Gated on the turn's own eligibility so a delegated
   // child (floored to subagentPolicy "off") never holds a live executor.
-  // Disposed in the finally below.
-  const disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
+  // Rebound to the retry turn on the reflection path (turn attribution) and
+  // disposed in the finally below.
+  const subagentFanoutExecutorOptions = {
+    signal: controller.signal,
+    operatorId: input.operatorId,
+    authActorId: input.authActorId,
+    authActorSource: input.authActorSource,
+    permissionProfileId: input.permissionProfileId,
+    localOperatorOverrideId: input.localOperatorOverrideId,
+    fullWebAccess: input.fullWebAccess,
+  };
+  let disposeSubagentFanout = shouldRegisterSubagentFanoutExecutor(prepared)
     ? host.subagentFanout?.register(
         sessionId,
-        createTurnSubagentFanoutExecutor(host, prepared, {
-          signal: controller.signal,
-          operatorId: input.operatorId,
-          authActorId: input.authActorId,
-          authActorSource: input.authActorSource,
-          permissionProfileId: input.permissionProfileId,
-          localOperatorOverrideId: input.localOperatorOverrideId,
-          fullWebAccess: input.fullWebAccess,
-        }),
+        createTurnSubagentFanoutExecutor(host, prepared, subagentFanoutExecutorOptions),
       )
     : undefined;
   try {
@@ -367,6 +368,17 @@ async function runAgentSendChatMessageLlmPath(
 
       const retryHistory = prepared.history;
       const retryPrompt = `${prepared.content}\n\nRetry guidance: last attempt was incomplete. Use a different approach or tool and be explicit about limits.`;
+      // R3-8: rebind the fan-out executor to the retry turn so any
+      // agent.fanout work during the retry is attributed to the retry turn's
+      // id (child runIds and delegated diagnostics derive from
+      // prepared.turnId), not the failed original.
+      if (shouldRegisterSubagentFanoutExecutor(prepared)) {
+        disposeSubagentFanout?.();
+        disposeSubagentFanout = host.subagentFanout?.register(
+          sessionId,
+          createTurnSubagentFanoutExecutor(host, { ...prepared, turnId: retryTurnId }, subagentFanoutExecutorOptions),
+        );
+      }
       const retryResult = await host.turnRuntime.run({
         sessionId,
         turnId: retryTurnId,
