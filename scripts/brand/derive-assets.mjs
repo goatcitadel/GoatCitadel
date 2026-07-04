@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..");
-const brandDir = path.join(repoRoot, "apps", "mission-control", "public", "brand");
+const brandDir = path.join(repoRoot, "apps", "mission-control-next", "public", "brand");
 const sourcePath = path.join(brandDir, "source", "goatcitadel-logo-source.png");
 
 async function main() {
