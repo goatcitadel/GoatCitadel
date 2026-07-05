@@ -374,7 +374,7 @@
 
 .mc-next-thread-subagent-row.tone-active .mc-next-thread-subagent-status,
 .mc-next-thread-step-head > span[data-tone="active"] {
-  color: var(--mc-accent);
+  color: var(--accent);
 }
 
 .mc-next-thread-subagent-row.tone-success .mc-next-thread-subagent-status,
@@ -1271,8 +1271,8 @@
 
 .mc-next-thread-tool-activity-row:hover,
 .mc-next-thread-tool-activity-more:hover {
-  border-color: color-mix(in oklab, var(--mc-accent) 52%, var(--mc-border-subtle));
-  background: color-mix(in oklab, var(--mc-accent) 10%, var(--mc-surface-1));
+  border-color: color-mix(in oklab, var(--accent) 52%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--accent) 10%, var(--mc-surface-1));
 }
 
 .mc-next-thread-tool-activity-status,
@@ -1312,7 +1312,7 @@
 }
 
 .mc-next-thread-tool-activity-row.tone-active .mc-next-thread-tool-activity-status {
-  color: var(--mc-accent);
+  color: var(--accent);
 }
 
 .mc-next-thread-tool-activity-row.tone-success .mc-next-thread-tool-activity-status {

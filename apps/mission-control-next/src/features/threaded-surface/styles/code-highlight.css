@@ -2,10 +2,9 @@
    HighlightedCode.tsx in packages/mission-control-shared). Highlight.js emits
    `hljs-*` class names (via lowlight); every color here derives from an already
    resolvable theme token with color-mix(in oklab, ...) so both themes stay in
-   sync automatically. NOTE: `--mc-accent` is not declared anywhere in this repo
-   (it is only ever referenced with a literal CSS fallback elsewhere) — the
-   canonical, actually-declared accent token is `--accent`, so that is used here
-   instead. */
+   sync automatically. NOTE: `--mc-accent` is not declared anywhere in this repo —
+   the canonical, actually-declared accent token is `--accent`, so that is used
+   here instead. */
 
 .mc-assistant-code-block .hljs-comment,
 .mc-assistant-code-block .hljs-quote {

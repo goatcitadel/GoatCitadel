@@ -141,11 +141,13 @@ export function ThreadedContextDrawer({
         <p className="mc-next-panel-kicker">Working Context</p>
         <h3>Thread grounding</h3>
       </div>
-      <div className="mc-next-panel-tab-row">
+      <div className="mc-next-panel-tab-row" role="tablist" aria-label="Context drawer panels">
         {(["context", "trace", "assist", "session"] as DrawerTab[]).map((tab) => (
           <button
             key={tab}
             type="button"
+            role="tab"
+            aria-selected={activeTab === tab}
             className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
             onClick={() => setActiveTab(tab)}
           >
