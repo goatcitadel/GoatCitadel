@@ -384,6 +384,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
+import { resolveUtilityModelOverride } from "./utility-model-routing.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -4075,7 +4076,39 @@ export class GatewayService {
     return this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
   }
 
+  /**
+   * Cheap utility-model override for background LLM calls. Returns undefined
+   * (= keep existing selection) unless utilityModelRoutingV1Enabled is on and
+   * the configured utility provider has a usable key.
+   */
+  private getUtilityModelOverride(): { providerId: string; model: string } | undefined {
+    if (this.readFeatureFlags().utilityModelRoutingV1Enabled !== true) {
+      return undefined;
+    }
+    const runtime = this.llmService.getRuntimeConfig({ useCache: true });
+    const utilityProviderId = runtime.utilityProviderId;
+    if (!utilityProviderId) {
+      return undefined;
+    }
+    // Keychain-backed keys are only surfaced when explicitly requested for a
+    // provider, so ask for the utility provider directly instead of relying on
+    // the active-provider summary.
+    const provider = this.llmService
+      .listProviders({ includeKeychainForProviderId: utilityProviderId, useCache: true })
+      .find((candidate) => candidate.providerId === utilityProviderId);
+    return resolveUtilityModelOverride({
+      flagEnabled: true,
+      utilityProviderId,
+      utilityModel: runtime.utilityModel,
+      provider,
+    });
+  }
+
   private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
+    const utilityOverride = this.getUtilityModelOverride();
+    if (utilityOverride) {
+      return utilityOverride;
+    }
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -4109,6 +4142,10 @@ export class GatewayService {
   }
 
   private getPromptJudgeModelDefaults(): { providerId?: string; model?: string } {
+    const utilityOverride = this.getUtilityModelOverride();
+    if (utilityOverride) {
+      return utilityOverride;
+    }
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -8636,6 +8673,7 @@ export class GatewayService {
       streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
+      utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8692,6 +8730,7 @@ export class GatewayService {
       streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
+      utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
     };
   }
 
