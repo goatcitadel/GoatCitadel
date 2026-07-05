@@ -188,6 +188,8 @@ describe("shared UI primitives", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("command-item");
     expect(JSON.stringify(renderer.toJSON())).toContain("sheet-content");
     expect(JSON.stringify(renderer.toJSON())).toContain("dialog-content");
+    expect(JSON.stringify(renderer.toJSON())).toContain("mc-dialog-overlay");
+    expect(JSON.stringify(renderer.toJSON())).toContain("mc-dialog-content");
     expect(JSON.stringify(renderer.toJSON())).toContain("popover-content");
   });
 
