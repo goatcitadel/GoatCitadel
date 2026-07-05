@@ -36,7 +36,7 @@ Inbound capability is derived from the runtime capability rules (`packages/gatew
 - **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook).
 - **Outbound delivery today:** Signal (bridge), iMessage (bridge), Microsoft Teams, Google Chat, Mattermost, ntfy, Zalo OA, Zalo Personal.
 
-Every inbound-capable connection starts with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime, and allowed messages still pass the standard policy gate.
+Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk) start with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
 
 Long-form walkthroughs below still focus on the current high-traffic channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those guided channels inside Mission Control without dropping back to raw JSON.
 
