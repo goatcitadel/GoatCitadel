@@ -205,6 +205,17 @@ const FOREIGN_MODEL_PROVIDER_IDS = new Set([
   "genie-ir20",
 ]);
 
+// Cloud aggregators/routers that forward requests to third-party model hosts.
+// The ultimate host is obscured from GoatCitadel, which matters for data-
+// sensitivity routing (see citadel-model-routing.ts): an aggregator must never
+// satisfy a prefer_local/local_only posture. Deliberately NOT the same set as
+// FOREIGN_MODEL_PROVIDER_IDS, which also contains local engines.
+const AGGREGATOR_PROVIDER_IDS = new Set(["openrouter", "vercel", "huggingface"]);
+
+export function isAggregatorProvider(providerId: string): boolean {
+  return AGGREGATOR_PROVIDER_IDS.has(providerId.trim().toLowerCase());
+}
+
 const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
   anthropic: "anthropic",
   "claude-code": "claude-code",
