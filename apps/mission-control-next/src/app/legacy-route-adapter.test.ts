@@ -379,6 +379,6 @@ describe("mission-control-next route model", () => {
       "Release-ready. Action: Configure provider credentials and run provider/model smoke evidence. Verification: verify:surface:regression, provider exercise paths. Constraint: Provider setup is release-bearing with smoke evidence, model discovery state, and plain failure copy.",
     );
     expect(describeReleaseSurfaceStatus("ship")).toBe("Release-ready");
-    expect(describeReleaseSurfaceStatus("hide")).toBe("Hidden");
+    expect(describeReleaseSurfaceStatus("hide")).toBe("Direct URL only");
   });
 });

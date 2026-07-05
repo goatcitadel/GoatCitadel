@@ -122,6 +122,11 @@ export function ThreadedContextDrawer({
   const planningMode: ChatPlanningMode = props.prefs?.planningMode ?? props.planningMode ?? "off";
   const planningEnabled = planningMode === "advisory";
   const trustRouteSummary = formatTrustRouteSummary(props);
+  const selectionSummary =
+    props.trust?.selectionSourceSummary ?? formatSelectionSource(props.routePreflight?.selectionSource);
+  const streamSummary = `${props.streamEnabled ? "On" : "Off"} · ${
+    props.visualStreamMode === "smooth" ? "Smooth" : "Instant"
+  }`;
   const handleSubagentPolicyChange = (next: ChatSubagentPolicy) => {
     if (next === "auto_when_useful" && !readSubagentAutoAckFromStorage(props.selectedSessionId)) {
       setPendingSubagentAuto(next);
@@ -164,19 +169,6 @@ export function ThreadedContextDrawer({
                 <dd>{getProjectSummary(props)}</dd>
               </div>
               <div>
-                <dt>Model</dt>
-                <dd>
-                  {formatContextValue(
-                    props.selectedModel ?? props.trust?.effectiveProviderModelSummary,
-                    "Route pending",
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Policy</dt>
-                <dd>{permissionSummary ?? "Policy pending"}</dd>
-              </div>
-              <div>
                 <dt>Memory</dt>
                 <dd>{props.selectedTurn?.trace.memoryMode ?? props.prefs?.memoryMode ?? "Session default"}</dd>
               </div>
@@ -186,63 +178,62 @@ export function ThreadedContextDrawer({
               </div>
             </dl>
             <div className="mc-next-context-chip-row">
-              <StatusChip tone={props.streamEnabled ? "success" : "muted"}>
-                {props.streamEnabled ? "Streaming on" : "Streaming off"}
+              <StatusChip tone={props.streamEnabled ? "success" : "muted"}>Streaming: {streamSummary}</StatusChip>
+              <StatusChip tone={planningEnabled ? "success" : "muted"}>
+                {planningEnabled ? "Planning on" : "Planning off"}
               </StatusChip>
-              <StatusChip tone="muted">{props.planningMode}</StatusChip>
-              {permissionSummary ? (
-                <StatusChip tone={permissionOverrideActive ? "warning" : "muted"}>{permissionSummary}</StatusChip>
-              ) : null}
-              <StatusChip tone="muted">{formatSelectionSource(props.routePreflight?.selectionSource)}</StatusChip>
             </div>
-            <div className="mc-next-context-actions">
-              <button
-                type="button"
-                className="mc-next-panel-button"
-                onClick={() => props.onStreamEnabledChange(!props.streamEnabled)}
-              >
-                {props.streamEnabled ? "Disable streaming" : "Enable streaming"}
-              </button>
-              <div className="mc-next-visual-stream-toggle" role="group" aria-label="Visual stream mode">
-                {(["smooth", "instant"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`mc-next-panel-button${props.visualStreamMode === mode ? " active" : ""}`}
-                    aria-pressed={props.visualStreamMode === mode}
-                    onClick={() => props.onVisualStreamModeChange(mode)}
-                  >
-                    {mode === "smooth" ? "Smooth" : "Instant"}
-                  </button>
-                ))}
-              </div>
-              {props.selectedProviderId ? (
+            <details className="mc-next-context-detail-disclosure">
+              <summary>Runtime controls</summary>
+              <div className="mc-next-context-actions">
                 <button
                   type="button"
                   className="mc-next-panel-button"
+                  onClick={() => props.onStreamEnabledChange(!props.streamEnabled)}
+                >
+                  {props.streamEnabled ? "Disable streaming" : "Enable streaming"}
+                </button>
+                <div className="mc-next-visual-stream-toggle" role="group" aria-label="Visual stream mode">
+                  {(["smooth", "instant"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`mc-next-panel-button${props.visualStreamMode === mode ? " active" : ""}`}
+                      aria-pressed={props.visualStreamMode === mode}
+                      onClick={() => props.onVisualStreamModeChange(mode)}
+                    >
+                      {mode === "smooth" ? "Smooth" : "Instant"}
+                    </button>
+                  ))}
+                </div>
+                {props.selectedProviderId ? (
+                  <button
+                    type="button"
+                    className="mc-next-panel-button"
+                    onClick={() =>
+                      void props.onPrefPatch({
+                        providerId: props.selectedProviderId,
+                        model: props.selectedModel,
+                      })
+                    }
+                  >
+                    Reapply route
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  aria-pressed={props.planningMode === "advisory"}
                   onClick={() =>
                     void props.onPrefPatch({
-                      providerId: props.selectedProviderId,
-                      model: props.selectedModel,
+                      planningMode: props.planningMode === "advisory" ? "off" : "advisory",
                     })
                   }
                 >
-                  Reapply route
+                  {props.planningMode === "advisory" ? "Turn planning off" : "Turn planning on"}
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className="mc-next-panel-button"
-                aria-pressed={props.planningMode === "advisory"}
-                onClick={() =>
-                  void props.onPrefPatch({
-                    planningMode: props.planningMode === "advisory" ? "off" : "advisory",
-                  })
-                }
-              >
-                {props.planningMode === "advisory" ? "Turn planning off" : "Turn planning on"}
-              </button>
-            </div>
+              </div>
+            </details>
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
             {props.routePreflight?.blockedReason ? <p>{props.routePreflight.blockedReason}</p> : null}
           </section>
@@ -253,9 +244,7 @@ export function ThreadedContextDrawer({
               <h4>{props.trust.gatewayLabel}</h4>
               <div className="mc-next-context-truth-compact">
                 <StatusChip tone="muted">{permissionSummary ?? "Policy pending"}</StatusChip>
-                {props.trust.selectionSourceSummary ? (
-                  <StatusChip tone="muted">{props.trust.selectionSourceSummary}</StatusChip>
-                ) : null}
+                <StatusChip tone="muted">{selectionSummary}</StatusChip>
                 {props.trust.fallbackSummary ? (
                   <StatusChip tone="warning">{props.trust.fallbackSummary}</StatusChip>
                 ) : null}

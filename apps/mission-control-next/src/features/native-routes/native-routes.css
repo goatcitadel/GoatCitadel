@@ -6,7 +6,7 @@
   max-width: min(100%, 1400px);
   width: 100%;
   margin-inline: auto;
-  padding: 0.85rem 1rem 1.2rem;
+  padding: 0.85rem 1rem 3.7rem;
 }
 
 .mc-next-shell[data-area="settings"] .mc-next-rail-menu,
@@ -2004,7 +2004,25 @@
 }
 
 .mc-next-board-lanes .mc-next-directory-lane-list {
+  display: grid;
+  align-content: start;
   max-height: min(44vh, 26rem);
+}
+
+.mc-next-board-lanes .mc-next-cowork-board-lane-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.34rem;
+  min-height: 8.25rem;
+  height: auto;
+  overflow: visible;
+}
+
+.mc-next-board-lanes .mc-next-cowork-board-lane-item .mc-next-directory-lane-meta {
+  flex: 0 0 auto;
+  line-height: 1.25;
 }
 
 .mc-next-board-lanes .mc-next-directory-lane-item strong,
@@ -2012,14 +2030,29 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  line-height: 1.32;
 }
 
 .mc-next-board-lanes .mc-next-directory-lane-item strong {
   -webkit-line-clamp: 2;
+  flex: 0 0 auto;
 }
 
 .mc-next-board-lanes .mc-next-directory-lane-item p {
   -webkit-line-clamp: 2;
+  min-height: calc(2 * var(--text-xs) * 1.32);
+  flex: 0 0 auto;
+}
+
+.mc-next-board-lanes .mc-next-cowork-board-lane-item .mc-next-directory-lane-status {
+  flex: 0 0 auto;
+  align-items: flex-start;
+  line-height: 1.25;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-agent {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mc-next-directory-lane {

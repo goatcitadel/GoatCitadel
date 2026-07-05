@@ -429,6 +429,10 @@
   border-radius: var(--r-pill);
 }
 
+.mc-next-threaded-surface.unified .mc-next-composer-title .mc-next-threaded-mode-control {
+  display: none;
+}
+
 .mc-next-threaded-surface.unified .mc-next-threaded-mode-control-eyebrow {
   display: none;
 }
@@ -895,8 +899,16 @@
 .mc-next-status-strip-primary {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 0.42rem;
   min-width: 0;
+  padding-inline-end: 0.2rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mc-next-status-strip-primary::-webkit-scrollbar {
+  display: none;
 }
 
 .mc-next-status-strip .mc-next-status-pill {
@@ -912,6 +924,8 @@
 .mc-next-status-details {
   position: relative;
   flex: 0 0 auto;
+  margin-left: auto;
+  z-index: 1;
 }
 
 .mc-next-status-details summary {

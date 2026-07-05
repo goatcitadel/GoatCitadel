@@ -264,7 +264,7 @@ export function ShellTopbar({
             title="Open approvals"
           >
             <span className="mc-next-badge-count">{pendingApprovals}</span>
-            <span className="mc-next-badge-label">approvals</span>
+            <span className="mc-next-badge-label">{pendingApprovals === 1 ? "approval" : "approvals"}</span>
           </button>
         </div>
         <button

@@ -3746,6 +3746,7 @@ export async function runVisualRegressionLane(context, options = {}) {
                     verificationTarget.packageName,
                     VISUAL_ROUTE_READY_TIMEOUT_MS,
                   );
+                  await assertNextVisualScenarioChrome(page, route);
                 } catch (readyError) {
                   return await captureRouteReadyFailure(context, {
                     page,
@@ -3773,6 +3774,7 @@ export async function runVisualRegressionLane(context, options = {}) {
                 });
                 await page.waitForTimeout(1000);
                 await stabilizeVisualRegressionSnapshot(page);
+                await assertNoFooterStatusCollision(page, { route, variant });
                 const baselineSlug = `visual-regression-${route.slug}-${variant.slug}`;
                 const artifactSlug = `${scenarioLane}-${route.slug}-${variant.slug}`;
                 const artifacts = await captureBrowserArtifacts(context, {
@@ -5859,6 +5861,87 @@ function resolveVisualRouteHref(route, variant, fixture) {
     }
   }
   return href;
+}
+
+async function assertNextVisualScenarioChrome(page, route) {
+  if (route?.slug !== "chat-pending-user-input") {
+    return;
+  }
+  const result = await page.evaluate(() => {
+    const text = document.body?.textContent ?? "";
+    const buttonTexts = Array.from(document.querySelectorAll("button")).map((button) =>
+      (button.textContent ?? "").replace(/\s+/g, " ").trim(),
+    );
+    return {
+      hasThreadedSurface: Boolean(document.querySelector(".mc-next-threaded-surface")),
+      hasContextPanel: Boolean(document.querySelector(".mc-next-threaded-context-panel")),
+      hasMobileContextControl: buttonTexts.some((value) => value === "Context" || value.endsWith(" Context")),
+      hasWorkingContextCopy: /Working Context|WORKING CONTEXT/.test(text),
+      legacyNeedles: ["GOATCITADEL / Mission Control", "New session", "MODE Chat"].filter((needle) =>
+        text.includes(needle),
+      ),
+    };
+  });
+  if (!result.hasThreadedSurface) {
+    throw new Error("chat-pending-user-input rendered outside the Mission Control Next threaded surface");
+  }
+  if (!result.hasContextPanel && !result.hasMobileContextControl && !result.hasWorkingContextCopy) {
+    throw new Error("chat-pending-user-input did not expose the new Working Context surface or mobile control");
+  }
+  if (result.legacyNeedles.length > 0) {
+    throw new Error(`chat-pending-user-input rendered legacy shell copy: ${result.legacyNeedles.join(", ")}`);
+  }
+}
+
+async function assertNoFooterStatusCollision(page, input = {}) {
+  const result = await page.evaluate(() => {
+    const primary = document.querySelector(".mc-next-status-strip-primary");
+    const details = document.querySelector(".mc-next-status-details");
+    if (!primary || !details) {
+      return { checked: false };
+    }
+    const primaryRect = primary.getBoundingClientRect();
+    const detailsRect = details.getBoundingClientRect();
+    const primaryVisible = primaryRect.width > 0 && primaryRect.height > 0;
+    const detailsVisible = detailsRect.width > 0 && detailsRect.height > 0;
+    if (!primaryVisible || !detailsVisible) {
+      return { checked: false };
+    }
+    const overlapWidth = Math.max(
+      0,
+      Math.min(primaryRect.right, detailsRect.right) - Math.max(primaryRect.left, detailsRect.left),
+    );
+    const overlapHeight = Math.max(
+      0,
+      Math.min(primaryRect.bottom, detailsRect.bottom) - Math.max(primaryRect.top, detailsRect.top),
+    );
+    return {
+      checked: true,
+      overlapArea: overlapWidth * overlapHeight,
+      primary: {
+        bottom: primaryRect.bottom,
+        left: primaryRect.left,
+        right: primaryRect.right,
+        top: primaryRect.top,
+      },
+      details: {
+        bottom: detailsRect.bottom,
+        left: detailsRect.left,
+        right: detailsRect.right,
+        top: detailsRect.top,
+      },
+    };
+  });
+  if (!result.checked || result.overlapArea <= 1) {
+    return;
+  }
+  const routeSlug = input.route?.slug ?? "unknown-route";
+  const variantSlug = input.variant?.slug ?? "unknown-variant";
+  throw new Error(
+    `footer status collision detected for ${routeSlug}/${variantSlug}: primary=${JSON.stringify(
+      result.primary,
+    )} details=${JSON.stringify(result.details)}`,
+  );
 }
 
 async function captureRouteReadyFailure(context, input) {

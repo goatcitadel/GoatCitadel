@@ -1447,7 +1447,7 @@ export function describeReleaseSurfaceStatus(status: ReleaseSurfaceStatus): stri
   if (status === "experimental") {
     return "Experimental";
   }
-  return "Hidden";
+  return "Direct URL only";
 }
 
 export function describeReleaseScopeForOperator(scope: RouteReleaseScope): string {

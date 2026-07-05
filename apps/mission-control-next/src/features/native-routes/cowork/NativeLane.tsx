@@ -26,7 +26,9 @@ export function NativeLane({ title, count, items, selectedTaskId, onSelect }: Na
             <button
               key={item.taskId}
               type="button"
-              className={`mc-next-directory-lane-item${selectedTaskId === item.taskId ? " is-selected" : ""}`}
+              className={`mc-next-directory-lane-item mc-next-cowork-board-lane-item${
+                selectedTaskId === item.taskId ? " is-selected" : ""
+              }`}
               data-status={item.status}
               aria-pressed={selectedTaskId === item.taskId}
               aria-label={`${item.title}: ${formatTaskStatus(item.status)}, ${item.priority} priority`}
