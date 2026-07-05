@@ -66,7 +66,7 @@
 | XC-config-drift-2 | platform-config | goatcitadel.example.json dead profiles map removed; tools.allow/deny reconciled to split (lines 211-259); deep-equal drift gate added (config-defaults.test.ts:76-80). 8 tests pass. |
 | XC-config-drift-3 | platform-config | Explicit `action` on all 5 cron rows + `BUILT_IN_CRON_ACTIONS` repair (cron-job-config-helpers.ts:29-34,133). Test loop16 :160-216. No misleading task fallback. |
 | XC-config-drift-6 | platform-config | withAssistantDefaults firecrawl flipped to enabled:true / defaultReadBackend firecrawl / apiKeyEnv default (config.ts). Built-in default now matches example. Test :59-66. |
-| XC-supply-chain-4 | windows-sweep | Personal path `F:\code\personal-ai` → 'this GoatCitadel checkout' (spec :5, commit 2eefaa041); verify-repo-hygiene exits 0; fast.repo-hygiene GREEN. 6/6. **CI-unblocker.** |
+| XC-supply-chain-4 | windows-sweep | Personal path `<personal-clone>` → 'this GoatCitadel checkout' (spec :5, commit 2eefaa041); verify-repo-hygiene exits 0; fast.repo-hygiene GREEN. 6/6. **CI-unblocker.** |
 | XC-windows-parity-5 | windows-sweep | `.gitattributes` gained `* text=auto eol=lf` + CRLF for .bat/.cmd/.ps1 (:1-4); enforced by new hygiene check (verify-repo-hygiene.mjs:127-139). |
 | XC-supply-chain-1 | windows-sweep | `requireDigestPin` default flipped `?? false` → `?? true` (config.ts:978; mirrored code-mode-execution-backends.ts:157); example ships fail-closed. Tests updated. |
 
