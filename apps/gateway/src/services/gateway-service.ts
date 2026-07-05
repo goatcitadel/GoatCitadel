@@ -1233,6 +1233,24 @@ export class GatewayService {
       },
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      recordEvidenceEnvelope: (input) => {
+        // Best-effort: envelope failure must never fail the cron run.
+        try {
+          return this.evidenceEnvelopeService.createEnvelope(input);
+        } catch (error) {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "evidence",
+            event: "evidence.envelope.failed",
+            message: "Failed to record cron run evidence envelope",
+            context: {
+              eventKind: input.eventKind,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+          return undefined;
+        }
+      },
       runHandlers: {
         task: async (job, _context?) => {
           const task = this.createCronInboxTask(job);
@@ -8636,6 +8654,7 @@ export class GatewayService {
       streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
+      cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8692,6 +8711,7 @@ export class GatewayService {
       streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
+      cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
     };
   }
 

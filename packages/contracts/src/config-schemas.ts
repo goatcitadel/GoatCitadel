@@ -696,6 +696,10 @@ export const AssistantConfigInputSchema = z
         // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
         // stream chunks. Absent/false (default) ⇒ byte-identical to today.
         chatThinkingStreamV1Enabled: z.boolean().optional(),
+        // Records a signed cron_job_executed evidence envelope for every cron
+        // run and pins the envelope id on the job record. Absent/false
+        // (default) ⇒ cron runs record no evidence, exactly as today.
+        cronEvidenceV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

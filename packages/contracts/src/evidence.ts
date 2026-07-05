@@ -8,7 +8,8 @@ export type EvidenceEnvelopeEventKind =
   | "continuation_gate"
   | "skill_export"
   | "browser_content_guard"
-  | "external_writeback";
+  | "external_writeback"
+  | "cron_job_executed";
 
 export type EvidenceEnvelopeSignatureStatus = "signed_hmac" | "unsigned_local" | "verification_failed";
 
