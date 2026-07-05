@@ -455,6 +455,7 @@ Use this matrix when handing the repo to external manual testers:
 | Flow | Required setup | Expected proof |
 | --- | --- | --- |
 | Desktop host | Windows installer or `pnpm desktop:dev` from source | native window loads Mission Control, close-to-tray keeps runtime warm, Open in Browser and logs actions work |
+| macOS desktop evidence | installed/running experimental Mac app plus `pnpm macos:desktop:evidence` from a source checkout | redacted evidence bundle with signing/Gatekeeper state, gateway/UI health, packaged status JSON, SSE stream readiness, and runtime log tails |
 | Installer bootstrap | Installed launcher smoke (`goatcitadel status --json`, `goatcitadel launch --no-open --json --wait`, `goatcitadel stop --json`) or source `pnpm verify:install` | packaged launcher starts/stops the local runtime; source lane proves isolated gateway/UI bootstrap and provider bootstrap behavior |
 | Onboarding + shell routes | `goatcitadel up`, then complete onboarding | Chat, Cowork, Code, Projects, Library, Ops, and Settings load without auth/origin errors |
 | Chat command flow | any started stack, one session | `/help` or another local command path returns a stable thread/update result without requiring cloud provider access |

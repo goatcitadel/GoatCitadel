@@ -377,14 +377,22 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
         Err(_) => return,
     };
     let gateway_url = runtime.gateway_url.clone();
-    let mut token = runtime
-        .desktop_event_stream
-        .as_ref()
-        .and_then(|value| value.token.clone());
+    let bridge_token_required =
+        desktop_event_stream_requires_token(runtime.desktop_event_stream.as_ref());
+    let mut token = if bridge_token_required {
+        runtime
+            .desktop_event_stream
+            .as_ref()
+            .and_then(|value| value.token.clone())
+    } else {
+        None
+    };
+    let mut auth_failure_notified = false;
     if let Some(error) = runtime
         .desktop_event_stream
         .as_ref()
         .and_then(|value| value.error.clone())
+        .filter(|_| bridge_token_required)
     {
         emit_watcher_error(&app, "desktop_sse_token_unavailable", &error);
     }
@@ -398,16 +406,26 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
         };
         if !response.status().is_success() {
             if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-                token = refresh_desktop_event_stream_token(&gateway_url);
-                emit_watcher_error(
-                    &app,
-                    "desktop_sse_auth_failed",
-                    "Desktop approval notifications could not authenticate to the gateway event stream.",
-                );
+                if bridge_token_required {
+                    token = refresh_desktop_event_stream_token(&gateway_url);
+                    emit_watcher_error(
+                        &app,
+                        "desktop_sse_auth_failed",
+                        "Desktop approval notifications could not authenticate to the gateway event stream.",
+                    );
+                } else if !auth_failure_notified {
+                    emit_watcher_error(
+                        &app,
+                        "desktop_sse_auth_failed",
+                        "Desktop approval notifications could not authenticate even though gateway auth mode does not require an SSE bridge token.",
+                    );
+                    auth_failure_notified = true;
+                }
             }
             sleep_or_stop(&stop, Duration::from_secs(10));
             continue;
         }
+        auth_failure_notified = false;
 
         let mut data_lines: Vec<String> = Vec::new();
         let reader = BufReader::new(response);
@@ -434,6 +452,13 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
         }
         sleep_or_stop(&stop, Duration::from_secs(2));
     }
+}
+
+fn desktop_event_stream_requires_token(credential: Option<&DesktopEventStreamCredential>) -> bool {
+    !matches!(
+        credential.and_then(|value| value.auth_mode.as_deref()),
+        Some("none")
+    )
 }
 
 fn build_event_stream_url(gateway_url: &str, token: Option<&str>) -> String {
@@ -995,6 +1020,28 @@ mod tests {
             build_event_stream_url("http://127.0.0.1:8787", None),
             "http://127.0.0.1:8787/api/v1/events/stream?replay=0",
         );
+    }
+
+    #[test]
+    fn skips_desktop_sse_bridge_tokens_when_auth_mode_is_none() {
+        let none_mode = DesktopEventStreamCredential {
+            scope: Some("events:stream".to_string()),
+            token: None,
+            expires_at: None,
+            auth_mode: Some("none".to_string()),
+            error: None,
+        };
+        let token_mode = DesktopEventStreamCredential {
+            scope: Some("events:stream".to_string()),
+            token: Some("token".to_string()),
+            expires_at: None,
+            auth_mode: Some("token".to_string()),
+            error: None,
+        };
+
+        assert!(!desktop_event_stream_requires_token(Some(&none_mode)));
+        assert!(desktop_event_stream_requires_token(Some(&token_mode)));
+        assert!(desktop_event_stream_requires_token(None));
     }
 
     #[test]
