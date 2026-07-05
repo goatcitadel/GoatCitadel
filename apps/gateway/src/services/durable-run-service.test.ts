@@ -1080,6 +1080,44 @@ describe("DurableRunService", () => {
     );
   });
 
+  it("resumes autonomy kill-switch parked runs when the switch is disengaged", () => {
+    const run = {
+      ...createRun("run-parked-for-kill-switch", "waiting", "chat.turn.execute"),
+      metadata: {
+        autonomous: { kind: "scheduled" },
+        waitForEvent: { eventKey: "autonomy.v1.enabled", correlationId: "run-parked-for-kill-switch" },
+        autonomyKillSwitch: { reason: "autonomyV1Disabled", blockedAt: "2026-03-14T00:00:00.000Z" },
+      },
+    };
+    // A run parked for a different reason must be left untouched by the sweep.
+    const otherWaiting = {
+      ...createRun("run-waiting-on-approval", "waiting", "chat.turn.execute"),
+      metadata: { waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-1" } },
+    };
+    const runs = new Map<string, DurableRunRecord>([
+      [run.runId, run],
+      [otherWaiting.runId, otherWaiting],
+    ]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const context = createContext(runs, checkpoints, timeline);
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks: new Set<Promise<void>>(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    const result = service.resumeRunsWaitingForAutonomyKillSwitch();
+
+    expect(result.woken).toEqual(["run-parked-for-kill-switch"]);
+    expect(runs.get("run-parked-for-kill-switch")).toMatchObject({ status: "queued" });
+    // The approval-parked run is not the kill switch's business — leave it waiting.
+    expect(runs.get("run-waiting-on-approval")).toMatchObject({ status: "waiting" });
+  });
+
   it("fails timed-out prompt-pack Cowork chat turns instead of waiting for an operator resume", async () => {
     vi.useFakeTimers();
     try {

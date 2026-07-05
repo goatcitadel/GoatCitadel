@@ -990,6 +990,11 @@ async function callMcpServerModeToolForStdio(state, params) {
   const call = normalizeMcpToolCallParams(params);
   const response = await launcherGatewayRequest(state, "/api/v1/mcp/server-mode/call", {
     method: "POST",
+    // Tool calls proxy real gateway work (code mode, long tools), so they get a
+    // generous deadline rather than the short health-check bound — but still a
+    // deadline, so a gateway that accepts the connection yet never answers can't
+    // hang the stdio client forever.
+    timeoutMs: LAUNCHER_GATEWAY_TOOL_CALL_TIMEOUT_MS,
     body: JSON.stringify({
       descriptorName: call.name,
       args: call.arguments,
@@ -1004,17 +1009,20 @@ async function callMcpServerModeToolForStdio(state, params) {
 }
 
 async function launcherGatewayRequest(state, apiPath, init = {}) {
+  const { timeoutMs, ...fetchInit } = init;
   const url = new URL(apiPath, `${state.gatewayUrl}/`).toString();
-  const response = await fetch(url, {
-    ...init,
-    method: init.method || "GET",
+  const response = await fetchWithTimeout(url, timeoutMs ?? LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS, {
+    ...fetchInit,
+    method: fetchInit.method || "GET",
     headers: {
       "Content-Type": "application/json",
       "x-goatcitadel-origin-surface": "mcp",
       "x-goatcitadel-correlation-id": `mcp-stdio:${randomUUID()}`,
-      ...(init.method && init.method !== "GET" ? { "Idempotency-Key": `mcp-stdio:${randomUUID()}` } : {}),
+      ...(fetchInit.method && fetchInit.method !== "GET"
+        ? { "Idempotency-Key": `mcp-stdio:${randomUUID()}` }
+        : {}),
       ...readLauncherOperatorAuthHeaders(),
-      ...(init.headers ?? {}),
+      ...(fetchInit.headers ?? {}),
     },
   });
   const text = await response.text();
@@ -1499,6 +1507,11 @@ async function fetchWithTimeout(url, timeoutMs, init = {}) {
 // under installer smokes and desktop hosts that block on our exit, and a gateway
 // that accepts the connection but never answers would otherwise hang them forever.
 const LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS = 15000;
+
+// MCP stdio tool calls proxy real gateway work and can run far longer than a
+// health check, so they get their own generous deadline. It still bounds the
+// request so a hung gateway cannot stall the stdio client indefinitely.
+const LAUNCHER_GATEWAY_TOOL_CALL_TIMEOUT_MS = 600000;
 
 async function fetchJson(url) {
   const response = await fetchWithTimeout(url, LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS);

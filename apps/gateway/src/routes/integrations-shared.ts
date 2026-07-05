@@ -257,8 +257,3 @@ export function readConfigString(config: Record<string, unknown>, key: string): 
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
-
-export function readEnvConfigString(config: Record<string, unknown>, key: string): string | undefined {
-  const envName = readConfigString(config, key);
-  return envName ? process.env[envName] : undefined;
-}

@@ -1423,6 +1423,51 @@ describe("executeDelegatedPlanStep S1 streaming fallback", () => {
     expect(result.output).toBeUndefined();
     expect(result.error).toBe("stream exploded before terminal result");
   });
+
+  it("fails the delegated step when a post-delta stream error leaves a transient waiting_for_tool trace", async () => {
+    const host = createHost();
+    const childStream = vi.fn(async function* () {
+      yield {
+        type: "delta",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        messageId: "child-msg-1",
+        delta: "partial ",
+      };
+      // Transient in-flight marker patched in right before a tool call; the child
+      // then crashes before the tool result / message_done arrives.
+      yield {
+        type: "trace_update",
+        sessionId: "delegate-session",
+        turnId: "child-turn-1",
+        trace: {
+          turnId: "child-turn-1",
+          sessionId: "delegate-session",
+          status: "waiting_for_tool",
+          model: "delegate-model",
+          routing: { effectiveProviderId: "delegate-provider" },
+        },
+      };
+      throw new Error("stream exploded mid tool call");
+    });
+    host.agentSendChatMessageStream = childStream as never;
+    host.agentSendChatMessage = vi.fn() as never;
+    const pushed: string[] = [];
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      streamTerminalStep: true,
+      finalDeltaSink: { push: (delta: string) => pushed.push(delta), markStreamed: () => {} },
+    } as never);
+
+    // waiting_for_tool is not an authoritative terminal trace, so the mid-tool-call
+    // failure must surface as a failed step rather than a "running"/partial result.
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(pushed).toEqual(["partial "]);
+    expect(result.status).toBe("failed");
+    expect(result.output).toBeUndefined();
+    expect(result.error).toBe("stream exploded mid tool call");
+  });
 });
 
 function createHost(): ChatTurnStreamHost & {

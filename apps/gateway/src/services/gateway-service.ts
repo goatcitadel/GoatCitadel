@@ -2199,6 +2199,17 @@ export class GatewayService {
       this.startOrchestrationWorktreeReapScheduler();
     }
     this.durableRunService.startWorker();
+    if (!this.isFeatureEnabled("autonomyV1Disabled")) {
+      // Recover autonomous runs that were parked while the kill switch was engaged
+      // in a previous process lifetime and never woken before the restart.
+      try {
+        this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
+      } catch (error) {
+        log.warn("Failed to resume autonomy-kill-switch-parked durable runs on startup", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     this.approvalEffectsService.startWorker();
     this.promptPackService.resumeInterruptedBenchmarkRuns();
     // Pre-warm LLM model catalogs for configured providers in the background.
@@ -8626,8 +8637,22 @@ export class GatewayService {
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
     };
+    const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
+    if (autonomyKillSwitchDisengaged) {
+      // Runs parked while the kill switch was engaged wait on a per-run event that
+      // nothing else emits; without an explicit resume they stay "waiting" forever.
+      // Best-effort — the flag write above already succeeded and must not be undone
+      // by a resume failure.
+      try {
+        this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
+      } catch (error) {
+        log.warn("Failed to resume autonomy-kill-switch-parked durable runs", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     return next;
   }
 

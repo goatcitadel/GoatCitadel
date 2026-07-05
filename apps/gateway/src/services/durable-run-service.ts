@@ -796,6 +796,44 @@ export class DurableRunService {
     };
   }
 
+  /**
+   * Resume autonomous durable runs that were parked while the autonomy kill
+   * switch was engaged. Each such run waits on {@link AUTONOMY_KILL_SWITCH_RESUME_EVENT}
+   * keyed to its own runId — an event nothing else ever emits — so without this
+   * sweep they stay "waiting" forever once the switch is turned back off. Call
+   * this when `autonomyV1Disabled` flips true -> false and on worker startup
+   * (when autonomy is enabled) so runs parked before a restart also recover.
+   * Idempotent: non-waiting or differently-parked runs are skipped by
+   * {@link wakeDurableRun}.
+   */
+  resumeRunsWaitingForAutonomyKillSwitch(): { woken: string[] } {
+    if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
+      return { woken: [] };
+    }
+    const woken: string[] = [];
+    for (const runId of this.ctx.storage.durableRuns.listRunIdsByStatus("waiting")) {
+      let run: DurableRunRecord;
+      try {
+        run = this.ctx.storage.durableRuns.getRun(runId);
+      } catch {
+        // Run vanished between the id scan and the read — nothing to resume.
+        continue;
+      }
+      const waitForEvent = (run.metadata as { waitForEvent?: { eventKey?: string } } | undefined)?.waitForEvent;
+      if (waitForEvent?.eventKey !== AUTONOMY_KILL_SWITCH_RESUME_EVENT) {
+        continue;
+      }
+      const result = this.wakeDurableRun(runId, {
+        eventKey: AUTONOMY_KILL_SWITCH_RESUME_EVENT,
+        correlationId: runId,
+      });
+      if (result.outcome === "woke") {
+        woken.push(runId);
+      }
+    }
+    return { woken };
+  }
+
   recoverDurableDeadLetter(
     entryId: string,
     actorId = "operator",

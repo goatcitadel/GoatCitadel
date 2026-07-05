@@ -1313,6 +1313,10 @@ async function driveTerminalDelegatedStream(
 }
 
 function isTerminalDelegatedStreamTrace(trace: ChatTurnTraceRecord | undefined): boolean {
+  // completed/partial/failed/cancelled are genuine final states. waiting_for_approval
+  // and waiting_for_user_input are genuine resting states: the child has intentionally
+  // parked awaiting external input, so a stream that ends here carries an authoritative
+  // (if paused) child result.
   switch (trace?.status) {
     case "completed":
     case "partial":
@@ -1320,8 +1324,13 @@ function isTerminalDelegatedStreamTrace(trace: ChatTurnTraceRecord | undefined):
     case "cancelled":
     case "waiting_for_approval":
     case "waiting_for_user_input":
-    case "waiting_for_tool":
       return true;
+    // waiting_for_tool is NOT terminal: it is a transient in-flight marker patched
+    // in immediately before each tool call and superseded once the tool completes.
+    // If the stream threw while the last-seen trace was still waiting_for_tool, the
+    // child crashed mid-tool-execution — treat it as a running/stale trace so the
+    // error is rethrown into the delegated failure path instead of being promoted
+    // to a successful-looking partial result.
     default:
       return false;
   }
