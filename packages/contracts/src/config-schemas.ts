@@ -696,6 +696,10 @@ export const AssistantConfigInputSchema = z
         // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
         // stream chunks. Absent/false (default) ⇒ byte-identical to today.
         chatThinkingStreamV1Enabled: z.boolean().optional(),
+        // Signal inbound poller (competitive-gap phase B1b): gates the governed
+        // poll loop against the local signal-cli bridge. Absent/false (default)
+        // ⇒ Signal stays outbound-only and behavior is byte-identical to today.
+        signalInboundV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

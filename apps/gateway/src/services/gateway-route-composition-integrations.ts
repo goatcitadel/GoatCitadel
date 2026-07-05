@@ -300,6 +300,7 @@ function createIntegrationChannelPortForGateway(
     recordConnectorHealthRun: (report) =>
       connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
     syncDiscordRuntime: () => gateway.syncDiscordRuntime(),
+    syncSignalInboundRuntime: () => gateway.syncSignalInboundRuntime(),
     getDiscordRuntimeStatus: (connectionId) => gateway.discordRuntimeService.getConnectionStatus(connectionId),
     getIntegrationConnection: (connectionId) => gateway.storage.integrationConnections.get(connectionId),
     assertDiscordConnection,
