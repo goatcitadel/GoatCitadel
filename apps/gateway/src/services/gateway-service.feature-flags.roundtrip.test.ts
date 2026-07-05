@@ -30,6 +30,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   streamIdleWatchdogV1Disabled: true,
   plannerFanoutV1Disabled: true,
   subagentFanoutV1Disabled: true,
+  channelVoiceReplyV1Enabled: true,
 };
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {

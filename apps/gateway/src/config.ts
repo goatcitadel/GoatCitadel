@@ -96,6 +96,12 @@ export interface FeatureFlagsConfig {
    * detection site) so the client's collapsible ChatThinkingSection can render.
    */
   chatThinkingStreamV1Enabled?: boolean;
+  /**
+   * Competitive-gap program phase B2b: TTS voice replies to audio-capable
+   * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
+   * path never synthesizes audio and behavior is byte-identical to today.
+   */
+  channelVoiceReplyV1Enabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -699,6 +705,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
+    ["channelVoiceReplyV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_REPLY_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1241,6 +1248,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
       subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
+      // B2b TTS voice replies: default OFF. `?? false` means the channel reply
+      // path never synthesizes audio unless an operator opts in — with the flag
+      // left at its default, runtime behavior is byte-identical to today.
+      channelVoiceReplyV1Enabled: featuresInput.channelVoiceReplyV1Enabled ?? false,
     },
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {

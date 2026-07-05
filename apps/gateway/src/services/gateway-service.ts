@@ -149,6 +149,7 @@ import type {
   CalendarListQuery,
   ChannelActivityInput,
   ChannelActivityResult,
+  ChannelAttachmentInput,
   ChannelDeliveryDiagnostics,
   ChannelReactInput,
   ChannelReplyInput,
@@ -607,6 +608,7 @@ import {
   commsCalendarCreate as commsCalendarCreateImpl,
   type CommsHost,
 } from "./comms-service.js";
+import { buildChannelVoiceReplyAttachment } from "./channel-voice-reply-service.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
 import {
   MCP_APPROVAL_INBOX_URL,
@@ -2469,12 +2471,21 @@ export class GatewayService {
       const assistantContent = response.assistantMessage?.content?.trim();
       if (assistantContent) {
         this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-reply");
+        // B2b voice replies: synthesize first (hard-bounded inside the
+        // service), then send text+audio together on the existing attachment
+        // lane. The helper never throws, so a synthesis failure or timeout
+        // degrades to the unchanged text-only send.
+        const voiceReplyAttachment = await this.maybeBuildChannelVoiceReplyAttachment(
+          binding.connectionId,
+          assistantContent,
+        );
         this.requireExecutedToolResult(
           "channel.send",
           await this.commsSend({
             connectionId: binding.connectionId,
             target: binding.target,
             message: assistantContent,
+            attachments: voiceReplyAttachment ? [voiceReplyAttachment] : undefined,
             replyToMessageId: deliveryReplyToMessageId?.trim() || prepared.userEventId,
             sessionId,
             agentId: "assistant",
@@ -2486,6 +2497,54 @@ export class GatewayService {
         transport: "integration",
       };
     });
+  }
+
+  /**
+   * B2b: optionally synthesize a TTS voice-note attachment for a channel
+   * reply. Cheap flag pre-gate first (flag off ⇒ zero extra work, including
+   * no connection lookup), then delegates to the never-throwing
+   * channel-voice-reply service. Any unexpected error here also degrades to
+   * text-only delivery — this path must never fail or delay the text reply.
+   */
+  private async maybeBuildChannelVoiceReplyAttachment(
+    connectionId: string,
+    text: string,
+  ): Promise<ChannelAttachmentInput | undefined> {
+    try {
+      if (!this.isFeatureEnabled("channelVoiceReplyV1Enabled")) {
+        return undefined;
+      }
+      const connection = this.storage.integrationConnections.get(connectionId);
+      return await buildChannelVoiceReplyAttachment(
+        {
+          text,
+          channelKey: connection.key,
+          connectionConfig: (connection.config ?? {}) as Record<string, unknown>,
+          connectionId,
+        },
+        {
+          isChannelVoiceReplyEnabled: () => this.isFeatureEnabled("channelVoiceReplyV1Enabled"),
+          synthesizeSpeech: (input) => this.mediaVoiceService.synthesizeSpeech(input),
+          recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+        },
+      );
+    } catch (error) {
+      try {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "voice",
+          event: "voice.reply.attachment_failed",
+          message: "Voice reply attachment build failed; delivering text-only reply.",
+          context: {
+            connectionId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch {
+        // Diagnostics must never block the text reply either.
+      }
+      return undefined;
+    }
   }
 
   public async listChatMessages(sessionId: string, limit = 200, cursor?: string): Promise<ChatMessageRecord[]> {
@@ -8636,6 +8695,7 @@ export class GatewayService {
       streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
+      channelVoiceReplyV1Enabled: patch.channelVoiceReplyV1Enabled ?? current.channelVoiceReplyV1Enabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8692,6 +8752,7 @@ export class GatewayService {
       streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
+      channelVoiceReplyV1Enabled: stored?.channelVoiceReplyV1Enabled ?? fromConfig.channelVoiceReplyV1Enabled,
     };
   }
 

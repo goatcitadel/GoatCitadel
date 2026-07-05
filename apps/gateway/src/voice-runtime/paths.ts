@@ -12,6 +12,9 @@ export interface VoiceRuntimePaths {
   modelsDir: string;
   ffmpegDir: string;
   manifestPath: string;
+  piperDir: string;
+  ttsVoicesDir: string;
+  ttsManifestPath: string;
 }
 
 export function resolveGoatCitadelHome(): string {
@@ -35,6 +38,9 @@ export function resolveVoiceRuntimePaths(): VoiceRuntimePaths {
     modelsDir: path.join(voiceDir, "models"),
     ffmpegDir: path.join(voiceDir, "ffmpeg"),
     manifestPath: path.join(voiceDir, "manifest.json"),
+    piperDir: path.join(voiceDir, "piper"),
+    ttsVoicesDir: path.join(voiceDir, "tts-voices"),
+    ttsManifestPath: path.join(voiceDir, "tts-manifest.json"),
   };
 }
 

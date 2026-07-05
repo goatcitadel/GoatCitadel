@@ -119,5 +119,7 @@ export interface RuntimeSettings {
     plannerFanoutV1Disabled?: boolean;
     /** R3-8 kill switch: model-callable `agent.fanout` spawn tool. Absent/false ⇒ feature ON. */
     subagentFanoutV1Disabled?: boolean;
+    /** B2b TTS voice replies to audio-capable channels. Absent/false (default) ⇒ no audio synthesis on the reply path. */
+    channelVoiceReplyV1Enabled?: boolean;
   };
 }
