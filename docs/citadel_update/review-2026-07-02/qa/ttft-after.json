@@ -1,0 +1,12 @@
+{
+  "trials": [8338, 21960, 7532],
+  "medianMs": 8338,
+  "method": "Playwright MutationObserver on .mc-assistant-streaming-markdown / .mc-next-thread-bubble.assistant; baseline assistant-bubble count captured BEFORE submit-click; t=submit-click to first non-empty NEW assistant token; fresh session per trial; prompt='Say hello in one sentence.'; 1440x900; chromium 1.58.2; HEAD a81eeccc4",
+  "timestamp": "2026-07-02",
+  "vsBeforeMs": 3311,
+  "deltaMs": 5027,
+  "measuredSurfaceMode": ["cowork"],
+  "notes": "IMPORTANT: every session in this workspace resolves to COWORK mode (send button 'Delegate'), NOT plain chat. '?mode=chat' is overridden (URL rewrites to mode=cowork; see N3). These are cowork agentic-orchestration turns (planner+workers, store-and-poll), NOT like-for-like with the 3311ms chat baseline. Gateway log during run shows provider 'Chat completion timed out after 1500ms' with retries 0-2 and some failed turns, so latency reflects local provider instability + orchestration overhead, not solely UI streaming. Per-trial: [{\"kind\":\"token\",\"ms\":8338,\"where\":\"assistant-bubble-new\",\"mode\":\"cowork\",\"sendText\":\"Delegate\"},{\"kind\":\"token\",\"ms\":21960,\"where\":\"assistant-bubble-new\",\"mode\":\"cowork\",\"sendText\":\"Stop turn\"},{\"kind\":\"token\",\"ms\":7532,\"where\":\"assistant-bubble-new\",\"mode\":\"cowork\",\"sendText\":\"Delegate\"}]",
+  "consoleErrors": [],
+  "blocked": false
+}

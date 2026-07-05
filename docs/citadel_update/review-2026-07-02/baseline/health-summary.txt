@@ -1,0 +1,9 @@
+[start] perfcheck
+[done ] perfcheck rc=1 11s
+[start] lint
+[done ] lint rc=0 307s
+[start] typecheck
+[done ] typecheck rc=0 270s
+[start] verifyfast
+[done ] verifyfast rc=1 1322s
+HEALTH-RUN-COMPLETE

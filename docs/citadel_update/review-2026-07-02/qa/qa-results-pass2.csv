@@ -1,0 +1,8 @@
+surface,pass,httpNav,readySelectorFound,hasVisibleContent,consoleErrorCount,firstConsoleError
+chat,PASS,ok,y,y,0,
+cowork,PASS,ok,y,y,0,
+code,PASS,ok,y,y,0,
+approvals,PASS,ok,y,y,0,
+library,PASS,ok,y,y,0,
+settings,PASS,ok,y,y,0,
+projects,PASS,ok,y,y,0,

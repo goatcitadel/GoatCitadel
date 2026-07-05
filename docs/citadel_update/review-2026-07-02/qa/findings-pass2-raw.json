@@ -1,0 +1,206 @@
+{
+  "footer": {
+    "footer": [
+      {
+        "tag": "DIV",
+        "cls": "mc-next-status-pill",
+        "title": null,
+        "ariaLabel": "Gateway reachability and access checks passed.: Gateway ready",
+        "text": "Gateway reachability and access checks passed.Gateway ready",
+        "accessibleName": "Gateway reachability and access checks passed.: Gateway ready"
+      },
+      {
+        "tag": "DIV",
+        "cls": "mc-next-status-pill",
+        "title": null,
+        "ariaLabel": "Live updates: Streaming",
+        "text": "Live updatesStreaming",
+        "accessibleName": "Live updates: Streaming"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "mc-next-status-pill mc-next-status-pill-action",
+        "title": "Approvals",
+        "ariaLabel": "Approvals: 0 pending",
+        "text": "Approvals0 pending",
+        "accessibleName": "Approvals: 0 pending"
+      },
+      {
+        "tag": "DIV",
+        "cls": "mc-next-status-pill",
+        "title": null,
+        "ariaLabel": "Sessions: 200 visible",
+        "text": "Sessions200 visible",
+        "accessibleName": "Sessions: 200 visible"
+      },
+      {
+        "tag": "DIV",
+        "cls": "mc-next-status-pill",
+        "title": null,
+        "ariaLabel": "Spend: $0.00",
+        "text": "Spend$0.00",
+        "accessibleName": "Spend: $0.00"
+      },
+      {
+        "tag": "DIV",
+        "cls": "mc-next-status-pill",
+        "title": null,
+        "ariaLabel": "Daemon: Serving",
+        "text": "DaemonServing",
+        "accessibleName": "Daemon: Serving"
+      }
+    ],
+    "approvalsPill": {
+      "tag": "BUTTON",
+      "cls": "mc-next-status-pill mc-next-status-pill-action",
+      "title": "Approvals",
+      "ariaLabel": "Approvals: 0 pending",
+      "text": "Approvals0 pending",
+      "accessibleName": "Approvals: 0 pending"
+    }
+  },
+  "escape": {
+    "openedDesktop": true,
+    "drawerBeforeEsc": true,
+    "drawerAfterEsc": false
+  },
+  "responsive1": {
+    "viewport": "1100x860",
+    "drawerOpen": true,
+    "drawerPosition": "fixed",
+    "drawerBottomCss": "14.4px",
+    "drawerRect": {
+      "x": 14.390625,
+      "y": 301.609375,
+      "width": 1071.21875,
+      "height": 544,
+      "top": "301.609px",
+      "right": "14.4px",
+      "bottom": "14.4px",
+      "left": "14.4px",
+      "position": "fixed",
+      "transform": "none"
+    },
+    "composerRect": {
+      "x": 0,
+      "y": 714.15625,
+      "width": 1100,
+      "height": 145.84375,
+      "top": 714.15625,
+      "right": 1100,
+      "bottom": 860,
+      "left": 0
+    },
+    "sendRect": {
+      "x": 1024.921875,
+      "y": 807.609375,
+      "width": 70.28125,
+      "height": 34,
+      "top": 807.609375,
+      "right": 1095.203125,
+      "bottom": 841.609375,
+      "left": 1024.921875
+    },
+    "drawerOverlapsComposer": true,
+    "drawerOverlapsSend": true,
+    "sendCoveredByOther": true,
+    "scrimPresent": true,
+    "scrimDisplayed": true,
+    "scrimClass": "mc-next-inspector-scrim open",
+    "scrimClickCloses": true
+  },
+  "responsive2": {
+    "1040": {
+      "grabCursor": "grab",
+      "draggableClass": true,
+      "movedAfterDrag": false,
+      "after": {
+        "rect": {
+          "x": 14.390625,
+          "y": 301.609375,
+          "width": 1011.21875,
+          "height": 544,
+          "top": 301.609375,
+          "right": 1025.609375,
+          "bottom": 845.609375,
+          "left": 14.390625
+        },
+        "dragX": "4.828125px",
+        "dragY": "-300px",
+        "transform": "none"
+      }
+    },
+    "1100": {
+      "grabCursor": "grab",
+      "draggableClass": true,
+      "movedAfterDrag": false,
+      "after": {
+        "rect": {
+          "x": 14.390625,
+          "y": 301.609375,
+          "width": 1071.21875,
+          "height": 544,
+          "top": 301.609375,
+          "right": 1085.609375,
+          "bottom": 845.609375,
+          "left": 14.390625
+        },
+        "dragX": "3.21875px",
+        "dragY": "-200px",
+        "transform": "none"
+      }
+    },
+    "1150": {
+      "grabCursor": "grab",
+      "draggableClass": true,
+      "movedAfterDrag": false,
+      "after": {
+        "rect": {
+          "x": 14.390625,
+          "y": 301.609375,
+          "width": 1121.21875,
+          "height": 544,
+          "top": 301.609375,
+          "right": 1135.609375,
+          "bottom": 845.609375,
+          "left": 14.390625
+        },
+        "dragX": "1.609375px",
+        "dragY": "-100px",
+        "transform": "none"
+      }
+    }
+  },
+  "composerV2": {
+    "defaultState": {
+      "contextStripPresent": true,
+      "contextStripText": "Modelopenai-codex / gpt-5.5ModeCoworkMemoryLast turn: autoLive0 tokens·$0.00",
+      "chipRowPresent": true,
+      "chips": [
+        "Thread ready",
+        "Web auto",
+        "Full web",
+        "Think extended",
+        "Standard",
+        "openai-codex / gpt-5.5",
+        "0 tokens / $0.00"
+      ],
+      "killSwitch": null
+    },
+    "killedState": {
+      "contextStripPresent": false,
+      "contextStripText": null,
+      "chipRowPresent": true,
+      "chips": [
+        "Thread ready",
+        "Web auto",
+        "Full web",
+        "Think extended",
+        "Standard",
+        "Route checking",
+        "0 tokens / $0.00"
+      ],
+      "killSwitch": "off"
+    }
+  }
+}

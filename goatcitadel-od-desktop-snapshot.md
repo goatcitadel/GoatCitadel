@@ -1,0 +1,28 @@
+- generic [active] [ref=e1] [box=0,0,1440,1250]:
+  - text: "`r`n"
+  - generic [ref=e2] [box=0,23,1440,1227]:
+    - banner [ref=e3] [box=0,23,1440,64]:
+      - generic [ref=e5] [box=16,37,36,36]: GC
+      - generic [ref=e6] [box=84,35,1048,40]
+      - generic [ref=e13] [box=1132,35,308,40]
+    - navigation "Primary areas" [ref=e19] [box=0,87,84,1129]:
+      - button "W Work" [ref=e20] [cursor=pointer] [box=8,99,67,58]
+      - button "P Projects" [ref=e22] [cursor=pointer] [box=8,165,67,58]
+      - button "L Library" [ref=e24] [cursor=pointer] [box=8,231,67,58]
+      - button "O Ops" [ref=e26] [cursor=pointer] [box=8,297,67,58]
+      - button "S Settings" [ref=e28] [cursor=pointer] [box=8,363,67,58]
+    - complementary [ref=e30] [box=84,87,230,1129]:
+      - generic [ref=e31] [box=84,87,229,82]
+      - generic [ref=e34] [box=84,169,229,495]
+    - main [ref=e60] [box=314,87,806,1129]:
+      - generic [ref=e63] [box=330,103,774,1097]
+    - complementary [ref=e151] [box=1120,87,320,1129]:
+      - tablist "Inspector tabs" [ref=e152] [box=1121,87,319,43]
+      - generic [ref=e157] [box=1121,130,319,421]
+    - contentinfo [ref=e167] [box=0,1216,1440,34]:
+      - generic [ref=e168] [box=16,1224,112,19]
+      - generic [ref=e170] [box=306,1224,79,19]
+      - generic [ref=e172] [box=562,1224,119,19]
+      - generic [ref=e174] [box=858,1224,66,19]
+      - generic [ref=e176] [box=1102,1224,73,19]
+      - generic [ref=e178] [box=1352,1224,73,19]

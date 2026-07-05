@@ -1,0 +1,16 @@
+- generic [active] [ref=e1] [box=0,0,375,2092]:
+  - text: "`r`n"
+  - generic [ref=e2] [box=0,23,375,2069]:
+    - banner [ref=e3] [box=0,23,375,56]:
+      - generic [ref=e180] [box=0,23,96,40]
+      - button "Command palette, search routes, resume runs, inspect proof Ctrl K" [ref=e10] [cursor=pointer] [box=108,23,255,40]
+      - button "Toggle theme" [ref=e16] [cursor=pointer] [box=16,63,40,40]: ◐
+    - main [ref=e60] [box=0,79,375,1979]:
+      - generic [ref=e63] [box=12,91,351,1955]
+    - contentinfo [ref=e167] [box=0,2058,375,34]:
+      - generic [ref=e168] [box=16,2048,60,56]
+      - generic [ref=e170] [box=88,2057,46,37]
+      - generic [ref=e172] [box=146,2048,64,56]
+      - generic [ref=e174] [box=222,2057,35,37]
+      - generic [ref=e176] [box=269,2057,39,37]
+      - generic [ref=e178] [box=320,2057,39,37]

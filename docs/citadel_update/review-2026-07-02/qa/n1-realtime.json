@@ -1,0 +1,36 @@
+{
+  "samples": [
+    {
+      "stripAria": "Live updates: Streaming (compatibility fallback)",
+      "stripDegraded": null,
+      "topbarBadge": "Live fallback"
+    },
+    {
+      "stripAria": "Live updates: Streaming (compatibility fallback)",
+      "stripDegraded": null,
+      "topbarBadge": "Live fallback"
+    },
+    {
+      "stripAria": "Live updates: Streaming (compatibility fallback)",
+      "stripDegraded": null,
+      "topbarBadge": "Live fallback"
+    },
+    {
+      "stripAria": "Live updates: Streaming (compatibility fallback)",
+      "stripDegraded": null,
+      "topbarBadge": "Live fallback"
+    },
+    {
+      "stripAria": "Live updates: Streaming (compatibility fallback)",
+      "stripDegraded": null,
+      "topbarBadge": "Live fallback"
+    },
+    {
+      "stripAria": "Live updates: Streaming (compatibility fallback)",
+      "stripDegraded": null,
+      "topbarBadge": "Live fallback"
+    }
+  ],
+  "finalStrip": "Live updates: Streaming (compatibility fallback)",
+  "stableClean": false
+}
