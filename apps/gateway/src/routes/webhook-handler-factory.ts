@@ -7,6 +7,10 @@ import {
   type ChannelActivityResult,
 } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "../services/chat-command-service.js";
+import type {
+  ChannelVoiceInboundRequest,
+  ChannelVoiceTranscriptionResult,
+} from "../services/channel-voice-inbound-service.js";
 import { ChannelBotLoopGuard, type BotLoopGuardConfig } from "../services/channel-bot-loop-guard.js";
 
 export const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
@@ -159,6 +163,15 @@ export type IntegrationWebhookRouteLike = {
       lastError?: string | null;
     },
   ) => IntegrationConnectionRecord;
+  /**
+   * channelVoiceInboundV1Enabled gate + channel voice download/transcription.
+   * Optional-typed so existing route-level test harnesses keep compiling, but
+   * carried as REQUIRED members of the integration-webhook route port
+   * (integration-webhook-route-service.ts), so the real gateway composition
+   * cannot silently drop them.
+   */
+  isVoiceInboundEnabled?: () => boolean;
+  transcribeChannelVoice?: (input: ChannelVoiceInboundRequest) => Promise<ChannelVoiceTranscriptionResult>;
 };
 
 type FastifyWithGateway = {
@@ -303,32 +316,36 @@ export function validateWebhookHostHeader(request: Pick<FastifyRequest, "headers
   }
 }
 
-export async function dispatchInboundWebhookMessage(
+export type InboundWebhookDispatchOptions = {
+  channel: string;
+  connectionId: string;
+  idempotencyKey: string;
+  eventType: string;
+  bindingTarget?: string;
+  /**
+   * Per-connection inbound trust config. New connections should set
+   * inboundAccessMode: "allowlist"; old configs without the field stay
+   * legacy-open and produce a migration diagnostic.
+   */
+  inboundAccessConfig?: Record<string, unknown>;
+  allowedSenders?: readonly string[];
+  message: IngestChannelMessageInput;
+  responseOptions?: {
+    deliveryReplyToMessageId?: string;
+    channelSystemInstruction?: string;
+  };
+};
+
+/**
+ * Sender trust gate. Unlike the bot-loop guard, this runs before
+ * ingest/binding: a sender that fails the active trust posture must never
+ * open or bind a session, dispatch a turn — or, on the voice path, trigger a
+ * media download or transcription subprocess.
+ */
+function evaluateInboundWebhookAccess(
   integrationWebhooks: IntegrationWebhookRouteLike,
-  options: {
-    channel: string;
-    connectionId: string;
-    idempotencyKey: string;
-    eventType: string;
-    bindingTarget?: string;
-    /**
-     * Per-connection inbound trust config. New connections should set
-     * inboundAccessMode: "allowlist"; old configs without the field stay
-     * legacy-open and produce a migration diagnostic.
-     */
-    inboundAccessConfig?: Record<string, unknown>;
-    allowedSenders?: readonly string[];
-    message: IngestChannelMessageInput;
-    responseOptions?: {
-      deliveryReplyToMessageId?: string;
-      channelSystemInstruction?: string;
-    };
-  },
-  loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
+  options: InboundWebhookDispatchOptions,
 ) {
-  // Sender trust gate. Unlike the bot-loop guard, this runs before
-  // ingest/binding: a sender that fails the active trust posture must never
-  // open or bind a session, nor dispatch a turn.
   const inboundAccess = evaluateChannelInboundAccess({
     config: options.inboundAccessConfig,
     actorId: options.message.actorId,
@@ -377,16 +394,31 @@ export async function dispatchInboundWebhookMessage(
       },
     });
     return {
-      accepted: true,
-      replied: false,
-      ignored: true as const,
-      reason: inboundAccess.reason,
-      eventType: options.eventType,
-      inboundAccess: {
-        mode: inboundAccess.mode,
+      allowed: false as const,
+      response: {
+        accepted: true,
+        replied: false,
+        ignored: true as const,
         reason: inboundAccess.reason,
+        eventType: options.eventType,
+        inboundAccess: {
+          mode: inboundAccess.mode,
+          reason: inboundAccess.reason,
+        },
       },
     };
+  }
+  return { allowed: true as const };
+}
+
+export async function dispatchInboundWebhookMessage(
+  integrationWebhooks: IntegrationWebhookRouteLike,
+  options: InboundWebhookDispatchOptions,
+  loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
+) {
+  const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);
+  if (!gate.allowed) {
+    return gate.response;
   }
 
   const ingestResult = await integrationWebhooks.ingestChannelMessage(
@@ -481,6 +513,124 @@ export async function dispatchInboundWebhookMessage(
     turnId: responseTurnId,
     eventType: options.eventType,
   };
+}
+
+/**
+ * Ingest framing for transcribed inbound voice. The prefix marks the text as
+ * spoofable auto-transcription: it is NEVER eligible for channel command
+ * parsing or approval-token resolution (commands require typed text), and the
+ * model-facing turn carries the untrusted provenance inline.
+ */
+export const VOICE_TRANSCRIPT_CONTENT_PREFIX = "[voice transcript — untrusted, auto-transcribed]";
+
+export type InboundVoiceDispatchOptions = InboundWebhookDispatchOptions & {
+  voice: {
+    /** Downloads + transcribes the referenced media. Only invoked AFTER the sender trust gate passes. */
+    transcribe: () => Promise<ChannelVoiceTranscriptionResult>;
+    /** Ingested instead of a transcript when transcription fails — the message is never silently dropped. */
+    fallbackContent: string;
+  };
+};
+
+/**
+ * Voice variant of dispatchInboundWebhookMessage (channelVoiceInboundV1Enabled).
+ *
+ * Ordering is governance-critical:
+ * 1. The sender trust gate runs FIRST — a non-allowlisted sender never triggers
+ *    a media download or a transcription subprocess.
+ * 2. The webhook is acked immediately; download/transcription/ingest run async.
+ * 3. The transcript is framed with VOICE_TRANSCRIPT_CONTENT_PREFIX and flows
+ *    through the same dispatchInboundWebhookMessage policy path as text ingest.
+ * 4. On transcription failure the placeholder content is ingested instead.
+ */
+export async function dispatchInboundVoiceWebhookMessage(
+  integrationWebhooks: IntegrationWebhookRouteLike,
+  options: InboundVoiceDispatchOptions,
+  loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
+) {
+  const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);
+  if (!gate.allowed) {
+    return gate.response;
+  }
+  void runInboundVoiceIngestTask(integrationWebhooks, options, loopGuard);
+  return {
+    accepted: true,
+    replied: false,
+    queued: true as const,
+    transcription: "pending" as const,
+    eventType: options.eventType,
+  };
+}
+
+async function runInboundVoiceIngestTask(
+  integrationWebhooks: IntegrationWebhookRouteLike,
+  options: InboundVoiceDispatchOptions,
+  loopGuard: ChannelBotLoopGuard,
+): Promise<void> {
+  const { voice, ...dispatchOptions } = options;
+  let content = voice.fallbackContent;
+  try {
+    const result = await voice.transcribe();
+    if (result.ok) {
+      content = `${VOICE_TRANSCRIPT_CONTENT_PREFIX} ${result.transcript}`;
+    } else {
+      integrationWebhooks.recordDevDiagnostic?.({
+        level: "warn",
+        category: "channels",
+        event: "channel.voice_transcription_failed",
+        message: "Inbound channel voice transcription failed; ingesting the placeholder content instead.",
+        context: {
+          channel: options.channel,
+          connectionId: options.connectionId,
+          actorId: options.message.actorId,
+          eventId: options.message.eventId,
+          reason: result.reason,
+          detail: result.detail,
+        },
+      });
+    }
+  } catch (error) {
+    integrationWebhooks.recordDevDiagnostic?.({
+      level: "warn",
+      category: "channels",
+      event: "channel.voice_transcription_failed",
+      message: "Inbound channel voice transcription threw; ingesting the placeholder content instead.",
+      context: {
+        channel: options.channel,
+        connectionId: options.connectionId,
+        actorId: options.message.actorId,
+        eventId: options.message.eventId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+  try {
+    await dispatchInboundWebhookMessage(
+      integrationWebhooks,
+      {
+        ...dispatchOptions,
+        message: {
+          ...dispatchOptions.message,
+          content,
+        },
+      },
+      loopGuard,
+    );
+  } catch (error) {
+    integrationWebhooks.recordDevDiagnostic?.({
+      level: "error",
+      category: "channels",
+      event: "channel.voice_inbound_dispatch_failed",
+      message: "Inbound channel voice ingest failed after the webhook was already acked.",
+      context: {
+        channel: options.channel,
+        connectionId: options.connectionId,
+        actorId: options.message.actorId,
+        eventId: options.message.eventId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
 }
 
 async function emitInboundWebhookActivity(

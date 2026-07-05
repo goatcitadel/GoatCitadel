@@ -32,6 +32,7 @@ import {
   IntegrationChannelService,
   type IntegrationChannelPort as IntegrationChannelServicePort,
 } from "./integration-channel-service.js";
+import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
 import { IntegrationDiagnosticsService } from "./integration-diagnostics-service.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { ExternalConnectorCatalogService } from "./external-connector-catalog-service.js";
@@ -47,6 +48,12 @@ export function composeIntegrationChannelRouteDependencies(
 > {
   const integrationDiagnostics = createIntegrationDiagnosticsServiceForGateway(gateway);
   const integrationChannel = createIntegrationChannelServiceForGateway(gateway, integrationDiagnostics);
+  const channelVoiceInbound = new ChannelVoiceInboundService({
+    fetchWithTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
+    transcribeVoice: (input) => gateway.mediaVoiceService.transcribeVoice(input),
+    isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
+    resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
+  });
   const externalConnectorCatalog = new ExternalConnectorCatalogService({
     reviewStates: gateway.storage.externalConnectorReviewStates,
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
@@ -237,6 +244,8 @@ export function composeIntegrationChannelRouteDependencies(
       hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
       ingestChannelMessage: (channel, idempotencyKey, input) =>
         gateway.ingestChannelMessage(channel, idempotencyKey, input),
+      isVoiceInboundEnabled: () => gateway.isFeatureEnabled("channelVoiceInboundV1Enabled") === true,
+      transcribeChannelVoice: (input) => channelVoiceInbound.transcribe(input),
       parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
       emitChannelActivity: (input) => gateway.commsActivity(input),

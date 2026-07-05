@@ -258,3 +258,100 @@ describe("whatsapp webhook helpers", () => {
     );
   });
 });
+
+describe("whatsapp inbound voice media (channelVoiceInboundV1Enabled)", () => {
+  const audioPayload = {
+    object: "whatsapp_business_account",
+    entry: [
+      {
+        changes: [
+          {
+            field: "messages",
+            value: {
+              metadata: { phone_number_id: "123456789012345" },
+              contacts: [{ wa_id: "15558675309", profile: { name: "Ada Lovelace" } }],
+              messages: [
+                {
+                  from: "15558675309",
+                  id: "wamid.audio.1",
+                  timestamp: "1712182068",
+                  type: "audio",
+                  audio: {
+                    id: "media-id-9000",
+                    mime_type: "audio/ogg; codecs=opus",
+                    voice: true,
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  it("keeps the placeholder without voiceMedia when the flag is off (byte-identical default)", () => {
+    const normalized = normalizeWhatsAppWebhookPayload({
+      connectionId: "conn-whatsapp",
+      payload: audioPayload,
+    });
+    expect(normalized).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventType: "audio",
+        content: "[whatsapp audio]",
+      }),
+    );
+    expect(normalized).not.toHaveProperty("voiceMedia");
+  });
+
+  it("emits a structured voiceMedia ref alongside the placeholder when the flag is on", () => {
+    const normalized = normalizeWhatsAppWebhookPayload({
+      connectionId: "conn-whatsapp",
+      payload: audioPayload,
+      voiceInboundEnabled: true,
+    });
+    expect(normalized).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventType: "audio",
+        content: "[whatsapp audio]",
+        voiceMedia: {
+          mediaId: "media-id-9000",
+          mimeType: "audio/ogg; codecs=opus",
+        },
+      }),
+    );
+  });
+
+  it("never emits voiceMedia for non-audio messages even with the flag on", () => {
+    const normalized = normalizeWhatsAppWebhookPayload({
+      connectionId: "conn-whatsapp",
+      payload: {
+        object: "whatsapp_business_account",
+        entry: [
+          {
+            changes: [
+              {
+                field: "messages",
+                value: {
+                  messages: [
+                    {
+                      from: "15558675309",
+                      id: "wamid.text.1",
+                      type: "text",
+                      text: { body: "typed text" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      voiceInboundEnabled: true,
+    });
+    expect(normalized).toEqual(expect.objectContaining({ kind: "message", content: "typed text" }));
+    expect(normalized).not.toHaveProperty("voiceMedia");
+  });
+});

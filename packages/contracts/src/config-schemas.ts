@@ -696,6 +696,10 @@ export const AssistantConfigInputSchema = z
         // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
         // stream chunks. Absent/false (default) ⇒ byte-identical to today.
         chatThinkingStreamV1Enabled: z.boolean().optional(),
+        // Inbound channel voice ingestion (Telegram voice notes / WhatsApp
+        // audio → transcription → governed turn). Absent/false (default) ⇒
+        // byte-identical: parsers keep emitting placeholders / dropping voice.
+        channelVoiceInboundV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

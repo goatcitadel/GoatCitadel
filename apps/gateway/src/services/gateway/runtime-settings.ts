@@ -109,6 +109,8 @@ export interface RuntimeSettings {
     autonomyV1Disabled?: boolean;
     /** Thinking-display skeleton. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
     chatThinkingStreamV1Enabled?: boolean;
+    /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
+    channelVoiceInboundV1Enabled?: boolean;
     /** Round-3 kill switch: planner triviality-skip + speed-model drafting. Absent/false ⇒ feature ON. */
     plannerFastPathV1Disabled?: boolean;
     /** Round-3 kill switch: all-read-only tool-batch parallel execution. Absent/false ⇒ feature ON. */
