@@ -208,7 +208,7 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     expect(suggestions.some((item) => item.kind === "mcp_template")).toBe(true);
   });
 
-  it("suggests a Code Mode self-authored candidate only after existing capability lanes have no match", async () => {
+  it("suggests a governed self-authored capability candidate only after existing capability lanes have no match", async () => {
     const suggestions = await scoutCapabilityUpgradeSuggestions({
       content: "Build a recurring worksheet pack from these lesson notes and save it as reusable workflow",
       assistantText: "I don't have that capability available yet.",
@@ -257,6 +257,9 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
       requiresUserApproval: true,
     });
     expect(suggestions[0]?.candidateId).toMatch(/^candidate-/);
+    expect(suggestions[0]?.summary).toContain("GoatCitadel can stage");
+    expect(suggestions[0]?.summary).not.toContain("Code Mode can draft");
+    expect(suggestions[0]?.validationExpectation).toContain("governed capability build");
     expect(suggestions[0]?.reason).toContain("A new reusable capability is justified");
   });
 

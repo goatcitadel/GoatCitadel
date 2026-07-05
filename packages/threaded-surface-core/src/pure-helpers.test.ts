@@ -353,7 +353,7 @@ describe("threaded-surface-core pure helpers", () => {
     ).toBeNull();
   });
 
-  it("unbound gate when code predicted and no project bound", () => {
+  it("does not gate predicted code when no project is bound", () => {
     expect(
       resolveCodeSendGate({
         autoRouteActive: true,
@@ -361,10 +361,10 @@ describe("threaded-surface-core pure helpers", () => {
         predictedConfidence: 0.9,
         hasBoundProject: false,
       }),
-    ).toEqual({ reason: "unbound" });
+    ).toBeNull();
   });
 
-  it("low_confidence gate when code predicted, bound, below threshold", () => {
+  it("does not gate low-confidence predicted code", () => {
     expect(
       resolveCodeSendGate({
         autoRouteActive: true,
@@ -372,7 +372,7 @@ describe("threaded-surface-core pure helpers", () => {
         predictedConfidence: 0.5,
         hasBoundProject: true,
       }),
-    ).toEqual({ reason: "low_confidence" });
+    ).toBeNull();
   });
 
   it("no gate when code predicted, bound, confident", () => {

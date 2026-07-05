@@ -1,5 +1,6 @@
 import type {
   ChatCapabilityUpgradeSuggestion,
+  ChatMode,
   ChatSessionRecord,
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
@@ -28,6 +29,7 @@ export function useChatSpecialistCapabilityActions(input: {
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   selectedTurnId: string | null;
+  surfaceMode: ChatMode;
   sending: boolean;
   setError: (value: string | null) => void;
   setSending: (value: boolean) => void;
@@ -44,6 +46,7 @@ export function useChatSpecialistCapabilityActions(input: {
     selectedSessionId,
     selectedSession,
     selectedTurnId,
+    surfaceMode,
     sending,
     setError,
     setSending,
@@ -283,7 +286,7 @@ export function useChatSpecialistCapabilityActions(input: {
 
         if (suggestion.recommendedAction === "build_code_mode_skill_candidate") {
           if (!selectedSessionId) {
-            throw new Error("A selected session is required before Code Mode can build a reusable capability.");
+            throw new Error("A selected session is required before GoatCitadel can stage a reusable capability.");
           }
           const candidateId =
             suggestion.candidateId ?? buildCapabilityCandidateId(selectedSessionId, selectedTurnId, suggestion.title);
@@ -312,7 +315,7 @@ export function useChatSpecialistCapabilityActions(input: {
           const codeModeRun = await createCodeModeRun({
             language: "javascript",
             source: CODE_MODE_CAPABILITY_CANDIDATE_SOURCE,
-            originSurface: "code",
+            originSurface: surfaceMode,
             workspaceId: selectedSession?.workspaceId,
             sessionId: selectedSessionId,
             turnId: sourceTurnId,
@@ -336,11 +339,10 @@ export function useChatSpecialistCapabilityActions(input: {
             },
           });
           pushLocalNotice(
-            `Created proposal ${proposal.proposalId} and queued Code Mode run ${codeModeRun.runId} for approval.`,
+            `Created proposal ${proposal.proposalId} and queued governed capability build ${codeModeRun.runId} for approval.`,
             "success",
           );
           dismissCapabilitySuggestion(suggestion);
-          window.location.hash = "skills";
           return;
         }
 
@@ -368,6 +370,7 @@ export function useChatSpecialistCapabilityActions(input: {
       setInstalledSkills,
       setMcpServers,
       setMcpTemplates,
+      surfaceMode,
     ],
   );
 
@@ -488,7 +491,7 @@ function buildCandidateSkillMarkdown(suggestion: ChatCapabilityUpgradeSuggestion
     "## Validation notes",
     `- ${sanitizeSkillMarkdownText(
       suggestion.validationExpectation ??
-        "The Code Mode staging run must validate the skill content and record artifact hashes.",
+        "The governed capability build must validate the skill content and record artifact hashes.",
     )}`,
     "",
     "## Provenance",

@@ -76,6 +76,12 @@ describe("buildBaseAgentSystemPrompt", () => {
     }
   });
 
+  it("keeps capability creation inside the current conversation instead of asking for mode switches", () => {
+    const prompt = buildBaseAgentSystemPrompt(input({ mode: "chat" as ChatMode }));
+    expect(prompt.stablePrefix).toContain("Do not ask the operator to switch Chat, Cowork, or Code modes");
+    expect(prompt.stablePrefix).toContain("Do not tell the operator to paste/apply work in Code Mode");
+  });
+
   it("puts runtime grounding (date/tz/model/provider/channel/mode/cwd/project) in the volatile tail", () => {
     const prompt = buildBaseAgentSystemPrompt(
       input({

@@ -62,7 +62,7 @@ export function classifyCapabilityGapFromTrace(input: {
       causeClass: "skill_missing",
       recoveryOptions: ["create_capability_proposal", "replay_failed_turn"],
       configArea: "apps/gateway/src/services/capability-system-service.ts",
-      suggestedRepairClass: "code_mode_skill_candidate",
+      suggestedRepairClass: "governed_capability_candidate",
       confidence: 0.68,
     };
   }

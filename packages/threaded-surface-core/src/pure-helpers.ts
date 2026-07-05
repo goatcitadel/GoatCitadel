@@ -39,38 +39,32 @@ export function resolveOutboundSurfaceMode(input: {
 }
 
 /**
- * Confidence floor below which a predicted-code auto-route send asks the
- * operator to confirm before routing into Code.
+ * Historical confidence floor for the old predicted-code confirmation gate.
+ * Kept exported for compatibility with callers/tests that import the constant.
  */
 export const CODE_SEND_CONFIDENCE_THRESHOLD = 0.7;
 
 /**
  * Pre-send gate decision for a predicted-code auto-route turn.
- * - `unbound`: code predicted but no project is bound to the thread.
- * - `low_confidence`: code predicted, project bound, but confidence is below threshold.
- * - `null`: send normally (not auto-routing, not code, no preview, or bound+confident).
+ * The classifier is now advisory for the unified chat surface: a code-leaning
+ * first turn still sends from the same composer, and Gateway/runtime policy
+ * decides whether any governed capability action or project binding is needed.
  */
 export type CodeSendGate = { reason: "unbound" | "low_confidence" } | null;
 
 /**
  * Decide whether a send should be gated before a predicted-code auto-route turn.
  *
- * Fail-open by design: when auto-routing is inactive, the prediction is not
- * `code`, or there is no preview at all (`predictedMode === undefined`), this
- * returns `null` so the send proceeds without interruption. A send is never
- * blocked because classify failed.
+ * Fail-open by design: first-turn classification should inform routing and
+ * visible previews, but it should not ask the operator to switch modes before
+ * the message can be handled.
  */
-export function resolveCodeSendGate(input: {
+export function resolveCodeSendGate(_input: {
   autoRouteActive: boolean;
   predictedMode: ChatMode | undefined;
   predictedConfidence: number | undefined;
   hasBoundProject: boolean;
   threshold?: number;
 }): CodeSendGate {
-  if (!input.autoRouteActive || input.predictedMode !== "code") return null; // fail-open + non-code
-  if (!input.hasBoundProject) return { reason: "unbound" };
-  if ((input.predictedConfidence ?? 1) < (input.threshold ?? CODE_SEND_CONFIDENCE_THRESHOLD)) {
-    return { reason: "low_confidence" };
-  }
   return null;
 }

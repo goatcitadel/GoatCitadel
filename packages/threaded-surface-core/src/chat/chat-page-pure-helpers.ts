@@ -306,8 +306,8 @@ export function getCapabilitySuggestionConfirmationCopy(
     case "build_code_mode_skill_candidate":
       return {
         title: "Build reusable capability",
-        message: `Create a non-callable Code Mode skill candidate for ${suggestion.title}? GoatCitadel will stage proof and require approval before future use.`,
-        confirmLabel: "Create candidate",
+        message: `Create a non-callable capability candidate for ${suggestion.title}? GoatCitadel will stage governed proof and require approval before future use.`,
+        confirmLabel: "Stage candidate",
         danger: false,
       };
   }

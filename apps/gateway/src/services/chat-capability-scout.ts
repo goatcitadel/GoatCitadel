@@ -384,7 +384,7 @@ function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): Ch
     kind: "code_mode_build",
     title: buildCodeModeBuildTitle(input.content),
     summary:
-      "No callable, disabled, importable, or configurable capability matched this gap. Code Mode can draft a self-authored SKILL.md candidate for review.",
+      "No callable, disabled, importable, or configurable capability matched this gap. GoatCitadel can stage a self-authored SKILL.md capability candidate for review from this conversation.",
     reason:
       "A new reusable capability is justified only after the installed skill catalog, disabled skills, hosted/importable skills, MCP templates, and tool-profile repairs did not produce a suitable match.",
     sourceProvider: "code_mode",
@@ -398,7 +398,7 @@ function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): Ch
     candidateType: "self_generated_skill",
     requiredPermissions: [],
     validationExpectation:
-      "Code Mode must stage a validated candidate bundle with artifact hashes before the skill can be reviewed.",
+      "The governed capability build must stage a validated candidate bundle with artifact hashes before the skill can be reviewed.",
     rollbackPosture:
       "The candidate remains non-callable until approved, and rejection, revocation, or rollback keeps previous callable skills intact.",
     requiresUserApproval: true,
@@ -410,7 +410,7 @@ function buildCodeModeBuildTitle(content: string): string {
     .filter((token) => !STOP_WORDS.has(token))
     .slice(0, 5);
   if (tokens.length === 0) {
-    return "Build reusable Code Mode skill";
+    return "Build reusable capability";
   }
   const label = tokens.map((token) => token[0]!.toUpperCase() + token.slice(1)).join(" ");
   return `Build reusable skill: ${label}`;

@@ -3237,7 +3237,7 @@ describe("MissionThreadedControllerHost", () => {
     });
   });
 
-  describe("code-path pre-send gate (#136)", () => {
+  describe("unified auto-route send path", () => {
     // Reconfigure the session-data mock to an EMPTY thread (no turns) so
     // autoRouteActive is true, and point the thread controller at a session
     // whose projectId reflects the desired bound/unbound state.
@@ -3268,7 +3268,7 @@ describe("MissionThreadedControllerHost", () => {
       return lastInput.sessionConfig.surfaceMode;
     }
 
-    it("gates an unbound predicted-code send and does not call the underlying send", async () => {
+    it("sends an unbound predicted-code first turn without asking for a mode switch", async () => {
       setupEmptyThread({ hasBoundProject: false });
       mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
       await renderHost();
@@ -3279,11 +3279,11 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "unbound" });
-      expect(handleSendMock).not.toHaveBeenCalled();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
 
-    it("gates a low-confidence predicted-code send when a project is bound", async () => {
+    it("sends a low-confidence predicted-code first turn without asking for a mode switch", async () => {
       setupEmptyThread({ hasBoundProject: true });
       mockSurfacePreview = { mode: "code", confidence: 0.5, source: "classifier" };
       await renderHost();
@@ -3293,8 +3293,8 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "low_confidence" });
-      expect(handleSendMock).not.toHaveBeenCalled();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
 
     it("sends normally when predicted code is bound and confident (no gate)", async () => {
@@ -3325,51 +3325,15 @@ describe("MissionThreadedControllerHost", () => {
       expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
 
-    it("confirms a gated code turn via the deferred forced send with modeOverride 'code'", async () => {
-      setupEmptyThread({ hasBoundProject: false });
-      mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
-      await renderHost();
-
-      await act(async () => {
-        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
-        await flushEffects(6);
-      });
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "unbound" });
-      expect(handleSendMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        latestSurfaceInput?.activeSessionSurfaceProps?.onConfirmCodeTurn?.();
-        await flushEffects(8);
-      });
-
-      // The deferred effect fired the send after the override rendered.
-      expect(handleSendMock).toHaveBeenCalledTimes(1);
-      // Gate cleared and the override routed the turn as code.
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("code");
-      expect(lastOutboundSurfaceMode()).toBe("code");
-    });
-
-    it("sends as chat instead via the deferred forced send with modeOverride 'chat'", async () => {
+    it("keeps legacy forced send callbacks available without changing normal auto-route behavior", async () => {
       setupEmptyThread({ hasBoundProject: true });
       mockSurfacePreview = { mode: "code", confidence: 0.5, source: "classifier" };
       await renderHost();
 
-      await act(async () => {
-        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
-        await flushEffects(6);
-      });
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toEqual({ reason: "low_confidence" });
-
-      await act(async () => {
-        latestSurfaceInput?.activeSessionSurfaceProps?.onSendAsChatInstead?.();
-        await flushEffects(8);
-      });
-
-      expect(handleSendMock).toHaveBeenCalledTimes(1);
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.onConfirmCodeTurn).toBeTypeOf("function");
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendAsChatInstead).toBeTypeOf("function");
       expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
-      expect(lastOutboundSurfaceMode()).toBe("chat");
+      expect(lastOutboundSurfaceMode()).toBeUndefined();
     });
   });
 });

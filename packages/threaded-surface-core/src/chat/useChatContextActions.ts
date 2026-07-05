@@ -66,6 +66,7 @@ export function useChatContextActions(input: {
     selectedSessionId: input.selectedSessionId,
     selectedSession: input.selectedSession,
     selectedTurnId: input.selectedTurnId,
+    surfaceMode: input.surfaceMode,
     sending: input.sending,
     setError: input.setError,
     setSending: input.setSending,

@@ -143,7 +143,7 @@ describe("chat-page-pure-helpers coverage", () => {
         recommendedAction: "build_code_mode_skill_candidate",
         title: "Report helper",
       } as never),
-    ).toMatchObject({ title: "Build reusable capability", confirmLabel: "Create candidate" });
+    ).toMatchObject({ title: "Build reusable capability", confirmLabel: "Stage candidate" });
     expect(getCapabilitySuggestionConfirmationCopy({ recommendedAction: "unsupported_action" } as never)).toBeNull();
     expect(getDeleteSessionConfirmationMessage("Launch chat")).toContain('Delete "Launch chat" permanently?');
   });

@@ -119,6 +119,7 @@ function setupApiDefaults() {
 function Harness(props: {
   selectedSession?: ChatSessionRecord | null;
   selectedTurnId?: string | null;
+  surfaceMode?: "chat" | "cowork" | "code";
   sendingInitial?: boolean;
   tryBegin?: boolean;
 }) {
@@ -151,6 +152,7 @@ function Harness(props: {
     selectedSessionId: selectedSession?.sessionId ?? null,
     selectedSession,
     selectedTurnId: props.selectedTurnId === undefined ? "turn-1" : props.selectedTurnId,
+    surfaceMode: props.surfaceMode ?? "chat",
     sending,
     setError,
     setSending,
@@ -413,7 +415,7 @@ describe("useChatSpecialistCapabilityActions", () => {
       intendedBehavior: "Turn report requests into reusable report helper skills.",
       candidateType: "self_generated_skill",
       requiredPermissions: [],
-      validationExpectation: "Code Mode must stage candidate proof.",
+      validationExpectation: "The governed capability build must stage candidate proof.",
       rollbackPosture: "Candidate remains inactive until approved.",
     });
 
@@ -444,7 +446,7 @@ describe("useChatSpecialistCapabilityActions", () => {
     expect(createCodeModeRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         language: "javascript",
-        originSurface: "code",
+        originSurface: "chat",
         sessionId: "session-1",
         turnId: "turn-1",
         saveCandidateOnSuccess: true,
@@ -460,8 +462,8 @@ describe("useChatSpecialistCapabilityActions", () => {
     );
     expect(latestHarness?.executedOutbound).toEqual([]);
     expect(latestHarness?.result.capabilitySuggestions).toEqual([]);
-    expect(latestHarness?.notices.at(-1)?.content).toContain("queued Code Mode run code-run-1");
-    expect((globalThis.window as any).location.hash).toBe("skills");
+    expect(latestHarness?.notices.at(-1)?.content).toContain("queued governed capability build code-run-1");
+    expect((globalThis.window as any).location.hash).toBe("");
   });
 
   it("surfaces unsupported and malformed capability actions", async () => {
