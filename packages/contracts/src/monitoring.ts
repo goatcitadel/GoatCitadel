@@ -85,6 +85,7 @@ export type CronJobAction =
   | "curator"
   | "backup"
   | "memory_flush"
+  | "memory_consolidation"
   | "cost_report"
   | "update_review"
   | "watchdog"
