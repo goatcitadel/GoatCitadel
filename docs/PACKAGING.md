@@ -88,6 +88,14 @@ The manual unsigned Mac lane uses ad-hoc signing (`signingIdentity: "-"`) for Ap
 
 Do not cite macOS packages as public-trust proof until the workflow has actually emitted a signed/notarized, stapled, checksummed, and smoke-tested DMG for the exact release SHA.
 
+When a reviewer does not have macOS access, attach a Mac operator evidence bundle instead of asking that reviewer to reproduce locally. The collector is read-only: it does not launch the app, remove quarantine, approve requests, or mutate runtime state.
+
+```text
+pnpm macos:desktop:evidence -- --app "/Applications/GoatCitadel Mission Control.app" --dmg "/path/to/GoatCitadel-<version>-macos-arm64.dmg"
+```
+
+The command writes `artifacts/macos-desktop-evidence/<timestamp>/macos-desktop-evidence.md` plus redacted raw command output and log tails. Reviewers should check the exact app path, signing/Gatekeeper state, gateway/UI health, packaged `desktopEventStream` status, tokenless SSE behavior when `authMode` is `none`, `/api/v1/auth/sse-token` warning counts, and packaged approval modal visual proof before treating Mac desktop approval behavior as verified.
+
 The later LaunchAgent stage should introduce a foreground `goatcitadel service run` supervisor before any `~/Library/LaunchAgents/com.goatcitadel.gateway.plist` install path is wired. Do not point `launchctl` at the one-shot `launch` command.
 
 ## Linux packaging

@@ -22,6 +22,7 @@
     "package:windows-msix": "node scripts/packaging/build-windows-msix.mjs",
     "package:windows": "node scripts/packaging/build-windows-native-installer.mjs",
     "package:macos": "node scripts/packaging/build-macos-native-installer.mjs",
+    "macos:desktop:evidence": "node scripts/packaging/collect-macos-desktop-evidence.mjs",
     "package:windows:bootstrap": "node scripts/packaging/build-windows-bootstrap.mjs",
     "dev:gateway": "pnpm --filter @goatcitadel/gateway dev",
     "dev:gateway:watch": "pnpm --filter @goatcitadel/gateway dev:watch",
