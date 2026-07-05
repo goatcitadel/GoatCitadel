@@ -20,7 +20,7 @@ const appPath = path.resolve(args.app || defaultAppPath);
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const outDir = path.resolve(args.out || path.join(repoRoot, "artifacts", "macos-desktop-evidence", timestamp));
 const rawDir = path.join(outDir, "raw");
-const tailLines = Number.parseInt(args.tailLines || "160", 10);
+const tailLines = parseTailLineCount(args.tailLines);
 
 fs.mkdirSync(rawDir, { recursive: true });
 
@@ -129,6 +129,18 @@ function requireValue(argv, index, flag) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
+}
+
+function parseTailLineCount(value) {
+  const raw = String(value ?? "160").trim();
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new Error("--tail-lines must be a positive integer no greater than 2000");
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed > 2000) {
+    throw new Error("--tail-lines must be a positive integer no greater than 2000");
+  }
+  return parsed;
 }
 
 function printUsage() {

@@ -454,9 +454,7 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
     }
 }
 
-fn desktop_event_stream_requires_token(
-    credential: Option<&DesktopEventStreamCredential>,
-) -> bool {
+fn desktop_event_stream_requires_token(credential: Option<&DesktopEventStreamCredential>) -> bool {
     !matches!(
         credential.and_then(|value| value.auth_mode.as_deref()),
         Some("none")
