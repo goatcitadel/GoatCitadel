@@ -350,7 +350,9 @@ describe("gateway service host guard", () => {
     // Soft bloat cap. Bumped to 163 for workspace/citadel capability scoping: `invokeMcpTool`
     // (routes the REST /mcp/invoke surface through the guarded gateway method) + `capabilityScopeResolver`
     // (resolution for the capability-scope route service).
-    expect(portMemberCount).toBeLessThanOrEqual(163);
+    // Bumped to 164 for `syncSignalInboundRuntime` (Signal inbound poller resync
+    // on integration connection create/update/delete).
+    expect(portMemberCount).toBeLessThanOrEqual(164);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

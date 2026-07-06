@@ -263,6 +263,10 @@ export const LlmConfigFileSchema = z
   .object({
     activeProviderId: z.string(),
     activeModel: z.string().optional(),
+    // Optional cheap utility-model slot for background LLM tasks; only honored
+    // when the utilityModelRoutingV1Enabled feature flag is on.
+    utilityProviderId: z.string().optional(),
+    utilityModel: z.string().optional(),
     providers: z.array(LlmProviderConfigSchema),
   })
   .passthrough();
@@ -700,6 +704,22 @@ export const AssistantConfigInputSchema = z
         // audio → transcription → governed turn). Absent/false (default) ⇒
         // byte-identical: parsers keep emitting placeholders / dropping voice.
         channelVoiceInboundV1Enabled: z.boolean().optional(),
+        // Signal inbound poller (competitive-gap phase B1b): gates the governed
+        // poll loop against the local signal-cli bridge. Absent/false (default)
+        // ⇒ Signal stays outbound-only and behavior is byte-identical to today.
+        signalInboundV1Enabled: z.boolean().optional(),
+        // Weekly governed memory consolidation: mines completed run traces and
+        // PROPOSES memory candidates (approval-gated, never auto-applied).
+        // Absent/false (default) ⇒ the consolidation job never runs.
+        memoryConsolidationV1Enabled: z.boolean().optional(),
+        // Records a signed cron_job_executed evidence envelope for every cron
+        // run and pins the envelope id on the job record. Absent/false
+        // (default) ⇒ cron runs record no evidence, exactly as today.
+        cronEvidenceV1Enabled: z.boolean().optional(),
+        // Routes background LLM calls (improvement scans, judges, classifiers,
+        // prompt packs) to the configured cheap utility-model slot. Absent/false
+        // (default) ⇒ background calls keep today's model selection exactly.
+        utilityModelRoutingV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),
@@ -731,6 +751,7 @@ export const CronJobSchema = z
         "curator",
         "backup",
         "memory_flush",
+        "memory_consolidation",
         "cost_report",
         "update_review",
         "watchdog",

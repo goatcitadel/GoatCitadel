@@ -6,6 +6,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
@@ -19,6 +20,7 @@ import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import {
   COST_REPORT_HOURLY_SCHEDULE_LABEL,
+  MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
   MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
   PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
   UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
@@ -30,6 +32,7 @@ const BUILT_IN_CRON_ACTIONS = new Map<string, CronJobRecord["action"]>([
   [IMPROVEMENT_WEEKLY_JOB_ID, "improvement"],
   [PRIVATE_BETA_BACKUP_JOB_ID, "backup"],
   [MEMORY_FLUSH_DAILY_JOB_ID, "memory_flush"],
+  [MEMORY_CONSOLIDATION_WEEKLY_JOB_ID, "memory_consolidation"],
   [COST_REPORT_HOURLY_JOB_ID, "cost_report"],
   [UPDATE_REVIEW_DAILY_JOB_ID, "update_review"],
 ]);
@@ -307,6 +310,38 @@ export function ensureMemoryFlushCronJob(host: CronJobConfigHost): void {
       description: existing?.description ?? "Prune expired memory artifacts and clear old maintenance context.",
       schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
       enabled: existing?.enabled ?? true,
+      endAt: existing?.endAt,
+      lastRunAt: existing?.lastRunAt,
+      nextRunAt: existing?.nextRunAt,
+      workdir: existing?.workdir,
+      contextFrom: existing?.contextFrom,
+      lastRunOutput: existing?.lastRunOutput,
+      lastRunId: existing?.lastRunId,
+      lastRunStatus: existing?.lastRunStatus,
+      lastFailureAt: existing?.lastFailureAt,
+      lastFailure: existing?.lastFailure,
+      failureCount: existing?.failureCount,
+      backoffUntil: existing?.backoffUntil,
+    },
+    now,
+  );
+}
+
+export function ensureMemoryConsolidationCronJob(host: CronJobConfigHost): void {
+  const existing = host.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
+  const now = new Date().toISOString();
+  host.storage.cronJobs.upsertIfChanged(
+    {
+      jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+      name: "Memory Consolidation Weekly",
+      action: "memory_consolidation",
+      description:
+        existing?.description ??
+        "Propose memory candidates from recent run traces (approval-gated; requires memoryConsolidationV1Enabled).",
+      schedule: MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
+      // Seeded DISABLED, unlike the other system jobs: consolidation is
+      // opt-in twice over (job.enabled AND the feature flag).
+      enabled: existing?.enabled ?? false,
       endAt: existing?.endAt,
       lastRunAt: existing?.lastRunAt,
       nextRunAt: existing?.nextRunAt,

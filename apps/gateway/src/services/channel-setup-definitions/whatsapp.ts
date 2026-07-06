@@ -20,7 +20,7 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "platform_api_resource_ids",
-      contentVersion: "2026.04.whatsapp.v1",
+      contentVersion: "2026.07.whatsapp.v2",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -38,7 +38,7 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events when you configure the webhook secret pair.",
+              "GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events, but inbound routing stays disabled until BOTH the app secret and the webhook verify token are configured. With only one of the two, the connection remains outbound-only.",
             ),
             paragraph(
               "Rich sends are preflighted before delivery: native media labels, text fallbacks, pending attachment hydration, provider evidence, and attachment-count limits are recorded before the Cloud API send.",
@@ -117,9 +117,10 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               label: "App secret env var",
               type: "text",
               required: false,
-              explanation: "Optional but recommended if you want signed inbound webhook routing.",
+              explanation:
+                "Optional but recommended if you want signed inbound webhook routing. Inbound is only enabled when BOTH this app secret and the webhook verify token are configured.",
               whyNeeded:
-                "Meta signs WhatsApp webhook deliveries with your app secret. Without it GoatCitadel stays outbound only.",
+                "Meta signs WhatsApp webhook deliveries with your app secret. Without it GoatCitadel stays outbound only, even if the verify token is set.",
               whereToFind: [
                 paragraph(
                   "Copy the app secret from the Meta developer app settings and store it in an env var such as WHATSAPP_APP_SECRET.",
@@ -146,9 +147,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: false,
               explanation:
-                "Optional but recommended if you want GoatCitadel to answer the Meta webhook verification challenge.",
+                "Optional but recommended if you want GoatCitadel to answer the Meta webhook verification challenge. Inbound is only enabled when BOTH this verify token and the app secret are configured.",
               whyNeeded:
-                "The verify token is compared during GET webhook subscription validation before Meta begins signed POST deliveries.",
+                "The verify token is compared during GET webhook subscription validation before Meta begins signed POST deliveries. Without it GoatCitadel stays outbound only, even if the app secret is set.",
               whereToFind: [
                 paragraph(
                   "Choose your own random token value, store it in an env var such as WHATSAPP_WEBHOOK_VERIFY_TOKEN, and use the same value when configuring the Meta webhook subscription.",
@@ -176,7 +177,7 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize.",
+              "Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure BOTH the app secret and the verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries; with only one of the two, inbound stays disabled. Operator proof is still manual after finalize.",
             ),
             paragraph(
               "Runtime rich-message evidence records whether media is native, text fallback, pending hydration, or blocked before provider delivery.",

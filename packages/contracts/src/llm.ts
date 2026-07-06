@@ -144,6 +144,13 @@ export interface LlmDiscoveredModelRecord {
 export interface LlmConfigFile {
   activeProviderId: string;
   activeModel?: string;
+  /**
+   * Optional cheap utility-model slot for background tasks (improvement scans,
+   * judges, classifiers, prompt packs). Only honored when the
+   * `utilityModelRoutingV1Enabled` feature flag is on and the provider has a key.
+   */
+  utilityProviderId?: string;
+  utilityModel?: string;
   providers: LlmProviderConfig[];
 }
 
@@ -168,6 +175,8 @@ export interface LlmProviderSummary {
 export interface LlmRuntimeConfig {
   activeProviderId: string;
   activeModel: string;
+  utilityProviderId?: string;
+  utilityModel?: string;
   providers: LlmProviderSummary[];
   activeModelContextWindow?: number;
   activeModelOutputTokenLimit?: number;
