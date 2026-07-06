@@ -11,6 +11,7 @@ import {
   createIgnoredWebhookReply,
   createWebhookPreParsing,
   createWebhookHandler,
+  dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   readHeaderValue,
   readQueryString,
@@ -103,6 +104,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
         const normalized = normalizeWhatsAppWebhookPayload({
           connectionId,
           payload: request.body,
+          voiceInboundEnabled: fastify.services.integrationWebhooks.isVoiceInboundEnabled?.() === true,
         });
         if (normalized.kind === "ignore") {
           return {
@@ -115,8 +117,8 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
+        const dispatchOptions = {
           channel: "whatsapp",
           connectionId,
           idempotencyKey: deriveWhatsAppWebhookIdempotencyKey(connectionId, request.body, rawBody),
@@ -136,7 +138,29 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
           responseOptions: {
             deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
           },
-        }),
+        };
+        const voiceMedia = parsed.voiceMedia;
+        if (voiceMedia) {
+          // channelVoiceInboundV1Enabled path (voiceMedia only exists when the
+          // flag is on): trust gate first (no download for unknown senders),
+          // fast webhook ack, async download/transcription/ingest, placeholder
+          // fallback on failure so the message is never silently dropped.
+          return dispatchInboundVoiceWebhookMessage(fastify.services.integrationWebhooks, {
+            ...dispatchOptions,
+            voice: {
+              transcribe: () =>
+                fastify.services.integrationWebhooks.transcribeChannelVoice({
+                  channel: "whatsapp",
+                  connectionConfig: connection.config,
+                  mediaId: voiceMedia.mediaId,
+                  mimeType: voiceMedia.mimeType,
+                }),
+              fallbackContent: parsed.content,
+            },
+          });
+        }
+        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
+      },
     }),
   );
 }

@@ -109,6 +109,10 @@ export interface RuntimeSettings {
     autonomyV1Disabled?: boolean;
     /** Thinking-display skeleton. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
     chatThinkingStreamV1Enabled?: boolean;
+    /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
+    channelVoiceInboundV1Enabled?: boolean;
+    /** Signal inbound poller (phase B1b). Absent/false (default) ⇒ the bridge poll loop never starts; Signal stays outbound-only. */
+    signalInboundV1Enabled?: boolean;
     /** Round-3 kill switch: planner triviality-skip + speed-model drafting. Absent/false ⇒ feature ON. */
     plannerFastPathV1Disabled?: boolean;
     /** Round-3 kill switch: all-read-only tool-batch parallel execution. Absent/false ⇒ feature ON. */
@@ -121,5 +125,11 @@ export interface RuntimeSettings {
     subagentFanoutV1Disabled?: boolean;
     /** B2b TTS voice replies to audio-capable channels. Absent/false (default) ⇒ no audio synthesis on the reply path. */
     channelVoiceReplyV1Enabled?: boolean;
+    /** Opt-in: weekly governed memory consolidation (propose-only, approval-gated). Absent/false ⇒ job never runs. */
+    memoryConsolidationV1Enabled?: boolean;
+    /** Opt-in: signed cron_job_executed evidence envelope on every cron run. Absent/false ⇒ no cron evidence, as today. */
+    cronEvidenceV1Enabled?: boolean;
+    /** Opt-in: routes background LLM calls (improvement scans, judges, classifiers, prompt packs) to the cheap utility-model slot. Absent/false ⇒ today's selection. */
+    utilityModelRoutingV1Enabled?: boolean;
   };
 }

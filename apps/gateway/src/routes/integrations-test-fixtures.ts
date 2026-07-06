@@ -37,6 +37,7 @@ export function decorateIntegrationServices(app: FastifyInstance, methods: Recor
       integrationWebhooks: {
         hasRunningTurn: () => false,
         emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+        isVoiceInboundEnabled: () => false,
         ...routeMethods,
       },
     } as never);

@@ -21,6 +21,7 @@ import {
   createIgnoredWebhookReply,
   createWebhookPreParsing,
   createWebhookHandler,
+  dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   readHeaderValue,
 } from "./webhook-handler-factory.js";
@@ -60,6 +61,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         const normalized = normalizeTelegramWebhookPayload({
           connectionId,
           payload: request.body,
+          voiceInboundEnabled: fastify.services.integrationWebhooks.isVoiceInboundEnabled?.() === true,
         });
         if (normalized.kind === "ignore") {
           return {
@@ -146,7 +148,12 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           }
         }
 
-        const command = target
+        // Voice messages never participate in channel command handling or
+        // approval-token resolution: transcripts are spoofable auto-generated
+        // text, and commands require typed text. The voice branch below routes
+        // straight to the trust-gated voice dispatch.
+        const commandEligible = target && !parsed.voiceMedia ? target : undefined;
+        const command = commandEligible
           ? await handleTelegramChannelCommand({
               connection: {
                 connectionId,
@@ -155,7 +162,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
                 status: connection.status ?? "connected",
                 config: connection.config,
               },
-              chatId: target,
+              chatId: commandEligible,
               threadId: parsed.threadId,
               actorId: parsed.actorId,
               actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
@@ -260,7 +267,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             text: "A GoatCitadel run is already active for this chat. Use /status to inspect it or /stop to cancel it before starting another request.",
           };
         }
-        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+        const dispatchOptions = {
           channel: "telegram",
           connectionId,
           idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
@@ -284,7 +291,29 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               ? buildChannelPersonalitySystemOverlay(connection.config, target, resolveRoutePersonalityCatalog(fastify))
               : undefined,
           },
-        });
+        };
+        const voiceMedia = parsed.voiceMedia;
+        if (voiceMedia) {
+          // channelVoiceInboundV1Enabled path (voiceMedia only exists when the
+          // flag is on): the trust gate runs first inside the voice dispatch,
+          // the webhook is acked fast, and download/transcription/ingest run
+          // asynchronously. Transcription failure falls back to ingesting the
+          // parser placeholder so the message is never silently dropped.
+          return dispatchInboundVoiceWebhookMessage(fastify.services.integrationWebhooks, {
+            ...dispatchOptions,
+            voice: {
+              transcribe: () =>
+                fastify.services.integrationWebhooks.transcribeChannelVoice({
+                  channel: "telegram",
+                  connectionConfig: connection.config,
+                  fileId: voiceMedia.fileId,
+                  mimeType: voiceMedia.mimeType,
+                }),
+              fallbackContent: parsed.content,
+            },
+          });
+        }
+        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
       },
     }),
   );

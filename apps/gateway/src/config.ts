@@ -102,6 +102,42 @@ export interface FeatureFlagsConfig {
    * path never synthesizes audio and behavior is byte-identical to today.
    */
   channelVoiceReplyV1Enabled?: boolean;
+  /**
+   * Inbound channel voice ingestion (competitive-gap phase B2a): Telegram voice
+   * notes and WhatsApp audio messages are downloaded, transcribed via the local
+   * voice runtime, and ingested as governed turns. Absent/false (default) ⇒
+   * byte-identical behavior to today: the WhatsApp parser keeps emitting the
+   * "[whatsapp audio]" placeholder and the Telegram parser keeps dropping
+   * voice/audio updates with no content.
+   */
+  channelVoiceInboundV1Enabled?: boolean;
+  /**
+   * Signal inbound poller (competitive-gap phase B1b): gates the governed poll
+   * loop against the local signal-cli bridge. Absent/false (default) ⇒ the
+   * poller never starts and Signal stays outbound-only — byte-identical to
+   * today. `true` allows connections with `inboundEnabled: true` to poll.
+   */
+  signalInboundV1Enabled?: boolean;
+  /**
+   * Weekly governed memory consolidation: mines completed run traces and
+   * PROPOSES memory candidates into the operator review queue (never
+   * auto-applied; also halted by autonomyV1Disabled). Absent/false (default)
+   * ⇒ the consolidation job never runs.
+   */
+  memoryConsolidationV1Enabled?: boolean;
+  /**
+   * Records a signed `cron_job_executed` evidence envelope for every cron run
+   * (success and failure) and pins the envelope id on the job record.
+   * Absent/false (default) ⇒ cron runs record no evidence, exactly as today.
+   */
+  cronEvidenceV1Enabled?: boolean;
+  /**
+   * Routes background LLM calls (improvement scans, judges, classifiers, prompt
+   * packs) to the configured cheap utility-model slot (`llm.utilityProviderId` /
+   * `llm.utilityModel`). Absent/false (default) ⇒ background calls keep today's
+   * model selection exactly.
+   */
+  utilityModelRoutingV1Enabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -700,12 +736,17 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
     ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
+    ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
+    ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
     ["parallelToolExecutionV1Disabled", process.env.GOATCITADEL_FEATURE_PARALLEL_TOOL_EXECUTION_V1_DISABLED],
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
     ["channelVoiceReplyV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_REPLY_V1_ENABLED],
+    ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
+    ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
+    ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1240,6 +1281,13 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
+      // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
+      // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
+      channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,
+      // Signal inbound poller: default OFF. `?? false` means the gateway never
+      // starts a bridge poll loop unless an operator opts in — with this flag
+      // left at its default, runtime behavior is byte-identical to today.
+      signalInboundV1Enabled: featuresInput.signalInboundV1Enabled ?? false,
       // Round-3 kill switches: planner triviality-skip + speed-model drafting,
       // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,
       // and planner-declared fan-out. `*Disabled` + `?? false` ⇒ ON by default.
@@ -1252,6 +1300,15 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // path never synthesizes audio unless an operator opts in — with the flag
       // left at its default, runtime behavior is byte-identical to today.
       channelVoiceReplyV1Enabled: featuresInput.channelVoiceReplyV1Enabled ?? false,
+      // Opt-in weekly memory consolidation. `?? false` keeps the job inert
+      // until an operator enables it.
+      memoryConsolidationV1Enabled: featuresInput.memoryConsolidationV1Enabled ?? false,
+      // Opt-in signed evidence for cron runs. `?? false` keeps cron behavior
+      // byte-identical until an operator enables it.
+      cronEvidenceV1Enabled: featuresInput.cronEvidenceV1Enabled ?? false,
+      // Opt-in utility-model tier for background LLM calls. `?? false` keeps
+      // background model selection byte-identical until an operator enables it.
+      utilityModelRoutingV1Enabled: featuresInput.utilityModelRoutingV1Enabled ?? false,
     },
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {

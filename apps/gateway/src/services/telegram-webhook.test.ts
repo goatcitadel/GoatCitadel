@@ -98,3 +98,107 @@ describe("telegram webhook helpers", () => {
     ).toBe("telegram:conn-telegram:9002");
   });
 });
+
+describe("telegram inbound voice media (channelVoiceInboundV1Enabled)", () => {
+  const voicePayload = {
+    update_id: 9100,
+    message: {
+      message_id: 500,
+      from: { id: 777, is_bot: false, first_name: "Ada" },
+      chat: { id: 777, type: "private" },
+      voice: {
+        file_id: "AwACAgIAAxkBAAIB",
+        file_unique_id: "AgADSw",
+        duration: 4,
+        mime_type: "audio/ogg",
+        file_size: 10240,
+      },
+    },
+  };
+
+  it("keeps dropping voice notes when the flag is off (byte-identical default)", () => {
+    expect(
+      normalizeTelegramWebhookPayload({
+        connectionId: "conn-telegram",
+        payload: voicePayload,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "ignore",
+        reason: "Missing Telegram chat, message id, content, or actor id",
+      }),
+    );
+    // Explicit false behaves like absent.
+    expect(
+      normalizeTelegramWebhookPayload({
+        connectionId: "conn-telegram",
+        payload: voicePayload,
+        voiceInboundEnabled: false,
+      }),
+    ).toEqual(expect.objectContaining({ kind: "ignore" }));
+  });
+
+  it("emits a structured voiceMedia ref plus placeholder content when the flag is on", () => {
+    const normalized = normalizeTelegramWebhookPayload({
+      connectionId: "conn-telegram",
+      payload: voicePayload,
+      voiceInboundEnabled: true,
+    });
+    expect(normalized).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventId: "500",
+        actorId: "777",
+        content: "[telegram voice message]",
+        voiceMedia: {
+          kind: "voice",
+          fileId: "AwACAgIAAxkBAAIB",
+          mimeType: "audio/ogg",
+          durationSeconds: 4,
+        },
+      }),
+    );
+  });
+
+  it("handles audio messages and keeps the caption as content when present", () => {
+    const normalized = normalizeTelegramWebhookPayload({
+      connectionId: "conn-telegram",
+      payload: {
+        update_id: 9101,
+        message: {
+          message_id: 501,
+          from: { id: 777, is_bot: false, first_name: "Ada" },
+          chat: { id: 777, type: "private" },
+          caption: "song draft",
+          audio: { file_id: "audio-file-1", duration: 30, mime_type: "audio/mpeg" },
+        },
+      },
+      voiceInboundEnabled: true,
+    });
+    expect(normalized).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        content: "song draft",
+        voiceMedia: expect.objectContaining({ kind: "audio", fileId: "audio-file-1", mimeType: "audio/mpeg" }),
+      }),
+    );
+  });
+
+  it("never emits voiceMedia for plain text messages even with the flag on", () => {
+    const normalized = normalizeTelegramWebhookPayload({
+      connectionId: "conn-telegram",
+      payload: {
+        update_id: 9102,
+        message: {
+          message_id: 502,
+          from: { id: 777, is_bot: false, first_name: "Ada" },
+          chat: { id: 777, type: "private" },
+          text: "typed text",
+        },
+      },
+      voiceInboundEnabled: true,
+    });
+    expect(normalized).toEqual(expect.objectContaining({ kind: "message", content: "typed text" }));
+    expect(normalized).not.toHaveProperty("voiceMedia");
+  });
+});

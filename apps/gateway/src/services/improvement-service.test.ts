@@ -89,38 +89,53 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
   it("returns only exemplars for the requested citadel", () => {
     const harness = createHarness();
 
-    const alphaBase: Omit<SurfaceRouteOverrideSignalInput, "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"> = {
+    const alphaBase: Omit<
+      SurfaceRouteOverrideSignalInput,
+      "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"
+    > = {
       citadelId: "alpha",
       workspaceId: "default",
       autoConfidence: 0.7,
     };
 
-    harness.service.recordSurfaceRouteOverrideSignal({
-      ...alphaBase,
-      sessionId: "s-alpha-1",
-      turnId: "t-alpha-1",
-      fromMode: "code",
-      toMode: "chat",
-      promptFeatureHash: "h1",
-    });
-    harness.service.recordSurfaceRouteOverrideSignal({
-      ...alphaBase,
-      sessionId: "s-alpha-2",
-      turnId: "t-alpha-2",
-      fromMode: "cowork",
-      toMode: "code",
-      promptFeatureHash: "h2",
-    });
-    harness.service.recordSurfaceRouteOverrideSignal({
-      citadelId: "beta",
-      workspaceId: "default",
-      sessionId: "s-beta-1",
-      turnId: "t-beta-1",
-      fromMode: "chat",
-      toMode: "code",
-      autoConfidence: 0.6,
-      promptFeatureHash: "h3",
-    });
+    // Signals recorded within the same millisecond tie on recorded_at, and the
+    // listing's tiebreaker is signal_id (a random UUID) — deterministic but
+    // arbitrary. Advance fake time between inserts so "most recent first" is
+    // actually observable instead of flaking on fast CI runners.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-05T00:00:00.000Z"));
+      harness.service.recordSurfaceRouteOverrideSignal({
+        ...alphaBase,
+        sessionId: "s-alpha-1",
+        turnId: "t-alpha-1",
+        fromMode: "code",
+        toMode: "chat",
+        promptFeatureHash: "h1",
+      });
+      vi.setSystemTime(new Date("2026-07-05T00:00:00.050Z"));
+      harness.service.recordSurfaceRouteOverrideSignal({
+        ...alphaBase,
+        sessionId: "s-alpha-2",
+        turnId: "t-alpha-2",
+        fromMode: "cowork",
+        toMode: "code",
+        promptFeatureHash: "h2",
+      });
+      vi.setSystemTime(new Date("2026-07-05T00:00:00.100Z"));
+      harness.service.recordSurfaceRouteOverrideSignal({
+        citadelId: "beta",
+        workspaceId: "default",
+        sessionId: "s-beta-1",
+        turnId: "t-beta-1",
+        fromMode: "chat",
+        toMode: "code",
+        autoConfidence: 0.6,
+        promptFeatureHash: "h3",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const exemplars: SurfaceRouteOverrideExemplar[] = harness.service.listSurfaceRouteOverrideExemplars("alpha");
 
@@ -141,7 +156,10 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
   it("respects the limit parameter", () => {
     const harness = createHarness();
 
-    const base: Omit<SurfaceRouteOverrideSignalInput, "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"> = {
+    const base: Omit<
+      SurfaceRouteOverrideSignalInput,
+      "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"
+    > = {
       citadelId: "alpha",
       workspaceId: "default",
       autoConfidence: 0.8,

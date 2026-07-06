@@ -257,6 +257,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
   it("runs due scheduler collaborators and skips work while closing", async () => {
     const runPrivateBetaBackupSchedulerIfDue = vi.fn(async () => undefined);
     const runMemoryFlushSchedulerIfDue = vi.fn(async () => undefined);
+    const runMemoryConsolidationSchedulerIfDue = vi.fn(async () => undefined);
     const runCostReportSchedulerIfDue = vi.fn(async () => undefined);
     const runUpdateReviewSchedulerIfDue = vi.fn(async () => undefined);
     const runDueTaskCronJobs = vi.fn(async () => undefined);
@@ -266,6 +267,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       closing: true,
       runPrivateBetaBackupSchedulerIfDue,
       runMemoryFlushSchedulerIfDue,
+      runMemoryConsolidationSchedulerIfDue,
       runCostReportSchedulerIfDue,
       runUpdateReviewSchedulerIfDue,
       curatorService: { runCuratorWeeklyIfDue: vi.fn(async () => undefined) },
@@ -282,6 +284,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
 
     expect(runPrivateBetaBackupSchedulerIfDue).toHaveBeenCalledTimes(1);
     expect(runMemoryFlushSchedulerIfDue).toHaveBeenCalledTimes(1);
+    expect(runMemoryConsolidationSchedulerIfDue).toHaveBeenCalledTimes(1);
     expect(runCostReportSchedulerIfDue).toHaveBeenCalledTimes(1);
     expect(runUpdateReviewSchedulerIfDue).toHaveBeenCalledTimes(1);
     expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
@@ -884,11 +887,9 @@ describe("GatewayService live-tail stream notification (P0-#1)", () => {
     try {
       const gateway = createGatewayHarness();
       let resolved = false;
-      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
-        .call(gateway, "turn-1", 200)
-        .then(() => {
-          resolved = true;
-        });
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent.call(gateway, "turn-1", 200).then(() => {
+        resolved = true;
+      });
       await Promise.resolve();
       expect(resolved).toBe(false);
 
@@ -908,11 +909,9 @@ describe("GatewayService live-tail stream notification (P0-#1)", () => {
     try {
       const gateway = createGatewayHarness();
       let resolved = false;
-      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
-        .call(gateway, "turn-1", 200)
-        .then(() => {
-          resolved = true;
-        });
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent.call(gateway, "turn-1", 200).then(() => {
+        resolved = true;
+      });
       await Promise.resolve();
       expect(resolved).toBe(false);
       await vi.advanceTimersByTimeAsync(200);
@@ -948,11 +947,9 @@ describe("GatewayService live-tail stream notification (P0-#1)", () => {
         },
       });
       let resolved = false;
-      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
-        .call(gateway, "turn-1", 200)
-        .then(() => {
-          resolved = true;
-        });
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent.call(gateway, "turn-1", 200).then(() => {
+        resolved = true;
+      });
       await Promise.resolve();
       expect(resolved).toBe(false);
 
@@ -976,11 +973,9 @@ describe("GatewayService live-tail stream notification (P0-#1)", () => {
     try {
       const gateway = createGatewayHarness();
       let resolved = false;
-      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent
-        .call(gateway, "turn-1", 200)
-        .then(() => {
-          resolved = true;
-        });
+      const waitP = (GatewayService.prototype as any).waitForChatStreamEvent.call(gateway, "turn-1", 200).then(() => {
+        resolved = true;
+      });
       await Promise.resolve();
 
       (GatewayService.prototype as any).signalChatStreamEvent.call(gateway, "turn-2");

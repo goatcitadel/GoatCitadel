@@ -68,10 +68,12 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
   const gateway = createGatewayHarness({
     approvalEffectsService: { startWorker: vi.fn(), stopWorker: vi.fn() },
     discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
+    signalInboundRuntimeService: { stop: vi.fn(), sync: vi.fn() },
     drainDueChannelDeliveries: vi.fn(async () => [{ deliveryId: "delivery-1" }]),
     durableRunService: { startWorker: vi.fn(), stopWorker: vi.fn() },
     ensureCostReportCronJob: vi.fn(),
     ensureMemoryFlushCronJob: vi.fn(),
+    ensureMemoryConsolidationCronJob: vi.fn(),
     ensurePrivateBetaBackupCronJob: vi.fn(),
     ensureUpdateReviewCronJob: vi.fn(),
     eventIngestService: { flushPendingTranscriptOutbox: vi.fn(async () => 1) },
@@ -165,6 +167,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.improvementService.ensureWeeklyImprovementCronJob).toHaveBeenCalled();
     expect(gateway.ensurePrivateBetaBackupCronJob).toHaveBeenCalled();
     expect(gateway.ensureMemoryFlushCronJob).toHaveBeenCalled();
+    expect(gateway.ensureMemoryConsolidationCronJob).toHaveBeenCalled();
     expect(gateway.ensureCostReportCronJob).toHaveBeenCalled();
     expect(gateway.ensureUpdateReviewCronJob).toHaveBeenCalled();
     expect(gateway.meshService.init).toHaveBeenCalled();
@@ -223,6 +226,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       backgroundTasks: new Set<Promise<unknown>>([backgroundTask]),
       chatProactiveService: { stopScheduler: vi.fn() },
       discordRuntimeService: { close: vi.fn(async () => undefined) },
+      signalInboundRuntimeService: { stop: vi.fn() },
       durableRunService: { stopWorker: vi.fn() },
       improvementService: { stopScheduler: vi.fn() },
       llamaCppRuntime: { close: vi.fn(async () => undefined) },

@@ -49,6 +49,7 @@ const cronJobCreateSchema = z.object({
       "curator",
       "backup",
       "memory_flush",
+      "memory_consolidation",
       "cost_report",
       "update_review",
       "watchdog",
@@ -75,6 +76,7 @@ const cronJobUpdateSchema = z.object({
       "curator",
       "backup",
       "memory_flush",
+      "memory_consolidation",
       "cost_report",
       "update_review",
       "watchdog",
@@ -141,6 +143,8 @@ const updateSettingsSchema = z.object({
     .object({
       activeProviderId: z.string().optional(),
       activeModel: z.string().optional(),
+      utilityProviderId: z.string().optional(),
+      utilityModel: z.string().optional(),
       upsertProvider: z
         .object({
           providerId: z.string().min(1),

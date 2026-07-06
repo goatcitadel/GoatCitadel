@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   CronJobRecord,
   CronReviewItem,
@@ -7,6 +7,7 @@ import type {
   CronWatchdogCheckId,
   CronWatchdogRunResult,
 } from "@goatcitadel/contracts";
+import type { EvidenceEnvelopeCreateRequest } from "../evidence-envelope-service.js";
 import type { Storage } from "@goatcitadel/storage";
 import {
   type AgentTurnCronRunHandler,
@@ -22,6 +23,7 @@ import {
 import {
   COST_REPORT_HOURLY_JOB_ID,
   IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
@@ -36,6 +38,7 @@ export {
 export {
   COST_REPORT_HOURLY_JOB_ID,
   IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
@@ -64,6 +67,8 @@ export interface CronRunSnapshot {
   childDurableStatus?: string;
   childTurnId?: string;
   profilePosture?: string;
+  /** Signed evidence envelope for this run (present when cronEvidenceV1Enabled). */
+  evidenceEnvelopeId?: string;
   failure?: CronJobRecord["lastFailure"];
   failureCount?: number;
   backoffUntil?: string;
@@ -81,6 +86,7 @@ const SYSTEM_CRON_JOB_IDS = new Set([
   IMPROVEMENT_WEEKLY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   COST_REPORT_HOURLY_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 ]);
@@ -128,7 +134,13 @@ export interface CronAutomationServiceDeps {
   persistCronJobsConfig: () => void;
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
   requireFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => void;
-  isFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => boolean;
+  isFeatureEnabled: (flag: "cronReviewQueueV1Enabled" | "cronEvidenceV1Enabled") => boolean;
+  /**
+   * Records a signed evidence envelope for a completed/failed cron run.
+   * Optional and best-effort: envelope failure must never fail the run
+   * (the gateway wiring wraps createEnvelope in a diagnostic try/catch).
+   */
+  recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => { envelopeId: string } | undefined;
   runHandlers: {
     task: (
       job: CronJobRecord,
@@ -137,6 +149,7 @@ export interface CronAutomationServiceDeps {
     improvement: () => Promise<void>;
     backup: () => Promise<void>;
     memoryFlush: () => Promise<void>;
+    memoryConsolidation: () => Promise<void>;
     costReport: () => Promise<void>;
     updateReview: () => Promise<void>;
     curator: () => Promise<void>;
@@ -401,6 +414,11 @@ export class CronAutomationService {
         const finishedAt = new Date().toISOString();
         const saved = this.recordCronRunSuccess(job, runId, finishedAt);
         runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "memory_consolidation") {
+        await this.deps.runHandlers.memoryConsolidation();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
       } else if (job.action === "cost_report") {
         await this.deps.runHandlers.costReport();
         const finishedAt = new Date().toISOString();
@@ -490,6 +508,7 @@ export class CronAutomationService {
           diff: { type: "manual_run", changed: false },
         });
       }
+      this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
       const childRun = this.resolveCronChildRunSummary(runSummary);
       return {
         jobId: normalizedJobId,
@@ -582,6 +601,7 @@ export class CronAutomationService {
       finishedAt: match.lastRunAt,
       output: match.lastRunOutput,
       ...childRun,
+      evidenceEnvelopeId: match.lastRunEvidenceEnvelopeId,
       failure: match.lastFailure,
       failureCount: match.failureCount,
       backoffUntil: match.backoffUntil,
@@ -738,6 +758,7 @@ export class CronAutomationService {
         lastRunAt: finishedAt,
         lastRunId: runId,
         lastRunStatus: "ok",
+        lastRunEvidenceEnvelopeId: undefined,
         lastFailureAt: undefined,
         lastFailure: undefined,
         failureCount: 0,
@@ -748,6 +769,66 @@ export class CronAutomationService {
     );
     this.deps.persistCronJobsConfig();
     return saved;
+  }
+
+  /**
+   * Emits a signed `cron_job_executed` evidence envelope for a run. Gated on
+   * cronEvidenceV1Enabled; returns the envelope id to pin on the job record.
+   * The run summary is referenced by hash, not embedded, so envelope size
+   * stays bounded and secrets in output never enter the evidence chain.
+   */
+  private recordCronRunEvidence(
+    job: CronJobRecord,
+    runId: string,
+    status: "ok" | "failed",
+    finishedAtIso: string,
+    details: { summary?: Record<string, unknown>; failureMessage?: string } = {},
+  ): string | undefined {
+    const record = this.deps.recordEvidenceEnvelope;
+    if (!record || !this.deps.isFeatureEnabled("cronEvidenceV1Enabled")) {
+      return undefined;
+    }
+    const outputHash = details.summary
+      ? createHash("sha256").update(JSON.stringify(details.summary), "utf8").digest("hex")
+      : undefined;
+    const envelope = record({
+      eventKind: "cron_job_executed",
+      runId,
+      createdAt: finishedAtIso,
+      metadata: {
+        jobId: job.jobId,
+        jobName: job.name,
+        action: job.action,
+        schedule: job.schedule,
+        status,
+        ...(outputHash ? { outputHash } : {}),
+        ...(details.failureMessage ? { failureMessage: details.failureMessage } : {}),
+      },
+    });
+    return envelope?.envelopeId;
+  }
+
+  /**
+   * Pins the success evidence envelope on the job record after every action
+   * branch (including agent_turn/no_agent, which persist their own run state
+   * outside recordCronRunSuccess). Best-effort by construction: the envelope
+   * callback never throws (gateway wiring) and a missing job is a no-op.
+   */
+  private finalizeCronRunEvidenceOnSuccess(jobId: string, runId: string, summary: Record<string, unknown>): void {
+    if (!this.deps.recordEvidenceEnvelope || !this.deps.isFeatureEnabled("cronEvidenceV1Enabled")) {
+      return;
+    }
+    const job = this.deps.storage.cronJobs.get(jobId);
+    if (!job) {
+      return;
+    }
+    const finishedAtIso = new Date().toISOString();
+    const envelopeId = this.recordCronRunEvidence(job, runId, "ok", finishedAtIso, { summary });
+    if (!envelopeId) {
+      return;
+    }
+    this.deps.storage.cronJobs.upsert({ ...job, lastRunEvidenceEnvelopeId: envelopeId }, finishedAtIso);
+    this.deps.persistCronJobsConfig();
   }
 
   private recordCronRunFailure(
@@ -761,12 +842,16 @@ export class CronAutomationService {
     const message = normalizeCronFailureMessage(error);
     const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
     const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
+    const evidenceEnvelopeId = this.recordCronRunEvidence(job, runId, "failed", failedAtIso, {
+      failureMessage: message,
+    });
     const saved = this.deps.storage.cronJobs.upsert(
       {
         ...job,
         lastRunAt: failedAtIso,
         lastRunId: runId,
         lastRunStatus: "failed",
+        lastRunEvidenceEnvelopeId: evidenceEnvelopeId,
         lastFailureAt: failedAtIso,
         lastFailure: {
           message,

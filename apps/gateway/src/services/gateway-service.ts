@@ -95,6 +95,7 @@ import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "./scheduler-timing.js";
+import { toWeekKeyForTimezone } from "./improvement-replay.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
@@ -385,6 +386,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
+import { resolveUtilityModelOverride } from "./utility-model-routing.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -432,10 +434,17 @@ import { MediaVoiceService } from "./media-voice-service.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
+import {
+  EXISTING_LEARNINGS_DEDUP_LIMIT,
+  MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY,
+  MemoryConsolidationService,
+  PENDING_CANDIDATES_DEDUP_LIMIT,
+} from "./memory-consolidation-service.js";
 import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
 import {
@@ -465,6 +474,7 @@ import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execut
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
+import { SignalInboundRuntimeService } from "./signal-inbound-runtime-service.js";
 import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/update-review.js";
 import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
@@ -675,6 +685,8 @@ const UPDATE_REVIEW_DAILY_TIME_ZONE = "America/Los_Angeles";
 export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
+const MEMORY_CONSOLIDATION_TIME_ZONE = "America/Los_Angeles";
+const MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY = "memory_consolidation_weekly_last_week_key_v1";
 const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v1";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
@@ -847,6 +859,7 @@ export class GatewayService {
   private readonly addonSlotService: AddonSlotService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
   public readonly discordRuntimeService: DiscordRuntimeService;
+  public readonly signalInboundRuntimeService: SignalInboundRuntimeService;
   private readonly chatProjectService: ChatProjectService;
   public readonly durableRunService: DurableRunService;
   private readonly durableOperatorService: DurableOperatorService;
@@ -867,6 +880,7 @@ export class GatewayService {
   private readonly curatorService: CuratorService;
   private readonly memoryMaintenanceService: MemoryMaintenanceService;
   public readonly memoryLifecycleService: MemoryLifecycleService;
+  public readonly memoryConsolidationService: MemoryConsolidationService;
   private readonly evidenceEnvelopeService: EvidenceEnvelopeService;
   private readonly runtimeDecisionRecorder: RuntimeDecisionRecorder;
   private readonly continuationGateService: ContinuationGateService;
@@ -1227,6 +1241,36 @@ export class GatewayService {
         });
       },
     });
+    // Signal inbound poller (phase B1b): polls the local signal-cli bridge and
+    // dispatches through the SAME inbound seam webhook channels use, so the
+    // default-deny sender allowlist, bot-loop guard, and ingest idempotency
+    // apply identically. Gated on signalInboundV1Enabled — sync() is a no-op
+    // (and stops any pollers) while the flag is off.
+    this.signalInboundRuntimeService = new SignalInboundRuntimeService({
+      isEnabled: () => this.isFeatureEnabled("signalInboundV1Enabled"),
+      listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
+      // SSRF-guarded fetch: the bridge URL comes from connection config, so it
+      // must ride the same egress allowlist as outbound integration actions.
+      fetchBridge: (url) => this.fetchWithDiagnosticsTimeout(url),
+      integrationWebhooks: {
+        getIntegrationConnection: (connectionId) => this.storage.integrationConnections.get(connectionId),
+        cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
+          this.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
+        hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+        ingestChannelMessage: (channel, idempotencyKey, input) =>
+          this.ingestChannelMessage(channel, idempotencyKey, input),
+        parseChatCommand: (sessionId, commandText, options) => this.parseChatCommand(sessionId, commandText, options),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+        emitChannelActivity: (input) => this.commsActivity(input),
+        respondToExistingChatMessage: (sessionId, messageId, options) =>
+          this.respondToExistingChatMessage(sessionId, messageId, options),
+        resolveApprovalWithRemoteToken: (input) => this.resolveApprovalWithRemoteToken(input),
+        resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
+        setChatSessionBinding: (input) => this.setChatSessionBinding(input),
+        updateIntegrationConnection: (connectionId, patch) =>
+          this.storage.integrationConnections.update(connectionId, patch),
+      },
+    });
     this.cronAutomationService = new CronAutomationService({
       storage: this.storage,
       persistCronJobsConfig: () => this.persistCronJobsConfig(),
@@ -1235,6 +1279,24 @@ export class GatewayService {
       },
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      recordEvidenceEnvelope: (input) => {
+        // Best-effort: envelope failure must never fail the cron run.
+        try {
+          return this.evidenceEnvelopeService.createEnvelope(input);
+        } catch (error) {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "evidence",
+            event: "evidence.envelope.failed",
+            message: "Failed to record cron run evidence envelope",
+            context: {
+              eventKind: input.eventKind,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+          return undefined;
+        }
+      },
       runHandlers: {
         task: async (job, _context?) => {
           const task = this.createCronInboxTask(job);
@@ -1249,6 +1311,9 @@ export class GatewayService {
         },
         memoryFlush: async () => {
           await this.runMemoryFlushSchedulerIfDue({ force: true });
+        },
+        memoryConsolidation: async () => {
+          await this.runMemoryConsolidationSchedulerIfDue({ force: true });
         },
         costReport: async () => {
           await this.runCostReportSchedulerIfDue({ force: true });
@@ -1683,6 +1748,30 @@ export class GatewayService {
         };
       },
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
+    });
+    this.memoryConsolidationService = new MemoryConsolidationService({
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      listCompletedTurnTracesSince: (sinceIso, limit) =>
+        this.storage.chatTurnTraces.listCompletedSince(sinceIso, limit),
+      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      // Rides the prompt-runner chokepoint, so drafting automatically moves to
+      // the cheap utility tier once utilityModelRoutingV1Enabled ships.
+      resolveModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      proposeTraceMemoryCandidate: (input, actorId) =>
+        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId),
+      listExistingInsightsForDedup: () => [
+        ...this.memoryLifecycleService
+          .listMemoryLearnings({ status: "all", limit: EXISTING_LEARNINGS_DEDUP_LIMIT })
+          .map((item) => item.insight),
+        ...this.memoryLifecycleService
+          .listTraceMemoryCandidates({ status: "proposed", limit: PENDING_CANDIDATES_DEDUP_LIMIT })
+          .map((item) => item.proposedInsight),
+      ],
+      getWatermark: () => this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY)?.value,
+      setWatermark: (iso) => this.storage.systemSettings.set(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY, iso),
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload ?? {}),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.durableOperatorService = new DurableOperatorService({
       durableRunService: this.durableRunService,
@@ -2180,10 +2269,13 @@ export class GatewayService {
     }
     this.improvementService.markInterruptedDecisionReplayRuns();
     await Promise.all([this.discordRuntimeService.sync(), this.loadCronJobsFromConfig()]);
+    // Starts pollers only when signalInboundV1Enabled is true (no-op otherwise).
+    this.syncSignalInboundRuntime();
     this.improvementService.ensureWeeklyImprovementCronJob();
     this.curatorService.ensureCuratorWeeklyCronJob();
     this.ensurePrivateBetaBackupCronJob();
     this.ensureMemoryFlushCronJob();
+    this.ensureMemoryConsolidationCronJob();
     this.ensureCostReportCronJob();
     this.ensureUpdateReviewCronJob();
     this.meshService.init();
@@ -2735,6 +2827,7 @@ export class GatewayService {
     const tasks = [
       { label: "private beta backups", run: () => this.runPrivateBetaBackupSchedulerIfDue() },
       { label: "memory flush", run: () => this.runMemoryFlushSchedulerIfDue() },
+      { label: "memory consolidation", run: () => this.runMemoryConsolidationSchedulerIfDue() },
       { label: "cost report", run: () => this.runCostReportSchedulerIfDue() },
       { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
       { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
@@ -3136,6 +3229,43 @@ export class GatewayService {
       outputPath: backup.outputPath,
       bytes: backup.bytes,
     });
+  }
+
+  private async runMemoryConsolidationSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+    const job = this.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
+    if (!job?.enabled) {
+      return;
+    }
+    // Both gates are re-checked inside the service too; checking here avoids
+    // bookkeeping writes for a run that would immediately no-op.
+    if (!this.isFeatureEnabled("memoryConsolidationV1Enabled") || this.isFeatureEnabled("autonomyV1Disabled")) {
+      return;
+    }
+    const now = new Date();
+    if (!options.force) {
+      // Weekly: Sundays in the 2 AM hour in the configured timezone.
+      const parts = getZonedDateParts(now, MEMORY_CONSOLIDATION_TIME_ZONE);
+      if (parts.weekday !== 0 || parts.hour !== 2) {
+        return;
+      }
+    }
+    const weekKey = toWeekKeyForTimezone(now, MEMORY_CONSOLIDATION_TIME_ZONE);
+    const lastWeekKey = this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY)?.value;
+    if (!options.force && lastWeekKey === weekKey) {
+      return;
+    }
+    const summary = await this.memoryConsolidationService.runConsolidation();
+    this.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
+    const finishedAt = new Date().toISOString();
+    this.storage.cronJobs.upsert(
+      {
+        ...job,
+        lastRunAt: finishedAt,
+        lastRunOutput: JSON.stringify(summary),
+        nextRunAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      finishedAt,
+    );
   }
 
   private async runMemoryFlushSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
@@ -4135,7 +4265,39 @@ export class GatewayService {
     return this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
   }
 
+  /**
+   * Cheap utility-model override for background LLM calls. Returns undefined
+   * (= keep existing selection) unless utilityModelRoutingV1Enabled is on and
+   * the configured utility provider has a usable key.
+   */
+  private getUtilityModelOverride(): { providerId: string; model: string } | undefined {
+    if (this.readFeatureFlags().utilityModelRoutingV1Enabled !== true) {
+      return undefined;
+    }
+    const runtime = this.llmService.getRuntimeConfig({ useCache: true });
+    const utilityProviderId = runtime.utilityProviderId;
+    if (!utilityProviderId) {
+      return undefined;
+    }
+    // Keychain-backed keys are only surfaced when explicitly requested for a
+    // provider, so ask for the utility provider directly instead of relying on
+    // the active-provider summary.
+    const provider = this.llmService
+      .listProviders({ includeKeychainForProviderId: utilityProviderId, useCache: true })
+      .find((candidate) => candidate.providerId === utilityProviderId);
+    return resolveUtilityModelOverride({
+      flagEnabled: true,
+      utilityProviderId,
+      utilityModel: runtime.utilityModel,
+      provider,
+    });
+  }
+
   private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
+    const utilityOverride = this.getUtilityModelOverride();
+    if (utilityOverride) {
+      return utilityOverride;
+    }
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -4169,6 +4331,10 @@ export class GatewayService {
   }
 
   private getPromptJudgeModelDefaults(): { providerId?: string; model?: string } {
+    const utilityOverride = this.getUtilityModelOverride();
+    if (utilityOverride) {
+      return utilityOverride;
+    }
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -8691,12 +8857,17 @@ export class GatewayService {
         patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
+      channelVoiceInboundV1Enabled: patch.channelVoiceInboundV1Enabled ?? current.channelVoiceInboundV1Enabled,
+      signalInboundV1Enabled: patch.signalInboundV1Enabled ?? current.signalInboundV1Enabled,
       plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
       parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
       streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
       channelVoiceReplyV1Enabled: patch.channelVoiceReplyV1Enabled ?? current.channelVoiceReplyV1Enabled,
+      memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
+      cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
+      utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8747,6 +8918,8 @@ export class GatewayService {
         stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
+      channelVoiceInboundV1Enabled: stored?.channelVoiceInboundV1Enabled ?? fromConfig.channelVoiceInboundV1Enabled,
+      signalInboundV1Enabled: stored?.signalInboundV1Enabled ?? fromConfig.signalInboundV1Enabled,
       plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
       parallelToolExecutionV1Disabled:
         stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
@@ -8754,6 +8927,9 @@ export class GatewayService {
       plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
       channelVoiceReplyV1Enabled: stored?.channelVoiceReplyV1Enabled ?? fromConfig.channelVoiceReplyV1Enabled,
+      memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
+      cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
+      utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
     };
   }
 
@@ -8795,6 +8971,22 @@ export class GatewayService {
         category: "channels",
         event: "discord.runtime.sync_failed",
         message: "Discord runtime sync failed.",
+        context: {
+          error: (error as Error).message,
+        },
+      });
+    }
+  }
+
+  public syncSignalInboundRuntime(): void {
+    try {
+      this.signalInboundRuntimeService.sync();
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "channels",
+        event: "signal.inbound.sync_failed",
+        message: "Signal inbound runtime sync failed.",
         context: {
           error: (error as Error).message,
         },
@@ -9228,6 +9420,7 @@ export class GatewayService {
       this.backgroundTasks.clear();
       await Promise.allSettled(tasks);
     }
+    this.signalInboundRuntimeService.stop();
     await this.discordRuntimeService.close();
     await this.assemblyService.close();
     await this.npuSidecar.close();
@@ -9819,6 +10012,10 @@ export class GatewayService {
 
   private ensureMemoryFlushCronJob(): void {
     return cronJobConfigHelpers.ensureMemoryFlushCronJob(this);
+  }
+
+  private ensureMemoryConsolidationCronJob(): void {
+    return cronJobConfigHelpers.ensureMemoryConsolidationCronJob(this);
   }
 
   private ensureCostReportCronJob(): void {

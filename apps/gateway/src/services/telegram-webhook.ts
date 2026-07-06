@@ -8,6 +8,18 @@ import {
 
 const TELEGRAM_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/telegram\/webhook$/i;
 
+/**
+ * Structured reference to an inbound Telegram voice note / audio message.
+ * Only a reference is emitted — never media bytes. Download + transcription
+ * happen later in the dispatch flow, after the sender trust gate.
+ */
+export type TelegramVoiceMediaRef = {
+  kind: "voice" | "audio";
+  fileId: string;
+  mimeType?: string;
+  durationSeconds?: number;
+};
+
 export type TelegramWebhookNormalization =
   | {
       kind: "message";
@@ -22,6 +34,8 @@ export type TelegramWebhookNormalization =
       threadId?: string;
       deliveryReplyToMessageId: string;
       metadata: Record<string, unknown>;
+      /** Present only when channelVoiceInboundV1Enabled and the update carries voice/audio. */
+      voiceMedia?: TelegramVoiceMediaRef;
     }
   | {
       kind: "callback";
@@ -70,6 +84,11 @@ export function deriveTelegramWebhookIdempotencyKey(connectionId: string, payloa
 export function normalizeTelegramWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
+  /**
+   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ voice/audio
+   * updates keep today's behavior: no content, so they are silently ignored.
+   */
+  voiceInboundEnabled?: boolean;
 }): TelegramWebhookNormalization {
   const root = asRecord(input.payload);
   const callbackQuery = asRecord(root.callback_query);
@@ -109,7 +128,11 @@ export function normalizeTelegramWebhookPayload(input: {
   const chat = asRecord(effectiveMessage.chat);
   const chatId = valueToIdString(chat.id);
   const messageId = valueToIdString(effectiveMessage.message_id);
-  const content = asString(effectiveMessage.text) ?? asString(effectiveMessage.caption);
+  const voiceMedia = input.voiceInboundEnabled === true ? readTelegramVoiceMedia(effectiveMessage) : undefined;
+  const content =
+    asString(effectiveMessage.text) ??
+    asString(effectiveMessage.caption) ??
+    (voiceMedia ? `[telegram ${voiceMedia.kind} message]` : undefined);
   const actorId = valueToIdString(from.id) ?? valueToIdString(senderChat.id);
   const actorType: "user" | "system" = valueToIdString(from.id) ? "user" : "system";
 
@@ -134,6 +157,7 @@ export function normalizeTelegramWebhookPayload(input: {
     actorId,
     actorType,
     content,
+    ...(voiceMedia ? { voiceMedia } : {}),
     room: isPrivate ? undefined : chatId,
     peer: isPrivate ? chatId : undefined,
     threadId,
@@ -206,6 +230,26 @@ function normalizeTelegramCallbackQuery(
       actorDisplayName: renderTelegramDisplayName(from),
     }),
   };
+}
+
+function readTelegramVoiceMedia(message: JsonRecord): TelegramVoiceMediaRef | undefined {
+  for (const kind of ["voice", "audio"] as const) {
+    const media = asRecord(message[kind]);
+    const fileId = asString(media.file_id);
+    if (!fileId) {
+      continue;
+    }
+    const duration = media.duration;
+    return {
+      kind,
+      fileId,
+      ...(asString(media.mime_type) ? { mimeType: asString(media.mime_type) } : {}),
+      ...(typeof duration === "number" && Number.isFinite(duration) && duration >= 0
+        ? { durationSeconds: duration }
+        : {}),
+    };
+  }
+  return undefined;
 }
 
 function detectUnsupportedTelegramEventType(root: JsonRecord): string | undefined {

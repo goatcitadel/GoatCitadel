@@ -25,12 +25,17 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   orchestrationFinalStreamingV1Disabled: true,
   autonomyV1Disabled: true,
   chatThinkingStreamV1Enabled: true,
+  channelVoiceInboundV1Enabled: true,
+  signalInboundV1Enabled: true,
   plannerFastPathV1Disabled: true,
   parallelToolExecutionV1Disabled: true,
   streamIdleWatchdogV1Disabled: true,
   plannerFanoutV1Disabled: true,
   subagentFanoutV1Disabled: true,
   channelVoiceReplyV1Enabled: true,
+  memoryConsolidationV1Enabled: true,
+  cronEvidenceV1Enabled: true,
+  utilityModelRoutingV1Enabled: true,
 };
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {

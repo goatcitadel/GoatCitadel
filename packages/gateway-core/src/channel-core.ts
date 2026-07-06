@@ -454,18 +454,28 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   signal: {
     supportedActions: ["channel.send"],
+    // Inbound is a governed POLL loop against the same local signal-cli
+    // bridge the outbound path uses (no public webhook surface). It only
+    // reports ready when the connection opts in AND the per-account receive
+    // endpoint is addressable (bridge URL + account id configured).
+    resolveInboundModes: (config) => (hasSignalInboundPollingConfigured(config) ? ["poll"] : ["none"]),
     threadCapabilities: {
       direct: true,
       groups: true,
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Signal is normalized as a stateless outbound bridge. It can send to configured recipients, but inbound routing is not available in the current runtime.",
+    resolveRuntimePosture: (config) => {
+      const hasPollIngress = hasSignalInboundPollingConfigured(config);
+      return {
+        outboundTransport: "api",
+        inboundTransport: hasPollIngress ? "poll" : undefined,
+        lifecycle: "stateless",
+        inboundReadiness: hasPollIngress ? "ready" : "unsupported",
+        operatorSummary: hasPollIngress
+          ? "Signal is normalized as a stateless bridge with governed inbound polling. It can send to configured recipients and routes inbound messages by polling the local signal-cli bridge receive endpoint."
+          : "Signal is normalized as a stateless outbound bridge. It can send to configured recipients, but inbound routing stays disabled until inbound polling is enabled with an account id on the connection.",
+      };
     },
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
@@ -1109,6 +1119,21 @@ function readConfigString(config: Record<string, unknown>, key: string): string 
 
 function hasAnyConfigured(config: Record<string, unknown>, keys: string[]): boolean {
   return keys.some((key) => Boolean(readConfigString(config, key)));
+}
+
+/**
+ * Signal inbound polling readiness: the connection must opt in
+ * (`inboundEnabled`) and the per-account bridge receive endpoint must be
+ * addressable (bridge URL + account id). Mirrors
+ * resolveSignalInboundSettings in the gateway's signal-inbound-runtime-service.
+ */
+function hasSignalInboundPollingConfigured(config: Record<string, unknown>): boolean {
+  const inboundEnabled = config.inboundEnabled === true || config.inboundEnabled === "true";
+  return (
+    inboundEnabled &&
+    hasAnyConfigured(config, ["baseUrl", "bridgeUrl"]) &&
+    hasAnyConfigured(config, ["accountId", "account"])
+  );
 }
 
 function trimOptionalString(value: string | undefined): string | undefined {
