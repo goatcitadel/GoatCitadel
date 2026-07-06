@@ -102,6 +102,13 @@ export interface FeatureFlagsConfig {
    * Absent/false (default) ⇒ cron runs record no evidence, exactly as today.
    */
   cronEvidenceV1Enabled?: boolean;
+  /**
+   * Routes background LLM calls (improvement scans, judges, classifiers, prompt
+   * packs) to the configured cheap utility-model slot (`llm.utilityProviderId` /
+   * `llm.utilityModel`). Absent/false (default) ⇒ background calls keep today's
+   * model selection exactly.
+   */
+  utilityModelRoutingV1Enabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -706,6 +713,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
+    ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1251,6 +1259,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // Opt-in signed evidence for cron runs. `?? false` keeps cron behavior
       // byte-identical until an operator enables it.
       cronEvidenceV1Enabled: featuresInput.cronEvidenceV1Enabled ?? false,
+      // Opt-in utility-model tier for background LLM calls. `?? false` keeps
+      // background model selection byte-identical until an operator enables it.
+      utilityModelRoutingV1Enabled: featuresInput.utilityModelRoutingV1Enabled ?? false,
     },
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {
