@@ -263,6 +263,10 @@ export const LlmConfigFileSchema = z
   .object({
     activeProviderId: z.string(),
     activeModel: z.string().optional(),
+    // Optional cheap utility-model slot for background LLM tasks; only honored
+    // when the utilityModelRoutingV1Enabled feature flag is on.
+    utilityProviderId: z.string().optional(),
+    utilityModel: z.string().optional(),
     providers: z.array(LlmProviderConfigSchema),
   })
   .passthrough();
@@ -696,6 +700,10 @@ export const AssistantConfigInputSchema = z
         // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
         // stream chunks. Absent/false (default) ⇒ byte-identical to today.
         chatThinkingStreamV1Enabled: z.boolean().optional(),
+        // Routes background LLM calls (improvement scans, judges, classifiers,
+        // prompt packs) to the configured cheap utility-model slot. Absent/false
+        // (default) ⇒ background calls keep today's model selection exactly.
+        utilityModelRoutingV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

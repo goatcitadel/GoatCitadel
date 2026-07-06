@@ -65,6 +65,8 @@ const MAX_PROVIDER_SSE_EVENTS = 2048;
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
   activeModel?: string;
+  utilityProviderId?: string;
+  utilityModel?: string;
   upsertProvider?: {
     providerId: string;
     label?: string;
@@ -205,6 +207,8 @@ export class LlmService {
   private readonly tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"];
   private activeProviderId: string;
   private activeModel: string;
+  private utilityProviderId: string;
+  private utilityModel: string;
   private readonly modelMetadata: LlmModelMetadataManifest;
   private readonly modelCatalogCachePath: string | undefined;
 
@@ -220,6 +224,8 @@ export class LlmService {
     this.tlsPathPolicy = options.tlsPathPolicy;
     this.activeProviderId = "";
     this.activeModel = "";
+    this.utilityProviderId = "";
+    this.utilityModel = "";
     this.modelCatalogCachePath = options.modelCatalogCachePath ?? this.env.GOATCITADEL_LLM_MODEL_CATALOG_CACHE_PATH;
 
     const metadataPath =
@@ -240,6 +246,12 @@ export class LlmService {
       throw new Error("LLM configuration must include at least one provider");
     }
     this.hydrateModelDiscoveryCacheFromDisk();
+
+    const configuredUtilityProviderId = normalizeConfiguredProviderId(config.utilityProviderId);
+    if (configuredUtilityProviderId && this.providers.has(configuredUtilityProviderId)) {
+      this.utilityProviderId = configuredUtilityProviderId;
+      this.utilityModel = config.utilityModel?.trim() ?? "";
+    }
 
     const configuredActiveProviderId = normalizeConfiguredProviderId(config.activeProviderId);
     if (!configuredActiveProviderId) {
@@ -333,6 +345,8 @@ export class LlmService {
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
+      utilityProviderId: this.utilityProviderId || undefined,
+      utilityModel: this.utilityModel || undefined,
       activeModelContextWindow: activeMeta?.contextWindow,
       activeModelOutputTokenLimit: activeMeta?.outputTokenLimit,
       providers,
@@ -418,6 +432,30 @@ export class LlmService {
             onMismatch: "throw",
           }) ?? "";
       }
+    }
+
+    const hasUtilityProviderId = Object.prototype.hasOwnProperty.call(input, "utilityProviderId");
+    const hasUtilityModel = Object.prototype.hasOwnProperty.call(input, "utilityModel");
+    if (hasUtilityProviderId) {
+      const utilityProviderId = normalizeConfiguredProviderId(input.utilityProviderId);
+      if (!utilityProviderId) {
+        this.utilityProviderId = "";
+        this.utilityModel = "";
+      } else {
+        const provider = this.providers.get(utilityProviderId);
+        if (!provider) {
+          throw new Error(`Unknown LLM provider: ${utilityProviderId}`);
+        }
+        this.utilityProviderId = provider.providerId;
+        if (hasUtilityModel) {
+          this.utilityModel = input.utilityModel?.trim() ?? "";
+        }
+      }
+    } else if (hasUtilityModel) {
+      if (!this.utilityProviderId && input.utilityModel?.trim()) {
+        throw new Error("Select a utility LLM provider before choosing a utility model.");
+      }
+      this.utilityModel = input.utilityModel?.trim() ?? "";
     }
 
     return this.getRuntimeConfig({
@@ -552,6 +590,8 @@ export class LlmService {
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
+      utilityProviderId: this.utilityProviderId || undefined,
+      utilityModel: this.utilityModel || undefined,
       providers: Array.from(this.providers.values()).map((provider) => ({
         ...provider,
         // SECURITY (codex finding #15): The LLM config endpoint serializes
