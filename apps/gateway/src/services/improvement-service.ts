@@ -5062,8 +5062,9 @@ export class ImprovementService {
         @evidenceJson, @summaryText, @inputExcerpt, @outputExcerpt, @createdAt
       )
     `);
-    this.ctx.gatewaySql.exec("BEGIN IMMEDIATE");
-    try {
+    // Raw "BEGIN IMMEDIATE" is sqlite-only syntax; the helper picks the
+    // driver-appropriate transaction statements on Postgres deployments.
+    this.ctx.gatewaySql.runImmediateTransaction(() => {
       for (const item of items) {
         insert.run({
           itemId: item.itemId,
@@ -5086,11 +5087,7 @@ export class ImprovementService {
           createdAt: item.createdAt,
         });
       }
-      this.ctx.gatewaySql.exec("COMMIT");
-    } catch (error) {
-      this.ctx.gatewaySql.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   private buildDecisionReplayFindings(runId: string, items: DecisionReplayItemRecord[]): DecisionReplayFindingRecord[] {
@@ -5162,8 +5159,9 @@ export class ImprovementService {
         @isDuplicate, @duplicateOfFingerprint, @createdAt
       )
     `);
-    this.ctx.gatewaySql.exec("BEGIN IMMEDIATE");
-    try {
+    // Raw "BEGIN IMMEDIATE" is sqlite-only syntax; the helper picks the
+    // driver-appropriate transaction statements on Postgres deployments.
+    this.ctx.gatewaySql.runImmediateTransaction(() => {
       for (const f of findings) {
         insert.run({
           findingId: f.findingId,
@@ -5184,11 +5182,7 @@ export class ImprovementService {
           createdAt: f.createdAt,
         });
       }
-      this.ctx.gatewaySql.exec("COMMIT");
-    } catch (error) {
-      this.ctx.gatewaySql.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   private planDecisionAutoTunes(runId: string, findings: DecisionReplayFindingRecord[]): DecisionAutoTuneRecord[] {

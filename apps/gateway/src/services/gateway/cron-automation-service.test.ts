@@ -66,23 +66,37 @@ class FakeDb {
   } | null = null;
 
   public exec(sql: string): void {
-    if (sql.includes("BEGIN IMMEDIATE")) {
-      this.snapshot = {
-        review: new Map([...this.review.entries()].map(([id, row]) => [id, { ...row }])),
-        diffs: new Map(this.diffs),
-      };
-      return;
+    // "BEGIN IMMEDIATE" is sqlite-only and breaks on the Postgres driver
+    // (syntax error at or near "IMMEDIATE"); raw COMMIT/ROLLBACK would bypass
+    // the sync client's transaction bookkeeping. Reject them so any regression
+    // back to raw transaction-control exec fails here the way it does live.
+    const leadingKeyword =
+      sql
+        .trim()
+        .split(/[\s;(]+/, 1)[0]
+        ?.toUpperCase() ?? "";
+    if (["BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "END"].includes(leadingKeyword)) {
+      throw new Error(
+        `raw transaction-control exec is dialect-unsafe; use storage.runImmediateTransaction (got: ${sql.trim()})`,
+      );
     }
-    if (sql.includes("COMMIT")) {
+  }
+
+  public runImmediateTransaction<T>(callback: () => T): T {
+    const snapshot = {
+      review: new Map([...this.review.entries()].map(([id, row]) => [id, { ...row }])),
+      diffs: new Map(this.diffs),
+    };
+    this.snapshot = snapshot;
+    try {
+      const result = callback();
       this.snapshot = null;
-      return;
-    }
-    if (sql.includes("ROLLBACK")) {
-      if (this.snapshot) {
-        this.review = new Map(this.snapshot.review);
-        this.diffs = new Map(this.snapshot.diffs);
-      }
+      return result;
+    } catch (error) {
+      this.review = new Map(snapshot.review);
+      this.diffs = new Map(snapshot.diffs);
       this.snapshot = null;
+      throw error;
     }
   }
 
@@ -261,6 +275,7 @@ function createService(
     storage: {
       db,
       cronJobs,
+      runImmediateTransaction: <T>(callback: () => T): T => db.runImmediateTransaction(callback),
       durableRuns: {
         getRun: (runId: string) => {
           const status = options.durableStatuses?.[runId];
