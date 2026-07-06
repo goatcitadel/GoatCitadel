@@ -97,6 +97,12 @@ export interface FeatureFlagsConfig {
    */
   chatThinkingStreamV1Enabled?: boolean;
   /**
+   * Competitive-gap program phase B2b: TTS voice replies to audio-capable
+   * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
+   * path never synthesizes audio and behavior is byte-identical to today.
+   */
+  channelVoiceReplyV1Enabled?: boolean;
+  /**
    * Inbound channel voice ingestion (competitive-gap phase B2a): Telegram voice
    * notes and WhatsApp audio messages are downloaded, transcribed via the local
    * voice runtime, and ingested as governed turns. Absent/false (default) ⇒
@@ -737,6 +743,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
+    ["channelVoiceReplyV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_REPLY_V1_ENABLED],
     ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
     ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
@@ -1289,6 +1296,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
       subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
+      // B2b TTS voice replies: default OFF. `?? false` means the channel reply
+      // path never synthesizes audio unless an operator opts in — with the flag
+      // left at its default, runtime behavior is byte-identical to today.
+      channelVoiceReplyV1Enabled: featuresInput.channelVoiceReplyV1Enabled ?? false,
       // Opt-in weekly memory consolidation. `?? false` keeps the job inert
       // until an operator enables it.
       memoryConsolidationV1Enabled: featuresInput.memoryConsolidationV1Enabled ?? false,

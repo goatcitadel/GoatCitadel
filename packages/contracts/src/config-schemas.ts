@@ -700,6 +700,9 @@ export const AssistantConfigInputSchema = z
         // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
         // stream chunks. Absent/false (default) ⇒ byte-identical to today.
         chatThinkingStreamV1Enabled: z.boolean().optional(),
+        // B2b: TTS voice replies to audio-capable channels (Telegram voice notes).
+        // Absent/false (default) ⇒ byte-identical to today; no synthesis runs.
+        channelVoiceReplyV1Enabled: z.boolean().optional(),
         // Inbound channel voice ingestion (Telegram voice notes / WhatsApp
         // audio → transcription → governed turn). Absent/false (default) ⇒
         // byte-identical: parsers keep emitting placeholders / dropping voice.

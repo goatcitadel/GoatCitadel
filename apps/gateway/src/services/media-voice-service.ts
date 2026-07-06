@@ -30,6 +30,7 @@ import {
   selectManagedVoiceModel,
 } from "../voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "../voice-runtime/status.js";
+import { synthesizeSpeech as synthesizeSpeechImpl } from "./media-voice-tts.js";
 import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
 import type { GatewaySqlRepository, SystemSettingsRepository } from "@goatcitadel/storage";
 
@@ -621,6 +622,30 @@ export class MediaVoiceService {
       },
     });
     return this.transcribeAudioBytes(bytes, input.mimeType, input.language);
+  }
+
+  // ── Voice synthesis (Competitive-gap program phase B2b) ─────────────────
+
+  /**
+   * Synthesize speech from already-policy-gated assistant reply text via the
+   * managed Piper runtime (ogg/opus output). See `media-voice-tts.ts` for the
+   * subprocess discipline and the governance posture note.
+   */
+  public async synthesizeSpeech(input: { text: string; voice?: string }): Promise<{
+    bytesBase64: string;
+    mimeType: string;
+  }> {
+    this.deps.recordDevDiagnostic({
+      level: "info",
+      category: "voice",
+      event: "voice.synthesize.start",
+      message: "Starting TTS synthesis",
+      context: {
+        chars: input.text?.length ?? 0,
+        voice: input.voice,
+      },
+    });
+    return synthesizeSpeechImpl(input);
   }
 
   // ── Voice status & runtime ──────────────────────────────────────────────

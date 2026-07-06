@@ -32,6 +32,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   streamIdleWatchdogV1Disabled: true,
   plannerFanoutV1Disabled: true,
   subagentFanoutV1Disabled: true,
+  channelVoiceReplyV1Enabled: true,
   memoryConsolidationV1Enabled: true,
   cronEvidenceV1Enabled: true,
   utilityModelRoutingV1Enabled: true,

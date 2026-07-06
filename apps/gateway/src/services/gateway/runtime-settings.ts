@@ -123,6 +123,8 @@ export interface RuntimeSettings {
     plannerFanoutV1Disabled?: boolean;
     /** R3-8 kill switch: model-callable `agent.fanout` spawn tool. Absent/false ⇒ feature ON. */
     subagentFanoutV1Disabled?: boolean;
+    /** B2b TTS voice replies to audio-capable channels. Absent/false (default) ⇒ no audio synthesis on the reply path. */
+    channelVoiceReplyV1Enabled?: boolean;
     /** Opt-in: weekly governed memory consolidation (propose-only, approval-gated). Absent/false ⇒ job never runs. */
     memoryConsolidationV1Enabled?: boolean;
     /** Opt-in: signed cron_job_executed evidence envelope on every cron run. Absent/false ⇒ no cron evidence, as today. */

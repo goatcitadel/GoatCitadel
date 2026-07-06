@@ -18,13 +18,23 @@ import {
   malformedFieldIssue,
 } from "./common.js";
 
+/** B2b voice replies: accepted per-connection modes; anything else normalizes to "off". */
+const VOICE_REPLY_MODES: ReadonlySet<string> = new Set(["off", "voice_on_voice", "always"]);
+
+function normalizeVoiceReplyMode(value: string | undefined): "off" | "voice_on_voice" | "always" {
+  if (value === "voice_on_voice" || value === "always") {
+    return value;
+  }
+  return "off";
+}
+
 export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.telegram");
   const definition: ChannelSetupDefinition = {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bot_token_target",
-      contentVersion: "2026.05.telegram.channel-ux.v1",
+      contentVersion: "2026.07.telegram.channel-ux.v2",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
@@ -178,6 +188,23 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "voiceReplyMode",
+              label: "Voice replies",
+              type: "select",
+              required: false,
+              defaultValue: "off",
+              explanation:
+                "Optionally attach a synthesized voice note to assistant replies in this chat. The text reply is always sent; audio is additive.",
+              whyNeeded:
+                "Lets audio-first chats hear replies as Telegram voice notes without changing text delivery. Requires the gateway voice-reply feature flag and the managed Piper TTS runtime.",
+              options: [
+                { value: "off", label: "Off (text only)" },
+                { value: "voice_on_voice", label: "Voice note when the inbound message was a voice message" },
+                { value: "always", label: "Voice note on every reply" },
+              ],
+              canChangeLater: true,
+            },
+            {
               key: "webhookSecretEnv",
               label: "Webhook secret ENV var",
               type: "text",
@@ -254,11 +281,11 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       ],
     },
     adapter: {
-      adapterVersion: "2026.05.telegram.channel-ux.v1",
+      adapterVersion: "2026.07.telegram.channel-ux.v2",
       secretFieldKeys: ["botToken", "webhookSecret"],
     },
     validation: {
-      validationVersion: "2026.05.telegram.channel-ux.v1",
+      validationVersion: "2026.07.telegram.channel-ux.v2",
       levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
@@ -304,6 +331,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           targets: normalizeTelegramTargets(config),
           defaultChatId: readString(config, "defaultChatId") ?? readString(config, "defaultChannelId"),
           parseMode: readString(config, "parseMode") ?? "Markdown",
+          voiceReplyMode: normalizeVoiceReplyMode(readString(config, "voiceReplyMode")),
           webhookSecretEnv: readString(config, "webhookSecretEnv") ?? readString(config, "secretTokenEnv"),
         },
         hydration: {
@@ -323,6 +351,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
             defaultChatId:
               readString(config, "defaultChatId") || readString(config, "defaultChannelId") ? "configured" : "unknown",
             parseMode: "configured",
+            voiceReplyMode: "configured",
             webhookSecret:
               readString(config, "webhookSecret") || readString(config, "secretToken") ? "configured" : "unknown",
             webhookSecretEnv:
@@ -353,6 +382,7 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         defaultChannelId: defaultTarget?.chatId ?? readString(draft.draft, "defaultChatId"),
         defaultChatId: defaultTarget?.chatId ?? readString(draft.draft, "defaultChatId"),
         parseMode: readString(draft.draft, "parseMode") ?? "Markdown",
+        voiceReplyMode: normalizeVoiceReplyMode(readString(draft.draft, "voiceReplyMode")),
         webhookSecretEnv: readString(draft.draft, "webhookSecretEnv") ?? preservedWebhookSecretEnv,
         webhookSecret: readString(draft.draft, "webhookSecret") ?? preservedWebhookSecret,
       });
@@ -380,6 +410,12 @@ export function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         if (!target.chatId) {
           issues.push(malformedFieldIssue("targets", "Every Telegram target needs a chat id or @channel handle."));
         }
+      }
+      const voiceReplyMode = readString(draft.draft, "voiceReplyMode");
+      if (voiceReplyMode && !VOICE_REPLY_MODES.has(voiceReplyMode)) {
+        issues.push(
+          malformedFieldIssue("voiceReplyMode", "Voice replies must be one of off, voice_on_voice, or always."),
+        );
       }
       return issues;
     },
