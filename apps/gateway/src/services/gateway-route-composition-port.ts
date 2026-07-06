@@ -221,6 +221,7 @@ export interface GatewayRouteCompositionPort {
   setSkillState: RouteDependencyMethod<"skills", "setSkillState">;
   suggestChatDelegation: RouteDependencyMethod<"chatDelegate", "suggestChatDelegation">;
   syncDiscordRuntime: IntegrationChannelServicePort["syncDiscordRuntime"];
+  syncSignalInboundRuntime: IntegrationChannelServicePort["syncSignalInboundRuntime"];
   updateChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["updateChatSessionPrefs"];
   updateFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["updateFeatureFlags"];
   updateSkillActivationPolicy: RouteDependencyMethod<"skills", "updateSkillActivationPolicy">;
@@ -429,6 +430,7 @@ export function createGatewayRouteCompositionPort(
     setSkillState: gateway.setSkillState.bind(gateway),
     suggestChatDelegation: gateway.suggestChatDelegation.bind(gateway),
     syncDiscordRuntime: gateway.syncDiscordRuntime.bind(gateway),
+    syncSignalInboundRuntime: gateway.syncSignalInboundRuntime.bind(gateway),
     updateChatSessionPrefs: gateway.updateChatSessionPrefs.bind(gateway),
     updateFeatureFlags: gateway.updateFeatureFlags.bind(gateway),
     updateSkillActivationPolicy: gateway.updateSkillActivationPolicy.bind(gateway),

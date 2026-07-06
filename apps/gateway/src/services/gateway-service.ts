@@ -473,6 +473,7 @@ import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execut
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
+import { SignalInboundRuntimeService } from "./signal-inbound-runtime-service.js";
 import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/update-review.js";
 import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
@@ -856,6 +857,7 @@ export class GatewayService {
   private readonly addonSlotService: AddonSlotService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
   public readonly discordRuntimeService: DiscordRuntimeService;
+  public readonly signalInboundRuntimeService: SignalInboundRuntimeService;
   private readonly chatProjectService: ChatProjectService;
   public readonly durableRunService: DurableRunService;
   private readonly durableOperatorService: DurableOperatorService;
@@ -1235,6 +1237,36 @@ export class GatewayService {
           message,
           context,
         });
+      },
+    });
+    // Signal inbound poller (phase B1b): polls the local signal-cli bridge and
+    // dispatches through the SAME inbound seam webhook channels use, so the
+    // default-deny sender allowlist, bot-loop guard, and ingest idempotency
+    // apply identically. Gated on signalInboundV1Enabled — sync() is a no-op
+    // (and stops any pollers) while the flag is off.
+    this.signalInboundRuntimeService = new SignalInboundRuntimeService({
+      isEnabled: () => this.isFeatureEnabled("signalInboundV1Enabled"),
+      listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
+      // SSRF-guarded fetch: the bridge URL comes from connection config, so it
+      // must ride the same egress allowlist as outbound integration actions.
+      fetchBridge: (url) => this.fetchWithDiagnosticsTimeout(url),
+      integrationWebhooks: {
+        getIntegrationConnection: (connectionId) => this.storage.integrationConnections.get(connectionId),
+        cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
+          this.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
+        hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+        ingestChannelMessage: (channel, idempotencyKey, input) =>
+          this.ingestChannelMessage(channel, idempotencyKey, input),
+        parseChatCommand: (sessionId, commandText, options) => this.parseChatCommand(sessionId, commandText, options),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+        emitChannelActivity: (input) => this.commsActivity(input),
+        respondToExistingChatMessage: (sessionId, messageId, options) =>
+          this.respondToExistingChatMessage(sessionId, messageId, options),
+        resolveApprovalWithRemoteToken: (input) => this.resolveApprovalWithRemoteToken(input),
+        resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
+        setChatSessionBinding: (input) => this.setChatSessionBinding(input),
+        updateIntegrationConnection: (connectionId, patch) =>
+          this.storage.integrationConnections.update(connectionId, patch),
       },
     });
     this.cronAutomationService = new CronAutomationService({
@@ -2235,6 +2267,8 @@ export class GatewayService {
     }
     this.improvementService.markInterruptedDecisionReplayRuns();
     await Promise.all([this.discordRuntimeService.sync(), this.loadCronJobsFromConfig()]);
+    // Starts pollers only when signalInboundV1Enabled is true (no-op otherwise).
+    this.syncSignalInboundRuntime();
     this.improvementService.ensureWeeklyImprovementCronJob();
     this.curatorService.ensureCuratorWeeklyCronJob();
     this.ensurePrivateBetaBackupCronJob();
@@ -8763,6 +8797,7 @@ export class GatewayService {
         patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
+      signalInboundV1Enabled: patch.signalInboundV1Enabled ?? current.signalInboundV1Enabled,
       plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
       parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
       streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
@@ -8821,6 +8856,7 @@ export class GatewayService {
         stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
+      signalInboundV1Enabled: stored?.signalInboundV1Enabled ?? fromConfig.signalInboundV1Enabled,
       plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
       parallelToolExecutionV1Disabled:
         stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
@@ -8871,6 +8907,22 @@ export class GatewayService {
         category: "channels",
         event: "discord.runtime.sync_failed",
         message: "Discord runtime sync failed.",
+        context: {
+          error: (error as Error).message,
+        },
+      });
+    }
+  }
+
+  public syncSignalInboundRuntime(): void {
+    try {
+      this.signalInboundRuntimeService.sync();
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "channels",
+        event: "signal.inbound.sync_failed",
+        message: "Signal inbound runtime sync failed.",
         context: {
           error: (error as Error).message,
         },
@@ -9304,6 +9356,7 @@ export class GatewayService {
       this.backgroundTasks.clear();
       await Promise.allSettled(tasks);
     }
+    this.signalInboundRuntimeService.stop();
     await this.discordRuntimeService.close();
     await this.assemblyService.close();
     await this.npuSidecar.close();

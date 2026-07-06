@@ -62,6 +62,7 @@ function createDeps(): IntegrationChannelPort {
     pickConnectorDiagnosticAction: vi.fn(),
     recordConnectorHealthRun: vi.fn(),
     syncDiscordRuntime: vi.fn(async () => undefined),
+    syncSignalInboundRuntime: vi.fn(),
     getDiscordRuntimeStatus: vi.fn(),
     getIntegrationConnection: (connectionId: string) =>
       connections.get(connectionId) ??
@@ -153,12 +154,16 @@ describe("integration-channel-service inbound access defaults", () => {
     expect(discord.config.inboundAccessMode).toBe("allowlist");
 
     // Default-safe: an unknown sender is denied until explicitly allowlisted.
-    expect(
-      evaluateChannelInboundAccess({ config: telegram.config, actorId: "tg-stranger" }),
-    ).toMatchObject({ allowed: false, mode: "allowlist", reason: "allowlist_empty" });
-    expect(
-      evaluateChannelInboundAccess({ config: discord.config, actorId: "dc-stranger" }),
-    ).toMatchObject({ allowed: false, mode: "allowlist", reason: "allowlist_empty" });
+    expect(evaluateChannelInboundAccess({ config: telegram.config, actorId: "tg-stranger" })).toMatchObject({
+      allowed: false,
+      mode: "allowlist",
+      reason: "allowlist_empty",
+    });
+    expect(evaluateChannelInboundAccess({ config: discord.config, actorId: "dc-stranger" })).toMatchObject({
+      allowed: false,
+      mode: "allowlist",
+      reason: "allowlist_empty",
+    });
   });
 
   it("keeps outbound-only and local channels open (tui, ntfy do not get an allowlist)", () => {

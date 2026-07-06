@@ -22,7 +22,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete | yes |
 | `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
-| `channel.signal` | Bridge URL | sandbox send through the Signal bridge JSON-RPC path | yes |
+| `channel.signal` | Bridge URL | sandbox send through the Signal bridge JSON-RPC path; optional inbound polling of the bridge receive endpoint when enabled with an account id | yes |
 | `channel.imessage` | BlueBubbles bridge URL + password | bridge query plus sandbox send/unsend | yes |
 | `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
 | `channel.line` | Channel access token | token auth plus sandbox push send; signed inbound webhook runtime when channel secret is configured | yes |

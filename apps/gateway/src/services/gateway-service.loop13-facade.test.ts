@@ -1266,6 +1266,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       assemblyService: { close: vi.fn(async () => undefined) },
       chatProactiveService: { stopScheduler: vi.fn() },
       discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
+      signalInboundRuntimeService: { stop: vi.fn(), sync: vi.fn() },
       durableRunService: { stopWorker: vi.fn() },
       improvementService: { stopScheduler: vi.fn() },
       initCritical: vi.fn(async () => undefined),

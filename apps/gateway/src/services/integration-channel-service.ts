@@ -61,6 +61,7 @@ export interface IntegrationChannelPort {
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
   recordConnectorHealthRun(report: ConnectorDiagnosticReport): void;
   syncDiscordRuntime(): Promise<void>;
+  syncSignalInboundRuntime(): void;
   getDiscordRuntimeStatus(connectionId: string): DiscordRuntimeStatus | undefined;
   getIntegrationConnection(connectionId: string): IntegrationConnection;
   assertDiscordConnection(connection: IntegrationConnection): void;
@@ -368,6 +369,7 @@ export function createIntegrationConnection(
     status: created.status,
   });
   void deps.syncDiscordRuntime();
+  deps.syncSignalInboundRuntime();
 
   return created;
 }
@@ -393,6 +395,7 @@ export function updateIntegrationConnection(
     lastError: updated.lastError,
   });
   void deps.syncDiscordRuntime();
+  deps.syncSignalInboundRuntime();
   return updated;
 }
 
@@ -457,6 +460,7 @@ export function deleteIntegrationConnection(deps: IntegrationChannelPort, connec
     });
   }
   void deps.syncDiscordRuntime();
+  deps.syncSignalInboundRuntime();
   return deleted;
 }
 

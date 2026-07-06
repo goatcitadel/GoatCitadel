@@ -97,6 +97,13 @@ export interface FeatureFlagsConfig {
    */
   chatThinkingStreamV1Enabled?: boolean;
   /**
+   * Signal inbound poller (competitive-gap phase B1b): gates the governed poll
+   * loop against the local signal-cli bridge. Absent/false (default) ⇒ the
+   * poller never starts and Signal stays outbound-only — byte-identical to
+   * today. `true` allows connections with `inboundEnabled: true` to poll.
+   */
+  signalInboundV1Enabled?: boolean;
+  /**
    * Weekly governed memory consolidation: mines completed run traces and
    * PROPOSES memory candidates into the operator review queue (never
    * auto-applied; also halted by autonomyV1Disabled). Absent/false (default)
@@ -714,6 +721,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
     ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
+    ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
     ["parallelToolExecutionV1Disabled", process.env.GOATCITADEL_FEATURE_PARALLEL_TOOL_EXECUTION_V1_DISABLED],
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
@@ -1256,6 +1264,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
+      // Signal inbound poller: default OFF. `?? false` means the gateway never
+      // starts a bridge poll loop unless an operator opts in — with this flag
+      // left at its default, runtime behavior is byte-identical to today.
+      signalInboundV1Enabled: featuresInput.signalInboundV1Enabled ?? false,
       // Round-3 kill switches: planner triviality-skip + speed-model drafting,
       // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,
       // and planner-declared fan-out. `*Disabled` + `?? false` ⇒ ON by default.
