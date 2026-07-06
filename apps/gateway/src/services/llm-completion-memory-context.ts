@@ -14,6 +14,11 @@ export async function composeChatCompletionMemoryContext(
 
   return host.memoryLifecycleService.composeContext({
     scope: "chat",
+    // Scope DB memory-item collection to this turn's workspace (review Finding 1).
+    // Without workspaceId the memory-item collector ran the unfiltered query and
+    // could surface another workspace's items into this completion's context. Uses
+    // the same resolver as the hooks path so memory + hook scoping stay consistent.
+    workspaceId: host.resolveChatCompletionHookWorkspaceId(request),
     prompt,
     sessionId: memoryInput?.sessionId,
     taskId: memoryInput?.taskId,

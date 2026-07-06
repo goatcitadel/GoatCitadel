@@ -40,6 +40,8 @@ import {
   sanitizeMemoryContextWrite,
 } from "./memory-context-safety.js";
 
+const DEFAULT_MEMORY_WORKSPACE_ID = "default";
+
 export class MemoryContextService {
   public constructor(
     private readonly storage: Storage,
@@ -556,7 +558,7 @@ export class MemoryContextService {
     }
 
     throwIfMemoryContextAborted(input.signal);
-    for (const item of this.collectMemoryItemSources(input.workspaceId)) {
+    for (const item of this.collectMemoryItemSources(this.resolveMemoryItemWorkspaceId(input))) {
       sources.push(item);
     }
 
@@ -580,6 +582,27 @@ export class MemoryContextService {
     }
 
     return sources;
+  }
+
+  // Finding 1 hardening: the DB memory-item retrieval choke-point must ALWAYS be
+  // workspace-scoped. Resolve from the explicit workspaceId, else the session's
+  // owning workspace, else the default workspace — never undefined, which would
+  // trigger the unfiltered cross-workspace query in listActiveMemoryItems. (The
+  // maintenance scan at memory-maintenance-service.ts calls listActiveMemoryItems
+  // directly and is intentionally cross-workspace; it does not pass through here.)
+  private resolveMemoryItemWorkspaceId(input: MemoryContextComposeRequest): string {
+    const explicit = input.workspaceId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    const sessionId = input.sessionId?.trim();
+    if (sessionId) {
+      const metaWorkspaceId = this.storage.chatSessionMeta?.get(sessionId)?.workspaceId?.trim();
+      if (metaWorkspaceId) {
+        return metaWorkspaceId;
+      }
+    }
+    return DEFAULT_MEMORY_WORKSPACE_ID;
   }
 
   private collectMemoryItemSources(workspaceId?: string): MemoryItemSource[] {
@@ -803,9 +826,13 @@ function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryR
   return "self";
 }
 
-function normalizeMemoryWorkspaceId(workspaceId?: string): string | undefined {
+// Finding 1: never return undefined — an undefined workspaceId makes
+// listActiveMemoryItems fall back to the unfiltered cross-workspace query. A
+// concrete workspace is resolved upstream (resolveMemoryItemWorkspaceId); this is
+// the final backstop.
+function normalizeMemoryWorkspaceId(workspaceId?: string): string {
   const trimmed = workspaceId?.trim();
-  return trimmed || undefined;
+  return trimmed || DEFAULT_MEMORY_WORKSPACE_ID;
 }
 
 async function readTranscriptOrEmpty(storage: Storage, sessionId: string) {

@@ -3180,6 +3180,8 @@ export class GatewayService {
     const task = prewarmContext({
       scope: "chat",
       sessionId: input.sessionId,
+      // Finding 1: scope prewarm memory-item collection to the session's workspace.
+      workspaceId: this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? "default",
       prompt: input.prompt,
       relationScope: input.relationScope,
       workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
@@ -9548,6 +9550,8 @@ export class GatewayService {
         phaseId: phase.phaseId,
         relationScope: "project",
         workspace: "memory",
+        // Finding 1: scope orchestration memory-item collection to the run's workspace.
+        workspaceId: run.workspaceId ?? "default",
         forceRefresh: true,
       })
       .then((pack) => {
