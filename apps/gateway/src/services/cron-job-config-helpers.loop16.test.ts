@@ -55,6 +55,7 @@ describe("cron job config helpers", () => {
       contextFrom: "upstream-existing",
       lastRunOutput: "existing output",
       lastRunId: "run-existing",
+      lastRunEvidenceEnvelopeId: "env-existing",
     });
 
     await loadCronJobsFromConfig(host);
@@ -76,6 +77,7 @@ describe("cron job config helpers", () => {
         contextFrom: "upstream-existing",
         lastRunOutput: "existing output",
         lastRunId: "run-existing",
+        lastRunEvidenceEnvelopeId: "env-existing",
       }),
     );
   });
@@ -98,6 +100,12 @@ describe("cron job config helpers", () => {
         contextFrom: "upstream-job",
         lastRunOutput: "alert body",
         lastRunId: "run-1",
+        lastRunStatus: "failed",
+        lastRunEvidenceEnvelopeId: "env-run-1",
+        lastFailureAt: "2026-05-01T00:01:00.000Z",
+        lastFailure: { message: "provider refused", code: "ProviderError" },
+        failureCount: 2,
+        backoffUntil: "2026-05-01T00:05:00.000Z",
       },
     ]);
 
@@ -117,6 +125,12 @@ describe("cron job config helpers", () => {
           lastRunAt: "2026-05-01T00:00:00.000Z",
           lastRunOutput: "alert body",
           lastRunId: "run-1",
+          lastRunStatus: "failed",
+          lastRunEvidenceEnvelopeId: "env-run-1",
+          lastFailureAt: "2026-05-01T00:01:00.000Z",
+          lastFailure: { message: "provider refused", code: "ProviderError" },
+          failureCount: 2,
+          backoffUntil: "2026-05-01T00:05:00.000Z",
           nextRunAt: "2026-05-01T00:15:00.000Z",
           workdir: "F:/code/personal-ai",
           contextFrom: "upstream-job",

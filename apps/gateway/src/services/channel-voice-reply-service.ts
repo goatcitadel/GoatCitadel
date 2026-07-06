@@ -89,15 +89,7 @@ export function shouldSynthesizeVoiceReply(input: { mode: ChannelVoiceReplyMode;
   if (input.mode === "always") {
     return true;
   }
-  // mode === "voice_on_voice":
-  // TODO(PR #175): once inbound voice transcription lands and threads a
-  // voice-inbound marker (the `[voice transcript — untrusted, auto-transcribed]`
-  // content framing or an explicit `wasVoiceInbound` boolean) through the reply
-  // path, an undefined marker here should mean "not a voice message" and skip.
-  // Until then the marker is never populated, so "voice_on_voice" is accepted
-  // but treated as "always" unless the caller explicitly reports a non-voice
-  // inbound message.
-  return input.wasVoiceInbound !== false;
+  return input.wasVoiceInbound === true;
 }
 
 function channelAcceptsNativeInlineAudio(channelKey: string, mimeType: string): boolean {

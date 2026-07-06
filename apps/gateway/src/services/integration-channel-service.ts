@@ -53,6 +53,7 @@ export interface IntegrationChannelPort {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
   buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"];
   runIntegrationConnectionLiveChecks(
     connection: IntegrationConnection,
@@ -263,6 +264,38 @@ export function getIntegrationConnectionChannelRuntimeStatus(
       authoritative: connection.key === "discord" || Boolean(connection.lastSyncAt),
     },
   };
+
+  if (
+    connection.key === "signal" &&
+    capabilities.inboundModes.includes("poll") &&
+    !deps.isFeatureEnabled("signalInboundV1Enabled")
+  ) {
+    const metadata = runtimeStatus.metadata ?? {};
+    const setupDiagnostics = Array.isArray(metadata.setupDiagnostics) ? metadata.setupDiagnostics : [];
+    return {
+      ...runtimeStatus,
+      ready: false,
+      lastReadyAt: undefined,
+      metadata: {
+        ...metadata,
+        readinessSource: "feature_flag",
+        authoritative: true,
+        featureFlag: "signalInboundV1Enabled",
+        featureEnabled: false,
+        setupDiagnostics: [
+          ...setupDiagnostics,
+          "Signal inbound polling is configured on this connection, but signalInboundV1Enabled is disabled.",
+        ],
+      },
+      runtimePosture: {
+        outboundTransport: "api",
+        lifecycle: "stateless",
+        inboundReadiness: "unsupported",
+        operatorSummary:
+          "Signal inbound polling is configured, but the signalInboundV1Enabled feature flag is disabled, so no poller is active.",
+      },
+    };
+  }
 
   if (connection.key !== "discord") {
     return runtimeStatus;

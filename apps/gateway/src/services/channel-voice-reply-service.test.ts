@@ -36,9 +36,7 @@ describe("shouldSynthesizeVoiceReply", () => {
   it("covers the mode matrix", () => {
     expect(shouldSynthesizeVoiceReply({ mode: "off" })).toBe(false);
     expect(shouldSynthesizeVoiceReply({ mode: "always" })).toBe(true);
-    // voice_on_voice: treated as always until PR #175 threads the inbound marker,
-    // except when the caller explicitly reports a non-voice inbound message.
-    expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice" })).toBe(true);
+    expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice" })).toBe(false);
     expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice", wasVoiceInbound: true })).toBe(true);
     expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice", wasVoiceInbound: false })).toBe(false);
   });
@@ -161,5 +159,24 @@ describe("buildChannelVoiceReplyAttachment", () => {
     );
     expect(attachment).toBeUndefined();
     expect(synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it("attaches voice_on_voice replies when the inbound message is marked as voice", async () => {
+    const { deps, synthesizeSpeech } = createDeps();
+    const attachment = await buildChannelVoiceReplyAttachment(
+      {
+        text: "hello",
+        channelKey: "telegram",
+        connectionConfig: { voiceReplyMode: "voice_on_voice" },
+        wasVoiceInbound: true,
+      },
+      deps,
+    );
+    expect(synthesizeSpeech).toHaveBeenCalledWith({ text: "hello" });
+    expect(attachment).toEqual({
+      title: VOICE_REPLY_ATTACHMENT_TITLE,
+      mimeType: "audio/ogg",
+      dataBase64: Buffer.from("OggSvoice").toString("base64"),
+    });
   });
 });

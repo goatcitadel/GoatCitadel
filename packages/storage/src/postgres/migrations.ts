@@ -2204,4 +2204,17 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_messages(session_id, seq DESC);
     `,
   },
+  {
+    version: 75,
+    name: "cron_jobs_run_evidence_state",
+    sql: `
+      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS last_run_status TEXT,
+        ADD COLUMN IF NOT EXISTS last_run_evidence_envelope_id TEXT,
+        ADD COLUMN IF NOT EXISTS last_failure_at TEXT,
+        ADD COLUMN IF NOT EXISTS last_failure_json TEXT,
+        ADD COLUMN IF NOT EXISTS failure_count BIGINT,
+        ADD COLUMN IF NOT EXISTS backoff_until TEXT;
+    `,
+  },
 ];

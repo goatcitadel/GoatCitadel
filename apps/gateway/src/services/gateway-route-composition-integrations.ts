@@ -301,6 +301,7 @@ function createIntegrationChannelPortForGateway(
     publishRealtime: (eventType, source, payload, options) =>
       gateway.publishRealtime(eventType, source, payload, options),
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag),
+    isFeatureEnabled: (flag) => gateway.isFeatureEnabled(flag),
     buildIntegrationConnectionChecks: (connection) =>
       integrationDiagnostics.buildIntegrationConnectionChecks(connection),
     runIntegrationConnectionLiveChecks: (connection, options) =>

@@ -23,6 +23,12 @@ interface CronJobRow {
   context_from: string | null;
   last_run_output: string | null;
   last_run_id: string | null;
+  last_run_status: string | null;
+  last_run_evidence_envelope_id: string | null;
+  last_failure_at: string | null;
+  last_failure_json: string | null;
+  failure_count: number | null;
+  backoff_until: string | null;
   updated_at: string;
 }
 
@@ -39,9 +45,9 @@ export class CronJobRepository {
   ) {
     this.upsertStmt = db.prepare(`
       INSERT INTO cron_jobs (
-        job_id, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, last_run_output, last_run_id, updated_at
+        job_id, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, last_run_output, last_run_id, last_run_status, last_run_evidence_envelope_id, last_failure_at, last_failure_json, failure_count, backoff_until, updated_at
       ) VALUES (
-        @jobId, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @workdir, @contextFrom, @lastRunOutput, @lastRunId, @updatedAt
+        @jobId, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @workdir, @contextFrom, @lastRunOutput, @lastRunId, @lastRunStatus, @lastRunEvidenceEnvelopeId, @lastFailureAt, @lastFailureJson, @failureCount, @backoffUntil, @updatedAt
       )
       ON CONFLICT(job_id) DO UPDATE SET
         name = excluded.name,
@@ -57,6 +63,12 @@ export class CronJobRepository {
         context_from = excluded.context_from,
         last_run_output = excluded.last_run_output,
         last_run_id = excluded.last_run_id,
+        last_run_status = excluded.last_run_status,
+        last_run_evidence_envelope_id = excluded.last_run_evidence_envelope_id,
+        last_failure_at = excluded.last_failure_at,
+        last_failure_json = excluded.last_failure_json,
+        failure_count = excluded.failure_count,
+        backoff_until = excluded.backoff_until,
         updated_at = excluded.updated_at
     `);
 
@@ -84,6 +96,12 @@ export class CronJobRepository {
       contextFrom: job.contextFrom ?? null,
       lastRunOutput: job.lastRunOutput ?? null,
       lastRunId: job.lastRunId ?? null,
+      lastRunStatus: job.lastRunStatus ?? null,
+      lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId ?? null,
+      lastFailureAt: job.lastFailureAt ?? null,
+      lastFailureJson: job.lastFailure ? JSON.stringify(job.lastFailure) : null,
+      failureCount: job.failureCount ?? null,
+      backoffUntil: job.backoffUntil ?? null,
       updatedAt: now,
     });
 
@@ -93,6 +111,12 @@ export class CronJobRepository {
       contextFrom: job.contextFrom ?? undefined,
       lastRunOutput: job.lastRunOutput ?? undefined,
       lastRunId: job.lastRunId ?? undefined,
+      lastRunStatus: job.lastRunStatus ?? undefined,
+      lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId ?? undefined,
+      lastFailureAt: job.lastFailureAt ?? undefined,
+      ...(job.lastFailure ? { lastFailure: job.lastFailure } : {}),
+      failureCount: job.failureCount ?? undefined,
+      backoffUntil: job.backoffUntil ?? undefined,
       updatedAt: now,
     };
   }
@@ -149,6 +173,17 @@ export class CronJobRepository {
       },
       undefined,
     ) as CronJobRecord["actionConfig"] | undefined;
+    const lastFailure = loadAndSanitize(
+      row.last_failure_json,
+      {
+        store: "cron_job.last_failure",
+        rowId: row.job_id,
+        parse: parseCronLastFailure,
+        onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+        log: this.options.logger,
+      },
+      undefined,
+    );
     return {
       jobId: row.job_id,
       name: row.name,
@@ -164,9 +199,35 @@ export class CronJobRepository {
       contextFrom: row.context_from ?? undefined,
       lastRunOutput: row.last_run_output ?? undefined,
       lastRunId: row.last_run_id ?? undefined,
+      lastRunStatus: row.last_run_status === "ok" || row.last_run_status === "failed" ? row.last_run_status : undefined,
+      lastRunEvidenceEnvelopeId: row.last_run_evidence_envelope_id ?? undefined,
+      lastFailureAt: row.last_failure_at ?? undefined,
+      ...(lastFailure ? { lastFailure } : {}),
+      failureCount: row.failure_count ?? undefined,
+      backoffUntil: row.backoff_until ?? undefined,
       updatedAt: row.updated_at,
     };
   }
+}
+
+function parseCronLastFailure(value: unknown): {
+  success: boolean;
+  data?: CronJobRecord["lastFailure"];
+  error?: { message: string };
+} {
+  if (!isRecord(value) || typeof value.message !== "string") {
+    return { success: false, error: { message: "expected cron failure object with message" } };
+  }
+  if (value.code !== undefined && typeof value.code !== "string") {
+    return { success: false, error: { message: "code: expected string" } };
+  }
+  return {
+    success: true,
+    data: {
+      message: value.message,
+      code: value.code,
+    },
+  };
 }
 
 function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
@@ -184,7 +245,13 @@ function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
     existing.workdir === next.workdir &&
     existing.contextFrom === next.contextFrom &&
     existing.lastRunOutput === next.lastRunOutput &&
-    existing.lastRunId === next.lastRunId
+    existing.lastRunId === next.lastRunId &&
+    existing.lastRunStatus === next.lastRunStatus &&
+    existing.lastRunEvidenceEnvelopeId === next.lastRunEvidenceEnvelopeId &&
+    existing.lastFailureAt === next.lastFailureAt &&
+    JSON.stringify(existing.lastFailure ?? {}) === JSON.stringify(next.lastFailure ?? {}) &&
+    existing.failureCount === next.failureCount &&
+    existing.backoffUntil === next.backoffUntil
   );
 }
 
@@ -219,6 +286,12 @@ function isCronJobRow(row: unknown): row is CronJobRow {
     (typeof row.context_from === "string" || row.context_from === null) &&
     (typeof row.last_run_output === "string" || row.last_run_output === null) &&
     (typeof row.last_run_id === "string" || row.last_run_id === null) &&
+    (typeof row.last_run_status === "string" || row.last_run_status === null) &&
+    (typeof row.last_run_evidence_envelope_id === "string" || row.last_run_evidence_envelope_id === null) &&
+    (typeof row.last_failure_at === "string" || row.last_failure_at === null) &&
+    (typeof row.last_failure_json === "string" || row.last_failure_json === null) &&
+    (typeof row.failure_count === "number" || row.failure_count === null) &&
+    (typeof row.backoff_until === "string" || row.backoff_until === null) &&
     typeof row.updated_at === "string"
   );
 }

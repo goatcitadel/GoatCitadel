@@ -18,6 +18,7 @@ vi.mock("./gateway-route-service-composition.js", () => ({
 
 import type { ApprovalRequest, OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
+import { MEMORY_CONSOLIDATION_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import * as routeComposition from "./gateway-route-service-composition.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
@@ -250,6 +251,53 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.npuSidecar.close).toHaveBeenCalled();
     expect(gateway.llamaCppRuntime.close).toHaveBeenCalled();
     expect(gateway.storage.close).toHaveBeenCalled();
+  });
+});
+
+describe("GatewayService memory consolidation scheduler", () => {
+  it("does not advance weekly bookkeeping when consolidation skips after a kill switch", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T09:30:00.000Z"));
+    const systemSettingSet = vi.fn();
+    const cronJobUpsert = vi.fn();
+    const runConsolidation = vi.fn(async () => ({
+      status: "skipped_kill_switch" as const,
+      scannedTurns: 0,
+      qualifyingTurns: 0,
+      sessionsSampled: 0,
+      sessionsFailed: 0,
+      drafted: 0,
+      deduplicated: 0,
+      proposed: 0,
+    }));
+    const gateway = createGatewayHarness({
+      isFeatureEnabled: vi.fn(
+        (flag: string) => flag === "memoryConsolidationV1Enabled" || flag === "memoryLifecycleAdminV1Enabled",
+      ),
+      memoryConsolidationService: {
+        runConsolidation,
+      },
+      storage: {
+        cronJobs: {
+          get: vi.fn((jobId: string) =>
+            jobId === MEMORY_CONSOLIDATION_WEEKLY_JOB_ID
+              ? { jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID, enabled: true }
+              : undefined,
+          ),
+          upsert: cronJobUpsert,
+        },
+        systemSettings: {
+          get: vi.fn(() => undefined),
+          set: systemSettingSet,
+        },
+      },
+    });
+
+    await (GatewayService.prototype as any).runMemoryConsolidationSchedulerIfDue.call(gateway);
+
+    expect(runConsolidation).toHaveBeenCalledTimes(1);
+    expect(systemSettingSet).not.toHaveBeenCalled();
+    expect(cronJobUpsert).not.toHaveBeenCalled();
   });
 });
 

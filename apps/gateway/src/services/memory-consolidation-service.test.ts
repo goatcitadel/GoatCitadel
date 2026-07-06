@@ -98,6 +98,24 @@ describe("MemoryConsolidationService", () => {
     expect(watermarks).toEqual(["2026-07-01T00:00:00.000Z"]);
   });
 
+  it("does not advance the watermark past unsampled qualifying sessions", async () => {
+    const { service, watermarks } = createHarness({
+      listCompletedTurnTracesSince: () => [
+        buildTrace({ turnId: "t1", sessionId: "s1", startedAt: "2026-07-01T00:00:01.000Z" }),
+        buildTrace({ turnId: "t2", sessionId: "s2", startedAt: "2026-07-01T00:00:02.000Z" }),
+        buildTrace({ turnId: "t3", sessionId: "s3", startedAt: "2026-07-01T00:00:03.000Z" }),
+        buildTrace({ turnId: "t4", sessionId: "s4", startedAt: "2026-07-01T00:00:04.000Z" }),
+      ],
+    });
+
+    const summary = await service.runConsolidation();
+
+    expect(summary.sessionsSampled).toBe(3);
+    expect(summary.qualifyingTurns).toBe(4);
+    expect(summary.nextWatermark).toBe("2026-07-01T00:00:03.000Z");
+    expect(watermarks).toEqual(["2026-07-01T00:00:03.000Z"]);
+  });
+
   it("is inert when the consolidation flag is off", async () => {
     const { service, deps, proposed } = createHarness({
       isFeatureEnabled: (flag) => flag === "memoryLifecycleAdminV1Enabled",

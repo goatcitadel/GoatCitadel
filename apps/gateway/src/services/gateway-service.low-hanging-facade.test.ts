@@ -1511,6 +1511,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     gateway.createBackup = createBackup;
     gateway.pruneRetention = pruneRetention;
     gateway.publishRealtime = publishRealtime;
+    gateway.persistCronJobsConfig = vi.fn();
 
     getCronJob.mockReturnValueOnce({ jobId: "private-beta-backup", enabled: false });
     await (GatewayService.prototype as any).runPrivateBetaBackupSchedulerIfDue.call(gateway, { force: true });
@@ -1537,15 +1538,83 @@ describe("GatewayService low-hanging facade delegation", () => {
           name: "Private beta backup",
           enabled: true,
           lastRunAt: "2026-05-15T12:00:00.000Z",
+          lastRunStatus: "ok",
+          lastRunId: expect.any(String),
+          failureCount: 0,
           nextRunAt: "2026-05-16T12:00:00.000Z",
         }),
       );
+      expect(gateway.persistCronJobsConfig).toHaveBeenCalledTimes(1);
       expect(publishRealtime).toHaveBeenCalledWith("backup_created", "system", {
         type: "private_beta_daily_backup",
         backupId: "backup-1",
         outputPath: "backups/private-beta.zip",
         bytes: 4096,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records private beta backup scheduler failure state and backoff", async () => {
+    const gateway = createGatewayHarness();
+    const upsertCronJob = vi.fn((job) => job);
+    const createBackup = vi.fn(async () => {
+      throw new Error("backup failed");
+    });
+    const publishRealtime = vi.fn();
+    gateway.storage = {
+      cronJobs: {
+        get: vi.fn(() => ({
+          jobId: "private-beta-backup",
+          name: "Private beta backup",
+          enabled: true,
+          action: "backup",
+          actionConfig: {},
+          failureCount: 1,
+        })),
+        upsert: upsertCronJob,
+      },
+      systemSettings: {
+        get: vi.fn(() => undefined),
+        set: vi.fn(),
+      },
+    };
+    gateway.createBackup = createBackup;
+    gateway.publishRealtime = publishRealtime;
+    gateway.persistCronJobsConfig = vi.fn();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:00:00.000Z"));
+    try {
+      await expect(
+        (GatewayService.prototype as any).runPrivateBetaBackupSchedulerIfDue.call(gateway, { force: true }),
+      ).rejects.toThrow("backup failed");
+
+      expect(upsertCronJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: "private-beta-backup",
+          lastRunAt: "2026-05-15T12:00:00.000Z",
+          lastRunStatus: "failed",
+          lastRunId: expect.any(String),
+          failureCount: 2,
+          backoffUntil: "2026-05-15T12:02:00.000Z",
+          lastFailureAt: "2026-05-15T12:00:00.000Z",
+          lastFailure: { message: "backup failed", code: "Error" },
+        }),
+      );
+      expect(gateway.persistCronJobsConfig).toHaveBeenCalledTimes(1);
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "cron_job_run",
+        "cron",
+        expect.objectContaining({
+          type: "cron_job_run_failed",
+          jobId: "private-beta-backup",
+          message: "backup failed",
+          failureCount: 2,
+          backoffUntil: "2026-05-15T12:02:00.000Z",
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

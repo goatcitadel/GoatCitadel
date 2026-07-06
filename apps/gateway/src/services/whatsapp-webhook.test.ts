@@ -484,14 +484,10 @@ describe("whatsapp webhook route negative paths", () => {
     const services = createIntegrationWebhooksMock();
     app = await buildApp(services);
 
-    // A streamed body over CHANNEL_INBOUND_MAX_BYTES is aborted by the
-    // preParsing raw-body guard before signature checks or ingest run. The
-    // guard throws a plain Error, so Fastify surfaces it as a 500 rather than
-    // a 413 — the delivery is still rejected without touching ingest.
     const oversized = buildInboundMessagePayload("wamid.oversized", "x".repeat(CHANNEL_INBOUND_MAX_BYTES + 1));
     const response = await signedInboundRequest(oversized);
 
-    expect(response.statusCode).toBe(500);
+    expect(response.statusCode).toBe(413);
     expect(services.ingestChannelMessage).not.toHaveBeenCalled();
     expect(services.respondToExistingChatMessage).not.toHaveBeenCalled();
   });

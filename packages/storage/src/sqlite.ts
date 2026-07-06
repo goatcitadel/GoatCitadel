@@ -1589,6 +1589,18 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 133,
+    name: "cron_jobs_run_evidence_state",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "last_run_status", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "last_run_evidence_envelope_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "last_failure_at", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "last_failure_json", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "failure_count", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "backoff_until", "TEXT");
+    },
+  },
 ];
 
 function ensureChatDelegationParentRunIdSchema(db: DatabaseSync): void {
@@ -2104,6 +2116,12 @@ function createBaseSchema(db: DatabaseSync): void {
       context_from TEXT,
       last_run_output TEXT,
       last_run_id TEXT,
+      last_run_status TEXT,
+      last_run_evidence_envelope_id TEXT,
+      last_failure_at TEXT,
+      last_failure_json TEXT,
+      failure_count INTEGER,
+      backoff_until TEXT,
       citadel_id TEXT,
       updated_at TEXT NOT NULL
     );
