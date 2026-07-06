@@ -6,6 +6,7 @@ import {
   type IntegrationWebhookRouteLike,
 } from "./channel-inbound-dispatch.js";
 import type { ChannelBotLoopGuard } from "./channel-bot-loop-guard.js";
+import { readBoundedResponseText } from "./bounded-response-reader.js";
 
 const log = logger.child("signal-inbound-runtime-service");
 
@@ -47,6 +48,10 @@ export const SIGNAL_INBOUND_MAX_POLL_INTERVAL_SECONDS = 3_600;
 export const SIGNAL_INBOUND_MAX_BACKOFF_MS = 5 * 60_000;
 /** Per-connection in-memory dedupe window (envelope keys). */
 const MAX_TRACKED_ENVELOPE_KEYS = 2_048;
+// A local bridge receive batch is small; 4 MiB leaves generous headroom while
+// keeping a misbehaving bridge from ballooning gateway memory.
+const SIGNAL_INBOUND_MAX_RECEIVE_BODY_BYTES = 4 * 1024 * 1024;
+const SIGNAL_INBOUND_RECEIVE_READ_TIMEOUT_MS = 15_000;
 
 export type SignalInboundTimerHandle = unknown;
 
@@ -275,7 +280,11 @@ export class SignalInboundRuntimeService {
     if (!response.ok) {
       throw new Error(`Signal bridge receive failed (${response.status})`);
     }
-    const bodyText = await response.text();
+    const bodyText = await readBoundedResponseText(response, {
+      maxBytes: SIGNAL_INBOUND_MAX_RECEIVE_BODY_BYTES,
+      timeoutMs: SIGNAL_INBOUND_RECEIVE_READ_TIMEOUT_MS,
+      label: "Signal bridge receive",
+    });
     let parsed: unknown = [];
     if (bodyText.trim().length > 0) {
       try {
