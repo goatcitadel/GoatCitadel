@@ -131,7 +131,7 @@ const personalityDefaultSchema = z.object({
   personalityId: z.string().min(1),
 });
 
-const updateSettingsSchema = z.object({
+export const updateSettingsSchema = z.object({
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
   defaultToolProfile: z.string().min(1).optional(),
@@ -242,6 +242,11 @@ const updateSettingsSchema = z.object({
       coworkRuntimeQualityV1Disabled: z.boolean().optional(),
       orchestrationFinalStreamingV1Disabled: z.boolean().optional(),
       autonomyV1Disabled: z.boolean().optional(),
+      plannerFastPathV1Disabled: z.boolean().optional(),
+      parallelToolExecutionV1Disabled: z.boolean().optional(),
+      streamIdleWatchdogV1Disabled: z.boolean().optional(),
+      plannerFanoutV1Disabled: z.boolean().optional(),
+      subagentFanoutV1Disabled: z.boolean().optional(),
       chatThinkingStreamV1Enabled: z.boolean().optional(),
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
