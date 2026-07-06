@@ -3665,6 +3665,11 @@ export class GatewayService {
     }
   }
 
+  // NOTE (Finding 7 divergence): this deliberately EXCLUDES `dead_lettered`,
+  // unlike the shared `isDurableRunTerminal` (contracts) used elsewhere. Kept
+  // local + unchanged here to preserve behavior; whether a dead-lettered run
+  // should count as terminal for the `durableCancelled` reporting flag is a
+  // correctness question deferred to the Phase 2 durable-run pass.
   private isDurableRunTerminalStatus(status: DurableRunStatus): boolean {
     return status === "completed" || status === "failed" || status === "cancelled";
   }

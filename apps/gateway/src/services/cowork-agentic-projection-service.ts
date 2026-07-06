@@ -17,7 +17,12 @@ import type {
   DurableRunRecord,
   DurableRunStatus,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  isDurableRunTerminal,
+  isDurableRunStatus,
+  isChatTurnWaitingStatus,
+} from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { buildLocalBusinessResearchAnnotationFromEvidence } from "./local-business-research-service.js";
 
@@ -413,7 +418,7 @@ export class CoworkAgenticProjectionService {
       {
         signalId: `projection-status-drift-${run.runId}-${durableRun.runId}`,
         code: "projection_status_drift",
-        severity: isTerminalDurableStatus(durableRun.status) ? "warning" : "info",
+        severity: isDurableRunTerminal(durableRun.status) ? "warning" : "info",
         title: "Durable trace status reconciled",
         summary: `Stored turn trace reported durable status ${trace.durable.status}; durable run ${durableRun.runId} is ${durableRun.status}.`,
         evidenceRef: `durable-run:${durableRun.runId}`,
@@ -457,7 +462,7 @@ export class CoworkAgenticProjectionService {
     }
     const now = new Date().toISOString();
     const childDurableRun = ctx.getDurableRun(step.durableRunId);
-    if (childDurableRun && isTerminalDurableStatus(childDurableRun.status)) {
+    if (childDurableRun && isDurableRunTerminal(childDurableRun.status)) {
       diagnostics.push(
         buildProjectionDriftDiagnostic({
           runId: step.runId,
@@ -492,7 +497,7 @@ export class CoworkAgenticProjectionService {
     }
 
     const childTrace = ctx.getTrace(step.childTurnId);
-    if (childTrace && isWaitingTraceStatus(childTrace.status)) {
+    if (childTrace && isChatTurnWaitingStatus(childTrace.status)) {
       return step;
     }
     if (childTrace && isTerminalTraceStatus(childTrace.status)) {
@@ -1209,29 +1214,10 @@ function mapDurableStatusToStepStatus(status: DurableRunStatus): ChatDelegationS
   return "failed";
 }
 
-function isTerminalDurableStatus(status: DurableRunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
-}
-
-function isDurableRunStatus(status: string | undefined): status is DurableRunStatus {
-  return (
-    status === "queued" ||
-    status === "running" ||
-    status === "waiting" ||
-    status === "paused" ||
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "dead_lettered"
-  );
-}
-
+// NOTE: `isTerminalTraceStatus` intentionally excludes `partial` (unlike the
+// shared `isChatTurnTerminalStatus`), so it stays local to preserve behavior.
 function isTerminalTraceStatus(status: ChatTurnTraceRecord["status"]): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
-}
-
-function isWaitingTraceStatus(status: ChatTurnTraceRecord["status"]): boolean {
-  return status === "waiting_for_approval" || status === "waiting_for_user_input" || status === "waiting_for_tool";
 }
 
 function resolveLinkedDurableWorkspaceId(
@@ -1320,7 +1306,7 @@ function buildProjectionDriftDiagnostic(input: {
   return {
     signalId: `projection-status-drift-${input.runId}-${suffix}`,
     code: "projection_status_drift",
-    severity: isTerminalDurableStatus(input.durableRun.status) ? "warning" : "info",
+    severity: isDurableRunTerminal(input.durableRun.status) ? "warning" : "info",
     title: "Runtime status projection reconciled",
     summary: `Projection reported ${input.previousStatus}; durable run ${input.durableRun.runId} is ${input.durableRun.status}.`,
     evidenceRef: `durable-run:${input.durableRun.runId}`,

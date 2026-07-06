@@ -9,6 +9,7 @@ import type {
   DurableRunStatus,
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
+import { isDurableRunTerminal } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
@@ -141,7 +142,7 @@ export function finalizeDurableChatRun(
 ): void {
   const now = new Date().toISOString();
   const currentRun = deps.durableRuns.getRun?.(runId);
-  if (currentRun && isTerminalDurableChatRunStatus(currentRun.status)) {
+  if (currentRun && isDurableRunTerminal(currentRun.status)) {
     deps.patchDurableTraceIfPresent(prepared.turnId, {
       durable: {
         runId,
@@ -242,10 +243,6 @@ export function finalizeDurableChatRun(
       checkpointKind,
     },
   });
-}
-
-function isTerminalDurableChatRunStatus(status: DurableRunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
 }
 
 function checkpointKindForTerminalDurableChatRunStatus(

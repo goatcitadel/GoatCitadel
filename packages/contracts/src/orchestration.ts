@@ -106,10 +106,19 @@ export interface OrchestrationRunPolicyContext {
   localOperatorOverrideId?: string;
 }
 
+export type OrchestrationRunStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "failed"
+  | "completed"
+  | "stopped_by_limit"
+  | "cancelled";
+
 export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   runId: string;
   planId: string;
-  status: "queued" | "running" | "paused" | "failed" | "completed" | "stopped_by_limit" | "cancelled";
+  status: OrchestrationRunStatus;
   startedAt: string;
   endedAt?: string;
   currentWaveId?: string;
