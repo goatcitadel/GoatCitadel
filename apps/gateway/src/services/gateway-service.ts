@@ -2541,7 +2541,8 @@ export class GatewayService {
           },
         });
       } catch {
-        // Diagnostics must never block the text reply either.
+        // Intentionally ignored (best-effort): diagnostics must never block
+        // the text reply either.
       }
       return undefined;
     }
