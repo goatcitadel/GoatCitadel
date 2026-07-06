@@ -2130,6 +2130,7 @@ function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
     }
     normalized.push({
       id,
+      label: extractModelLabel(record, id),
       ownedBy:
         typeof record.owned_by === "string"
           ? record.owned_by
@@ -2144,9 +2145,41 @@ function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
             : typeof record.createdAt === "number"
               ? record.createdAt
               : undefined,
+      contextWindow: extractPositiveInteger(
+        // `context_length` is the OpenRouter/aggregator field name.
+        record.context_length ?? record.context_window ?? record.contextWindow ?? record.max_context_length,
+      ),
+      outputTokenLimit: extractPositiveInteger(
+        record.max_output_tokens ??
+          record.output_token_limit ??
+          record.outputTokenLimit ??
+          // OpenRouter nests the completion cap under top_provider.
+          (isPlainRecord(record.top_provider) ? record.top_provider.max_completion_tokens : undefined),
+      ),
     });
   }
   return normalized;
+}
+
+function extractModelLabel(record: Record<string, unknown>, id: string): string | undefined {
+  const candidates = [record.label, record.display_name, record.name];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed && trimmed !== id) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function extractPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const truncated = Math.trunc(value);
+  return truncated > 0 ? truncated : undefined;
 }
 
 function mergeModelCatalogs(primary: LlmModelRecord[], fallback: LlmModelRecord[]): LlmModelRecord[] {
