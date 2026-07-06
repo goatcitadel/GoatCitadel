@@ -97,6 +97,15 @@ export interface FeatureFlagsConfig {
    */
   chatThinkingStreamV1Enabled?: boolean;
   /**
+   * Inbound channel voice ingestion (competitive-gap phase B2a): Telegram voice
+   * notes and WhatsApp audio messages are downloaded, transcribed via the local
+   * voice runtime, and ingested as governed turns. Absent/false (default) ⇒
+   * byte-identical behavior to today: the WhatsApp parser keeps emitting the
+   * "[whatsapp audio]" placeholder and the Telegram parser keeps dropping
+   * voice/audio updates with no content.
+   */
+  channelVoiceInboundV1Enabled?: boolean;
+  /**
    * Signal inbound poller (competitive-gap phase B1b): gates the governed poll
    * loop against the local signal-cli bridge. Absent/false (default) ⇒ the
    * poller never starts and Signal stays outbound-only — byte-identical to
@@ -721,6 +730,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
     ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
+    ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
     ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
     ["parallelToolExecutionV1Disabled", process.env.GOATCITADEL_FEATURE_PARALLEL_TOOL_EXECUTION_V1_DISABLED],
@@ -1264,6 +1274,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
+      // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
+      // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
+      channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,
       // Signal inbound poller: default OFF. `?? false` means the gateway never
       // starts a bridge poll loop unless an operator opts in — with this flag
       // left at its default, runtime behavior is byte-identical to today.

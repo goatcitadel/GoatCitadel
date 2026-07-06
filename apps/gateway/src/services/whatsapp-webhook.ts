@@ -10,6 +10,16 @@ import {
 const WHATSAPP_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/whatsapp\/webhook$/i;
 const WHATSAPP_SIGNATURE_PREFIX = "sha256=";
 
+/**
+ * Structured reference to an inbound WhatsApp audio/voice-note message.
+ * Only the Cloud API media id is emitted — never media bytes. Download +
+ * transcription happen later in the dispatch flow, after the sender trust gate.
+ */
+export type WhatsAppVoiceMediaRef = {
+  mediaId: string;
+  mimeType?: string;
+};
+
 export type WhatsAppWebhookNormalization =
   | {
       kind: "message";
@@ -23,6 +33,8 @@ export type WhatsAppWebhookNormalization =
       peer: string;
       deliveryReplyToMessageId: string;
       metadata: Record<string, unknown>;
+      /** Present only when channelVoiceInboundV1Enabled and the message is audio with a media id. */
+      voiceMedia?: WhatsAppVoiceMediaRef;
     }
   | {
       kind: "ignore";
@@ -64,6 +76,11 @@ export function deriveWhatsAppWebhookIdempotencyKey(connectionId: string, payloa
 export function normalizeWhatsAppWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
+  /**
+   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ audio messages
+   * keep today's behavior: the literal "[whatsapp audio]" placeholder content.
+   */
+  voiceInboundEnabled?: boolean;
 }): WhatsAppWebhookNormalization {
   const root = asRecord(input.payload);
   if (asString(root.object) !== "whatsapp_business_account") {
@@ -108,6 +125,8 @@ export function normalizeWhatsAppWebhookPayload(input: {
   const profile = asRecord(contact?.profile);
   const metadata = asRecord(value.metadata);
   const context = asRecord(message.context);
+  const voiceMedia =
+    input.voiceInboundEnabled === true && eventType === "audio" ? readWhatsAppVoiceMedia(message) : undefined;
 
   return {
     kind: "message",
@@ -118,6 +137,7 @@ export function normalizeWhatsAppWebhookPayload(input: {
     actorType: "user",
     displayName: asString(profile.name),
     content,
+    ...(voiceMedia ? { voiceMedia } : {}),
     peer: actorId,
     deliveryReplyToMessageId: eventId,
     metadata: compactRecord({
@@ -170,6 +190,19 @@ function renderWhatsAppMessageContent(message: JsonRecord): string | undefined {
     default:
       return undefined;
   }
+}
+
+function readWhatsAppVoiceMedia(message: JsonRecord): WhatsAppVoiceMediaRef | undefined {
+  const audio = asRecord(message.audio);
+  const mediaId = asString(audio.id);
+  if (!mediaId) {
+    return undefined;
+  }
+  const mimeType = asString(audio.mime_type);
+  return {
+    mediaId,
+    ...(mimeType ? { mimeType } : {}),
+  };
 }
 
 function compactRecord(record: JsonRecord): JsonRecord {

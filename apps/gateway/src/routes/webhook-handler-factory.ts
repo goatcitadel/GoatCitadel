@@ -9,10 +9,14 @@ import type { IntegrationConnectionRecord, IntegrationWebhookRouteLike } from ".
 // route modules keep importing from this factory unchanged.
 export {
   DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG,
+  dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   getInboundBotLoopGuard,
+  VOICE_TRANSCRIPT_CONTENT_PREFIX,
 } from "../services/channel-inbound-dispatch.js";
 export type {
+  InboundVoiceDispatchOptions,
+  InboundWebhookDispatchOptions,
   IngestChannelMessageInput,
   IntegrationConnectionRecord,
   IntegrationWebhookRouteLike,

@@ -2,8 +2,10 @@ import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
+  VOICE_TRANSCRIPT_CONTENT_PREFIX,
   createWebhookHandler,
   createWebhookPreParsing,
+  dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   type WebhookRawBodyRequest,
 } from "./webhook-handler-factory.js";
@@ -559,5 +561,207 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "clear", messageId: "event-1", target: "room-1", turnId: "turn-1" }),
     );
+  });
+});
+
+describe("dispatchInboundVoiceWebhookMessage (channelVoiceInboundV1Enabled)", () => {
+  function createVoiceGateway() {
+    return {
+      ingestChannelMessage: vi.fn(async () => ({
+        deduped: false,
+        session: { sessionId: "session-voice" },
+      })),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-voice" })),
+      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+      recordDevDiagnostic: vi.fn(),
+      parseChatCommand: vi.fn(),
+      resolveApprovalWithRemoteToken: vi.fn(),
+    };
+  }
+
+  const baseOptions = {
+    channel: "telegram",
+    connectionId: "11111111-1111-1111-1111-111111111111",
+    idempotencyKey: "telegram:voice-1",
+    eventType: "message",
+    bindingTarget: "chat-1",
+    message: {
+      eventId: "voice-1",
+      account: "11111111-1111-1111-1111-111111111111",
+      peer: "chat-1",
+      actorId: "U-OWNER",
+      content: "[telegram voice message]",
+    },
+  };
+
+  it("runs the sender trust gate BEFORE any download/transcription", async () => {
+    const gateway = createVoiceGateway();
+    const transcribe = vi.fn(async () => ({ ok: true as const, transcript: "should never run" }));
+
+    const result = await dispatchInboundVoiceWebhookMessage(gateway as any, {
+      ...baseOptions,
+      allowedSenders: ["someone-else"],
+      voice: { transcribe, fallbackContent: baseOptions.message.content },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: false,
+        ignored: true,
+        reason: "sender_not_allowlisted",
+      }),
+    );
+    // Governance-critical pin: a non-allowlisted sender never triggers a media
+    // download or a whisper subprocess spawn.
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
+  });
+
+  it("acks fast, then ingests the framed transcript asynchronously through the normal policy path", async () => {
+    const gateway = createVoiceGateway();
+    let resolveTranscription!: (value: { ok: true; transcript: string }) => void;
+    const transcribe = vi.fn(
+      () =>
+        new Promise<{ ok: true; transcript: string }>((resolve) => {
+          resolveTranscription = resolve;
+        }),
+    );
+
+    const ack = await dispatchInboundVoiceWebhookMessage(gateway as any, {
+      ...baseOptions,
+      allowedSenders: ["u-owner"],
+      voice: { transcribe, fallbackContent: baseOptions.message.content },
+    });
+
+    // The webhook reply does not wait for transcription.
+    expect(ack).toEqual({
+      accepted: true,
+      replied: false,
+      queued: true,
+      transcription: "pending",
+      eventType: "message",
+    });
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+
+    resolveTranscription({ ok: true, transcript: "buy milk tomorrow" });
+    await vi.waitFor(() => {
+      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
+      "telegram",
+      "telegram:voice-1",
+      expect.objectContaining({
+        content: `${VOICE_TRANSCRIPT_CONTENT_PREFIX} buy milk tomorrow`,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(gateway.respondToExistingChatMessage).toHaveBeenCalledWith("session-voice", "voice-1");
+    });
+  });
+
+  it("EXCLUDES transcripts from command parsing and approval-token resolution (voice is spoofable)", async () => {
+    const gateway = createVoiceGateway();
+    const transcribe = vi.fn(async () => ({
+      ok: true as const,
+      // A transcript that would be a channel command / approval token if typed.
+      transcript: "/stop gca:approval-token-123:a",
+    }));
+
+    await dispatchInboundVoiceWebhookMessage(gateway as any, {
+      ...baseOptions,
+      allowedSenders: ["u-owner"],
+      voice: { transcribe, fallbackContent: baseOptions.message.content },
+    });
+
+    await vi.waitFor(() => {
+      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    });
+    // The command-looking transcript is ingested as inert framed text only.
+    expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
+      "telegram",
+      "telegram:voice-1",
+      expect.objectContaining({
+        content: `${VOICE_TRANSCRIPT_CONTENT_PREFIX} /stop gca:approval-token-123:a`,
+      }),
+    );
+    expect(gateway.parseChatCommand).not.toHaveBeenCalled();
+    expect(gateway.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+  });
+
+  it("falls back to ingesting the placeholder content when transcription fails (never silently dropped)", async () => {
+    const gateway = createVoiceGateway();
+    const transcribe = vi.fn(async () => ({
+      ok: false as const,
+      reason: "download_failed" as const,
+      detail: "boom",
+    }));
+
+    const ack = await dispatchInboundVoiceWebhookMessage(gateway as any, {
+      ...baseOptions,
+      allowedSenders: ["u-owner"],
+      voice: { transcribe, fallbackContent: "[telegram voice message]" },
+    });
+
+    expect(ack).toEqual(expect.objectContaining({ accepted: true, transcription: "pending" }));
+    await vi.waitFor(() => {
+      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
+      "telegram",
+      "telegram:voice-1",
+      expect.objectContaining({ content: "[telegram voice message]" }),
+    );
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "channel.voice_transcription_failed",
+        category: "channels",
+        context: expect.objectContaining({ reason: "download_failed" }),
+      }),
+    );
+  });
+
+  it("falls back to the placeholder when the transcriber throws", async () => {
+    const gateway = createVoiceGateway();
+    const transcribe = vi.fn(async () => {
+      throw new Error("subprocess exploded");
+    });
+
+    await dispatchInboundVoiceWebhookMessage(gateway as any, {
+      ...baseOptions,
+      allowedSenders: ["u-owner"],
+      voice: { transcribe, fallbackContent: "[telegram voice message]" },
+    });
+
+    await vi.waitFor(() => {
+      expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
+        "telegram",
+        "telegram:voice-1",
+        expect.objectContaining({ content: "[telegram voice message]" }),
+      );
+    });
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.voice_transcription_failed" }),
+    );
+  });
+
+  it("records a diagnostic instead of crashing when the post-ack ingest fails", async () => {
+    const gateway = createVoiceGateway();
+    gateway.ingestChannelMessage.mockRejectedValueOnce(new Error("db is on fire"));
+    const transcribe = vi.fn(async () => ({ ok: true as const, transcript: "hello" }));
+
+    await dispatchInboundVoiceWebhookMessage(gateway as any, {
+      ...baseOptions,
+      allowedSenders: ["u-owner"],
+      voice: { transcribe, fallbackContent: baseOptions.message.content },
+    });
+
+    await vi.waitFor(() => {
+      expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "channel.voice_inbound_dispatch_failed", level: "error" }),
+      );
+    });
   });
 });

@@ -8797,6 +8797,7 @@ export class GatewayService {
         patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
+      channelVoiceInboundV1Enabled: patch.channelVoiceInboundV1Enabled ?? current.channelVoiceInboundV1Enabled,
       signalInboundV1Enabled: patch.signalInboundV1Enabled ?? current.signalInboundV1Enabled,
       plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
       parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
@@ -8856,6 +8857,7 @@ export class GatewayService {
         stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
       autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
       chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
+      channelVoiceInboundV1Enabled: stored?.channelVoiceInboundV1Enabled ?? fromConfig.channelVoiceInboundV1Enabled,
       signalInboundV1Enabled: stored?.signalInboundV1Enabled ?? fromConfig.signalInboundV1Enabled,
       plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
       parallelToolExecutionV1Disabled:
