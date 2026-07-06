@@ -285,30 +285,59 @@ Official references:
 - https://developers.facebook.com/docs/whatsapp/cloud-api
 - https://developers.facebook.com/docs/graph-api/webhooks/getting-started
 
+### How inbound enablement works
+
+Inbound webhook routing is only enabled when BOTH the app secret and the webhook verify token are configured on the connection. With only one of the two, the connection stays outbound-only:
+
+- the app secret verifies the `x-hub-signature-256` HMAC that Meta attaches to every POST delivery
+- the verify token answers the one-time Meta GET verification challenge when you register the webhook URL
+
+On top of the signature check, each inbound sender must pass the connection's sender allowlist before GoatCitadel ingests the message. New connections default to `inboundAccessMode=allowlist` with an empty list, which denies all inbound senders until you explicitly add the phone numbers (WhatsApp `wa_id` values, digits only) you trust.
+
 ### Step-by-step
 
-1. Create or select a Meta app with WhatsApp Cloud API access.
-2. Generate the Cloud API access token you want GoatCitadel to use for outbound delivery.
-3. Record the phone number id for the sending number.
-4. Record the Meta app secret and choose a webhook verify token you control.
-5. In GoatCitadel `Connections`, add `channel.whatsapp`.
-6. Set the outbound/runtime secrets:
+1. Create or select a Meta app with WhatsApp Cloud API access:
+   - open the Meta developer console at https://developers.facebook.com/apps
+   - create a `Business` app (or reuse one) and add the `WhatsApp` product
+2. Generate the Cloud API access token you want GoatCitadel to use for outbound delivery, and store it in `WHATSAPP_ACCESS_TOKEN`.
+3. Record the phone number id for the sending number (the numeric Cloud API sender id, not the display phone number).
+4. Copy the Meta app secret from `App settings > Basic` and store it in `WHATSAPP_APP_SECRET`.
+5. Choose a webhook verify token you control (any long random string) and store it in `WHATSAPP_WEBHOOK_VERIFY_TOKEN`.
+6. In GoatCitadel `Connections`, add `channel.whatsapp`.
+7. Set the outbound/runtime secrets:
    - `accessTokenEnv=WHATSAPP_ACCESS_TOKEN`
    - `appSecretEnv=WHATSAPP_APP_SECRET`
    - `webhookVerifyTokenEnv=WHATSAPP_WEBHOOK_VERIFY_TOKEN`
    - `phoneNumberId=<your_meta_phone_number_id>`
-7. Point the Meta webhook subscription at:
+8. Allowlist the inbound senders you trust:
+   - keep `inboundAccessMode=allowlist`
+   - add each permitted sender phone number to `allowedSenders`
+   - an empty allowlist rejects every inbound message before it reaches a session
+9. In the Meta app dashboard under `WhatsApp > Configuration`, point the webhook subscription at:
    - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/whatsapp/webhook`
-8. Subscribe to message events, finalize the connection, and confirm manually that:
-   - the Meta challenge succeeds
-   - an inbound sandbox message lands in GoatCitadel
-   - outbound replies still use the expected phone number id
+   - use the same verify token value you configured in step 5
+10. Subscribe to the `messages` webhook field, finalize the connection, and confirm manually that:
+    - the Meta challenge succeeds
+    - an inbound sandbox message from an allowlisted sender lands in GoatCitadel
+    - outbound replies still use the expected phone number id
+
+### WhatsApp environment example
+
+```env
+WHATSAPP_ACCESS_TOKEN=EAAG...
+WHATSAPP_APP_SECRET=your_meta_app_secret
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=long-random-string-you-chose
+```
 
 ### WhatsApp troubleshooting
 
 - Meta challenge fails: the verify token in Meta does not match GoatCitadel
 - inbound `401`: the `x-hub-signature-256` signature does not match the configured app secret
-- outbound works but inbound does not: the access token is valid, but the webhook secret pair is missing or stale
+- inbound `400` with a missing-app-secret error: the connection has a verify token but no app secret, so signed POST deliveries cannot be verified
+- outbound works but inbound does not: the access token is valid, but the app secret plus verify token pair is missing or stale; both are required for inbound
+- signature and challenge both pass but messages never appear: the sender is not on the connection allowlist; add the sender phone number to `allowedSenders` or check for an empty allowlist
+- repeated deliveries of the same message id: expected to be idempotent; GoatCitadel dedupes on the WhatsApp message id, so a Meta retry does not create a second reply
+- inbound `413` or rejected large payloads: inbound webhook bodies are capped at 256 KiB; oversized deliveries are dropped before processing
 - delivery statuses appear without messages: expected when Meta posts status-only payloads; send a real inbound text to validate routing
 - local-only gateway URL: Meta cannot call loopback or non-public HTTP endpoints; use a reachable HTTPS URL
 
