@@ -243,6 +243,12 @@ const updateSettingsSchema = z.object({
       orchestrationFinalStreamingV1Disabled: z.boolean().optional(),
       autonomyV1Disabled: z.boolean().optional(),
       chatThinkingStreamV1Enabled: z.boolean().optional(),
+      utilityModelRoutingV1Enabled: z.boolean().optional(),
+      cronEvidenceV1Enabled: z.boolean().optional(),
+      memoryConsolidationV1Enabled: z.boolean().optional(),
+      signalInboundV1Enabled: z.boolean().optional(),
+      channelVoiceInboundV1Enabled: z.boolean().optional(),
+      channelVoiceReplyV1Enabled: z.boolean().optional(),
     })
     .optional(),
 });
