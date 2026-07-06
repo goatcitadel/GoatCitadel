@@ -115,6 +115,7 @@ export class ChatTurnTraceRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
+  private readonly listCompletedSinceStmt;
   private readonly deleteByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly getByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
@@ -170,6 +171,12 @@ export class ChatTurnTraceRepository {
       SELECT * FROM chat_turn_traces
       WHERE session_id = @sessionId
       ORDER BY started_at DESC
+      LIMIT @limit
+    `);
+    this.listCompletedSinceStmt = db.prepare(`
+      SELECT * FROM chat_turn_traces
+      WHERE status = 'completed' AND started_at > @sinceIso
+      ORDER BY started_at ASC
       LIMIT @limit
     `);
   }
@@ -277,6 +284,17 @@ export class ChatTurnTraceRepository {
     return this.get(turnId);
   }
 
+  /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */
+  public listCompletedSince(sinceIso: string, limit = 200): ChatTurnTraceRecord[] {
+    const rows = toChatTurnTraceRows(
+      this.listCompletedSinceStmt.all({
+        sinceIso,
+        limit: Math.max(1, Math.min(limit, 1000)),
+      }),
+    );
+    return rows.map(mapRow);
+  }
+
   public listBySession(sessionId: string, limit = 100): ChatTurnTraceRecord[] {
     const rows = toChatTurnTraceRows(
       this.listBySessionStmt.all({
@@ -288,7 +306,9 @@ export class ChatTurnTraceRepository {
   }
 
   public getByTurnIds(turnIds: Array<string | undefined>): Map<string, ChatTurnTraceRecord> {
-    const uniqueTurnIds = [...new Set(turnIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+    const uniqueTurnIds = [
+      ...new Set(turnIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item))),
+    ];
     const byTurnId = new Map<string, ChatTurnTraceRecord>();
     if (uniqueTurnIds.length === 0) {
       return byTurnId;

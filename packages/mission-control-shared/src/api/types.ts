@@ -369,6 +369,7 @@ export interface CronJobsResponse {
       | "curator"
       | "backup"
       | "memory_flush"
+      | "memory_consolidation"
       | "cost_report"
       | "update_review"
       | "watchdog"
@@ -386,6 +387,9 @@ export interface CronJobsResponse {
     contextFrom?: string;
     lastRunOutput?: string;
     lastRunId?: string;
+    lastRunStatus?: "ok" | "failed";
+    /** Signed evidence envelope recorded for the last run (cronEvidenceV1Enabled). */
+    lastRunEvidenceEnvelopeId?: string;
   }>;
 }
 
@@ -398,6 +402,7 @@ export interface CronJobRecordResponse {
     | "curator"
     | "backup"
     | "memory_flush"
+    | "memory_consolidation"
     | "cost_report"
     | "update_review"
     | "watchdog"
