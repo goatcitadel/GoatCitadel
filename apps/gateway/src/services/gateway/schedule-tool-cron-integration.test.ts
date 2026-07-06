@@ -135,6 +135,7 @@ function createService(cronJobs: FakeCronJobs): CronAutomationService {
       improvement: async () => {},
       backup: async () => {},
       memoryFlush: async () => {},
+      memoryConsolidation: async () => {},
       costReport: async () => {},
       updateReview: async () => {},
       curator: async () => {},

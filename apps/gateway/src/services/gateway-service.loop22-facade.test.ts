@@ -72,6 +72,7 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     durableRunService: { startWorker: vi.fn(), stopWorker: vi.fn() },
     ensureCostReportCronJob: vi.fn(),
     ensureMemoryFlushCronJob: vi.fn(),
+    ensureMemoryConsolidationCronJob: vi.fn(),
     ensurePrivateBetaBackupCronJob: vi.fn(),
     ensureUpdateReviewCronJob: vi.fn(),
     eventIngestService: { flushPendingTranscriptOutbox: vi.fn(async () => 1) },
@@ -165,6 +166,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.improvementService.ensureWeeklyImprovementCronJob).toHaveBeenCalled();
     expect(gateway.ensurePrivateBetaBackupCronJob).toHaveBeenCalled();
     expect(gateway.ensureMemoryFlushCronJob).toHaveBeenCalled();
+    expect(gateway.ensureMemoryConsolidationCronJob).toHaveBeenCalled();
     expect(gateway.ensureCostReportCronJob).toHaveBeenCalled();
     expect(gateway.ensureUpdateReviewCronJob).toHaveBeenCalled();
     expect(gateway.meshService.init).toHaveBeenCalled();

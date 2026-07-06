@@ -700,6 +700,10 @@ export const AssistantConfigInputSchema = z
         // Thinking-display skeleton: gates the gateway emitting `thinking_delta`
         // stream chunks. Absent/false (default) ⇒ byte-identical to today.
         chatThinkingStreamV1Enabled: z.boolean().optional(),
+        // Weekly governed memory consolidation: mines completed run traces and
+        // PROPOSES memory candidates (approval-gated, never auto-applied).
+        // Absent/false (default) ⇒ the consolidation job never runs.
+        memoryConsolidationV1Enabled: z.boolean().optional(),
         // Records a signed cron_job_executed evidence envelope for every cron
         // run and pins the envelope id on the job record. Absent/false
         // (default) ⇒ cron runs record no evidence, exactly as today.
@@ -739,6 +743,7 @@ export const CronJobSchema = z
         "curator",
         "backup",
         "memory_flush",
+        "memory_consolidation",
         "cost_report",
         "update_review",
         "watchdog",

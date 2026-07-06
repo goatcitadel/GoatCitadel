@@ -23,6 +23,7 @@ import {
 import {
   COST_REPORT_HOURLY_JOB_ID,
   IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
@@ -37,6 +38,7 @@ export {
 export {
   COST_REPORT_HOURLY_JOB_ID,
   IMPROVEMENT_WEEKLY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
@@ -84,6 +86,7 @@ const SYSTEM_CRON_JOB_IDS = new Set([
   IMPROVEMENT_WEEKLY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   COST_REPORT_HOURLY_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 ]);
@@ -146,6 +149,7 @@ export interface CronAutomationServiceDeps {
     improvement: () => Promise<void>;
     backup: () => Promise<void>;
     memoryFlush: () => Promise<void>;
+    memoryConsolidation: () => Promise<void>;
     costReport: () => Promise<void>;
     updateReview: () => Promise<void>;
     curator: () => Promise<void>;
@@ -407,6 +411,11 @@ export class CronAutomationService {
         runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
       } else if (job.action === "memory_flush") {
         await this.deps.runHandlers.memoryFlush();
+        const finishedAt = new Date().toISOString();
+        const saved = this.recordCronRunSuccess(job, runId, finishedAt);
+        runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+      } else if (job.action === "memory_consolidation") {
+        await this.deps.runHandlers.memoryConsolidation();
         const finishedAt = new Date().toISOString();
         const saved = this.recordCronRunSuccess(job, runId, finishedAt);
         runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };

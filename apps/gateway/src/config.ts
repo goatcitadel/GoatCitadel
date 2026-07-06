@@ -97,6 +97,13 @@ export interface FeatureFlagsConfig {
    */
   chatThinkingStreamV1Enabled?: boolean;
   /**
+   * Weekly governed memory consolidation: mines completed run traces and
+   * PROPOSES memory candidates into the operator review queue (never
+   * auto-applied; also halted by autonomyV1Disabled). Absent/false (default)
+   * ⇒ the consolidation job never runs.
+   */
+  memoryConsolidationV1Enabled?: boolean;
+  /**
    * Records a signed `cron_job_executed` evidence envelope for every cron run
    * (success and failure) and pins the envelope id on the job record.
    * Absent/false (default) ⇒ cron runs record no evidence, exactly as today.
@@ -712,6 +719,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
+    ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
     ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
   ];
@@ -1256,6 +1264,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
       subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
+      // Opt-in weekly memory consolidation. `?? false` keeps the job inert
+      // until an operator enables it.
+      memoryConsolidationV1Enabled: featuresInput.memoryConsolidationV1Enabled ?? false,
       // Opt-in signed evidence for cron runs. `?? false` keeps cron behavior
       // byte-identical until an operator enables it.
       cronEvidenceV1Enabled: featuresInput.cronEvidenceV1Enabled ?? false,
