@@ -99,6 +99,7 @@ import { toWeekKeyForTimezone } from "./improvement-replay.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
+import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
@@ -7483,86 +7484,14 @@ export class GatewayService {
     token: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
   ): RemoteActionTokenRecord {
-    const normalizedToken = token.trim();
-    if (!normalizedToken) {
-      throw new ValidationError({
-        message: "Remote action token is required.",
-      });
-    }
-    const current = this.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalizedToken));
-    if (!current) {
-      throw new NotFoundError({
-        entity: "Remote action token",
-        id: "unknown",
-      });
-    }
-    if (current.actionType !== expectedActionType) {
-      throw new ConflictError({
-        message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
-      });
-    }
-    if (current.state !== "pending") {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    const expiresAt = Date.parse(current.expiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-      this.storage.remoteActionTokens.updateState(current.tokenId, "expired");
-      throw new ConflictError({
-        message: "Remote action token has expired.",
-      });
-    }
-    const consumed = this.storage.remoteActionTokens.consumePending(current.tokenId, {
-      consumedAt: new Date().toISOString(),
-      consumedBy: `connector:${current.connectorId}`,
-    });
-    if (!consumed) {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    return consumed;
+    return approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
   }
 
   /** @internal */ public consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
   ): RemoteActionTokenRecord {
-    const normalizedTokenId = tokenId.trim();
-    if (!normalizedTokenId) {
-      throw new ValidationError({
-        message: "Remote action token id is required.",
-      });
-    }
-    const current = this.storage.remoteActionTokens.get(normalizedTokenId);
-    if (current.actionType !== expectedActionType) {
-      throw new ConflictError({
-        message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
-      });
-    }
-    if (current.state !== "pending") {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    const expiresAt = Date.parse(current.expiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-      this.storage.remoteActionTokens.updateState(current.tokenId, "expired");
-      throw new ConflictError({
-        message: "Remote action token has expired.",
-      });
-    }
-    const consumed = this.storage.remoteActionTokens.consumePending(current.tokenId, {
-      consumedAt: new Date().toISOString(),
-      consumedBy: `connector:${current.connectorId}`,
-    });
-    if (!consumed) {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    return consumed;
+    return approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
   public listSkills(): SkillListItem[] {
