@@ -68,6 +68,7 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
   const gateway = createGatewayHarness({
     approvalEffectsService: { startWorker: vi.fn(), stopWorker: vi.fn() },
     discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
+    signalInboundRuntimeService: { stop: vi.fn(), sync: vi.fn() },
     drainDueChannelDeliveries: vi.fn(async () => [{ deliveryId: "delivery-1" }]),
     durableRunService: { startWorker: vi.fn(), stopWorker: vi.fn() },
     ensureCostReportCronJob: vi.fn(),
@@ -223,6 +224,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       backgroundTasks: new Set<Promise<unknown>>([backgroundTask]),
       chatProactiveService: { stopScheduler: vi.fn() },
       discordRuntimeService: { close: vi.fn(async () => undefined) },
+      signalInboundRuntimeService: { stop: vi.fn() },
       durableRunService: { stopWorker: vi.fn() },
       improvementService: { stopScheduler: vi.fn() },
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
