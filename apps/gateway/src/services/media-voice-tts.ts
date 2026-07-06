@@ -105,7 +105,10 @@ export async function synthesizeSpeech(
   input: SynthesizeSpeechInput,
   deps: SynthesizeSpeechDeps = {},
 ): Promise<SynthesizeSpeechResult> {
-  const text = truncateTtsText(input.text ?? "");
+  if (typeof input.text !== "string") {
+    throw new Error("TTS synthesis requires text to be provided as a string.");
+  }
+  const text = truncateTtsText(input.text);
   if (!text) {
     throw new Error("TTS synthesis requires non-empty text.");
   }
