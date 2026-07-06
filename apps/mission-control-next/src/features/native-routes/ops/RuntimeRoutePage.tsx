@@ -468,7 +468,16 @@ export function RuntimeRoutePage({
                 items={(data.timeline?.scheduler?.jobs ?? []).map((item) => ({
                   title: item.name,
                   meta: item.enabled ? "enabled" : "disabled",
-                  body: `${item.action} · ${item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run"}`,
+                  body: [
+                    item.action,
+                    item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run",
+                    item.lastRunStatus ? `last run ${item.lastRunStatus}` : undefined,
+                    item.lastRunEvidenceEnvelopeId
+                      ? `evidence ${item.lastRunEvidenceEnvelopeId.slice(0, 8)}`
+                      : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join(" · "),
                 }))}
                 emptyLabel="No scheduled jobs."
                 density="compact"

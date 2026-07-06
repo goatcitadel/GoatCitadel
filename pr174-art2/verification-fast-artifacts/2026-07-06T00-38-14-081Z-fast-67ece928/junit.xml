@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="goatcitadel-verification" tests="14" failures="1" skipped="0" time="500.671">
+    <testcase classname="fast" name="Skill catalog coverage" time="0.378" />
+    <testcase classname="fast" name="Repo hygiene" time="1.388" />
+    <testcase classname="fast" name="Storage migration parity" time="0.468" />
+    <testcase classname="fast" name="Extensions SDK build" time="9.691" />
+    <testcase classname="fast" name="Extensions SDK package artifact" time="0.725" />
+    <testcase classname="fast" name="Root typecheck" time="97.306" />
+    <testcase classname="fast" name="Gateway tests" time="159.104"><failure message="{&quot;level&quot;:&quot;warn&quot;,&quot;ts&quot;:&quot;2026-07-06T00:40:08.140Z&quot;,&quot;component&quot;:&quot;core:prompt-pack-service&quot;,&quot;msg&quot;:&quot;prompt-pack export refresh failed&quot;,&quot;packId&quot;:&quot;pack-1&quot;,&quot;reason&quot;:&quot;auto_score_prompt_pack_test&quot;,&quot;error&quot;:&quot;disk full&quot;}
+{&quot;level&quot;:&quot;warn&quot;,&quot;ts&quot;:&quot;2026-07-06T00:40:08.143Z&quot;,&quot;component&quot;:&quot;core:prompt-pack-service&quot;,&quot;msg&quot;:&quot;prompt-pack auto-score batch item failed&quot;,&quot;packId&quot;:&quot;pack-1&quot;,&quot;testId&quot;:&quot;test-batch-1&quot;,&quot;runId&quot;:&quot;run-batch-completed&quot;,&quot;error&quot;:&quot;Cannot score first run&quot;}
+(node:5216) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+{&quot;level&quot;:&quot;error&quot;,&quot;ts&quot;:&quot;2026-07-06T00:42:12.029Z&quot;,&quot;component&quot;:&quot;core:chat-proactive-service&quot;,&quot;msg&quot;:&quot;scheduler tick failed&quot;,&quot;error&quot;:&quot;session query failed&quot;}
+(node:5273) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:5280) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 SIGINT listeners added to [process]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+(Use `node --trace-warnings ...` to show where the warning was cre...">{&quot;level&quot;:&quot;warn&quot;,&quot;ts&quot;:&quot;2026-07-06T00:40:08.140Z&quot;,&quot;component&quot;:&quot;core:prompt-pack-service&quot;,&quot;msg&quot;:&quot;prompt-pack export refresh failed&quot;,&quot;packId&quot;:&quot;pack-1&quot;,&quot;reason&quot;:&quot;auto_score_prompt_pack_test&quot;,&quot;error&quot;:&quot;disk full&quot;}
+{&quot;level&quot;:&quot;warn&quot;,&quot;ts&quot;:&quot;2026-07-06T00:40:08.143Z&quot;,&quot;component&quot;:&quot;core:prompt-pack-service&quot;,&quot;msg&quot;:&quot;prompt-pack auto-score batch item failed&quot;,&quot;packId&quot;:&quot;pack-1&quot;,&quot;testId&quot;:&quot;test-batch-1&quot;,&quot;runId&quot;:&quot;run-batch-completed&quot;,&quot;error&quot;:&quot;Cannot score first run&quot;}
+(node:5216) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+{&quot;level&quot;:&quot;error&quot;,&quot;ts&quot;:&quot;2026-07-06T00:42:12.029Z&quot;,&quot;component&quot;:&quot;core:chat-proactive-service&quot;,&quot;msg&quot;:&quot;scheduler tick failed&quot;,&quot;error&quot;:&quot;session query failed&quot;}
+(node:5273) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:5280) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 SIGINT listeners added to [process]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+(Use `node --trace-warnings ...` to show where the warning was cre...</failure></testcase>
+    <testcase classname="fast" name="Storage tests" time="131.010" />
+    <testcase classname="fast" name="Policy engine tests" time="16.148" />
+    <testcase classname="fast" name="Mission Control Next tests" time="53.440" />
+    <testcase classname="fast" name="Library and desktop tests" time="48.212" />
+    <testcase classname="fast" name="Gateway smoke (fast profile)" time="7.114" />
+    <testcase classname="fast" name="Root build" time="26.864" />
+    <testcase classname="fast" name="Docs checks" time="2.250" />
+</testsuite>

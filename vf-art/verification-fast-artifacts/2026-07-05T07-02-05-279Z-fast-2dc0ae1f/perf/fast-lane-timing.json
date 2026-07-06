@@ -1,0 +1,114 @@
+{
+  "generatedAt": "2026-07-05T07:09:56.177Z",
+  "runId": "2026-07-05T07-02-05-279Z-fast-2dc0ae1f",
+  "lane": "fast",
+  "strict": false,
+  "status": "failed",
+  "budgets": [
+    {
+      "id": "total",
+      "durationMs": 470898,
+      "warnMs": 240000,
+      "failMs": 300000,
+      "status": "failed"
+    },
+    {
+      "id": "fast.test",
+      "durationMs": 377567,
+      "warnMs": 135000,
+      "status": "warn"
+    },
+    {
+      "id": "fast.smoke",
+      "durationMs": 5024,
+      "warnMs": 45000,
+      "status": "passed"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "fast.skills-catalog",
+      "title": "Skill catalog coverage",
+      "status": "passed",
+      "durationMs": 462
+    },
+    {
+      "id": "fast.repo-hygiene",
+      "title": "Repo hygiene",
+      "status": "failed",
+      "durationMs": 1633
+    },
+    {
+      "id": "fast.storage-migration-parity",
+      "title": "Storage migration parity",
+      "status": "passed",
+      "durationMs": 539
+    },
+    {
+      "id": "fast.extensions-sdk-build",
+      "title": "Extensions SDK build",
+      "status": "passed",
+      "durationMs": 10312
+    },
+    {
+      "id": "fast.extensions-sdk-package",
+      "title": "Extensions SDK package artifact",
+      "status": "passed",
+      "durationMs": 856
+    },
+    {
+      "id": "fast.typecheck",
+      "title": "Root typecheck",
+      "status": "passed",
+      "durationMs": 106815
+    },
+    {
+      "id": "fast.test.gateway",
+      "title": "Gateway tests",
+      "status": "passed",
+      "durationMs": 164821
+    },
+    {
+      "id": "fast.test.storage",
+      "title": "Storage tests",
+      "status": "passed",
+      "durationMs": 70624
+    },
+    {
+      "id": "fast.test.policy-engine",
+      "title": "Policy engine tests",
+      "status": "passed",
+      "durationMs": 19294
+    },
+    {
+      "id": "fast.test.mission-control-next",
+      "title": "Mission Control Next tests",
+      "status": "passed",
+      "durationMs": 65841
+    },
+    {
+      "id": "fast.test.libraries",
+      "title": "Library and desktop tests",
+      "status": "passed",
+      "durationMs": 56987
+    },
+    {
+      "id": "fast.smoke",
+      "title": "Gateway smoke (fast profile)",
+      "status": "passed",
+      "durationMs": 5024
+    },
+    {
+      "id": "fast.build",
+      "title": "Root build",
+      "status": "passed",
+      "durationMs": 30807
+    },
+    {
+      "id": "fast.docs",
+      "title": "Docs checks",
+      "status": "passed",
+      "durationMs": 2694
+    }
+  ]
+}
