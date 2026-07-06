@@ -119,5 +119,7 @@ export interface RuntimeSettings {
     plannerFanoutV1Disabled?: boolean;
     /** R3-8 kill switch: model-callable `agent.fanout` spawn tool. Absent/false ⇒ feature ON. */
     subagentFanoutV1Disabled?: boolean;
+    /** Opt-in: routes background LLM calls (improvement scans, judges, classifiers, prompt packs) to the cheap utility-model slot. Absent/false ⇒ today's selection. */
+    utilityModelRoutingV1Enabled?: boolean;
   };
 }

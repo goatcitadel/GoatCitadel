@@ -96,6 +96,13 @@ export interface FeatureFlagsConfig {
    * detection site) so the client's collapsible ChatThinkingSection can render.
    */
   chatThinkingStreamV1Enabled?: boolean;
+  /**
+   * Routes background LLM calls (improvement scans, judges, classifiers, prompt
+   * packs) to the configured cheap utility-model slot (`llm.utilityProviderId` /
+   * `llm.utilityModel`). Absent/false (default) ⇒ background calls keep today's
+   * model selection exactly.
+   */
+  utilityModelRoutingV1Enabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -699,6 +706,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
+    ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1241,6 +1249,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
       subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
+      // Opt-in utility-model tier for background LLM calls. `?? false` keeps
+      // background model selection byte-identical until an operator enables it.
+      utilityModelRoutingV1Enabled: featuresInput.utilityModelRoutingV1Enabled ?? false,
     },
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {
