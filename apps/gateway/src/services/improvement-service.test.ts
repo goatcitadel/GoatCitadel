@@ -154,36 +154,45 @@ describe("ImprovementService listSurfaceRouteOverrideExemplars", () => {
   });
 
   it("respects the limit parameter", () => {
-    const harness = createHarness();
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
 
-    const base: Omit<
-      SurfaceRouteOverrideSignalInput,
-      "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"
-    > = {
-      citadelId: "alpha",
-      workspaceId: "default",
-      autoConfidence: 0.8,
-    };
+      const base: Omit<
+        SurfaceRouteOverrideSignalInput,
+        "fromMode" | "toMode" | "promptFeatureHash" | "sessionId" | "turnId"
+      > = {
+        citadelId: "alpha",
+        workspaceId: "default",
+        autoConfidence: 0.8,
+      };
 
-    harness.service.recordSurfaceRouteOverrideSignal({
-      ...base,
-      sessionId: "s1",
-      turnId: "t1",
-      fromMode: "code",
-      toMode: "chat",
-      promptFeatureHash: "h1",
-    });
-    harness.service.recordSurfaceRouteOverrideSignal({
-      ...base,
-      sessionId: "s2",
-      turnId: "t2",
-      fromMode: "cowork",
-      toMode: "code",
-      promptFeatureHash: "h2",
-    });
+      vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
+      harness.service.recordSurfaceRouteOverrideSignal({
+        ...base,
+        sessionId: "s1",
+        turnId: "t1",
+        fromMode: "code",
+        toMode: "chat",
+        promptFeatureHash: "h1",
+      });
 
-    const limited = harness.service.listSurfaceRouteOverrideExemplars("alpha", 1);
-    expect(limited).toHaveLength(1);
+      vi.setSystemTime(new Date("2025-01-01T00:00:01.000Z"));
+      harness.service.recordSurfaceRouteOverrideSignal({
+        ...base,
+        sessionId: "s2",
+        turnId: "t2",
+        fromMode: "cowork",
+        toMode: "code",
+        promptFeatureHash: "h2",
+      });
+
+      const limited = harness.service.listSurfaceRouteOverrideExemplars("alpha", 1);
+      expect(limited).toHaveLength(1);
+      expect(limited[0]).toMatchObject({ fromMode: "cowork", toMode: "code" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns an empty array when no signals exist for the citadel", () => {
