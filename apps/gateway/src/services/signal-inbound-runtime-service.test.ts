@@ -7,7 +7,6 @@ import {
   SignalInboundRuntimeService,
   clampPollIntervalSeconds,
   normalizeSignalInboundEnvelope,
-  type SignalInboundBridgeResponse,
   type SignalInboundScheduler,
 } from "./signal-inbound-runtime-service.js";
 
@@ -108,12 +107,11 @@ function createWebhookHost(connections: Map<string, IntegrationConnection>) {
   return { host, ingestChannelMessage };
 }
 
-function bridgeResponse(payload: unknown, status = 200): SignalInboundBridgeResponse {
-  return {
-    ok: status >= 200 && status < 300,
+function bridgeResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
     status,
-    text: async () => JSON.stringify(payload),
-  };
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function textEnvelope(overrides: { source?: string; message?: string; timestamp?: number; groupId?: string } = {}) {
@@ -145,7 +143,7 @@ const ALLOWLISTED_CONFIG = {
 
 function createService(input: {
   connections: IntegrationConnection[];
-  fetchBridge: (url: string) => Promise<SignalInboundBridgeResponse>;
+  fetchBridge: (url: string) => Promise<Response>;
   enabled?: () => boolean;
 }) {
   const connectionMap = new Map(input.connections.map((connection) => [connection.connectionId, connection]));

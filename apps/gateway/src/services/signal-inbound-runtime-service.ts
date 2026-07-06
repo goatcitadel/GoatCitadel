@@ -72,12 +72,6 @@ const defaultScheduler: SignalInboundScheduler = {
   },
 };
 
-export interface SignalInboundBridgeResponse {
-  ok: boolean;
-  status: number;
-  text(): Promise<string>;
-}
-
 export interface SignalInboundRuntimeCallbacks {
   /** `signalInboundV1Enabled` feature flag. Checked on sync AND every tick. */
   isEnabled(): boolean;
@@ -87,7 +81,7 @@ export interface SignalInboundRuntimeCallbacks {
    * `fetchWithDiagnosticsTimeout`, so the connection-config-supplied bridge URL
    * rides the same egress allowlist as outbound integration actions.
    */
-  fetchBridge(url: string): Promise<SignalInboundBridgeResponse>;
+  fetchBridge(url: string): Promise<Response>;
   /** Same inbound seam webhook routes use — trust gate + loop guard + idempotency. */
   integrationWebhooks: IntegrationWebhookRouteLike;
   scheduler?: SignalInboundScheduler;
