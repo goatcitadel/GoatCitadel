@@ -666,9 +666,9 @@ export class CronAutomationService {
 
     const retriedRunId = randomUUID();
     const now = new Date().toISOString();
-    let updated: CronReviewRow | undefined;
-    this.deps.storage.db.exec("BEGIN IMMEDIATE");
-    try {
+    // Raw "BEGIN IMMEDIATE" is sqlite-only syntax; the helper picks the
+    // driver-appropriate transaction statements on Postgres deployments.
+    const updated = this.deps.storage.runImmediateTransaction(() => {
       this.deps.storage.db
         .prepare(
           `
@@ -699,7 +699,7 @@ export class CronAutomationService {
           diffJson: JSON.stringify({ retried: true, previousRunId: existing.run_id }),
           createdAt: now,
         });
-      updated = this.deps.storage.db
+      return this.deps.storage.db
         .prepare(
           `
         SELECT item_id, job_id, run_id, severity, status, summary_json, diff_json, created_at, updated_at, resolved_at
@@ -708,11 +708,7 @@ export class CronAutomationService {
       `,
         )
         .get(itemId) as CronReviewRow | undefined;
-      this.deps.storage.db.exec("COMMIT");
-    } catch (error) {
-      this.deps.storage.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
     if (!updated) {
       throw new Error("Cron review item retry update failed.");
     }
