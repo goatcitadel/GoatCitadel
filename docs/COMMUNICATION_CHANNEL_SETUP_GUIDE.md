@@ -1,6 +1,6 @@
 # Communication Channel Setup Guide
 
-Last updated: 2026-04-02
+Last updated: 2026-07-05
 Target audience: beginner to intermediate operators
 
 This guide walks through GoatCitadel channel setup in the order that makes the most sense for operator-facing `1.0` validation.
@@ -28,6 +28,15 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 | `channel.line` | Channel access token | token auth plus sandbox push send; signed inbound webhook runtime when channel secret is configured | yes |
 | `channel.zalo` | Official Account access token | sandbox send through the OA send path | yes |
 | `channel.zalouser` | zca bridge URL + optional bearer token | sandbox send through the bridge text-send path | yes |
+
+### Inbound Posture At A Glance
+
+Inbound capability is derived from the runtime capability rules (`packages/gateway-core/src/channel-core.ts`), not from this doc:
+
+- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook).
+- **Outbound delivery today:** Signal (bridge), iMessage (bridge), Microsoft Teams, Google Chat, Mattermost, ntfy, Zalo OA, Zalo Personal.
+
+Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk) start with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
 
 Long-form walkthroughs below still focus on the current high-traffic channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those guided channels inside Mission Control without dropping back to raw JSON.
 

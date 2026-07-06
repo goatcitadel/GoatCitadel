@@ -87,7 +87,8 @@ The last release cycle concentrated on speed, parallelism, governance depth, and
 - **Governance down to a single tool call.** Citadel Wards are enforced at the policy gate on every invocation, MCP tools and skills can be allowlisted per workspace/Citadel (enforced at MCP invocation), and skills carry declared governance metadata (approval, risk tier, trust scope) surfaced in the Trust UI.
 - **Hardened Code Mode.** Docker sandbox images are digest-pinned fail-closed, the macOS Seatbelt read scope is narrowed to runtime essentials, synthetic-env guards block host env leakage, and a dedicated adversarial canary CI lane is a required gate — with the Windows AppContainer hostile-sandbox promotion slice green.
 - **Models, cloud and local.** The model catalog spans Anthropic (including `claude-opus-4-8` and `fable-5`), OpenAI, Google, GLM, Moonshot, and Perplexity, with capability-selected per-step model routing inside orchestration. `llama.cpp` is a first-class local runtime option with guided setup and diagnostics ([docs/LLAMA_CPP_INTEGRATION_MEMO.md](./docs/LLAMA_CPP_INTEGRATION_MEMO.md)).
-- **Reach it from where you work.** Guided channel setup for Telegram, Slack, Discord, and Mattermost, plus generic webhook channels ([docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md](./docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md)).
+- **Reach it from where you work.** Guided Mission Control setup for 13 channels — Telegram, Slack, Discord, WhatsApp, Signal (bridge), iMessage (bridge), Microsoft Teams, Google Chat, LINE, Mattermost, Nextcloud Talk, Zalo OA, and Zalo Personal — plus ntfy push and generic webhook channels. Telegram, Slack, WhatsApp, LINE, and Nextcloud Talk accept governed inbound messages behind default-deny sender allowlists; Discord inbound is governed by guild/channel/role pairing rules instead; the remaining channels are outbound delivery today ([docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md](./docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md)).
+- **Governed scheduled automations.** A durable cron scheduler runs recurring agent turns under a restricted scheduled-turn permission profile, with a model-callable `schedule.manage` tool (per-creator caps, 15-minute minimum interval, scheduled-run recursion blocked), a human review queue for run warnings and watchdog findings, and delivery of run output to any configured channel.
 - **Release proof tooling.** Tagged releases assemble signed installer checksums with cosign certificate sidecars, a CycloneDX SBOM, and a commit-bound `release-certificate.json` covering lane status, artifact digests, and scan results.
 
 The complete change record is [CHANGELOG.md](./CHANGELOG.md).
@@ -372,7 +373,7 @@ PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `g
 ```mermaid
 flowchart LR
   MC["Mission Control<br/>React operator console"] --> GW
-  CH["Channels<br/>Telegram · Slack · Discord · Mattermost · webhooks"] --> GW
+  CH["Channels (14 built-in)<br/>Telegram · Slack · Discord · WhatsApp · Signal · Teams · LINE · … · webhooks"] --> GW
   GW["Gateway control plane<br/>Fastify · runtime APIs · realtime events"] --> POL
   POL["Policy engine<br/>Citadel scope · Wards · deny-wins · path jails · approvals"] --> DUR
   GW --> MEM["Memory lifecycle · skills · capability catalog"]
