@@ -31,6 +31,8 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   plannerFanoutV1Disabled: true,
   subagentFanoutV1Disabled: true,
   memoryConsolidationV1Enabled: true,
+  cronEvidenceV1Enabled: true,
+  utilityModelRoutingV1Enabled: true,
 };
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {

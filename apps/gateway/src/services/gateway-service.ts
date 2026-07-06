@@ -385,6 +385,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
+import { resolveUtilityModelOverride } from "./utility-model-routing.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -1244,6 +1245,24 @@ export class GatewayService {
       },
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      recordEvidenceEnvelope: (input) => {
+        // Best-effort: envelope failure must never fail the cron run.
+        try {
+          return this.evidenceEnvelopeService.createEnvelope(input);
+        } catch (error) {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "evidence",
+            event: "evidence.envelope.failed",
+            message: "Failed to record cron run evidence envelope",
+            context: {
+              eventKind: input.eventKind,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+          return undefined;
+        }
+      },
       runHandlers: {
         task: async (job, _context?) => {
           const task = this.createCronInboxTask(job);
@@ -4152,7 +4171,39 @@ export class GatewayService {
     return this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
   }
 
+  /**
+   * Cheap utility-model override for background LLM calls. Returns undefined
+   * (= keep existing selection) unless utilityModelRoutingV1Enabled is on and
+   * the configured utility provider has a usable key.
+   */
+  private getUtilityModelOverride(): { providerId: string; model: string } | undefined {
+    if (this.readFeatureFlags().utilityModelRoutingV1Enabled !== true) {
+      return undefined;
+    }
+    const runtime = this.llmService.getRuntimeConfig({ useCache: true });
+    const utilityProviderId = runtime.utilityProviderId;
+    if (!utilityProviderId) {
+      return undefined;
+    }
+    // Keychain-backed keys are only surfaced when explicitly requested for a
+    // provider, so ask for the utility provider directly instead of relying on
+    // the active-provider summary.
+    const provider = this.llmService
+      .listProviders({ includeKeychainForProviderId: utilityProviderId, useCache: true })
+      .find((candidate) => candidate.providerId === utilityProviderId);
+    return resolveUtilityModelOverride({
+      flagEnabled: true,
+      utilityProviderId,
+      utilityModel: runtime.utilityModel,
+      provider,
+    });
+  }
+
   private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
+    const utilityOverride = this.getUtilityModelOverride();
+    if (utilityOverride) {
+      return utilityOverride;
+    }
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -4186,6 +4237,10 @@ export class GatewayService {
   }
 
   private getPromptJudgeModelDefaults(): { providerId?: string; model?: string } {
+    const utilityOverride = this.getUtilityModelOverride();
+    if (utilityOverride) {
+      return utilityOverride;
+    }
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
@@ -8714,6 +8769,8 @@ export class GatewayService {
       plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
       memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
+      cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
+      utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -8771,6 +8828,8 @@ export class GatewayService {
       plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
       subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
       memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
+      cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
+      utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
     };
   }
 

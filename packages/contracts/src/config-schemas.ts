@@ -263,6 +263,10 @@ export const LlmConfigFileSchema = z
   .object({
     activeProviderId: z.string(),
     activeModel: z.string().optional(),
+    // Optional cheap utility-model slot for background LLM tasks; only honored
+    // when the utilityModelRoutingV1Enabled feature flag is on.
+    utilityProviderId: z.string().optional(),
+    utilityModel: z.string().optional(),
     providers: z.array(LlmProviderConfigSchema),
   })
   .passthrough();
@@ -700,6 +704,14 @@ export const AssistantConfigInputSchema = z
         // PROPOSES memory candidates (approval-gated, never auto-applied).
         // Absent/false (default) ⇒ the consolidation job never runs.
         memoryConsolidationV1Enabled: z.boolean().optional(),
+        // Records a signed cron_job_executed evidence envelope for every cron
+        // run and pins the envelope id on the job record. Absent/false
+        // (default) ⇒ cron runs record no evidence, exactly as today.
+        cronEvidenceV1Enabled: z.boolean().optional(),
+        // Routes background LLM calls (improvement scans, judges, classifiers,
+        // prompt packs) to the configured cheap utility-model slot. Absent/false
+        // (default) ⇒ background calls keep today's model selection exactly.
+        utilityModelRoutingV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

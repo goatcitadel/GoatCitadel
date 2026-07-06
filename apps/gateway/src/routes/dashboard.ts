@@ -143,6 +143,8 @@ const updateSettingsSchema = z.object({
     .object({
       activeProviderId: z.string().optional(),
       activeModel: z.string().optional(),
+      utilityProviderId: z.string().optional(),
+      utilityModel: z.string().optional(),
       upsertProvider: z
         .object({
           providerId: z.string().min(1),

@@ -192,6 +192,8 @@ export interface CronJobRecord {
   lastRunOutput?: string;
   lastRunId?: string;
   lastRunStatus?: "ok" | "failed";
+  /** Signed evidence envelope recorded for the last run (cronEvidenceV1Enabled). */
+  lastRunEvidenceEnvelopeId?: string;
   lastFailureAt?: string;
   lastFailure?: {
     message: string;
