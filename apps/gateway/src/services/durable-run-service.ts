@@ -729,14 +729,34 @@ export class DurableRunService {
     const waitForEvent = ((
       current.metadata as { waitForEvent?: { eventKey?: string; correlationId?: string } } | undefined
     )?.waitForEvent ?? {}) as { eventKey?: string; correlationId?: string };
-    if (waitForEvent.eventKey && waitForEvent.eventKey !== event.eventKey) {
+    // Wake-registration guard. The rule (see also `resolveChatDurableWaitForEvent`):
+    //   (a) run declares waitForEvent.eventKey  => caller's eventKey MUST match it.
+    //   (b) run declares none, caller passes an eventKey => REJECT. A run parked
+    //       without a registered key accepts no keyed wake; otherwise a stale or
+    //       cross-type wake would prematurely resume a still-waiting turn (Finding 3).
+    //   (c) run declares none, caller passes none => ALLOW (back-compat). No production
+    //       waker currently wakes keyless — operator wakes require a non-empty eventKey
+    //       and the autonomy kill-switch sweep matches case (a) — but this preserves the
+    //       only legitimate keyless path for legacy/other-path parks.
+    if (waitForEvent.eventKey) {
+      if (waitForEvent.eventKey !== event.eventKey) {
+        return {
+          runId,
+          eventKey: event.eventKey,
+          correlationId: event.correlationId,
+          outcome: "skipped_event_key_mismatch",
+          run: current,
+          detail: `Wake event key mismatch: expected ${waitForEvent.eventKey}`,
+        };
+      }
+    } else if (event.eventKey) {
       return {
         runId,
         eventKey: event.eventKey,
         correlationId: event.correlationId,
         outcome: "skipped_event_key_mismatch",
         run: current,
-        detail: `Wake event key mismatch: expected ${waitForEvent.eventKey}`,
+        detail: `Durable run ${runId} parked without a wake registration and cannot accept event key ${event.eventKey}.`,
       };
     }
     if (waitForEvent.correlationId && waitForEvent.correlationId !== event.correlationId) {
@@ -803,8 +823,11 @@ export class DurableRunService {
    * sweep they stay "waiting" forever once the switch is turned back off. Call
    * this when `autonomyV1Disabled` flips true -> false and on worker startup
    * (when autonomy is enabled) so runs parked before a restart also recover.
-   * Idempotent: non-waiting or differently-parked runs are skipped by
-   * {@link wakeDurableRun}.
+   * Idempotent: this sweep itself pre-filters to runs whose registered
+   * `waitForEvent.eventKey` is {@link AUTONOMY_KILL_SWITCH_RESUME_EVENT} (the
+   * `continue` below), so differently-parked runs are never passed to
+   * {@link wakeDurableRun}; wakeDurableRun independently skips non-"waiting" runs
+   * and re-checks the same event-key/correlation match.
    */
   resumeRunsWaitingForAutonomyKillSwitch(): { woken: string[] } {
     if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {

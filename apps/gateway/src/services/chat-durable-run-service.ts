@@ -18,6 +18,56 @@ export type ChatDurableThreadEventType =
   | "chat_thread_turn_retried"
   | "chat_thread_turn_edited";
 
+// Wake-event keys that the durable chat-turn parks register on `metadata.waitForEvent`.
+// Each MUST exactly match the eventKey its real waker emits, or the parked run either
+// resumes prematurely (loose key) or never resumes (wrong key):
+//   - approval.resolved       — emitted by ApprovalEffectsService.wakeDurableRun
+//                               (approval-resolution-effects-service.ts), correlationId = approvalId.
+//   - chat.user_input.resolved — emitted by the user-input respond runtime
+//                               (chat-message-route-runtime.ts), correlationId = promptId.
+//   - chat.tool_wait.resolved  — SENTINEL. `waiting_for_tool` is a transient in-flight
+//                               marker (see chat-turn-stream-service.ts); NO production
+//                               path emits a keyed wake for it. Kept eventKey-only so an
+//                               operator can still force-resume via the durable wake route,
+//                               while blocking stray cross-type wakes.
+const CHAT_APPROVAL_RESOLVED_WAKE_EVENT = "approval.resolved";
+const CHAT_USER_INPUT_RESOLVED_WAKE_EVENT = "chat.user_input.resolved";
+const CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT = "chat.tool_wait.resolved";
+
+interface ChatDurableWaitForEvent {
+  eventKey: string;
+  correlationId?: string;
+}
+
+/**
+ * Resolve the wake contract for a chat turn that parked in a waiting state.
+ *
+ * The correlationId MUST match what the real waker supplies, and we NEVER guess
+ * one: a wrong correlationId rejects a legitimate resume (worse than the loose
+ * wake it replaces). When the identifier cannot be resolved from the trace we
+ * fall back to eventKey-only so the run is still wakeable by its real waker.
+ */
+function resolveChatDurableWaitForEvent(trace: ChatTurnTraceRecord): ChatDurableWaitForEvent {
+  if (trace.status === "waiting_for_approval") {
+    // Mirror orchestration-phase-execution-service.ts: prefer the (hydration-only)
+    // pendingApprovalSummary, then the persisted approval_required tool run.
+    const approvalId =
+      trace.pendingApprovalSummary?.approvalId ??
+      trace.toolRuns.find((toolRun) => toolRun.status === "approval_required" && toolRun.approvalId)?.approvalId;
+    return approvalId
+      ? { eventKey: CHAT_APPROVAL_RESOLVED_WAKE_EVENT, correlationId: approvalId }
+      : { eventKey: CHAT_APPROVAL_RESOLVED_WAKE_EVENT };
+  }
+  if (trace.status === "waiting_for_user_input") {
+    const promptId = trace.pendingUserInput?.promptId;
+    return promptId
+      ? { eventKey: CHAT_USER_INPUT_RESOLVED_WAKE_EVENT, correlationId: promptId }
+      : { eventKey: CHAT_USER_INPUT_RESOLVED_WAKE_EVENT };
+  }
+  // waiting_for_tool — eventKey-only sentinel (no real keyed waker exists).
+  return { eventKey: CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT };
+}
+
 interface DurableRunStore {
   getRun?(runId: string): DurableRunRecord;
   updateRun(input: {
@@ -168,6 +218,7 @@ export function finalizeDurableChatRun(
     trace.status === "waiting_for_user_input" ||
     trace.status === "waiting_for_tool"
   ) {
+    const waitForEvent = resolveChatDurableWaitForEvent(trace);
     deps.durableRuns.updateRun({
       runId,
       status: "waiting",
@@ -175,6 +226,14 @@ export function finalizeDurableChatRun(
       clearFinishedAt: true,
       clearLastError: true,
       clearLease: true,
+      // The durable-run repo REPLACES metadata on update, so spread the existing
+      // metadata (surface, objective, retryPolicy, …) to avoid clobbering it while
+      // registering the wake contract. Without waitForEvent, wakeDurableRun would
+      // accept ANY wake and prematurely resume a still-waiting turn (Finding 3).
+      metadata: {
+        ...(currentRun?.metadata ?? {}),
+        waitForEvent,
+      },
     });
     deps.durableRuns.createCheckpoint({
       runId,
