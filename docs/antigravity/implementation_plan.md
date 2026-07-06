@@ -1,6 +1,6 @@
 # Mission Control Frontend Consolidation — Implementation Plan
 
-> **Historical note (2026-05-18)**: This plan targets the legacy `apps/mission-control` compatibility shell and is superseded for current `1.0` product decisions by Mission Control Next in `apps/mission-control-next`. Use [docs/1_0_CONTRACT.md](../1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](../1_0_RELEASE_EVIDENCE.md), and [apps/mission-control-next/src/app/route-model.ts](../../apps/mission-control-next/src/app/route-model.ts) for current route and release-surface truth.
+> **Historical note (2026-05-18)**: This plan targets the legacy `apps/mission-control` compatibility shell and is superseded for current `1.0` product decisions by Mission Control Next in `apps/mission-control-next`. Use [docs/1_0_CONTRACT.md](../1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](../1_0_RELEASE_EVIDENCE.md), and [apps/mission-control-next/src/app/route-model.ts](../../apps/mission-control-next/src/app/route-model.ts) for current route and release-surface truth. The inline `file:///…/apps/mission-control/src/…` paths below point at the archived legacy shell (source removed from disk) and are non-navigable historical references only.
 
 > **Purpose**: A comprehensive, agent-executable plan for fixing the highest-impact frontend issues in GoatCitadel Mission Control. Each task is self-contained: an agent (Claude, Codex, human) should be able to pick up any task and execute it with only the information provided here and the codebase.
 >
