@@ -146,8 +146,9 @@ export class CronJobRepository {
 
   /**
    * List cron jobs visible to a Citadel: jobs scoped to that Citadel plus global
-   * (unscoped) jobs. The Watchtower enforcement point once a real citadel scope
-   * is threaded through scheduling.
+   * (unscoped) jobs.
+   * TODO: Enforce Watchtower access control once a real citadel scope is threaded
+   * through scheduling.
    */
   public listByCitadel(citadelId: string): CronJobRecord[] {
     const rows = this.listByCitadelStmt.all({ citadelId });
@@ -230,12 +231,59 @@ function parseCronLastFailure(value: unknown): {
   };
 }
 
+function deepEqualCanonical(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (left === null || right === null) {
+    return left === right;
+  }
+
+  if (typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    for (let i = 0; i < left.length; i += 1) {
+      if (!deepEqualCanonical(left[i], right[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  for (let i = 0; i < leftKeys.length; i += 1) {
+    const key = leftKeys[i];
+    if (key === undefined || key !== rightKeys[i]) {
+      return false;
+    }
+    if (!deepEqualCanonical(leftRecord[key], rightRecord[key])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
   return (
     existing.jobId === next.jobId &&
     existing.name === next.name &&
     existing.action === next.action &&
-    JSON.stringify(existing.actionConfig ?? {}) === JSON.stringify(next.actionConfig ?? {}) &&
+    deepEqualCanonical(existing.actionConfig ?? {}, next.actionConfig ?? {}) &&
     existing.description === next.description &&
     existing.schedule === next.schedule &&
     existing.enabled === next.enabled &&
@@ -249,7 +297,7 @@ function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
     existing.lastRunStatus === next.lastRunStatus &&
     existing.lastRunEvidenceEnvelopeId === next.lastRunEvidenceEnvelopeId &&
     existing.lastFailureAt === next.lastFailureAt &&
-    JSON.stringify(existing.lastFailure ?? {}) === JSON.stringify(next.lastFailure ?? {}) &&
+    deepEqualCanonical(existing.lastFailure ?? {}, next.lastFailure ?? {}) &&
     existing.failureCount === next.failureCount &&
     existing.backoffUntil === next.backoffUntil
   );
