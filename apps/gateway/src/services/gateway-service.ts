@@ -577,6 +577,7 @@ import {
   type ResolvedRuntimeGuidance,
 } from "./chat-turn-planning-helpers.js";
 import { persistContextManifestForCompletionRequest } from "./llm-completion-memory-context.js";
+import { stampLegacyOpenChannelInboundAccess } from "./channel-inbound-access-migration.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { computeDurableBaselineDrift, DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
@@ -2287,6 +2288,20 @@ export class GatewayService {
       });
     }
     this.improvementService.markInterruptedDecisionReplayRuns();
+    // One-time (marker-guarded) stamp of ambiguous legacy-open channel access
+    // to an explicit open_legacy posture; behavior-preserving by design.
+    const legacyStamp = stampLegacyOpenChannelInboundAccess({
+      storage: this.storage,
+      publishRealtime: (eventType, source, payload, options) =>
+        this.publishRealtime(eventType, source, payload, options),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      now: new Date().toISOString(),
+    });
+    if (legacyStamp.stampedConnectionIds.length > 0) {
+      log.info("stamped legacy-open channel inbound access to explicit open_legacy", {
+        count: legacyStamp.stampedConnectionIds.length,
+      });
+    }
     await Promise.all([this.discordRuntimeService.sync(), this.loadCronJobsFromConfig()]);
     // Starts pollers only when signalInboundV1Enabled is true (no-op otherwise).
     this.syncSignalInboundRuntime();

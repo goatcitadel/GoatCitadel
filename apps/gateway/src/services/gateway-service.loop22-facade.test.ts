@@ -101,6 +101,16 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
       realtimeStreamLeases: {
         closeOpenForNode: vi.fn(() => 2),
       },
+      // Legacy-open stamp migration (runs inside runDeferredInit): empty
+      // connection list + absent done-marker → stamps nothing, publishes nothing.
+      integrationConnections: {
+        list: vi.fn(() => []),
+        update: vi.fn(),
+      },
+      systemSettings: {
+        get: vi.fn(() => undefined),
+        set: vi.fn(),
+      },
     },
   });
   Object.assign(gateway, overrides);
