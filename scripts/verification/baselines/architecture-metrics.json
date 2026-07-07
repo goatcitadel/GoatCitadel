@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-07T17:20:25.443Z",
-  "gatewayLineCount": 9905,
+  "generatedAt": "2026-07-07T17:26:31.467Z",
+  "gatewayLineCount": 9676,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
@@ -9,8 +9,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 9905,
-      "bytes": 399550
+      "lineCount": 9676,
+      "bytes": 389636
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",

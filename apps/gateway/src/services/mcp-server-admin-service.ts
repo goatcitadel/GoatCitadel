@@ -10,7 +10,11 @@ import type {
 } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
+import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
+import { discoverMcpTools, inferMcpToolsForServer } from "./mcp-runtime.js";
+import { createInternalMcpApprovalInboxTools, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
+import { createInternalMcpDurableTasksTools, isInternalMcpDurableTasksServer } from "./mcp-durable-tasks.js";
 import {
   buildInternalMcpServerCreateBlockedMessage,
   buildUnsupportedMcpTransportMessage,
@@ -278,4 +282,49 @@ function normalizeMcpOAuthConfig(input?: McpOAuthConfig): McpOAuthConfig | undef
 function resolveEnvValue(envKey?: string): string | undefined {
   const key = normalizeSafeEnvKeyNames(envKey ? [envKey] : [])[0];
   return key ? process.env[key]?.trim() || undefined : undefined;
+}
+
+/** Deps for connected-tool discovery (B5b): sandbox network policy + per-server OAuth token minting. */
+export interface ResolveConnectedMcpToolsDeps {
+  networkAllowlist: NonNullable<Parameters<typeof discoverMcpTools>[2]>["networkAllowlist"];
+  resolveOAuthAccessToken: NonNullable<NonNullable<Parameters<typeof discoverMcpTools>[2]>["oauthAccessTokenResolver"]>;
+}
+
+/**
+ * Resolve the live tool list for a connecting MCP server: internal servers get
+ * their synthesized tools, stdio/http/sse servers get real discovery (with the
+ * sandbox network allowlist + OAuth token resolver applied to remote
+ * transports), and anything undiscoverable falls back to inference over the
+ * previously known tools. Verbatim move from GatewayService; the gateway keeps
+ * a thin delegator for the route-composition port.
+ */
+export async function resolveConnectedMcpTools(
+  deps: ResolveConnectedMcpToolsDeps,
+  server: McpServerRecord,
+  existingTools: McpToolRecord[],
+  actorContext?: ToolPolicyActorContext,
+): Promise<McpToolRecord[]> {
+  if (isInternalMcpApprovalInboxServer(server)) {
+    return createInternalMcpApprovalInboxTools(server.serverId);
+  }
+  if (isInternalMcpDurableTasksServer(server)) {
+    return createInternalMcpDurableTasksTools(server.serverId);
+  }
+  if (server.transport === "stdio") {
+    const discovered = await discoverMcpTools(server, undefined, { actorContext });
+    if (discovered.length > 0) {
+      return discovered;
+    }
+  }
+  if (server.transport === "http" || server.transport === "sse") {
+    const discovered = await discoverMcpTools(server, undefined, {
+      networkAllowlist: deps.networkAllowlist,
+      oauthAccessTokenResolver: deps.resolveOAuthAccessToken,
+      actorContext,
+    });
+    if (discovered.length > 0) {
+      return discovered;
+    }
+  }
+  return inferMcpToolsForServer(server, existingTools);
 }
