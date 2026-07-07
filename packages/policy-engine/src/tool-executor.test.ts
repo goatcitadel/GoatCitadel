@@ -804,7 +804,7 @@ describe("executeTool", () => {
 
   it("searches file names with code.search_files", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const filePath = path.join(testWorkspaceRoot, "src", "chat-agent-orchestrator.test.ts");
+    const filePath = path.join(testWorkspaceRoot, "src", "chat-turn-agent-runner.test.ts");
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "test('ok')\n", "utf8");
 

@@ -92,7 +92,7 @@ export interface FeatureFlagsConfig {
    * Thinking-display skeleton: gates the gateway emitting `thinking_delta` stream
    * chunks carrying the model's reasoning/thinking text. Absent/false (default) ⇒
    * byte-identical behavior to today (no chunk is even constructed). `true` turns
-   * on the terminal-block emission (see chat-agent-orchestrator's P0-B reasoning
+   * on the terminal-block emission (see chat-turn-agent-runner's P0-B reasoning
    * detection site) so the client's collapsible ChatThinkingSection can render.
    */
   chatThinkingStreamV1Enabled?: boolean;

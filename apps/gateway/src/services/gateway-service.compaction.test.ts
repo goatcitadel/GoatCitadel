@@ -21,7 +21,7 @@ describe("buildConversationCompactionSummary", () => {
         messageId: "m1",
         role: "user",
         content:
-          "We decided to keep the fallback on `browser.search` and avoid changing C:\\code\\personal-ai\\apps\\gateway\\src\\services\\chat-agent-orchestrator.ts.",
+          "We decided to keep the fallback on `browser.search` and avoid changing C:\\code\\personal-ai\\apps\\gateway\\src\\services\\chat-turn-agent-runner.ts.",
       }),
       createMessage({
         messageId: "m2",
@@ -41,7 +41,7 @@ describe("buildConversationCompactionSummary", () => {
     expect(summary).toContain("Failed attempts and issues:");
     expect(summary).toContain("Notable artifacts:");
     expect(summary).toContain("browser.search");
-    expect(summary).toContain("C:\\code\\personal-ai\\apps\\gateway\\src\\services\\chat-agent-orchestrator.ts");
+    expect(summary).toContain("C:\\code\\personal-ai\\apps\\gateway\\src\\services\\chat-turn-agent-runner.ts");
     expect(summary).toContain("https://example.com/report");
     expect(summary).toContain("TIMEOUT");
     expect(summary).toContain("Recent context:");

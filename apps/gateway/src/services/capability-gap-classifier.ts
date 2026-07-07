@@ -71,7 +71,7 @@ export function classifyCapabilityGapFromTrace(input: {
     return {
       causeClass: "missing_required_tool_evidence",
       recoveryOptions: ["patch_config", "replay_failed_turn"],
-      configArea: "apps/gateway/src/services/chat-agent-orchestrator.ts",
+      configArea: "apps/gateway/src/services/chat-turn-agent-runner.ts",
       suggestedRepairClass: "tool_evidence_contract_patch",
       confidence: 0.78,
     };

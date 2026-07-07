@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-07-07T06:23:36.510Z",
-  "gatewayLineCount": 10722,
+  "generatedAt": "2026-07-07T14:36:56.952Z",
+  "gatewayLineCount": 10951,
   "largeServiceDebt": [
     {
-      "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
+      "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
       "lineCount": 13548,
-      "bytes": 550805
+      "bytes": 550945
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 10722,
-      "bytes": 432121
+      "lineCount": 10951,
+      "bytes": 439906
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
@@ -117,7 +117,7 @@
     "apps/gateway/src/services/channel-setup-helpers.ts": 1,
     "apps/gateway/src/services/channel-setup-service.ts": 34,
     "apps/gateway/src/services/channel-voice-inbound-service.ts": 1,
-    "apps/gateway/src/services/chat-agent-orchestrator.ts": 5,
+    "apps/gateway/src/services/chat-turn-agent-runner.ts": 5,
     "apps/gateway/src/services/chat-turn-dispatch-service.ts": 41,
     "apps/gateway/src/services/chat-turn-entry-service.ts": 91,
     "apps/gateway/src/services/chat-turn-helpers.ts": 1,
