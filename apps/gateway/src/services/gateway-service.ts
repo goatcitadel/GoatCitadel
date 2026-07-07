@@ -77,7 +77,6 @@ import {
 } from "@goatcitadel/storage";
 import {
   buildChatModePrefsPatch,
-  chatModeAllowsDynamicTeamGrowth,
   ConflictError,
   DEFAULT_CITADEL_ID,
   inferProviderForModelId,
@@ -96,7 +95,6 @@ import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "./scheduler-timing.js";
 import { toWeekKeyForTimezone } from "./improvement-replay.js";
-import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
@@ -565,13 +563,12 @@ import type {
   PersistableChatStreamChunk,
   PreparedChatExecutionPlanResolution,
 } from "./chat-turn-types.js";
-import { DEFAULT_DELEGATION_ROLES, detectDelegationRoles, truncateSummaryLine } from "./chat-turn-helpers.js";
+import { detectDelegationRoles, truncateSummaryLine } from "./chat-turn-helpers.js";
 import {
-  buildRoleGapSpecialistSuggestion,
-  buildSpecialistSuggestionFromCapability,
-  extractSpecialistObjectiveKeywords,
+  collectSpecialistCandidateSuggestions,
   mergeSpecialistEvidence,
   mergeSpecialistRoutingHints,
+  normalizeDelegationRoles,
   normalizeSpecialistCandidateFingerprint,
   type ResolvedRuntimeGuidance,
 } from "./chat-turn-planning-helpers.js";
@@ -4137,14 +4134,6 @@ export class GatewayService {
     return latestUser?.content ?? "";
   }
 
-  private computeDelegationSuggestionConfidence(objective: string, roles: string[]): number {
-    let score = roles.length >= 3 ? 0.84 : roles.length >= 2 ? 0.72 : 0.58;
-    if (/\b(prd|architecture|implement|qa|ops|handoff)\b/i.test(objective)) {
-      score += 0.12;
-    }
-    return clamp01(score);
-  }
-
   public collectSpecialistCandidateSuggestions(input: {
     sessionId: string;
     mode: ChatMode;
@@ -4152,70 +4141,15 @@ export class GatewayService {
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[] {
-    if (!chatModeAllowsDynamicTeamGrowth(input.mode)) {
-      return [];
-    }
-    const existingCandidates = this.storage.chatSpecialistCandidates.listBySession(input.sessionId, 200);
-    const seen = new Set<string>(
-      existingCandidates
-        .filter((candidate) => candidate.status !== "retired")
-        .map((candidate) => normalizeSpecialistCandidateFingerprint(candidate)),
+    return collectSpecialistCandidateSuggestions(
+      {
+        chatSpecialistCandidates: this.storage.chatSpecialistCandidates,
+        chatSessionMeta: this.storage.chatSessionMeta,
+        importedAgentCatalog: this.storage.importedAgentCatalog,
+        normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      },
+      input,
     );
-    const suggested = new Map<string, ChatSpecialistCandidateSuggestionRecord>();
-    const objectiveKeywords = extractSpecialistObjectiveKeywords(input.content);
-    const addSuggestion = (suggestion: ChatSpecialistCandidateSuggestionRecord): void => {
-      const fingerprint = normalizeSpecialistCandidateFingerprint(suggestion);
-      if (seen.has(fingerprint) || suggested.has(fingerprint)) {
-        return;
-      }
-      suggested.set(fingerprint, suggestion);
-    };
-
-    for (const capability of input.capabilitySuggestions) {
-      addSuggestion(
-        buildSpecialistSuggestionFromCapability({
-          capability,
-          mode: input.mode,
-          objectiveKeywords,
-        }),
-      );
-    }
-
-    const sessionWorkspaceId = this.normalizeWorkspaceId(
-      this.storage.chatSessionMeta.ensure(input.sessionId).workspaceId,
-    );
-    for (const suggestion of suggestImportedCatalogEntries({
-      entries: this.storage.importedAgentCatalog.list({
-        workspaceId: sessionWorkspaceId,
-        limit: 500,
-      }),
-      content: input.content,
-      mode: input.mode,
-    })) {
-      addSuggestion(suggestion);
-    }
-
-    if (suggested.size === 0 && input.trace.orchestration) {
-      const detectedRoles = normalizeDelegationRoles(detectDelegationRoles(input.content));
-      for (const role of detectedRoles) {
-        if (role === "coder") {
-          continue;
-        }
-        addSuggestion(
-          buildRoleGapSpecialistSuggestion({
-            role,
-            mode: input.mode,
-            objective: input.content,
-            objectiveKeywords,
-            confidence: this.computeDelegationSuggestionConfidence(input.content, detectedRoles),
-            runId: input.trace.orchestration.runId,
-            turnId: input.trace.turnId,
-          }),
-        );
-      }
-    }
-
-    return [...suggested.values()].slice(0, 3);
   }
 
   public extractAndPersistLearnedMemory(
@@ -9878,27 +9812,6 @@ export function parsePipelineCommand(
     roles,
     objective,
   };
-}
-
-function normalizeDelegationRoles(roles: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const role of roles) {
-    const normalized = role
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  if (out.length === 0) {
-    return [...DEFAULT_DELEGATION_ROLES];
-  }
-  return out;
 }
 
 function dedupeStrings(values: readonly string[]): string[] {

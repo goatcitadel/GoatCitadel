@@ -13,13 +13,16 @@ import type {
   ChatTurnTraceRecord,
   ChatWebMode,
 } from "@goatcitadel/contracts";
+import { chatModeAllowsDynamicTeamGrowth } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import type { OrchestrationPlan as ModeOrchestrationPlan, OrchestrationRole } from "../orchestration/types.js";
+import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import {
   buildDraftExpansionSteps,
   materializeDraftExpansionSteps,
   shouldProtectPlannerTemplateStep,
 } from "./chat-planner-fanout.js";
-import { isImageMimeType, toTitleCase } from "./chat-turn-helpers.js";
+import { DEFAULT_DELEGATION_ROLES, detectDelegationRoles, isImageMimeType, toTitleCase } from "./chat-turn-helpers.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import {
   IMPROVEMENT_TUNE_DEFAULTS,
@@ -775,4 +778,125 @@ export function extractCompletionText(response: ChatCompletionResponse): string 
       .trim();
   }
   return "";
+}
+
+/**
+ * Normalize free-form delegation role tokens: lowercase, kebab-safe, deduped;
+ * an empty result falls back to the default delegation team.
+ */
+export function normalizeDelegationRoles(roles: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const role of roles) {
+    const normalized = role
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  if (out.length === 0) {
+    return [...DEFAULT_DELEGATION_ROLES];
+  }
+  return out;
+}
+
+function computeDelegationSuggestionConfidence(objective: string, roles: string[]): number {
+  let score = roles.length >= 3 ? 0.84 : roles.length >= 2 ? 0.72 : 0.58;
+  if (/\b(prd|architecture|implement|qa|ops|handoff)\b/i.test(objective)) {
+    score += 0.12;
+  }
+  return Math.max(0, Math.min(1, score));
+}
+
+export interface CollectSpecialistCandidateSuggestionsDeps {
+  chatSpecialistCandidates: Pick<Storage["chatSpecialistCandidates"], "listBySession">;
+  chatSessionMeta: Pick<Storage["chatSessionMeta"], "ensure">;
+  importedAgentCatalog: Pick<Storage["importedAgentCatalog"], "list">;
+  normalizeWorkspaceId(workspaceId: string | undefined): string;
+}
+
+/**
+ * Suggest specialist candidates for a turn: capability-upgrade-derived first,
+ * then imported-catalog matches for the session's workspace, and finally
+ * role-gap suggestions when an orchestrated turn detected delegation roles but
+ * nothing else matched. Deduped against existing non-retired candidates and
+ * capped at three. Extracted from GatewayService (B3a).
+ */
+export function collectSpecialistCandidateSuggestions(
+  deps: CollectSpecialistCandidateSuggestionsDeps,
+  input: {
+    sessionId: string;
+    mode: ChatMode;
+    content: string;
+    capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
+    trace: ChatTurnTraceRecord;
+  },
+): ChatSpecialistCandidateSuggestionRecord[] {
+  if (!chatModeAllowsDynamicTeamGrowth(input.mode)) {
+    return [];
+  }
+  const existingCandidates = deps.chatSpecialistCandidates.listBySession(input.sessionId, 200);
+  const seen = new Set<string>(
+    existingCandidates
+      .filter((candidate) => candidate.status !== "retired")
+      .map((candidate) => normalizeSpecialistCandidateFingerprint(candidate)),
+  );
+  const suggested = new Map<string, ChatSpecialistCandidateSuggestionRecord>();
+  const objectiveKeywords = extractSpecialistObjectiveKeywords(input.content);
+  const addSuggestion = (suggestion: ChatSpecialistCandidateSuggestionRecord): void => {
+    const fingerprint = normalizeSpecialistCandidateFingerprint(suggestion);
+    if (seen.has(fingerprint) || suggested.has(fingerprint)) {
+      return;
+    }
+    suggested.set(fingerprint, suggestion);
+  };
+
+  for (const capability of input.capabilitySuggestions) {
+    addSuggestion(
+      buildSpecialistSuggestionFromCapability({
+        capability,
+        mode: input.mode,
+        objectiveKeywords,
+      }),
+    );
+  }
+
+  const sessionWorkspaceId = deps.normalizeWorkspaceId(deps.chatSessionMeta.ensure(input.sessionId).workspaceId);
+  for (const suggestion of suggestImportedCatalogEntries({
+    entries: deps.importedAgentCatalog.list({
+      workspaceId: sessionWorkspaceId,
+      limit: 500,
+    }),
+    content: input.content,
+    mode: input.mode,
+  })) {
+    addSuggestion(suggestion);
+  }
+
+  if (suggested.size === 0 && input.trace.orchestration) {
+    const detectedRoles = normalizeDelegationRoles(detectDelegationRoles(input.content));
+    for (const role of detectedRoles) {
+      if (role === "coder") {
+        continue;
+      }
+      addSuggestion(
+        buildRoleGapSpecialistSuggestion({
+          role,
+          mode: input.mode,
+          objective: input.content,
+          objectiveKeywords,
+          confidence: computeDelegationSuggestionConfidence(input.content, detectedRoles),
+          runId: input.trace.orchestration.runId,
+          turnId: input.trace.turnId,
+        }),
+      );
+    }
+  }
+
+  return [...suggested.values()].slice(0, 3);
 }
