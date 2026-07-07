@@ -9,7 +9,7 @@ import {
   type ComponentPropsWithoutRef,
   type Ref,
 } from "react";
-import { Activity, AlertTriangle, LayoutDashboard, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, LayoutDashboard, RefreshCw, Users } from "lucide-react";
 import { Virtuoso, type Components } from "react-virtuoso";
 import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/client";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
@@ -160,8 +160,21 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       title="Kanban"
       description="Agentic run board with stale-run detection, diagnostics, and bulk operator controls."
       loading={loading}
-      error={actionError ?? error}
+      // Only a failed run-list fetch (error) is fatal — it leaves the board null/stale,
+      // so the frame replaces it (Finding 10). A failed bulk action (actionError) must
+      // stay non-fatal: the board data is still valid and the operator's selection must
+      // remain visible, so it renders as an inline banner below instead of nuking the board.
+      error={error}
       releaseStatus={getRouteReleaseScope(props.route).status}
+      actions={
+        <NativeButton
+          variant="secondary"
+          className="mc-next-kanban-action"
+          onClick={() => props.navigate({ area: "cowork", section: "board", theme: props.route.theme })}
+        >
+          <Users className="h-3 w-3" /> Agent Board
+        </NativeButton>
+      }
     >
       <div className="mc-next-kanban-toolbar" role="toolbar" aria-label="Agentic run bulk actions">
         <NativeButton
@@ -197,6 +210,11 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
           <RefreshCw className="h-3 w-3" /> Refresh
         </NativeButton>
       </div>
+      {actionError ? (
+        <div data-testid="kanban-action-error">
+          <NoticeBanner tone="error" message={actionError} />
+        </div>
+      ) : null}
       {notice ? (
         <div data-testid="kanban-notice">
           <NoticeBanner tone="success" message={notice} />

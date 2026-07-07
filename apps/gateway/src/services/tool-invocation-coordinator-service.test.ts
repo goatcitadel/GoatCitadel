@@ -2051,6 +2051,94 @@ describe("ToolInvocationCoordinatorService", () => {
       }),
     );
   });
+
+  describe("redact Citadel Ward effect", () => {
+    const SECRET = "sk-abcdefghijklmnopqrstuvwx";
+
+    it("scrubs secret patterns from tool output when the policy decision carries wardEffect redact", async () => {
+      const host = createHost({
+        policyEngine: {
+          invoke: vi.fn(
+            async (): Promise<ToolInvokeResult> => ({
+              outcome: "executed",
+              policyReason: "allowed",
+              auditEventId: "audit-redact",
+              wardEffect: "redact",
+              result: {
+                stdout: `token=${SECRET}`,
+                nested: { note: `Authorization: Bearer ${SECRET}` },
+                exitCode: 0,
+              },
+            }),
+          ),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      });
+      const coordinator = new ToolInvocationCoordinatorService(host);
+
+      const result = await coordinator.invokeTool(createToolRequest());
+
+      expect(result.outcome).toBe("executed");
+      // The secret is gone from every string value in the output payload.
+      expect(JSON.stringify(result.result)).not.toContain(SECRET);
+      // Structure is preserved: non-secret fields survive untouched.
+      expect(result.result?.exitCode).toBe(0);
+      expect((result.result?.nested as { note: string }).note).toContain("[REDACTED]");
+      expect(typeof result.result?.stdout).toBe("string");
+    });
+
+    it("leaves tool output byte-identical when no redact ward is present (regression)", async () => {
+      const rawResult = {
+        stdout: `token=${SECRET}`,
+        nested: { note: `Authorization: Bearer ${SECRET}` },
+        exitCode: 0,
+      };
+      const host = createHost({
+        policyEngine: {
+          invoke: vi.fn(
+            async (): Promise<ToolInvokeResult> => ({
+              outcome: "executed",
+              policyReason: "allowed",
+              auditEventId: "audit-noward",
+              result: rawResult,
+            }),
+          ),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      });
+      const coordinator = new ToolInvocationCoordinatorService(host);
+
+      const result = await coordinator.invokeTool(createToolRequest());
+
+      // No redact ward => the secret is preserved exactly as the tool produced it.
+      expect(result.result).toEqual(rawResult);
+      expect(JSON.stringify(result.result)).toContain(SECRET);
+    });
+
+    it("does not act on non-redact ward effects such as route_local (regression)", async () => {
+      const rawResult = { stdout: `token=${SECRET}`, exitCode: 0 };
+      const host = createHost({
+        policyEngine: {
+          invoke: vi.fn(
+            async (): Promise<ToolInvokeResult> => ({
+              outcome: "executed",
+              policyReason: "allowed",
+              auditEventId: "audit-routelocal",
+              wardEffect: "route_local",
+              result: rawResult,
+            }),
+          ),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      });
+      const coordinator = new ToolInvocationCoordinatorService(host);
+
+      const result = await coordinator.invokeTool(createToolRequest());
+
+      expect(result.result).toEqual(rawResult);
+      expect(JSON.stringify(result.result)).toContain(SECRET);
+    });
+  });
 });
 
 describe("capability-scope choke point (executeMcpRuntime)", () => {

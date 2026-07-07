@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionLabel,
   groupDelegatedSessionsForRail,
-  resolveCodeSendGate,
   resolveMissionControlMessageMode,
   resolveOptimisticChatPrefs,
   resolveOutboundSurfaceMode,
@@ -318,71 +317,5 @@ describe("threaded-surface-core pure helpers", () => {
 
   it("returns undefined on a new unlocked thread with no override (enables auto-route)", () => {
     expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: null })).toBeUndefined();
-  });
-
-  it("no gate when not auto-routing", () => {
-    expect(
-      resolveCodeSendGate({
-        autoRouteActive: false,
-        predictedMode: "code",
-        predictedConfidence: 0.2,
-        hasBoundProject: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("no gate when predicted mode is not code", () => {
-    expect(
-      resolveCodeSendGate({
-        autoRouteActive: true,
-        predictedMode: "chat",
-        predictedConfidence: 0.1,
-        hasBoundProject: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("no gate when there is no preview (fail-open)", () => {
-    expect(
-      resolveCodeSendGate({
-        autoRouteActive: true,
-        predictedMode: undefined,
-        predictedConfidence: undefined,
-        hasBoundProject: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("does not gate predicted code when no project is bound", () => {
-    expect(
-      resolveCodeSendGate({
-        autoRouteActive: true,
-        predictedMode: "code",
-        predictedConfidence: 0.9,
-        hasBoundProject: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("does not gate low-confidence predicted code", () => {
-    expect(
-      resolveCodeSendGate({
-        autoRouteActive: true,
-        predictedMode: "code",
-        predictedConfidence: 0.5,
-        hasBoundProject: true,
-      }),
-    ).toBeNull();
-  });
-
-  it("no gate when code predicted, bound, confident", () => {
-    expect(
-      resolveCodeSendGate({
-        autoRouteActive: true,
-        predictedMode: "code",
-        predictedConfidence: 0.9,
-        hasBoundProject: true,
-      }),
-    ).toBeNull();
   });
 });

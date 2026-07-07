@@ -325,6 +325,9 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     expect(prewarmContext).toHaveBeenCalledWith({
       scope: "chat",
       sessionId: "session-1",
+      // Finding 1: prewarm now scopes memory-item retrieval to the session's
+      // workspace (falls back to "default" when the facade harness has no storage).
+      workspaceId: "default",
       prompt: "Summarize the current thread",
       relationScope: "project",
       workspace: "memory/workspace/session-1",

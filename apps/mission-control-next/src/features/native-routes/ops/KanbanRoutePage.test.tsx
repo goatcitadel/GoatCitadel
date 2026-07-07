@@ -132,6 +132,16 @@ describe("KanbanRoutePage", () => {
     act(() => renderer.unmount());
   });
 
+  it("signposts the Agent Board from the Kanban header (5.4)", async () => {
+    const renderer = await renderPage();
+    const signpost = findRequiredButton(renderer, "agent board");
+    await act(async () => {
+      signpost.props.onClick();
+    });
+    expect(baseProps.navigate).toHaveBeenCalledWith({ area: "cowork", section: "board", theme: "ops" });
+    act(() => renderer.unmount());
+  });
+
   it("shows a critical diagnostic chip on cards with unresolved critical diagnostics", async () => {
     const renderer = await renderPage();
     const chip = renderer.root.findAll((node) => node.props?.["data-testid"] === "diagnostic-chip-t-2")[0];

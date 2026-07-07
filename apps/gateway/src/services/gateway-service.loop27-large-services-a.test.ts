@@ -6,6 +6,7 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import { McpServerStore } from "./mcp-server-store.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const settings = new Map<string, unknown>();
@@ -87,6 +88,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     },
   });
   Object.assign(gateway, overrides);
+  if (!gateway.mcpServerStore) {
+    // Real store over the harness's map-backed systemSettings (B5a): MCP
+    // read/write behavior assertions keep flowing through `settings`.
+    gateway.mcpServerStore = new McpServerStore({ systemSettings: gateway.storage.systemSettings });
+  }
   return { gateway, settings };
 }
 

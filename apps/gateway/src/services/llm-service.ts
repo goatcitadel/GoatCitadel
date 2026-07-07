@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
 import { createHash, randomUUID } from "node:crypto";
+import { lookup as nodeDnsLookup, type LookupAddress, type LookupOptions } from "node:dns";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -137,6 +138,13 @@ export interface LlmServiceOptions {
    * after readiness instead of blocking on remote model discovery.
    */
   modelCatalogCachePath?: string;
+  /**
+   * Optional DNS lookup override used by the provider request dispatcher's
+   * DNS-rebinding-safe guard. Defaults to Node's `dns.lookup`. Injected in
+   * tests to simulate a host that resolves to a private/metadata address at
+   * fetch time; production leaves this unset.
+   */
+  dnsLookup?: ProviderDnsLookupFn;
 }
 
 export interface LlmProviderSecretStatusOptions {
@@ -181,6 +189,15 @@ type UndiciProxyTlsOptions = Extract<ConstructorParameters<typeof ProxyAgent>[0]
 type UndiciConnectOptions = UndiciAgentConnectOptions & UndiciProxyTlsOptions;
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
+// Node-style `dns.lookup` callback signature (what undici's `connect.lookup`
+// expects). Kept structurally identical to `node:dns`'s `lookup` so the real
+// resolver drops straight in and tests can inject a rebinding resolver.
+export type ProviderDnsLookupFn = (
+  hostname: string,
+  options: LookupOptions,
+  callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
+) => void;
+
 export class LlmService {
   private static readonly MODEL_DISCOVERY_TTL_MS = 60_000;
   private readonly providers = new Map<string, LlmProviderConfig>();
@@ -205,6 +222,7 @@ export class LlmService {
   private networkAllowlist: string[];
   private enforceNetworkAllowlist: boolean;
   private readonly tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"];
+  private readonly dnsLookup: ProviderDnsLookupFn;
   private activeProviderId: string;
   private activeModel: string;
   private utilityProviderId: string;
@@ -222,6 +240,7 @@ export class LlmService {
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.tlsPathPolicy = options.tlsPathPolicy;
+    this.dnsLookup = options.dnsLookup ?? nodeDnsLookup;
     this.activeProviderId = "";
     this.activeModel = "";
     this.utilityProviderId = "";
@@ -1314,8 +1333,12 @@ export class LlmService {
     if (!this.enforceNetworkAllowlist) {
       return;
     }
-    // When no explicit runtime allowlist is configured, permit validated provider base URLs.
-    // Provider URLs still pass strict baseUrl validation (protocol/host/private-range checks).
+    // When an explicit runtime allowlist is configured, enforce it here at the
+    // hostname level. When it is empty (the default), this hostname check is a
+    // no-op — but the provider request dispatcher still applies a fetch-time,
+    // DNS-rebinding-safe resolved-IP guard (see createProviderGuardedLookup),
+    // so a host that re-resolves to a private/metadata/loopback address at
+    // fetch time is blocked even with an empty allowlist. See Finding 4.
     if (this.networkAllowlist.length === 0) {
       return;
     }
@@ -1385,18 +1408,25 @@ export class LlmService {
     endpoint: string,
     requestConfig: LlmProviderRequestConfig | undefined,
   ): Dispatcher | undefined {
-    if (!requestConfig?.proxy && !requestConfig?.tls) {
-      return undefined;
-    }
-
     const targetUrl = new URL(endpoint);
+    // SECURITY (Finding 4): every provider request now runs through a dispatcher
+    // carrying a DNS-rebinding-safe guarded lookup — including the common case
+    // with no proxy/TLS, which previously fell through to the unguarded global
+    // fetch dispatcher. A configured proxy resolves the origin at the proxy, so
+    // the local lookup cannot see it there; that path is deliberate operator
+    // egress and still passes the hostname allowlist check upstream.
+    const usesProxy = Boolean(
+      requestConfig?.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
+    );
+    const guardedLookup = usesProxy ? undefined : createProviderGuardedLookup(endpoint, this.dnsLookup);
+
     const cacheKey = buildRequestDispatcherCacheKey(targetUrl, requestConfig);
     const cached = this.requestDispatcherCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
-    const dispatcher = createRequestDispatcher(targetUrl, requestConfig, this.env, this.tlsPathPolicy);
+    const dispatcher = createRequestDispatcher(targetUrl, requestConfig, this.env, this.tlsPathPolicy, guardedLookup);
     if (!dispatcher) {
       return undefined;
     }
@@ -1668,7 +1698,13 @@ export class LlmService {
         redirect: "manual",
         dispatcher: target.dispatcher,
       };
-      const response = await fetch(target.url, requestInit);
+      let response: Response;
+      try {
+        response = await fetch(target.url, requestInit);
+      } catch (error) {
+        rethrowIfProviderNetworkBlocked(error);
+        throw error;
+      }
 
       if (isRedirect(response.status)) {
         throw new Error(`model listing blocked redirect (${response.status})`);
@@ -1696,6 +1732,11 @@ export class LlmService {
         warning: "Provider returned no models. Falling back to GoatCitadel's provider template.",
       };
     } catch (error) {
+      // An SSRF/rebinding block must never be masked by a template-model
+      // fallback — surface it so the caller sees the provider was blocked.
+      if (error instanceof ProviderNetworkBlockedError) {
+        throw error;
+      }
       if (fallback.length > 0) {
         return { items: fallback, source: "error_fallback", warning: (error as Error).message };
       }
@@ -2375,7 +2416,12 @@ async function postJsonRequest(
     redirect: "manual",
     dispatcher: target.dispatcher,
   };
-  return fetch(target.url, requestInit);
+  try {
+    return await fetch(target.url, requestInit);
+  } catch (error) {
+    rethrowIfProviderNetworkBlocked(error);
+    throw error;
+  }
 }
 
 async function postMultipartRequest(
@@ -2394,18 +2440,24 @@ async function postMultipartRequest(
     redirect: "manual",
     dispatcher: target.dispatcher,
   };
-  return fetch(target.url, requestInit);
+  try {
+    return await fetch(target.url, requestInit);
+  } catch (error) {
+    rethrowIfProviderNetworkBlocked(error);
+    throw error;
+  }
 }
 
 function createRequestDispatcher(
   targetUrl: URL,
-  requestConfig: LlmProviderRequestConfig,
+  requestConfig: LlmProviderRequestConfig | undefined,
   env: NodeJS.ProcessEnv,
   tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"],
+  guardedLookup?: ProviderDnsLookupFn,
 ): Dispatcher | undefined {
   const tlsOptions =
-    targetUrl.protocol === "https:" ? buildRequestTlsOptions(requestConfig.tls, tlsPathPolicy) : undefined;
-  const proxy = requestConfig.proxy;
+    targetUrl.protocol === "https:" ? buildRequestTlsOptions(requestConfig?.tls, tlsPathPolicy) : undefined;
+  const proxy = requestConfig?.proxy;
   if (proxy && !shouldBypassProxy(targetUrl.hostname, proxy.bypassHosts)) {
     const proxyHeaders = buildProxyRequestHeaders(proxy.auth, env);
     return new ProxyAgent({
@@ -2415,25 +2467,32 @@ function createRequestDispatcher(
       requestTls: tlsOptions,
     });
   }
-  if (!tlsOptions) {
+  // Non-proxy path: always attach the guarded lookup (merged with any TLS
+  // overrides) so the resolved-IP guard runs even when no TLS override exists.
+  // Without a guarded lookup and without TLS options there is nothing to
+  // configure, so returning undefined (default dispatcher) is acceptable.
+  const connect: UndiciConnectOptions | undefined = guardedLookup
+    ? { ...(tlsOptions ?? {}), lookup: guardedLookup }
+    : tlsOptions;
+  if (!connect) {
     return undefined;
   }
   return new Agent({
-    connect: tlsOptions,
+    connect,
   });
 }
 
-function buildRequestDispatcherCacheKey(targetUrl: URL, requestConfig: LlmProviderRequestConfig): string {
+function buildRequestDispatcherCacheKey(targetUrl: URL, requestConfig: LlmProviderRequestConfig | undefined): string {
   const useProxy = Boolean(
-    requestConfig.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
+    requestConfig?.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
   );
   return JSON.stringify({
     origin: targetUrl.origin,
     useProxy,
-    proxyUrl: useProxy ? requestConfig.proxy?.url : undefined,
-    proxyAuth: useProxy ? (requestConfig.proxy?.auth ?? undefined) : undefined,
-    proxyTls: useProxy ? (requestConfig.proxy?.tls ?? undefined) : undefined,
-    tls: requestConfig.tls ?? undefined,
+    proxyUrl: useProxy ? requestConfig?.proxy?.url : undefined,
+    proxyAuth: useProxy ? (requestConfig?.proxy?.auth ?? undefined) : undefined,
+    proxyTls: useProxy ? (requestConfig?.proxy?.tls ?? undefined) : undefined,
+    tls: requestConfig?.tls ?? undefined,
   });
 }
 
@@ -2553,6 +2612,174 @@ function validateProviderBaseUrl(rawUrl: string): void {
   if (host.endsWith(".local")) {
     throw new Error(`Provider host ${host} is a local network domain`);
   }
+}
+
+function stripIpv6Brackets(address: string): string {
+  const trimmed = address.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+// Decode an IPv4-mapped IPv6 literal (`::ffff:a.b.c.d`, its uncompressed
+// `0:0:0:0:0:ffff:…` variants, and Node's `::ffff:hhhh:hhhh` normalisation)
+// to its dotted-quad IPv4 form so the IPv4 reserved-range check applies. Without
+// this, `::ffff:169.254.169.254` (or a resolver returning that mapped form)
+// would slip past the IPv4 metadata block.
+function extractIpv4MappedAddress(ipv6Lower: string): string | undefined {
+  const canonical = ipv6Lower.replace(/^(?:0{1,4}:){2,5}ffff:/, "::ffff:").replace(/^0{1,4}:ffff:/, "::ffff:");
+  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(canonical);
+  if (dotted) {
+    return dotted[1];
+  }
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(canonical);
+  if (hex) {
+    const high = Number.parseInt(hex[1] ?? "", 16);
+    const low = Number.parseInt(hex[2] ?? "", 16);
+    if (Number.isFinite(high) && Number.isFinite(low)) {
+      const octet = (value: number, shift: number) => (value >>> shift) & 0xff;
+      return [octet(high, 8), octet(high, 0), octet(low, 8), octet(low, 0)].join(".");
+    }
+  }
+  return undefined;
+}
+
+// True when a *resolved* IP address is private/reserved per the exact same
+// policy `validateProviderBaseUrl` applies to a literal host string (loopback
+// and RFC1918/link-local/metadata ranges), so the fetch-time guard never blocks
+// anything the save-time check already permits (notably the tailnet
+// 100.64.0.0/10 range, which this policy deliberately does NOT treat as
+// private).
+function isBlockedResolvedIp(address: string): boolean {
+  const normalized = stripIpv6Brackets(address).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (DISALLOWED_BASE_HOSTS.has(normalized)) {
+    return true;
+  }
+  const family = isIP(normalized);
+  if (family === 4) {
+    return isPrivateOrReservedIpv4(normalized);
+  }
+  if (family === 6) {
+    const mapped = extractIpv4MappedAddress(normalized);
+    if (mapped) {
+      return isPrivateOrReservedIpv4(mapped);
+    }
+    return isBlockedIpv6(normalized);
+  }
+  return false;
+}
+
+function isLoopbackResolvedIp(address: string): boolean {
+  const normalized = stripIpv6Brackets(address).toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "::ffff:127.0.0.1";
+}
+
+function isConfiguredLoopbackHost(hostOrUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(hostOrUrl).hostname.toLowerCase();
+  } catch {
+    host = hostOrUrl.trim().toLowerCase();
+  }
+  host = stripIpv6Brackets(host);
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+// Sentinel embedded in the guarded-lookup error. undici surfaces a lookup
+// failure as `TypeError: fetch failed` with the real reason on `error.cause`,
+// so this marker lets the fetch helpers recognise and re-surface an SSRF block
+// (and stop it from being silently masked by a template-model fallback).
+const PROVIDER_ADDRESS_BLOCKED_MESSAGE =
+  "Provider host resolved to a private, metadata, or reserved address and was blocked";
+
+// Distinct error so the model-discovery fallback path can rethrow an SSRF block
+// instead of degrading it to a template-model fallback.
+export class ProviderNetworkBlockedError extends Error {
+  public constructor(message: string = PROVIDER_ADDRESS_BLOCKED_MESSAGE) {
+    super(message);
+    this.name = "ProviderNetworkBlockedError";
+  }
+}
+
+// Walk an error's `cause` chain looking for the guarded-lookup block sentinel.
+// Returns a clean `ProviderNetworkBlockedError` when found (so callers see a
+// stable, redaction-safe "blocked" message rather than undici's opaque
+// "fetch failed"), otherwise `undefined`.
+function asProviderNetworkBlock(error: unknown): ProviderNetworkBlockedError | undefined {
+  let current: unknown = error;
+  for (let depth = 0; current instanceof Error && depth < 6; depth += 1) {
+    if (current.message.includes(PROVIDER_ADDRESS_BLOCKED_MESSAGE)) {
+      return new ProviderNetworkBlockedError();
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+// Re-throw a clean block error when `error` is (or wraps) a guarded-lookup
+// block; otherwise return so the caller can handle the original error.
+function rethrowIfProviderNetworkBlocked(error: unknown): void {
+  const blocked = asProviderNetworkBlock(error);
+  if (blocked) {
+    throw blocked;
+  }
+}
+
+// The DNS-rebinding decision core: given the configured provider URL/host and an
+// address it resolved to at fetch time, return the offending address when it
+// must be blocked, or `undefined` when the connection may proceed.
+//
+// Loopback resolved addresses are permitted ONLY when the configured host is a
+// loopback literal (localhost/127.0.0.1/::1) — this is how a legitimately-local
+// runtime (llama.cpp, Ollama, LM Studio) keeps reaching 127.0.0.1 while a remote
+// host that rebinds to loopback is blocked. All other private/reserved resolved
+// addresses are blocked regardless of the configured host. Exported for unit
+// coverage.
+export function findBlockedResolvedProviderAddress(hostOrUrl: string, resolvedAddress: string): string | undefined {
+  if (isLoopbackResolvedIp(resolvedAddress)) {
+    return isConfiguredLoopbackHost(hostOrUrl) ? undefined : resolvedAddress;
+  }
+  return isBlockedResolvedIp(resolvedAddress) ? resolvedAddress : undefined;
+}
+
+function findBlockedResolvedProviderAddressList(
+  hostOrUrl: string,
+  address: string | LookupAddress[],
+): string | undefined {
+  const candidates = Array.isArray(address) ? address.map((entry) => entry.address) : [address];
+  for (const candidate of candidates) {
+    const blocked = findBlockedResolvedProviderAddress(hostOrUrl, candidate);
+    if (blocked) {
+      return blocked;
+    }
+  }
+  return undefined;
+}
+
+// Wrap a Node-style DNS lookup so that, after resolution, any private/reserved/
+// rebinding address fails the lookup (and therefore the connection) before a
+// socket is opened. Mirrors the guarded-lookup pattern used by the policy-engine
+// network guard, but applies llm-service's own provider-host policy so the
+// fetch-time block stays consistent with validateProviderBaseUrl.
+function createProviderGuardedLookup(hostOrUrl: string, dnsLookup: ProviderDnsLookupFn): ProviderDnsLookupFn {
+  return (hostname, options, callback) => {
+    dnsLookup(hostname, options, (error, address, family) => {
+      if (error) {
+        callback(error, address, family);
+        return;
+      }
+      const blocked = findBlockedResolvedProviderAddressList(hostOrUrl, address);
+      if (blocked) {
+        callback(new Error(PROVIDER_ADDRESS_BLOCKED_MESSAGE), address, family);
+        return;
+      }
+      callback(null, address, family);
+    });
+  };
 }
 
 function isPrivateOrReservedIpv4(host: string): boolean {

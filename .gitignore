@@ -15,6 +15,7 @@ config/*.json
 coverage
 .tmp/
 artifacts/
+vf-art/
 data/index.db
 data/index.db-shm
 data/index.db-wal

@@ -28,6 +28,7 @@ import {
   summarizeMemorySubspaces,
 } from "@goatcitadel/mission-control-shared/content/memory-helpers";
 import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from "../shared/native-helpers";
@@ -123,6 +124,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memory = useMemoryOperatorSnapshot(activeWorkspaceId);
   const [search, setSearch] = useState("");
   const [namespaceFilter, setNamespaceFilter] = useState<string>(NAMESPACE_FILTER_ALL);
+  // 5.2: gate the destructive "Forget item" action behind a confirm step (the button's
+  // own aria-label calls it permanent), matching how Curator/Approvals confirm.
+  const [pendingForget, setPendingForget] = useState(false);
   const [draft, setDraft] = useState({
     title: "",
     content: "",
@@ -688,11 +692,25 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   variant="destructive"
                   disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
                   aria-label={`Forget memory item ${selectedVisibleItem.title} — permanent`}
-                  onClick={() => void memory.forgetSelectedItem()}
+                  onClick={() => setPendingForget(true)}
                 >
                   Forget item
                 </NativeButton>
               </div>
+              <ConfirmModal
+                open={pendingForget}
+                title="Forget this memory item?"
+                message={`Forget "${selectedVisibleItem.title}"? It stops being used in context and is hidden from the default item list.`}
+                confirmLabel="Forget"
+                danger
+                pending={memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
+                disableDismiss={memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
+                onCancel={() => setPendingForget(false)}
+                onConfirm={() => {
+                  void memory.forgetSelectedItem();
+                  setPendingForget(false);
+                }}
+              />
               <div className="mc-next-settings-code-block">
                 <span>Item history</span>
                 <SectionTruthNotice message={sectionErrors?.memoryHistory ?? null} />

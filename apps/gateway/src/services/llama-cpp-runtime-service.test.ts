@@ -1047,13 +1047,17 @@ async function waitForDownloadStatus(
   jobId: string,
   status: "completed" | "failed" | "cancelled",
 ): Promise<ReturnType<LlamaCppRuntimeService["getHuggingFaceDownloadStatus"]>> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  // Wall-clock deadline, not attempt-counted: the old 50x5ms budget (~250ms)
+  // flaked under full verify-lane load, where starved timers stretch each poll
+  // far past its nominal interval. Generous by design — a stuck job still fails.
+  const deadline = Date.now() + 30_000;
+  do {
     const current = service.getHuggingFaceDownloadStatus(jobId);
     if (current.status === status) {
       return current;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (Date.now() < deadline);
   throw new Error(`Timed out waiting for llama.cpp download ${jobId} to reach ${status}.`);
 }
 

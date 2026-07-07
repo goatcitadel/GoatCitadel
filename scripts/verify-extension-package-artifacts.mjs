@@ -63,7 +63,8 @@ try {
   const tarball = findPackedTarball(tempDir, pack.stdout);
   const extractDir = path.join(tempDir, "extract");
   fs.mkdirSync(extractDir, { recursive: true });
-  const tar = spawnSync("tar", tarExtractArgs(tarball, extractDir), {
+  const tar = spawnSync("tar", tarExtractArgs(toTarPath(tempDir, tarball), "extract"), {
+    cwd: tempDir,
     encoding: "utf8",
     shell: false,
   });
@@ -217,7 +218,8 @@ function verifyPortableSkillBundlePackageSurvivesExtraction(tempDir) {
   );
 
   const tarball = path.join(tempDir, "portable-skill-bundle.tgz");
-  const pack = spawnSync("tar", tarCreateArgs(tarball, bundleDir), {
+  const pack = spawnSync("tar", tarCreateArgs("portable-skill-bundle.tgz", "portable-skill-bundle"), {
+    cwd: tempDir,
     encoding: "utf8",
     shell: false,
   });
@@ -229,7 +231,8 @@ function verifyPortableSkillBundlePackageSurvivesExtraction(tempDir) {
   }
 
   fs.mkdirSync(extractDir, { recursive: true });
-  const extract = spawnSync("tar", tarExtractArgs(tarball, extractDir), {
+  const extract = spawnSync("tar", tarExtractArgs("portable-skill-bundle.tgz", "portable-skill-extract"), {
+    cwd: tempDir,
     encoding: "utf8",
     shell: false,
   });
@@ -294,12 +297,26 @@ function resolvePnpmPackInvocation(tempDir) {
   };
 }
 
+/*
+ * tar args MUST be relative forward-slash paths, with the spawn anchored via cwd.
+ * When a native (non-MSYS) parent spawns Git-for-Windows' /usr/bin/tar, the MSYS
+ * runtime re-parses the raw command line and C-escape-mangles absolute Windows
+ * paths — "...\Temp\fast..." arrives as "...\Temp<formfeed>ast..." — so tar fails
+ * on a path that exists. --force-local cannot help with that; relative paths
+ * contain no drive colon or backslashes and work under both MSYS GNU tar and
+ * Windows bsdtar regardless of PATH order.
+ */
 function tarExtractArgs(tarball, extractDir) {
   return maybeForceLocalTarArgs(["-xzf", tarball, "-C", extractDir]);
 }
 
 function tarCreateArgs(tarball, sourceDir) {
   return maybeForceLocalTarArgs(["-czf", tarball, "-C", sourceDir, "."]);
+}
+
+function toTarPath(baseDir, absolutePath) {
+  const relative = path.relative(baseDir, absolutePath);
+  return (relative === "" ? "." : relative).replaceAll("\\", "/");
 }
 
 function maybeForceLocalTarArgs(args) {

@@ -77,12 +77,10 @@ import {
 } from "@goatcitadel/storage";
 import {
   buildChatModePrefsPatch,
-  chatModeAllowsDynamicTeamGrowth,
   ConflictError,
   DEFAULT_CITADEL_ID,
   inferProviderForModelId,
   isChatTurnActiveStatus,
-  isChatTurnTerminalStatus,
   NotFoundError,
   PolicyViolationError,
   providerAllowsForeignModelIds,
@@ -96,9 +94,9 @@ import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "./scheduler-timing.js";
 import { toWeekKeyForTimezone } from "./improvement-replay.js";
-import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
+import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
@@ -420,6 +418,8 @@ import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
+import { SkillStateService } from "./skill-state-service.js";
+import { GATEWAY_OWNED_MCP_SERVER_IDS, McpServerStore } from "./mcp-server-store.js";
 import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
 import { AddonsService } from "./addons-service.js";
 import { AddonSlotService } from "./addon-slot-service.js";
@@ -518,6 +518,7 @@ import * as durableExecutionService from "./durable-execution-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
+import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
   ChatDelegationService,
@@ -566,19 +567,18 @@ import type {
   PersistableChatStreamChunk,
   PreparedChatExecutionPlanResolution,
 } from "./chat-turn-types.js";
-import { DEFAULT_DELEGATION_ROLES, detectDelegationRoles, truncateSummaryLine } from "./chat-turn-helpers.js";
+import { detectDelegationRoles, truncateSummaryLine } from "./chat-turn-helpers.js";
 import {
-  buildRoleGapSpecialistSuggestion,
-  buildSpecialistSuggestionFromCapability,
-  extractSpecialistObjectiveKeywords,
+  collectSpecialistCandidateSuggestions,
   mergeSpecialistEvidence,
   mergeSpecialistRoutingHints,
+  normalizeDelegationRoles,
   normalizeSpecialistCandidateFingerprint,
   type ResolvedRuntimeGuidance,
 } from "./chat-turn-planning-helpers.js";
-import { buildMemoryContextSystemMessage } from "./llm-completion-helpers.js";
+import { persistContextManifestForCompletionRequest } from "./llm-completion-memory-context.js";
 import { ChatProjectService } from "./chat-project-service.js";
-import { DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
+import { computeDurableBaselineDrift, DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
 import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
@@ -608,7 +608,10 @@ import {
 } from "./channel-delivery-runtime-service.js";
 import { VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
-import { evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
+import {
+  evaluateDeploymentProfileToolAccess,
+  policyContextHasOperatorApproval,
+} from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import {
@@ -646,17 +649,14 @@ export interface MemoryFileEntry {
   modifiedAt: string;
 }
 
-const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
-const MCP_TOOLS_SETTING_KEY = "mcp_tools_v1";
-const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
-const GATEWAY_OWNED_MCP_CREATED_AT = "2026-05-26T00:00:00.000Z";
-const GATEWAY_OWNED_MCP_SERVER_IDS = new Set([
-  "goatcitadel-internal-approval-inbox",
-  "goatcitadel-internal-durable-tasks",
-]);
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
-const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
+// Perf (Finding 6): the resolved feature-flag set is read 5-15x per chat turn, each
+// call previously issuing a synchronous systemSettings.get (a blocking worker
+// round-trip on Postgres). Memoize it for a short window; the sole writer
+// (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
+// hypothetical out-of-band settings write.
+const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
 const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 import { hashSensitiveToken } from "./device-access-helpers.js";
@@ -664,11 +664,6 @@ import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
-const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
-  guardedAutoThreshold: 0.72,
-  requireFirstUseConfirmation: true,
-};
-const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "browser.search",
   "browser.navigate",
@@ -870,6 +865,8 @@ export class GatewayService {
   private readonly chatProjectService: ChatProjectService;
   public readonly durableRunService: DurableRunService;
   private readonly durableOperatorService: DurableOperatorService;
+  private readonly skillStateService: SkillStateService;
+  private readonly mcpServerStore: McpServerStore;
   private readonly durableWorkflowRegistry: durableExecutionService.DurableWorkflowExecutorRegistry;
   public readonly hooksService: HooksService;
   public readonly approvalWaitRunService: ApprovalWaitRunService;
@@ -918,6 +915,8 @@ export class GatewayService {
   public readonly mutationIdempotencyStore: Storage["mutationIdempotency"];
   public readonly chatTurnExecutionRegistry = new ChatTurnExecutionRegistry();
   public readonly backgroundTasks = new Set<Promise<void>>();
+  private featureFlagsCache?: RuntimeSettings["features"];
+  private featureFlagsCacheAtMs = 0;
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
   private readonly syntheticPermissionProfiles = new Map<string, PermissionProfileRecord>();
@@ -1066,7 +1065,7 @@ export class GatewayService {
       readFeatureFlags: () => this.readFeatureFlags(),
       listToolCatalog: () => this.listToolCatalog(),
       listLoadedSkills: () => this.skillsService.list(),
-      readSkillStates: () => this.readSkillStates(),
+      readSkillStates: () => this.skillStateService.readSkillStates(),
       invokeTool: (request) => this.invokeTool(request),
       createApproval: (input) => this.createApproval(input),
       publishRealtime: (eventType, source, payload) => {
@@ -1551,7 +1550,9 @@ export class GatewayService {
       },
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
-        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args),
+        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args, {
+          operatorApproved: policyContextHasOperatorApproval(request.policyContext),
+        }),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       resolveToolHookWorkspaceId: (request) => this.resolveToolHookWorkspaceId(request),
       primeToolApprovalLifecycle: (approvalId, request) =>
@@ -1688,7 +1689,7 @@ export class GatewayService {
       idleSweep: {
         isWorkspaceIdle: () => !this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
         isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-        snapshotSkill: (skillId) => this.captureCuratorIdleSkillSnapshot(skillId),
+        snapshotSkill: (skillId) => this.skillStateService.captureCuratorIdleSnapshot(skillId),
       },
     });
     // Cross-cutting kill-switch & rollback. Ties every subsystem's existing
@@ -1786,6 +1787,17 @@ export class GatewayService {
       hooksService: this.hooksService,
       resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
     });
+    // Host callbacks are lazy closures, so fields assigned later in this constructor
+    // (skillsService, autonomyControlService) are safe to reference here.
+    this.skillStateService = new SkillStateService(
+      { gatewaySql: this.storage.gatewaySql, systemSettings: this.storage.systemSettings },
+      {
+        listSkills: () => this.skillsService.list(),
+        recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      },
+    );
+    this.mcpServerStore = new McpServerStore({ systemSettings: this.storage.systemSettings });
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
       durableExecutionService.buildDurableWorkflowExecutors({
         memoryMaintenance: {
@@ -2218,7 +2230,7 @@ export class GatewayService {
     });
     const skills = await traceInitStep("skillsService.reload", () => this.skillsService.reload());
     await traceInitStep("ensureSkillStates", () => {
-      this.ensureSkillStates(skills.map((skill) => skill.skillId));
+      this.skillStateService.ensureSkillStates(skills.map((skill) => skill.skillId));
     });
     this.criticalInitComplete = true;
   }
@@ -2574,10 +2586,14 @@ export class GatewayService {
         // service), then send text+audio together on the existing attachment
         // lane. The helper never throws, so a synthesis failure or timeout
         // degrades to the unchanged text-only send.
+        // 3.6: an inbound voice message is framed with VOICE_TRANSCRIPT_CONTENT_PREFIX,
+        // so the reply path can honor the connection's voice_on_voice mode instead of
+        // treating it as "always".
+        const wasVoiceInbound = userMessage.content.trimStart().startsWith(VOICE_TRANSCRIPT_CONTENT_PREFIX);
         const voiceReplyAttachment = await this.maybeBuildChannelVoiceReplyAttachment(
           binding.connectionId,
           assistantContent,
-          userMessage.content.trimStart().startsWith(VOICE_TRANSCRIPT_CONTENT_PREFIX),
+          wasVoiceInbound,
         );
         this.requireExecutedToolResult(
           "channel.send",
@@ -2622,6 +2638,8 @@ export class GatewayService {
           channelKey: connection.key,
           connectionConfig: (connection.config ?? {}) as Record<string, unknown>,
           connectionId,
+          // 3.6: honor voice_on_voice — synthesize a voice reply only when the
+          // inbound message that triggered this turn was itself voice.
           wasVoiceInbound,
         },
         {
@@ -2677,64 +2695,14 @@ export class GatewayService {
     childrenByTurnId: Map<string, string[]>;
     activeLeafTurnId?: string;
   }> {
-    await this.ensureChatMessageProjection(sessionId);
-    const rawTraces = this.storage.chatTurnTraces.listBySession(sessionId, 2_000);
-    const turnLineageById = new Map(
-      rawTraces.map((trace) => [
-        trace.turnId,
-        {
-          turnId: trace.turnId,
-          parentTurnId: trace.parentTurnId,
-        },
-      ]),
+    return chatTurnTraceHydration.loadChatTurnSessionState(
+      {
+        storage: this.storage,
+        ensureChatMessageProjection: (targetSessionId) => this.ensureChatMessageProjection(targetSessionId),
+      },
+      sessionId,
+      options,
     );
-    const activeLeafTurnId = this.resolveChatActiveLeafTurnId(sessionId, rawTraces);
-    const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
-    const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
-    const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
-    const siblingTracesByParent = this.storage.chatTurnTraces.listSiblingsByParentTurnIds(sessionId, pathParentTurnIds);
-    const visibleTurnIds = new Set(selectedPathTurnIds);
-    for (const siblings of siblingTracesByParent.values()) {
-      for (const sibling of siblings) {
-        visibleTurnIds.add(sibling.turnId);
-        if (!rawTraceById.has(sibling.turnId)) {
-          rawTraceById.set(sibling.turnId, sibling);
-        }
-      }
-    }
-    const visibleRawTraces = [...visibleTurnIds]
-      .map((turnId) => rawTraceById.get(turnId))
-      .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
-    const hydratedVisibleTracesById = new Map(
-      chatTurnTraceHydration
-        .hydrateChatTurnTraces(this, visibleRawTraces, {
-          includeDecisionTrace: options.includeDecisionTrace === true,
-        })
-        .map((trace) => [trace.turnId, trace]),
-    );
-    const traces = rawTraces.map((trace) => hydratedVisibleTracesById.get(trace.turnId) ?? trace);
-    const messageIds = visibleRawTraces.flatMap((trace) => [
-      trace.userMessageId,
-      ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
-    ]);
-    const messagesById = this.storage.chatMessages.listByMessageIds(messageIds);
-    const messages = [...messagesById.values()].sort((left, right) => {
-      const leftTimestamp = Date.parse(left.timestamp) || 0;
-      const rightTimestamp = Date.parse(right.timestamp) || 0;
-      if (leftTimestamp !== rightTimestamp) {
-        return leftTimestamp - rightTimestamp;
-      }
-      return left.messageId.localeCompare(right.messageId);
-    });
-    return {
-      traces,
-      tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
-      turnLineageById,
-      messages,
-      messagesById,
-      childrenByTurnId: this.buildChatTurnChildrenMap(traces),
-      activeLeafTurnId,
-    };
   }
 
   private buildChatThreadKnowledgeDependencies(): chatThreadKnowledgeService.ChatThreadKnowledgeDependencies {
@@ -3189,6 +3157,10 @@ export class GatewayService {
     const task = prewarmContext({
       scope: "chat",
       sessionId: input.sessionId,
+      // Finding 1: scope prewarm memory-item collection to the session's workspace.
+      // Optional-chained: some facade/test compositions invoke this method without a
+      // full storage (mirrors the guard in memory-context-service); prod always has it.
+      workspaceId: this.storage?.chatSessionMeta?.get(input.sessionId)?.workspaceId ?? "default",
       prompt: input.prompt,
       relationScope: input.relationScope,
       workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
@@ -3898,6 +3870,11 @@ export class GatewayService {
     }
   }
 
+  // NOTE (Finding 7 divergence): this deliberately EXCLUDES `dead_lettered`,
+  // unlike the shared `isDurableRunTerminal` (contracts) used elsewhere. Kept
+  // local + unchanged here to preserve behavior; whether a dead-lettered run
+  // should count as terminal for the `durableCancelled` reporting flag is a
+  // correctness question deferred to the Phase 2 durable-run pass.
   private isDurableRunTerminalStatus(status: DurableRunStatus): boolean {
     return status === "completed" || status === "failed" || status === "cancelled";
   }
@@ -4190,119 +4167,20 @@ export class GatewayService {
   }
 
   public markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord {
-    let current: ChatTurnTraceRecord;
-    try {
-      current = this.storage.chatTurnTraces.get(turnId);
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
-      }
-      const recovered = this.createRunningTraceForActiveStreamCancellation(sessionId, turnId);
-      if (!recovered) {
-        throw error;
-      }
-      current = recovered;
-    }
-    if (current.sessionId !== sessionId) {
-      throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
-    }
-    if (current.status === "cancelled") {
-      return this.createHydratedChatTurnTrace(turnId, current);
-    }
-    if (isChatTurnTerminalStatus(current.status)) {
-      return this.createHydratedChatTurnTrace(turnId, current);
-    }
-    const trace = this.storage.chatTurnTraces.patch(turnId, {
-      status: "cancelled",
-      failure: undefined,
-      completion: {
-        finishReason: current.completion?.finishReason,
-        status: "interrupted",
-        repaired: Boolean(current.completion?.repaired),
+    return markChatTurnCancelled(
+      {
+        storage: this.storage,
+        getActiveChatTurnStream: (targetTurnId) => this.getActiveChatTurnStream(targetTurnId),
+        parseDurableChatTurnPayload: (run) => this.parseDurableChatTurnPayload(run),
+        createHydratedChatTurnTrace: (targetTurnId, trace) => this.createHydratedChatTurnTrace(targetTurnId, trace),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+        publishRealtime: (eventType, source, payload, options) =>
+          this.publishRealtime(eventType, source, payload, options),
       },
-      finishedAt: new Date().toISOString(),
-    });
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "chat.turn.cancelled",
-      message: "Cancelled active chat turn",
       sessionId,
       turnId,
-      context: {
-        cancelledBy,
-      },
-    });
-    this.publishRealtime(
-      "chat_thread_updated",
-      "chat",
-      {
-        type: "chat_thread_turn_cancelled",
-        sessionId,
-        turnId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
-          sessionId,
-          turnId,
-        },
-      },
+      cancelledBy,
     );
-    return this.createHydratedChatTurnTrace(turnId, trace);
-  }
-
-  private createRunningTraceForActiveStreamCancellation(
-    sessionId: string,
-    turnId: string,
-  ): ChatTurnTraceRecord | undefined {
-    const activeStream = this.getActiveChatTurnStream(turnId);
-    if (!activeStream || activeStream.sessionId !== sessionId || !activeStream.runId) {
-      return undefined;
-    }
-    let run: DurableRunRecord;
-    try {
-      run = this.storage.durableRuns.getRun(activeStream.runId);
-    } catch {
-      return undefined;
-    }
-    const payload = this.parseDurableChatTurnPayload(run);
-    if (!payload || payload.sessionId !== sessionId || payload.turnId !== turnId) {
-      return undefined;
-    }
-    const prefs = this.storage.chatSessionPrefs.get(sessionId);
-    const request = payload.request;
-    const mode: ChatMode = request.mode ?? request.prefsOverride?.mode ?? prefs?.mode ?? "chat";
-    return this.storage.chatTurnTraces.create({
-      turnId,
-      sessionId,
-      userMessageId: payload.userMessageId,
-      parentTurnId: payload.parentTurnId,
-      branchKind: payload.branchKind,
-      sourceTurnId: payload.sourceTurnId,
-      status: "running",
-      mode,
-      model: request.model ?? prefs?.model,
-      webMode: request.webMode ?? request.prefsOverride?.webMode ?? prefs?.webMode ?? "auto",
-      memoryMode: request.memoryMode ?? request.prefsOverride?.memoryMode ?? prefs?.memoryMode ?? "auto",
-      thinkingLevel:
-        request.thinkingLevel ?? request.prefsOverride?.thinkingLevel ?? prefs?.thinkingLevel ?? "standard",
-      speedMode: request.speedMode ?? request.prefsOverride?.speedMode ?? prefs?.speedMode,
-      subagentPolicy: request.subagentPolicy ?? request.prefsOverride?.subagentPolicy ?? prefs?.subagentPolicy,
-      effectiveToolAutonomy: request.prefsOverride?.toolAutonomy ?? prefs?.toolAutonomy,
-      startedAt: activeStream.startedAt,
-      routing: {
-        primaryProviderId: request.providerId ?? prefs?.providerId,
-        primaryModel: request.model ?? prefs?.model,
-        effectiveProviderId: request.providerId ?? prefs?.providerId,
-        effectiveModel: request.model ?? prefs?.model,
-      },
-      durable: {
-        runId: activeStream.runId,
-        status: run.status,
-      },
-    });
   }
 
   private getSessionIdleSeconds(sessionId: string): number {
@@ -4336,14 +4214,6 @@ export class GatewayService {
     return latestUser?.content ?? "";
   }
 
-  private computeDelegationSuggestionConfidence(objective: string, roles: string[]): number {
-    let score = roles.length >= 3 ? 0.84 : roles.length >= 2 ? 0.72 : 0.58;
-    if (/\b(prd|architecture|implement|qa|ops|handoff)\b/i.test(objective)) {
-      score += 0.12;
-    }
-    return clamp01(score);
-  }
-
   public collectSpecialistCandidateSuggestions(input: {
     sessionId: string;
     mode: ChatMode;
@@ -4351,70 +4221,15 @@ export class GatewayService {
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[] {
-    if (!chatModeAllowsDynamicTeamGrowth(input.mode)) {
-      return [];
-    }
-    const existingCandidates = this.storage.chatSpecialistCandidates.listBySession(input.sessionId, 200);
-    const seen = new Set<string>(
-      existingCandidates
-        .filter((candidate) => candidate.status !== "retired")
-        .map((candidate) => normalizeSpecialistCandidateFingerprint(candidate)),
+    return collectSpecialistCandidateSuggestions(
+      {
+        chatSpecialistCandidates: this.storage.chatSpecialistCandidates,
+        chatSessionMeta: this.storage.chatSessionMeta,
+        importedAgentCatalog: this.storage.importedAgentCatalog,
+        normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      },
+      input,
     );
-    const suggested = new Map<string, ChatSpecialistCandidateSuggestionRecord>();
-    const objectiveKeywords = extractSpecialistObjectiveKeywords(input.content);
-    const addSuggestion = (suggestion: ChatSpecialistCandidateSuggestionRecord): void => {
-      const fingerprint = normalizeSpecialistCandidateFingerprint(suggestion);
-      if (seen.has(fingerprint) || suggested.has(fingerprint)) {
-        return;
-      }
-      suggested.set(fingerprint, suggestion);
-    };
-
-    for (const capability of input.capabilitySuggestions) {
-      addSuggestion(
-        buildSpecialistSuggestionFromCapability({
-          capability,
-          mode: input.mode,
-          objectiveKeywords,
-        }),
-      );
-    }
-
-    const sessionWorkspaceId = this.normalizeWorkspaceId(
-      this.storage.chatSessionMeta.ensure(input.sessionId).workspaceId,
-    );
-    for (const suggestion of suggestImportedCatalogEntries({
-      entries: this.storage.importedAgentCatalog.list({
-        workspaceId: sessionWorkspaceId,
-        limit: 500,
-      }),
-      content: input.content,
-      mode: input.mode,
-    })) {
-      addSuggestion(suggestion);
-    }
-
-    if (suggested.size === 0 && input.trace.orchestration) {
-      const detectedRoles = normalizeDelegationRoles(detectDelegationRoles(input.content));
-      for (const role of detectedRoles) {
-        if (role === "coder") {
-          continue;
-        }
-        addSuggestion(
-          buildRoleGapSpecialistSuggestion({
-            role,
-            mode: input.mode,
-            objective: input.content,
-            objectiveKeywords,
-            confidence: this.computeDelegationSuggestionConfidence(input.content, detectedRoles),
-            runId: input.trace.orchestration.runId,
-            turnId: input.trace.turnId,
-          }),
-        );
-      }
-    }
-
-    return [...suggested.values()].slice(0, 3);
   }
 
   public extractAndPersistLearnedMemory(
@@ -6329,7 +6144,12 @@ export class GatewayService {
     if (policyContext.permissionProfile && policyContext.permissionProfileId) {
       this.registerSyntheticPermissionProfile(policyContext.permissionProfile);
     }
-    this.persistInitialDurableChatTurnTrace(prepared, request, run);
+    chatDurableRunService.persistInitialDurableChatTurnTrace(
+      { chatTurnTraces: this.storage.chatTurnTraces },
+      prepared,
+      request,
+      run,
+    );
     this.persistChatStreamChunk(
       {
         type: "message_start",
@@ -6490,57 +6310,13 @@ export class GatewayService {
         buildDurablePayloadRecord: (preparedTurn, request, eventType) =>
           durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(preparedTurn, request, eventType)),
         persistChatStreamChunk: (chunk, durableRunId) => this.persistChatStreamChunk(chunk, durableRunId),
-        persistInitialTrace: (preparedTurn, request, run) =>
-          this.persistInitialDurableChatTurnTrace(preparedTurn, request, run),
+        chatTurnTraces: this.storage.chatTurnTraces,
         requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       },
       prepared,
       input,
       threadEventType,
     );
-  }
-
-  private persistInitialDurableChatTurnTrace(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
-    input: ChatSendMessageRequest,
-    run: DurableRunRecord,
-  ): void {
-    try {
-      this.storage.chatTurnTraces.get(prepared.turnId);
-      return;
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
-      }
-    }
-    this.storage.chatTurnTraces.create({
-      turnId: prepared.turnId,
-      sessionId: prepared.session.sessionId,
-      userMessageId: prepared.userEventId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-      status: "running",
-      mode: chatTurnPrepService.resolvePreparedTurnMode(prepared),
-      model: input.model ?? prepared.prefs.model,
-      webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-      memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-      thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-      speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-      subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
-      effectiveToolAutonomy: prepared.effectiveToolAutonomy,
-      routing: {
-        primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-        primaryModel: input.model ?? prepared.prefs.model,
-        effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
-        effectiveModel: input.model ?? prepared.prefs.model,
-        modelRouter: prepared.modelRouterDecision,
-      },
-      durable: {
-        runId: run.runId,
-        status: run.status,
-      },
-    });
   }
 
   public finalizeDurableChatRun(
@@ -6556,22 +6332,12 @@ export class GatewayService {
         chatMessages: this.storage.chatMessages,
         recordDurableTimelineEvent: (durableRunId, eventType, payload) =>
           this.recordDurableTimelineEvent(durableRunId, eventType, payload),
-        patchDurableTraceIfPresent: (turnId, patch) => this.patchDurableTraceIfPresent(turnId, patch),
+        chatTurnTraces: this.storage.chatTurnTraces,
       },
       runId,
       prepared,
       trace,
     );
-  }
-
-  private patchDurableTraceIfPresent(turnId: string, input: Parameters<Storage["chatTurnTraces"]["patch"]>[1]): void {
-    try {
-      this.storage.chatTurnTraces.patch(turnId, input);
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
-      }
-    }
   }
 
   private async executePreparedAgentChatTurnBackground(
@@ -7711,90 +7477,18 @@ export class GatewayService {
     token: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
   ): RemoteActionTokenRecord {
-    const normalizedToken = token.trim();
-    if (!normalizedToken) {
-      throw new ValidationError({
-        message: "Remote action token is required.",
-      });
-    }
-    const current = this.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalizedToken));
-    if (!current) {
-      throw new NotFoundError({
-        entity: "Remote action token",
-        id: "unknown",
-      });
-    }
-    if (current.actionType !== expectedActionType) {
-      throw new ConflictError({
-        message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
-      });
-    }
-    if (current.state !== "pending") {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    const expiresAt = Date.parse(current.expiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-      this.storage.remoteActionTokens.updateState(current.tokenId, "expired");
-      throw new ConflictError({
-        message: "Remote action token has expired.",
-      });
-    }
-    const consumed = this.storage.remoteActionTokens.consumePending(current.tokenId, {
-      consumedAt: new Date().toISOString(),
-      consumedBy: `connector:${current.connectorId}`,
-    });
-    if (!consumed) {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    return consumed;
+    return approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
   }
 
   /** @internal */ public consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
   ): RemoteActionTokenRecord {
-    const normalizedTokenId = tokenId.trim();
-    if (!normalizedTokenId) {
-      throw new ValidationError({
-        message: "Remote action token id is required.",
-      });
-    }
-    const current = this.storage.remoteActionTokens.get(normalizedTokenId);
-    if (current.actionType !== expectedActionType) {
-      throw new ConflictError({
-        message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
-      });
-    }
-    if (current.state !== "pending") {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    const expiresAt = Date.parse(current.expiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-      this.storage.remoteActionTokens.updateState(current.tokenId, "expired");
-      throw new ConflictError({
-        message: "Remote action token has expired.",
-      });
-    }
-    const consumed = this.storage.remoteActionTokens.consumePending(current.tokenId, {
-      consumedAt: new Date().toISOString(),
-      consumedBy: `connector:${current.connectorId}`,
-    });
-    if (!consumed) {
-      throw new ConflictError({
-        message: "Remote action token has already been consumed.",
-      });
-    }
-    return consumed;
+    return approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
   public listSkills(): SkillListItem[] {
-    this.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
+    this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
     return this.capabilitySystemService.listSkills();
   }
 
@@ -7859,7 +7553,7 @@ export class GatewayService {
 
   public async reloadSkills(): Promise<SkillListItem[]> {
     const loaded = await this.skillsService.reload();
-    this.ensureSkillStates(loaded.map((skill) => skill.skillId));
+    this.skillStateService.ensureSkillStates(loaded.map((skill) => skill.skillId));
     this.capabilitySystemService.ensureSkillLifecycleBackfill();
     return this.listSkills();
   }
@@ -7898,127 +7592,19 @@ export class GatewayService {
   }
 
   public getSkillActivationPolicy(): SkillActivationPolicy {
-    const stored = this.storage.systemSettings.get<SkillActivationPolicy>(SKILL_ACTIVATION_POLICY_SETTING_KEY)?.value;
-    if (!stored) {
-      return { ...DEFAULT_SKILL_ACTIVATION_POLICY };
-    }
-    return {
-      guardedAutoThreshold: clamp01(
-        stored.guardedAutoThreshold ?? DEFAULT_SKILL_ACTIVATION_POLICY.guardedAutoThreshold,
-      ),
-      requireFirstUseConfirmation:
-        stored.requireFirstUseConfirmation ?? DEFAULT_SKILL_ACTIVATION_POLICY.requireFirstUseConfirmation,
-    };
+    return this.skillStateService.getActivationPolicy();
   }
 
   public updateSkillActivationPolicy(input: Partial<SkillActivationPolicy>): SkillActivationPolicy {
-    const current = this.getSkillActivationPolicy();
-    const next: SkillActivationPolicy = {
-      guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
-      requireFirstUseConfirmation: input.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
-    };
-    this.storage.systemSettings.set(SKILL_ACTIVATION_POLICY_SETTING_KEY, next);
-    return next;
+    return this.skillStateService.updateActivationPolicy(input);
   }
 
   public setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord {
-    const knownSkill = this.skillsService.list().find((skill) => skill.skillId === skillId);
-    if (!knownSkill) {
-      throw new Error(`Unknown skill: ${skillId}`);
-    }
-    const currentState = this.readSkillStates().get(skillId);
-    if (currentState?.pinned && currentState.state !== state) {
-      throw new Error(`Pinned skill ${skillId} cannot be changed directly; create a skill mutation proposal first.`);
-    }
-    const now = new Date().toISOString();
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
-      VALUES (@skillId, @state, @note, @updatedAt, NULL)
-      ON CONFLICT(skill_id) DO UPDATE SET
-        state = excluded.state,
-        note = excluded.note,
-        updated_at = excluded.updated_at
-    `,
-      )
-      .run({
-        skillId,
-        state,
-        note: note?.trim() || null,
-        updatedAt: now,
-      });
-
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO skill_activation_events (
-        event_id, skill_id, event_type, payload_json, created_at
-      ) VALUES (
-        @eventId, @skillId, @eventType, @payloadJson, @createdAt
-      )
-    `,
-      )
-      .run({
-        eventId: randomUUID(),
-        skillId,
-        eventType: "state_updated",
-        payloadJson: JSON.stringify({ state, note: note?.trim() || undefined }),
-        createdAt: now,
-      });
-
-    const updated = this.readSkillStates().get(skillId);
-    if (!updated) {
-      throw new Error(`Failed to persist skill state for ${skillId}`);
-    }
-
-    return updated;
+    return this.skillStateService.setSkillState(skillId, state, note);
   }
 
   public bulkSetSkillState(skillIds: string[], state: SkillRuntimeState, note?: string): SkillStateRecord[] {
-    const uniqueIds = [...new Set(skillIds)];
-    const updated: SkillStateRecord[] = [];
-    for (const skillId of uniqueIds) {
-      updated.push(this.setSkillState(skillId, state, note));
-    }
-    return updated;
-  }
-
-  /**
-   * Capture a reversible snapshot of a skill's prior runtime-state row before the
-   * S3 idle janitor archives (disables) it. Persisted into `system_settings` so
-   * the global "revert autonomous changes" path can restore the exact prior
-   * state/note via {@link restoreCuratorIdleSkillSnapshot}. Best-effort: a
-   * snapshot failure must not abort the sweep (which is itself failure-isolated),
-   * so this swallows errors. The archive is reversible regardless — a
-   * curator-archived skill is a `disabled` row re-enableable from the snapshot.
-   */
-  private captureCuratorIdleSkillSnapshot(skillId: string): void {
-    try {
-      const prior = this.readSkillStates().get(skillId);
-      this.storage.systemSettings.set(this.curatorIdleSnapshotKey(skillId), {
-        skillId,
-        priorState: prior?.state ?? "enabled",
-        priorNote: prior?.note,
-        priorPinned: prior?.pinned ?? false,
-        capturedAt: new Date().toISOString(),
-      });
-      // Unified audit: the snapshot self-persists in system_settings under the
-      // deterministic key, so the restoreRef only needs the skillId (best-effort).
-      this.autonomyControlService.recordAutonomousMutation({
-        kind: "curator_archive",
-        targetKey: skillId,
-        restoreRef: { kind: "curator_archive", skillId },
-      });
-    } catch (error) {
-      this.recordDevDiagnostic({
-        level: "warn",
-        category: "cron",
-        event: "curator_idle_snapshot_failed",
-        message: "failed to snapshot skill state before idle archive",
-        context: { skillId, error: error instanceof Error ? error.message : String(error) },
-      });
-    }
+    return this.skillStateService.bulkSetSkillState(skillIds, state, note);
   }
 
   /**
@@ -8027,27 +7613,13 @@ export class GatewayService {
    * autonomous-rollback path.
    */
   public restoreCuratorIdleSkillSnapshot(skillId: string): boolean {
-    const snapshot = this.storage.systemSettings.get<{
-      skillId: string;
-      priorState: SkillRuntimeState;
-      priorNote?: string;
-      priorPinned?: boolean;
-    }>(this.curatorIdleSnapshotKey(skillId))?.value;
-    if (!snapshot || snapshot.skillId !== skillId) {
-      return false;
-    }
-    this.setSkillState(skillId, snapshot.priorState, snapshot.priorNote);
-    return true;
-  }
-
-  private curatorIdleSnapshotKey(skillId: string): string {
-    return `curator_idle_skill_snapshot_v1:${skillId}`;
+    return this.skillStateService.restoreCuratorIdleSnapshot(skillId);
   }
 
   public resolveSkillActivation(input: SkillResolveInput) {
     const policy = this.getSkillActivationPolicy();
     const base = this.skillsService.resolveActivation(input);
-    const stateMap = this.readSkillStates();
+    const stateMap = this.skillStateService.readSkillStates();
     const selected: Array<
       SkillListItem & {
         confidence: number;
@@ -8099,7 +7671,7 @@ export class GatewayService {
       });
     }
 
-    this.recordSkillUsage(selected.map((skill) => skill.skillId));
+    this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
 
     return {
       ...base,
@@ -8117,72 +7689,7 @@ export class GatewayService {
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
   }): void {
-    const turnId = input.request.memory?.turnId?.trim();
-    if (!turnId) {
-      return;
-    }
-
-    const manifest = this.storage.contextManifests.ensure({
-      scope: "chat_turn",
-      turnId,
-      sessionId: input.request.memory?.sessionId?.trim(),
-      taskId: input.request.memory?.taskId?.trim(),
-    });
-    const memoryContextSystemMessage = input.memoryContext
-      ? buildMemoryContextSystemMessage(input.memoryContext)
-      : undefined;
-    let entryIndex = 0;
-
-    for (const [messageIndex, message] of input.request.messages.entries()) {
-      if (message.role !== "system" || typeof message.content !== "string") {
-        continue;
-      }
-      const contentText = message.content.trim();
-      if (!contentText) {
-        continue;
-      }
-      if (memoryContextSystemMessage && contentText === memoryContextSystemMessage) {
-        continue;
-      }
-      this.storage.contextManifests.appendEntry({
-        manifestId: manifest.manifestId,
-        kind: "system_message",
-        entryIndex,
-        title: contentText.split(/\r?\n/u, 1)[0]?.slice(0, 120) || "System message",
-        sourceRef: `system:${messageIndex}`,
-        contentText,
-        metadata: {
-          role: message.role,
-          messageIndex,
-        },
-      });
-      entryIndex += 1;
-    }
-
-    if (!input.memoryContext) {
-      return;
-    }
-
-    this.storage.contextManifests.appendEntry({
-      manifestId: manifest.manifestId,
-      kind: "memory_context",
-      entryIndex,
-      title: "Memory context",
-      sourceRef: input.memoryContext.contextId,
-      contentText: input.memoryContext.contextText,
-      metadata: {
-        scope: input.memoryContext.scope,
-        status: input.memoryContext.quality.status,
-        reason: input.memoryContext.quality.reason,
-        citationsCount: input.memoryContext.citations.length,
-        originalTokenEstimate: input.memoryContext.originalTokenEstimate,
-        distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
-        assembly: input.memoryContext.quality.assembly,
-        placement: input.memoryContextPlacement,
-        createdAt: input.memoryContext.createdAt,
-        expiresAt: input.memoryContext.expiresAt,
-      },
-    });
+    persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests }, input);
   }
 
   public listMemoryItems(
@@ -8440,7 +7947,7 @@ export class GatewayService {
     sourceProvider?: SkillSourceProvider;
   }): Promise<SkillImportValidationResult> {
     const validation = await this.skillImportService.validateImport(input);
-    this.recordSkillImportEvent(validation, "import_validated");
+    this.skillStateService.recordSkillImportEvent(validation, "import_validated");
     this.publishRealtime("system", "skills", {
       type: "skill_import_validated",
       sourceProvider: validation.candidate.sourceProvider,
@@ -8472,7 +7979,7 @@ export class GatewayService {
     if (installedSkill) {
       this.setSkillState(installedSkill.skillId, "disabled", "Imported skill starts disabled by default.");
     }
-    this.recordSkillImportEvent(installed.validation, "import_installed");
+    this.skillStateService.recordSkillImportEvent(installed.validation, "import_installed");
     this.publishRealtime("system", "skills", {
       type: "skill_import_installed",
       sourceProvider: installed.validation.candidate.sourceProvider,
@@ -8995,18 +8502,7 @@ export class GatewayService {
     finishedAt?: string;
     clearFinishedAt?: boolean;
   }): DurableRunRecord {
-    const current = this.storage.durableRuns.getRun(input.runId);
-    return this.storage.durableRuns.updateRun({
-      runId: input.runId,
-      status: input.status ?? current.status,
-      metadata: input.metadata ?? current.metadata,
-      lastError: input.lastError,
-      clearLastError: input.clearLastError,
-      finishedAt: input.finishedAt,
-      clearFinishedAt: input.clearFinishedAt,
-      updatedAt: new Date().toISOString(),
-      expectedVersion: current.version,
-    });
+    return this.durableRunService.updateRunState(input);
   }
 
   /** @internal */ public async executeDurableOrchestrationRun(
@@ -9022,27 +8518,13 @@ export class GatewayService {
   }
 
   private enforceDurableExecutionBaseline(): void {
-    const durable = this.config.assistant.durable;
-    const configuredFeatureFlag = this.config.assistant.features.durableKernelV1Enabled;
     const stored =
       this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
-    const driftedFields: string[] = [];
-    if (!durable.enabled) {
-      driftedFields.push("assistant.durable.enabled");
-    }
-    if (!durable.executionEnabled) {
-      driftedFields.push("assistant.durable.executionEnabled");
-    }
-    if (!durable.chatAutoPromoteEnabled) {
-      driftedFields.push("assistant.durable.chatAutoPromoteEnabled");
-    }
-    if (!configuredFeatureFlag) {
-      driftedFields.push("features.durableKernelV1Enabled");
-    }
-    if (stored?.durableKernelV1Enabled === false) {
-      driftedFields.push("feature_flags_v1.durableKernelV1Enabled");
-    }
-
+    const driftedFields = computeDurableBaselineDrift({
+      durable: this.config.assistant.durable,
+      configuredFeatureFlag: this.config.assistant.features.durableKernelV1Enabled,
+      storedDurableKernelFlag: stored?.durableKernelV1Enabled,
+    });
     if (driftedFields.length > 0) {
       log.warn("durable baseline drift detected; coercing always-on durable execution", {
         driftedFields,
@@ -9105,6 +8587,10 @@ export class GatewayService {
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
+    // Prime the read cache so the new flags are visible immediately (Finding 6);
+    // this is the sole writer, so no invalidation race with the TTL path.
+    this.featureFlagsCache = next;
+    this.featureFlagsCacheAtMs = Date.now();
     if (autonomyKillSwitchDisengaged) {
       // Runs parked while the kill switch was engaged wait on a per-run event that
       // nothing else emits; without an explicit resume they stay "waiting" forever.
@@ -9126,10 +8612,14 @@ export class GatewayService {
   }
 
   /** @internal */ public readFeatureFlags(): RuntimeSettings["features"] {
+    const nowMs = Date.now();
+    if (this.featureFlagsCache && nowMs - this.featureFlagsCacheAtMs < FEATURE_FLAGS_CACHE_TTL_MS) {
+      return this.featureFlagsCache;
+    }
     const stored =
       this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
     const fromConfig = this.config.assistant.features;
-    return {
+    const resolved: RuntimeSettings["features"] = {
       durableKernelV1Enabled: true,
       replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
@@ -9164,6 +8654,9 @@ export class GatewayService {
       cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
       utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
     };
+    this.featureFlagsCache = resolved;
+    this.featureFlagsCacheAtMs = nowMs;
+    return resolved;
   }
 
   private normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
@@ -9378,73 +8871,22 @@ export class GatewayService {
   }
 
   /** @internal */ public readMcpServers(): McpServerRecord[] {
-    const stored = this.storage.systemSettings.get<McpServerRecord[]>(MCP_SERVERS_SETTING_KEY)?.value;
-    const authRows = this.readMcpAuthState();
-    const persisted = Array.isArray(stored) ? stored : [];
-    const callerOwned = persisted
-      .filter((item): item is McpServerRecord => Boolean(item?.serverId))
-      .filter((item) => !isGatewayOwnedMcpServerUrl(item.url) && !GATEWAY_OWNED_MCP_SERVER_IDS.has(item.serverId))
-      .map((item) => ({
-        ...item,
-        category: item.category ?? inferMcpCategory(item.transport),
-        trustTier: item.trustTier ?? "restricted",
-        costTier: item.costTier ?? "unknown",
-        policy: normalizeMcpPolicy(item.policy),
-        authState: buildPublicMcpAuthState(item, authRows[item.serverId]),
-      }));
-    return [...buildGatewayOwnedInternalMcpServers(authRows), ...callerOwned];
+    return this.mcpServerStore.readServers();
   }
 
   /** @internal */ public writeMcpServers(servers: McpServerRecord[]): void {
-    this.storage.systemSettings.set(
-      MCP_SERVERS_SETTING_KEY,
-      servers
-        .filter(
-          (server) => !isGatewayOwnedMcpServerUrl(server.url) && !GATEWAY_OWNED_MCP_SERVER_IDS.has(server.serverId),
-        )
-        .map((server) => {
-          const persisted = { ...server };
-          delete persisted.authState;
-          return persisted;
-        }),
-    );
+    this.mcpServerStore.writeServers(servers);
   }
 
   /** @internal */ public requireMcpServer(serverId: string): McpServerRecord {
-    const server = this.readMcpServers().find((item) => item.serverId === serverId);
-    if (!server) {
-      throw new Error(`Unknown MCP server: ${serverId}`);
-    }
-    return server;
+    return this.mcpServerStore.requireServer(serverId);
   }
 
   /** @internal */ public patchMcpServerState(
     serverId: string,
     patch: Partial<Pick<McpServerRecord, "status" | "lastConnectedAt" | "lastError">>,
   ): McpServerRecord {
-    const now = new Date().toISOString();
-    const hasStatus = Object.prototype.hasOwnProperty.call(patch, "status");
-    const hasLastConnectedAt = Object.prototype.hasOwnProperty.call(patch, "lastConnectedAt");
-    const hasLastError = Object.prototype.hasOwnProperty.call(patch, "lastError");
-    let updated: McpServerRecord | undefined;
-    const servers = this.readMcpServers().map((item) => {
-      if (item.serverId !== serverId) {
-        return item;
-      }
-      updated = {
-        ...item,
-        status: hasStatus ? (patch.status ?? item.status) : item.status,
-        lastConnectedAt: hasLastConnectedAt ? patch.lastConnectedAt : item.lastConnectedAt,
-        lastError: hasLastError ? patch.lastError : item.lastError,
-        updatedAt: now,
-      };
-      return updated;
-    });
-    if (!updated) {
-      throw new Error(`Unknown MCP server: ${serverId}`);
-    }
-    this.writeMcpServers(servers);
-    return updated;
+    return this.mcpServerStore.patchServerState(serverId, patch);
   }
 
   /** @internal */ public async resolveConnectedMcpTools(
@@ -9478,158 +8920,23 @@ export class GatewayService {
   }
 
   /** @internal */ public readMcpTools(): McpToolRecord[] {
-    const stored = this.storage.systemSettings.get<McpToolRecord[]>(MCP_TOOLS_SETTING_KEY)?.value;
-    const persisted = Array.isArray(stored) ? stored : [];
-    const callerOwned = persisted.filter(
-      (item): item is McpToolRecord =>
-        Boolean(item?.serverId && item?.toolName) && !GATEWAY_OWNED_MCP_SERVER_IDS.has(item.serverId),
-    );
-    return [...buildGatewayOwnedInternalMcpTools(), ...callerOwned];
+    return this.mcpServerStore.readTools();
   }
 
   /** @internal */ public writeMcpTools(tools: McpToolRecord[]): void {
-    this.storage.systemSettings.set(
-      MCP_TOOLS_SETTING_KEY,
-      tools.filter((tool) => !GATEWAY_OWNED_MCP_SERVER_IDS.has(tool.serverId)),
-    );
+    this.mcpServerStore.writeTools(tools);
   }
 
   /** @internal */ public readMcpAuthState(): Record<string, McpAuthStateRecord> {
-    return this.storage.systemSettings.get<Record<string, McpAuthStateRecord>>("mcp_auth_state_v1")?.value ?? {};
+    return this.mcpServerStore.readAuthState();
   }
 
   /** @internal */ public writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void {
-    this.storage.systemSettings.set("mcp_auth_state_v1", state);
-  }
-
-  private readMcpFirstApprovals(): Record<string, string[]> {
-    return this.storage.systemSettings.get<Record<string, string[]>>(MCP_TOOL_FIRST_APPROVAL_SETTING_KEY)?.value ?? {};
+    this.mcpServerStore.writeAuthState(state);
   }
 
   private isMcpToolApproved(serverId: string, toolName: string): boolean {
-    const approved = this.readMcpFirstApprovals();
-    return approved[serverId]?.includes(toolName) ?? false;
-  }
-
-  private readSkillStates(): Map<string, SkillStateRecord> {
-    const rows = toSkillStateRows(
-      this.gatewaySql
-        .prepare(
-          `
-      SELECT skill_id AS skillId, state, note, updated_at AS updatedAt, first_auto_approved_at AS firstAutoApprovedAt
-      FROM skill_state
-    `,
-        )
-        .all(),
-    );
-    const metadata = this.readSkillStateMetadata();
-
-    return new Map(
-      rows.map((row) => [
-        row.skillId,
-        {
-          ...row,
-          pinned: metadata[row.skillId]?.pinned,
-          usageCount: metadata[row.skillId]?.usageCount,
-          lastUsedAt: metadata[row.skillId]?.lastUsedAt,
-        },
-      ]),
-    );
-  }
-
-  private readSkillStateMetadata(): Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> {
-    const value = this.storage.systemSettings.get<
-      Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>
-    >(SKILL_STATE_METADATA_SETTING_KEY)?.value;
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    const output: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> = {};
-    for (const [skillId, metadata] of Object.entries(value)) {
-      if (!isRecord(metadata)) {
-        continue;
-      }
-      output[skillId] = {
-        pinned: metadata.pinned === true ? true : undefined,
-        usageCount:
-          typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
-        lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : undefined,
-      };
-    }
-    return output;
-  }
-
-  private recordSkillUsage(skillIds: string[]): void {
-    const uniqueSkillIds = [...new Set(skillIds.filter((skillId) => skillId.trim().length > 0))];
-    if (uniqueSkillIds.length === 0) {
-      return;
-    }
-    const metadata = this.readSkillStateMetadata();
-    const now = new Date().toISOString();
-    for (const skillId of uniqueSkillIds) {
-      const current = metadata[skillId] ?? {};
-      metadata[skillId] = {
-        ...current,
-        usageCount: (current.usageCount ?? 0) + 1,
-        lastUsedAt: now,
-      };
-    }
-    this.storage.systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, metadata);
-  }
-
-  private ensureSkillStates(skillIds: string[]): void {
-    const unique = [...new Set(skillIds)];
-    const now = new Date().toISOString();
-    const insert = this.gatewaySql.prepare(`
-      INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
-      VALUES (@skillId, @state, @note, @updatedAt, NULL)
-      ON CONFLICT (skill_id) DO NOTHING
-    `);
-    for (const skillId of unique) {
-      insert.run({
-        skillId,
-        state: "enabled",
-        note: null,
-        updatedAt: now,
-      });
-    }
-  }
-
-  private recordSkillImportEvent(
-    validation: SkillImportValidationResult,
-    eventType: "import_validated" | "import_installed",
-  ): void {
-    const now = new Date().toISOString();
-    const skillId = validation.inferredSkillId
-      ? `import:${validation.inferredSkillId}`
-      : `import:${createHash("sha1").update(validation.candidate.canonicalKey).digest("hex").slice(0, 12)}`;
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO skill_activation_events (
-        event_id, skill_id, event_type, payload_json, created_at
-      ) VALUES (
-        @eventId, @skillId, @eventType, @payloadJson, @createdAt
-      )
-    `,
-      )
-      .run({
-        eventId: randomUUID(),
-        skillId,
-        eventType,
-        payloadJson: JSON.stringify({
-          sourceProvider: validation.candidate.sourceProvider,
-          sourceRef: validation.candidate.sourceRef,
-          canonicalKey: validation.candidate.canonicalKey,
-          valid: validation.valid,
-          riskLevel: validation.riskLevel,
-          skillName: validation.inferredSkillName,
-          skillId: validation.inferredSkillId,
-          warnings: validation.warnings,
-          errors: validation.errors,
-        }),
-        createdAt: now,
-      });
+    return this.mcpServerStore.isToolApproved(serverId, toolName);
   }
 
   public async close(): Promise<void> {
@@ -9847,6 +9154,8 @@ export class GatewayService {
         phaseId: phase.phaseId,
         relationScope: "project",
         workspace: "memory",
+        // Finding 1: scope orchestration memory-item collection to the run's workspace.
+        workspaceId: run.workspaceId ?? "default",
         forceRefresh: true,
       })
       .then((pack) => {
@@ -10512,60 +9821,6 @@ interface McpAuthStateRecord {
   lastCodePreview?: string;
 }
 
-function buildGatewayOwnedInternalMcpServers(authRows: Record<string, McpAuthStateRecord>): McpServerRecord[] {
-  return [
-    buildGatewayOwnedInternalMcpServer("goatcitadel-internal-approval-inbox", MCP_APPROVAL_INBOX_URL, authRows),
-    buildGatewayOwnedInternalMcpServer("goatcitadel-internal-durable-tasks", MCP_DURABLE_TASKS_URL, authRows),
-  ].filter((server): server is McpServerRecord => Boolean(server));
-}
-
-function buildGatewayOwnedInternalMcpServer(
-  serverId: string,
-  url: string,
-  authRows: Record<string, McpAuthStateRecord>,
-): McpServerRecord | undefined {
-  const template = MCP_SERVER_TEMPLATES.find((item) => item.url === url);
-  if (!template) {
-    return undefined;
-  }
-  const server: McpServerRecord = {
-    serverId,
-    label: template.label,
-    transport: template.transport,
-    command: template.command,
-    args: template.args,
-    url: template.url,
-    authType: template.authType,
-    oauth: template.oauth,
-    enabled: true,
-    status: "connected",
-    category: template.category,
-    trustTier: template.trustTier,
-    costTier: template.costTier,
-    policy: normalizeMcpPolicy(template.policy),
-    verifiedAt: GATEWAY_OWNED_MCP_CREATED_AT,
-    lastConnectedAt: GATEWAY_OWNED_MCP_CREATED_AT,
-    createdAt: GATEWAY_OWNED_MCP_CREATED_AT,
-    updatedAt: GATEWAY_OWNED_MCP_CREATED_AT,
-  };
-  return {
-    ...server,
-    authState: buildPublicMcpAuthState(server, authRows[serverId]),
-  };
-}
-
-function buildGatewayOwnedInternalMcpTools(): McpToolRecord[] {
-  return [
-    ...createInternalMcpApprovalInboxTools("goatcitadel-internal-approval-inbox"),
-    ...createInternalMcpDurableTasksTools("goatcitadel-internal-durable-tasks"),
-  ];
-}
-
-function isGatewayOwnedMcpServerUrl(url: string | undefined): boolean {
-  const normalized = url?.trim().toLowerCase();
-  return normalized === MCP_APPROVAL_INBOX_URL || normalized === MCP_DURABLE_TASKS_URL;
-}
-
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -10637,27 +9892,6 @@ export function parsePipelineCommand(
     roles,
     objective,
   };
-}
-
-function normalizeDelegationRoles(roles: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const role of roles) {
-    const normalized = role
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  if (out.length === 0) {
-    return [...DEFAULT_DELEGATION_ROLES];
-  }
-  return out;
 }
 
 function dedupeStrings(values: readonly string[]): string[] {
@@ -11713,18 +10947,4 @@ function readRequiredString(value: unknown, label: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function toSkillStateRows(value: unknown): SkillStateRecord[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (row): row is SkillStateRecord =>
-          isRecord(row) &&
-          typeof row.skillId === "string" &&
-          typeof row.state === "string" &&
-          (typeof row.note === "string" || row.note === null) &&
-          typeof row.updatedAt === "string" &&
-          (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null),
-      )
-    : [];
 }

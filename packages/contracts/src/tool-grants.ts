@@ -1,3 +1,4 @@
+import type { WardEffect } from "./citadel-wards.js";
 import type { ContextSourceAttribution } from "./ingestion.js";
 import type { ToolExecutionTrustLevel } from "./internal-tooling.js";
 import type { ToolPolicyActorContext } from "./policy.js";
@@ -86,4 +87,12 @@ export interface ToolAccessEvaluateResponse extends ToolAccessDecision {
   toolName: string;
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
+  /**
+   * The raw Citadel Ward effect that matched this action, when a Ward matched
+   * with a non-`allow` effect. Surfaced (not persisted) so downstream execution
+   * can enforce the previously-silent effects (`require_dry_run`, `route_local`,
+   * `redact`) that neither deny nor require_approval already act on. `undefined`
+   * when no Ward matched or the match resolved to `allow`.
+   */
+  wardEffect?: WardEffect;
 }

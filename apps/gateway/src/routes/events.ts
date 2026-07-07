@@ -167,6 +167,9 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     // finally delivered directly. See INFRA-003.
     let replayFlushed = false;
     let lastDeliveredSequence = requestedCursor;
+    // Bound the pre-flush live buffer so one stalled replay flush (slow client)
+    // cannot grow gateway memory without limit.
+    const MAX_LIVE_BUFFER_EVENTS = 2000;
     const liveBuffer: RealtimeEvent[] = [];
     const deliverLiveEvent = (event: RealtimeEvent) => {
       writeChain = writeChain
@@ -199,6 +202,12 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         return;
       }
       liveBuffer.push(event);
+      if (liveBuffer.length > MAX_LIVE_BUFFER_EVENTS) {
+        // Replay flush is stalling; tear down rather than buffer unbounded. The
+        // client reconnects and replays from its cursor (a sequence gap it already
+        // detects and recovers from), instead of one stuck stream leaking memory.
+        cleanup("stream_replay_buffer_overflow");
+      }
     });
 
     raw.on("close", () => cleanup("client_disconnect"));

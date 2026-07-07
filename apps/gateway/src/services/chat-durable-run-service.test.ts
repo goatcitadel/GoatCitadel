@@ -207,6 +207,123 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("parks approval waits with an approval.resolved waitForEvent keyed to the pending approval", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_approval",
+      toolRuns: [
+        {
+          toolRunId: "tool-run-1",
+          turnId: "turn-1",
+          toolName: "shell.exec",
+          status: "approval_required",
+          approvalId: "approval-xyz",
+          startedAt: "2026-04-10T00:00:01.000Z",
+        },
+      ],
+      failure: {
+        failureClass: "approval_required",
+        message: "Waiting for approval",
+        retryable: true,
+        recommendedAction: "approve_pending_step",
+      },
+    });
+    const state = createFinalizeState();
+    // Seed pre-existing run metadata to prove finalize preserves it (the repo
+    // REPLACES metadata on updateRun, so the waiting branch must spread it).
+    state.runs.set("run-waiting", {
+      ...createRun("run-waiting", "running"),
+      metadata: { surface: "chat", objective: "Research this repo", retryPolicy: { maxAttempts: 3 } },
+    });
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    expect(state.runs.get("run-waiting")?.metadata).toMatchObject({
+      surface: "chat",
+      objective: "Research this repo",
+      retryPolicy: { maxAttempts: 3 },
+      waitForEvent: {
+        eventKey: "approval.resolved",
+        correlationId: "approval-xyz",
+      },
+    });
+  });
+
+  it("parks user-input waits with a chat.user_input.resolved waitForEvent keyed to the pending prompt", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_user_input",
+      pendingUserInput: {
+        promptId: "prompt-abc",
+        turnId: "turn-1",
+        kind: "text",
+        title: "Deployment target",
+        question: "Which environment should I deploy to?",
+      },
+      failure: {
+        failureClass: "needs_input",
+        message: "Waiting for deployment target",
+        retryable: true,
+        recommendedAction: "answer_prompt",
+      },
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    expect(state.runs.get("run-waiting")?.metadata).toMatchObject({
+      waitForEvent: {
+        eventKey: "chat.user_input.resolved",
+        correlationId: "prompt-abc",
+      },
+    });
+  });
+
+  it("parks tool waits with an eventKey-only waitForEvent (no known wake correlation)", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_tool",
+      failure: {
+        failureClass: "tool_wait",
+        message: "Waiting for browser.search to finish",
+        retryable: true,
+        recommendedAction: "resume_tool_wait",
+      },
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    const waitForEvent = (state.runs.get("run-waiting")?.metadata as { waitForEvent?: Record<string, unknown> })
+      ?.waitForEvent;
+    expect(waitForEvent).toEqual({ eventKey: "chat.tool_wait.resolved" });
+    expect(waitForEvent).not.toHaveProperty("correlationId");
+  });
+
+  it("falls back to a runId-scoped waitForEvent when an approval wait lacks a resolvable approvalId", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_approval",
+      // No approval_required toolRun and no pendingApprovalSummary: the approvalId
+      // cannot be resolved, so we must NOT emit a correlationId that could reject a
+      // legit wake — fall back to eventKey-only.
+      toolRuns: [],
+      failure: {
+        failureClass: "approval_required",
+        message: "Waiting for approval",
+        retryable: true,
+      },
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    const waitForEvent = (state.runs.get("run-waiting")?.metadata as { waitForEvent?: Record<string, unknown> })
+      ?.waitForEvent;
+    expect(waitForEvent).toEqual({ eventKey: "approval.resolved" });
+    expect(waitForEvent).not.toHaveProperty("correlationId");
+  });
+
   it("marks cancelled traces as durable cancellation checkpoints", () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
@@ -752,8 +869,11 @@ function createFinalizeState(options?: {
     recordDurableTimelineEvent: (runId, eventType, payload) => {
       timelineEvents.push({ runId, eventType, payload });
     },
-    patchDurableTraceIfPresent: (turnId, patch) => {
-      tracePatches.push({ turnId, patch: patch as Record<string, unknown> });
+    chatTurnTraces: {
+      patch: (turnId, patch) => {
+        tracePatches.push({ turnId, patch: patch as Record<string, unknown> });
+        return { turnId } as unknown as ReturnType<ChatDurableRunFinalizeDeps["chatTurnTraces"]["patch"]>;
+      },
     },
   };
   return { deps, runs, checkpoints, timelineEvents, tracePatches };

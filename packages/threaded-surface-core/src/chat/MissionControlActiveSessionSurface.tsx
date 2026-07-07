@@ -25,7 +25,6 @@ import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
 import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
-import type { CodeSendGate } from "../pure-helpers";
 
 export interface ThreadedContextSelectionState {
   label: string;
@@ -229,15 +228,6 @@ export interface MissionControlActiveSessionSurfaceProps {
   surfaceRoutePreview?: SurfaceClassifyResponse;
   /** True when auto-routing is active for the current thread (unlocked surface, no override, empty thread). */
   autoRouteActive?: boolean;
-  /**
-   * Set when a send was intercepted by the code-path pre-send gate. The composer
-   * renders an inline confirm; `null` when no gate is pending.
-   */
-  pendingCodeGate?: CodeSendGate;
-  /** Proceed with the gated send, forcing the Code surface. */
-  onConfirmCodeTurn?: () => void;
-  /** Dismiss the gate and send the message as Chat instead. */
-  onSendAsChatInstead?: () => void;
   /**
    * Cowork: the active delegation run's `cancel` control, surfaced beside the
    * composer so an operator can stop a running delegation from the chat window

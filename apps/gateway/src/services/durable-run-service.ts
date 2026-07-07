@@ -384,6 +384,35 @@ export class DurableRunService {
 
   // ── mutations ────────────────────────────────────────────────────
 
+  /**
+   * Optimistic read-modify-write of a run's coarse state. Unspecified fields keep
+   * the current record's values; the update is versioned against the record read
+   * here, so a concurrent writer surfaces as a version conflict instead of a
+   * silent lost update.
+   */
+  updateRunState(input: {
+    runId: string;
+    status?: DurableRunRecord["status"];
+    metadata?: Record<string, unknown>;
+    lastError?: string;
+    clearLastError?: boolean;
+    finishedAt?: string;
+    clearFinishedAt?: boolean;
+  }): DurableRunRecord {
+    const current = this.ctx.storage.durableRuns.getRun(input.runId);
+    return this.ctx.storage.durableRuns.updateRun({
+      runId: input.runId,
+      status: input.status ?? current.status,
+      metadata: input.metadata ?? current.metadata,
+      lastError: input.lastError,
+      clearLastError: input.clearLastError,
+      finishedAt: input.finishedAt,
+      clearFinishedAt: input.clearFinishedAt,
+      updatedAt: new Date().toISOString(),
+      expectedVersion: current.version,
+    });
+  }
+
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const workflowKey = input.workflowKey.trim();
@@ -729,14 +758,34 @@ export class DurableRunService {
     const waitForEvent = ((
       current.metadata as { waitForEvent?: { eventKey?: string; correlationId?: string } } | undefined
     )?.waitForEvent ?? {}) as { eventKey?: string; correlationId?: string };
-    if (waitForEvent.eventKey && waitForEvent.eventKey !== event.eventKey) {
+    // Wake-registration guard. The rule (see also `resolveChatDurableWaitForEvent`):
+    //   (a) run declares waitForEvent.eventKey  => caller's eventKey MUST match it.
+    //   (b) run declares none, caller passes an eventKey => REJECT. A run parked
+    //       without a registered key accepts no keyed wake; otherwise a stale or
+    //       cross-type wake would prematurely resume a still-waiting turn (Finding 3).
+    //   (c) run declares none, caller passes none => ALLOW (back-compat). No production
+    //       waker currently wakes keyless — operator wakes require a non-empty eventKey
+    //       and the autonomy kill-switch sweep matches case (a) — but this preserves the
+    //       only legitimate keyless path for legacy/other-path parks.
+    if (waitForEvent.eventKey) {
+      if (waitForEvent.eventKey !== event.eventKey) {
+        return {
+          runId,
+          eventKey: event.eventKey,
+          correlationId: event.correlationId,
+          outcome: "skipped_event_key_mismatch",
+          run: current,
+          detail: `Wake event key mismatch: expected ${waitForEvent.eventKey}`,
+        };
+      }
+    } else if (event.eventKey) {
       return {
         runId,
         eventKey: event.eventKey,
         correlationId: event.correlationId,
         outcome: "skipped_event_key_mismatch",
         run: current,
-        detail: `Wake event key mismatch: expected ${waitForEvent.eventKey}`,
+        detail: `Durable run ${runId} parked without a wake registration and cannot accept event key ${event.eventKey}.`,
       };
     }
     if (waitForEvent.correlationId && waitForEvent.correlationId !== event.correlationId) {
@@ -803,8 +852,11 @@ export class DurableRunService {
    * sweep they stay "waiting" forever once the switch is turned back off. Call
    * this when `autonomyV1Disabled` flips true -> false and on worker startup
    * (when autonomy is enabled) so runs parked before a restart also recover.
-   * Idempotent: non-waiting or differently-parked runs are skipped by
-   * {@link wakeDurableRun}.
+   * Idempotent: this sweep itself pre-filters to runs whose registered
+   * `waitForEvent.eventKey` is {@link AUTONOMY_KILL_SWITCH_RESUME_EVENT} (the
+   * `continue` below), so differently-parked runs are never passed to
+   * {@link wakeDurableRun}; wakeDurableRun independently skips non-"waiting" runs
+   * and re-checks the same event-key/correlation match.
    */
   resumeRunsWaitingForAutonomyKillSwitch(): { woken: string[] } {
     if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
@@ -1721,6 +1773,34 @@ function isAutonomousDurableRunForKillSwitch(run: DurableRunRecord): boolean {
 
 function isDurableRunUpdateConflict(error: unknown): boolean {
   return error instanceof Error && /durable run .* update conflict/i.test(error.message);
+}
+
+/**
+ * Durable execution is a shipped always-on baseline: report every config/stored-flag
+ * field that has drifted away from it. Pure — the caller decides how to surface drift.
+ */
+export function computeDurableBaselineDrift(input: {
+  durable: { enabled: boolean; executionEnabled: boolean; chatAutoPromoteEnabled: boolean };
+  configuredFeatureFlag: boolean | undefined;
+  storedDurableKernelFlag: boolean | undefined;
+}): string[] {
+  const driftedFields: string[] = [];
+  if (!input.durable.enabled) {
+    driftedFields.push("assistant.durable.enabled");
+  }
+  if (!input.durable.executionEnabled) {
+    driftedFields.push("assistant.durable.executionEnabled");
+  }
+  if (!input.durable.chatAutoPromoteEnabled) {
+    driftedFields.push("assistant.durable.chatAutoPromoteEnabled");
+  }
+  if (!input.configuredFeatureFlag) {
+    driftedFields.push("features.durableKernelV1Enabled");
+  }
+  if (input.storedDurableKernelFlag === false) {
+    driftedFields.push("feature_flags_v1.durableKernelV1Enabled");
+  }
+  return driftedFields;
 }
 
 function resolveCheckpointPruneConfig(): { keepPerRun: number; diskBudgetBytes: number } {

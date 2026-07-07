@@ -5,9 +5,9 @@
  * storage deps.
  */
 
-import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { resolveNewestLeafTurnId } from "./chat-thread-utils.js";
+import { buildSelectedPathTurnIds, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 
 type ChatTurnTraceHydrationStorage = Pick<
   Storage,
@@ -168,4 +168,86 @@ export function resolveChatActiveLeafTurnId(
   );
   deps.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId, newest.finishedAt ?? newest.startedAt);
   return newestLeafTurnId;
+}
+
+export interface LoadChatTurnSessionStateDeps extends ChatTurnTraceHydrationDependencies {
+  storage: ChatTurnTraceHydrationDependencies["storage"] & Pick<Storage, "chatMessages">;
+  ensureChatMessageProjection(sessionId: string): Promise<void>;
+}
+
+/**
+ * Load a session's turn state for the thread surface: full lineage, the
+ * hydrated visible window (active-leaf path plus its siblings — hydration is
+ * deliberately limited to what the surface renders), and the visible turns'
+ * messages sorted by timestamp. Extracted from GatewayService (B3b).
+ */
+export async function loadChatTurnSessionState(
+  deps: LoadChatTurnSessionStateDeps,
+  sessionId: string,
+  options: { includeDecisionTrace?: boolean } = {},
+): Promise<{
+  traces: ChatTurnTraceRecord[];
+  tracesById: Map<string, ChatTurnTraceRecord>;
+  turnLineageById: Map<string, { turnId: string; parentTurnId?: string }>;
+  messages: ChatMessageRecord[];
+  messagesById: Map<string, ChatMessageRecord>;
+  childrenByTurnId: Map<string, string[]>;
+  activeLeafTurnId?: string;
+}> {
+  await deps.ensureChatMessageProjection(sessionId);
+  const rawTraces = deps.storage.chatTurnTraces.listBySession(sessionId, 2_000);
+  const turnLineageById = new Map(
+    rawTraces.map((trace) => [
+      trace.turnId,
+      {
+        turnId: trace.turnId,
+        parentTurnId: trace.parentTurnId,
+      },
+    ]),
+  );
+  const activeLeafTurnId = resolveChatActiveLeafTurnId(deps, sessionId, rawTraces);
+  const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
+  const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
+  const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
+  const siblingTracesByParent = deps.storage.chatTurnTraces.listSiblingsByParentTurnIds(sessionId, pathParentTurnIds);
+  const visibleTurnIds = new Set(selectedPathTurnIds);
+  for (const siblings of siblingTracesByParent.values()) {
+    for (const sibling of siblings) {
+      visibleTurnIds.add(sibling.turnId);
+      if (!rawTraceById.has(sibling.turnId)) {
+        rawTraceById.set(sibling.turnId, sibling);
+      }
+    }
+  }
+  const visibleRawTraces = [...visibleTurnIds]
+    .map((turnId) => rawTraceById.get(turnId))
+    .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
+  const hydratedVisibleTracesById = new Map(
+    hydrateChatTurnTraces(deps, visibleRawTraces, {
+      includeDecisionTrace: options.includeDecisionTrace === true,
+    }).map((trace) => [trace.turnId, trace]),
+  );
+  const traces = rawTraces.map((trace) => hydratedVisibleTracesById.get(trace.turnId) ?? trace);
+  const messageIds = visibleRawTraces.flatMap((trace) => [
+    trace.userMessageId,
+    ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
+  ]);
+  const messagesById = deps.storage.chatMessages.listByMessageIds(messageIds);
+  const messages = [...messagesById.values()].sort((left, right) => {
+    const leftTimestamp = Date.parse(left.timestamp) || 0;
+    const rightTimestamp = Date.parse(right.timestamp) || 0;
+    if (leftTimestamp !== rightTimestamp) {
+      return leftTimestamp - rightTimestamp;
+    }
+    return left.messageId.localeCompare(right.messageId);
+  });
+  return {
+    traces,
+    tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
+    turnLineageById,
+    messages,
+    messagesById,
+    childrenByTurnId: buildChatTurnChildrenMap(traces),
+    activeLeafTurnId,
+  };
 }

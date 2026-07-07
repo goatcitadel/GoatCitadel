@@ -237,6 +237,61 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     });
   });
 
+  it("enforces waitForEvent registration: matching key/correlation wakes, stale wakes are rejected", () => {
+    // A chat turn parked on approval, keyed to its own approval.
+    const approvalWait = {
+      ...createRun("run-approval-wait", "waiting"),
+      metadata: {
+        surface: "chat",
+        waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-A" },
+      },
+    };
+    // A run parked WITHOUT any waitForEvent (legacy / other-path park).
+    const noRegistration = {
+      ...createRun("run-no-registration", "waiting"),
+      metadata: { surface: "chat" },
+    };
+    const runs = new Map([
+      [approvalWait.runId, approvalWait],
+      [noRegistration.runId, noRegistration],
+    ]);
+    const context = createContext(runs);
+    const service = new DurableRunService(context as unknown as ServiceContext);
+
+    // Cross-type stale wake (wrong eventKey) -> rejected, run stays waiting.
+    expect(
+      service.wakeDurableRun(approvalWait.runId, { eventKey: "some.other.key", correlationId: "approval-A" }),
+    ).toMatchObject({ outcome: "skipped_event_key_mismatch" });
+    expect(runs.get(approvalWait.runId)?.status).toBe("waiting");
+
+    // Right key but a DIFFERENT approval's correlationId -> rejected (the premature-resume bug).
+    expect(
+      service.wakeDurableRun(approvalWait.runId, { eventKey: "approval.resolved", correlationId: "approval-B" }),
+    ).toMatchObject({ outcome: "skipped_correlation_mismatch" });
+    expect(runs.get(approvalWait.runId)?.status).toBe("waiting");
+
+    // The legit wake (matching key + correlationId) resumes the run.
+    expect(
+      service.wakeDurableRun(approvalWait.runId, { eventKey: "approval.resolved", correlationId: "approval-A" }),
+    ).toMatchObject({ outcome: "woke", run: expect.objectContaining({ status: "queued" }) });
+    expect(runs.get(approvalWait.runId)?.status).toBe("queued");
+
+    // Core bug: a run with NO waitForEvent must REJECT a caller-supplied eventKey
+    // rather than silently accept any wake.
+    expect(
+      service.wakeDurableRun(noRegistration.runId, { eventKey: "approval.resolved", correlationId: "whatever" }),
+    ).toMatchObject({ outcome: "skipped_event_key_mismatch" });
+    expect(runs.get(noRegistration.runId)?.status).toBe("waiting");
+
+    // Back-compat: the same no-registration run is still wakeable by a caller
+    // that supplies NO eventKey (the only legitimate keyless path).
+    expect(service.wakeDurableRun(noRegistration.runId, { eventKey: "" })).toMatchObject({
+      outcome: "woke",
+      run: expect.objectContaining({ status: "queued" }),
+    });
+    expect(runs.get(noRegistration.runId)?.status).toBe("queued");
+  });
+
   it("dead-letters exhausted retries and recovers them with a bounded max-attempt override", async () => {
     const exhausted = {
       ...createRun("run-exhausted", "failed"),

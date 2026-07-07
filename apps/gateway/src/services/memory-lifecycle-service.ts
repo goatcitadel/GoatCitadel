@@ -1895,6 +1895,9 @@ export class MemoryLifecycleService {
       const context = await this.composeContext({
         scope: input.scope ?? "chat",
         prompt,
+        // Finding 1: scope targeted recall's memory-item retrieval to the resolved
+        // workspace (already computed above), not the unfiltered cross-workspace query.
+        workspaceId,
         sessionId: input.sessionId,
         taskId: input.taskId,
         runId: input.runId,
@@ -1958,6 +1961,8 @@ export class MemoryLifecycleService {
         const pack = await this.composeContext({
           scope: "chat",
           prompt,
+          // Finding 1: scope benchmark retrieval to the requested workspace hint.
+          workspaceId: normalizeStructuredWorkspaceId(input.workspace),
           workspace: input.workspace,
           relationScope: input.relationScope,
           maxContextTokens: input.maxContextTokens,

@@ -320,7 +320,10 @@ describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {
   });
 });
 
-describe("gateway request diagnostics", () => {
+// 120s for every test here: each boots the full Fastify app (import-heavy);
+// under a loaded machine (verify lanes building concurrently) the global 15s
+// testTimeout is routinely exceeded. Generous by design — real hangs still fail.
+describe("gateway request diagnostics", { timeout: 120_000 }, () => {
   const envKeys = [
     "GATEWAY_HOST",
     "GOATCITADEL_ALLOWED_ORIGINS",

@@ -9,6 +9,7 @@ import type {
   DurableRunStatus,
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
+import { isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
@@ -16,6 +17,56 @@ export type ChatDurableThreadEventType =
   | "chat_thread_turn_appended"
   | "chat_thread_turn_retried"
   | "chat_thread_turn_edited";
+
+// Wake-event keys that the durable chat-turn parks register on `metadata.waitForEvent`.
+// Each MUST exactly match the eventKey its real waker emits, or the parked run either
+// resumes prematurely (loose key) or never resumes (wrong key):
+//   - approval.resolved       — emitted by ApprovalEffectsService.wakeDurableRun
+//                               (approval-resolution-effects-service.ts), correlationId = approvalId.
+//   - chat.user_input.resolved — emitted by the user-input respond runtime
+//                               (chat-message-route-runtime.ts), correlationId = promptId.
+//   - chat.tool_wait.resolved  — SENTINEL. `waiting_for_tool` is a transient in-flight
+//                               marker (see chat-turn-stream-service.ts); NO production
+//                               path emits a keyed wake for it. Kept eventKey-only so an
+//                               operator can still force-resume via the durable wake route,
+//                               while blocking stray cross-type wakes.
+const CHAT_APPROVAL_RESOLVED_WAKE_EVENT = "approval.resolved";
+const CHAT_USER_INPUT_RESOLVED_WAKE_EVENT = "chat.user_input.resolved";
+const CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT = "chat.tool_wait.resolved";
+
+interface ChatDurableWaitForEvent {
+  eventKey: string;
+  correlationId?: string;
+}
+
+/**
+ * Resolve the wake contract for a chat turn that parked in a waiting state.
+ *
+ * The correlationId MUST match what the real waker supplies, and we NEVER guess
+ * one: a wrong correlationId rejects a legitimate resume (worse than the loose
+ * wake it replaces). When the identifier cannot be resolved from the trace we
+ * fall back to eventKey-only so the run is still wakeable by its real waker.
+ */
+function resolveChatDurableWaitForEvent(trace: ChatTurnTraceRecord): ChatDurableWaitForEvent {
+  if (trace.status === "waiting_for_approval") {
+    // Mirror orchestration-phase-execution-service.ts: prefer the (hydration-only)
+    // pendingApprovalSummary, then the persisted approval_required tool run.
+    const approvalId =
+      trace.pendingApprovalSummary?.approvalId ??
+      trace.toolRuns.find((toolRun) => toolRun.status === "approval_required" && toolRun.approvalId)?.approvalId;
+    return approvalId
+      ? { eventKey: CHAT_APPROVAL_RESOLVED_WAKE_EVENT, correlationId: approvalId }
+      : { eventKey: CHAT_APPROVAL_RESOLVED_WAKE_EVENT };
+  }
+  if (trace.status === "waiting_for_user_input") {
+    const promptId = trace.pendingUserInput?.promptId;
+    return promptId
+      ? { eventKey: CHAT_USER_INPUT_RESOLVED_WAKE_EVENT, correlationId: promptId }
+      : { eventKey: CHAT_USER_INPUT_RESOLVED_WAKE_EVENT };
+  }
+  // waiting_for_tool — eventKey-only sentinel (no real keyed waker exists).
+  return { eventKey: CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT };
+}
 
 interface DurableRunStore {
   getRun?(runId: string): DurableRunRecord;
@@ -80,7 +131,8 @@ export interface ChatDurableRunBeginDeps {
     },
     durableRunId?: string,
   ): void;
-  persistInitialTrace?(prepared: PreparedAgentChatTurn, input: ChatSendMessageRequest, run: DurableRunRecord): void;
+  /** When present, the initial durable chat-turn trace is persisted through this store. */
+  chatTurnTraces?: Pick<Storage["chatTurnTraces"], "get" | "create">;
   requestDurableRunProcessing(runId: string): void;
 }
 
@@ -94,7 +146,7 @@ export interface ChatDurableRunFinalizeDeps {
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
   ): void;
-  patchDurableTraceIfPresent(turnId: string, input: Parameters<Storage["chatTurnTraces"]["patch"]>[1]): void;
+  chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">;
 }
 
 export function beginDurableChatRun(
@@ -116,7 +168,9 @@ export function beginDurableChatRun(
       objective: prepared.content,
     },
   });
-  deps.persistInitialTrace?.(prepared, input, run);
+  if (deps.chatTurnTraces) {
+    persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
+  }
   deps.persistChatStreamChunk(
     {
       type: "message_start",
@@ -133,6 +187,70 @@ export function beginDurableChatRun(
   return run;
 }
 
+/**
+ * Persist the initial "running" chat-turn trace for a freshly-begun durable run.
+ * Idempotent: if a trace already exists for the turn (e.g. a retry re-entered the
+ * durable path) it is left untouched.
+ */
+export function persistInitialDurableChatTurnTrace(
+  deps: { chatTurnTraces: Pick<Storage["chatTurnTraces"], "get" | "create"> },
+  prepared: PreparedAgentChatTurn,
+  input: ChatSendMessageRequest,
+  run: DurableRunRecord,
+): void {
+  try {
+    deps.chatTurnTraces.get(prepared.turnId);
+    return;
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  deps.chatTurnTraces.create({
+    turnId: prepared.turnId,
+    sessionId: prepared.session.sessionId,
+    userMessageId: prepared.userEventId,
+    parentTurnId: prepared.parentTurnId,
+    branchKind: prepared.branchKind,
+    sourceTurnId: prepared.sourceTurnId,
+    status: "running",
+    mode: resolvePreparedTurnMode(prepared),
+    model: input.model ?? prepared.prefs.model,
+    webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+    memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+    thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+    speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+    subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
+    effectiveToolAutonomy: prepared.effectiveToolAutonomy,
+    routing: {
+      primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+      primaryModel: input.model ?? prepared.prefs.model,
+      effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
+      effectiveModel: input.model ?? prepared.prefs.model,
+      modelRouter: prepared.modelRouterDecision,
+    },
+    durable: {
+      runId: run.runId,
+      status: run.status,
+    },
+  });
+}
+
+/** Patch a chat-turn trace, tolerating a trace that was never created for the turn. */
+function patchDurableTraceIfPresent(
+  chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">,
+  turnId: string,
+  input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
+): void {
+  try {
+    chatTurnTraces.patch(turnId, input);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+}
+
 export function finalizeDurableChatRun(
   deps: ChatDurableRunFinalizeDeps,
   runId: string,
@@ -141,8 +259,8 @@ export function finalizeDurableChatRun(
 ): void {
   const now = new Date().toISOString();
   const currentRun = deps.durableRuns.getRun?.(runId);
-  if (currentRun && isTerminalDurableChatRunStatus(currentRun.status)) {
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+  if (currentRun && isDurableRunTerminal(currentRun.status)) {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: currentRun.status,
@@ -152,7 +270,7 @@ export function finalizeDurableChatRun(
     return;
   }
   if (currentRun && currentRun.status !== "running") {
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: currentRun.status,
@@ -167,6 +285,7 @@ export function finalizeDurableChatRun(
     trace.status === "waiting_for_user_input" ||
     trace.status === "waiting_for_tool"
   ) {
+    const waitForEvent = resolveChatDurableWaitForEvent(trace);
     deps.durableRuns.updateRun({
       runId,
       status: "waiting",
@@ -174,6 +293,14 @@ export function finalizeDurableChatRun(
       clearFinishedAt: true,
       clearLastError: true,
       clearLease: true,
+      // The durable-run repo REPLACES metadata on update, so spread the existing
+      // metadata (surface, objective, retryPolicy, …) to avoid clobbering it while
+      // registering the wake contract. Without waitForEvent, wakeDurableRun would
+      // accept ANY wake and prematurely resume a still-waiting turn (Finding 3).
+      metadata: {
+        ...(currentRun?.metadata ?? {}),
+        waitForEvent,
+      },
     });
     deps.durableRuns.createCheckpoint({
       runId,
@@ -181,7 +308,7 @@ export function finalizeDurableChatRun(
       state: checkpointState,
     });
     deps.recordDurableTimelineEvent(runId, "run_waiting", checkpointState);
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: "waiting",
@@ -206,7 +333,7 @@ export function finalizeDurableChatRun(
       state: checkpointState,
     });
     deps.recordDurableTimelineEvent(runId, "run_cancelled", checkpointState);
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: "cancelled",
@@ -235,17 +362,13 @@ export function finalizeDurableChatRun(
     state: checkpointState,
   });
   deps.recordDurableTimelineEvent(runId, failed ? "run_failed" : "run_completed", checkpointState);
-  deps.patchDurableTraceIfPresent(prepared.turnId, {
+  patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
     durable: {
       runId,
       status: nextStatus,
       checkpointKind,
     },
   });
-}
-
-function isTerminalDurableChatRunStatus(status: DurableRunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
 }
 
 function checkpointKindForTerminalDurableChatRunStatus(

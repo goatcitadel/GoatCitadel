@@ -43,7 +43,7 @@ A Citadel is not a chat folder, a project, or a dashboard. It is a protected AI 
 | --- | --- | --- |
 | **Charter & Chambers** | The Citadel's identity, purpose, and operating posture | Library → Citadels → Overview |
 | **The Mason** | Guided setup: design, stage, and safely activate a Citadel | Library → Citadels → Mason |
-| **Gatehouse Wards** | Access rules enforced at the policy gate on every tool invocation — `deny` and `require_approval` ward effects are always-on; `redact`, `route_local`, and `require_dry_run` are evaluated and surfaced while their enforcement is a tracked follow-up | Library → Citadels → Wards |
+| **Gatehouse Wards** | Access rules enforced at the policy gate on every tool invocation — `deny`, `require_approval`, and `redact` (tool-output secret scrub) ward effects are enforced and every matched ward is audited; `require_dry_run` enforcement is wired at the side-effect runner (integration/a2a caller wiring is a tracked follow-up); `route_local` is evaluated and audited but not yet enforced | Library → Citadels → Wards |
 | **Council** | The agents seated in the Citadel, by reference | Library → Citadels → Council |
 | **Vault** | Sealed per-Citadel secrets behind the OS keychain; fails closed when the keychain is unavailable | Library → Citadels → Vault |
 | **Blueprint** | Portable `citadel.blueprint.yaml` export/import that never contains secrets, credentials, or live grants | Library → Citadels → Blueprint |
@@ -164,7 +164,7 @@ Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Chat
 | Visible IA | Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Chat, Cowork, and Code run as governed modes inside the unified Work surface; `chat / cowork / code` remain the underlying route areas in the release scope. |
 | Unified surface routing | The gateway surface router recommends `auto / chat / cowork / code` per turn with a live composer preview and one-click operator override. Code-directed turns require operator confirmation before execution. |
 | Route scope | The current visible route surface is 50 routes: 45 `ship`, 0 `needs_release_polish`, and 5 `experimental`. See [docs/1_0_RELEASE_SURFACE_SCOPE.md](./docs/1_0_RELEASE_SURFACE_SCOPE.md). |
-| Citadels | Six Citadel Library routes ship (Overview, Mason, Wards, Council, Blueprint, Vault). Gatehouse Ward `deny` and `require_approval` effects are enforced at the policy gate on every tool invocation; `redact`, `route_local`, and `require_dry_run` are evaluated and surfaced while enforcement is a tracked follow-up. Vault secrets are sealed per Citadel behind the OS keychain and fail closed. |
+| Citadels | Six Citadel Library routes ship (Overview, Mason, Wards, Council, Blueprint, Vault). Gatehouse Ward `deny`, `require_approval`, and `redact` effects are enforced at the policy gate on every tool invocation and every matched ward is audited; `require_dry_run` enforcement is wired at the side-effect runner (integration/a2a caller wiring is a tracked follow-up); `route_local` is evaluated and audited but not yet enforced. Vault secrets are sealed per Citadel behind the OS keychain and fail closed. |
 | Capability scoping | MCP tools and skills can be allowlisted per workspace/Citadel; scope is enforced at MCP invocation. The dedicated capability-scoping Settings panels remain `hide` (not part of the certified release surface) while agent-side skill-discovery scoping and visual coverage land. |
 | Durable execution | Durable runs own the shipped resumable mission-session Chat, Cowork, and Code flow set. Cowork/Code turns may fan out to bounded, policy-gated sub-agents via `agent.fanout` and planner-declared parallel workers. |
 | Evidence & compliance | Runs produce signed, offline-verifiable evidence receipts, compliance export bundles carry content plus signed receipt plus structure proof, and orchestration decision traces are visible in Run Detail. |
@@ -474,7 +474,7 @@ Do not claim without fresh proof:
 
 - cross-platform or general hostile-code sandboxing for Code Mode beyond the named Windows-native proof slice
 - ungoverned autonomous high-risk tool activation
-- full Citadel Ward effect enforcement: `redact`, `route_local`, and `require_dry_run` ward effects are evaluated and surfaced, not yet enforced
+- full Citadel Ward effect enforcement across every effect: `deny`/`require_approval`/`redact` are enforced and all matched wards are audited, but `require_dry_run` is not yet wired to the integration/a2a side-effect callers, and `route_local` is evaluated and audited without an execution-routing path to enforce it
 - the workspace/Citadel capability-scoping Settings panels as certified release surface, or agent-side skill-discovery scoping as complete
 - multi-user Citadel sharing or cross-operator Citadel membership
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal; that path is retired from the shipped 1.0 source and installer.

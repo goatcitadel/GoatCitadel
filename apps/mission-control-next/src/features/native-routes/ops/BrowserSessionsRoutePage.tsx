@@ -179,7 +179,10 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
       title="Browser Sessions"
       description={`Govern in-memory browser session state, grants, and events for ${activeWorkspaceName}.`}
       loading={loading}
-      error={error ?? actionError}
+      // Only a failed load (error) is fatal and replaces the page (Finding 10). A failed
+      // action (actionError) is non-fatal — the session board is still valid and stays
+      // visible with an inline error banner below, so operators keep their draft/selection.
+      error={error}
       metrics={[
         { label: "Visible", value: String(sessions.length) },
         { label: "Active", value: String(activeCount) },
@@ -194,6 +197,11 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
       }
     >
       <LibraryLoadWarnings issues={[...(data?.issues ?? []), ...detail.issues]} onRetry={() => void reload()} />
+      {actionError ? (
+        <div data-testid="browser-sessions-action-error">
+          <NoticeBanner tone="error" message={actionError} />
+        </div>
+      ) : null}
       {notice ? <NoticeBanner tone="success" message={notice} /> : null}
       <NativeGrid>
         <NativeCard

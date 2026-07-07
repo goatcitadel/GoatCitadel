@@ -32,48 +32,54 @@ describe("SkillImportService loop42 git install behavior", () => {
     fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it("installs local git sources, records resolved HEAD metadata, and cleans cloned materialization", async () => {
-    const repoDir = createGitSkillRepo(rootDir);
-    const expectedHead = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-      windowsHide: true,
-    }).trim();
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+  // 120s: spawns real git clone/rev-parse subprocesses; under a loaded machine
+  // (verify lanes building concurrently) the global 15s testTimeout is exceeded.
+  it(
+    "installs local git sources, records resolved HEAD metadata, and cleans cloned materialization",
+    { timeout: 120_000 },
+    async () => {
+      const repoDir = createGitSkillRepo(rootDir);
+      const expectedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repoDir,
+        encoding: "utf8",
+        windowsHide: true,
+      }).trim();
+      const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
 
-    const installed = await service.installImport({
-      sourceRef: repoDir,
-      sourceType: "git_url",
-      sourceProvider: "github",
-    });
-    const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
+      const installed = await service.installImport({
+        sourceRef: repoDir,
+        sourceType: "git_url",
+        sourceProvider: "github",
+      });
+      const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
 
-    expect(fs.existsSync(path.join(installed.installedPath, "SKILL.md"))).toBe(true);
-    expect(manifest).toMatchObject({
-      manifestVersion: 2,
-      candidate: expect.objectContaining({
-        sourceProvider: "github",
-        sourceType: "git_url",
-        sourceRef: repoDir,
-        repositoryUrl: repoDir,
-      }),
-      resolvedUpstream: {
-        url: repoDir,
-        ref: "HEAD",
-        version: expectedHead,
-      },
-    });
-    expect(service.listHistory(1)).toEqual([
-      expect.objectContaining({
-        action: "install",
-        outcome: "accepted",
-        sourceProvider: "github",
-        sourceType: "git_url",
-        sourceRef: repoDir,
-        skillId: "git-runtime-tool",
-      }),
-    ]);
-  }, 15_000);
+      expect(fs.existsSync(path.join(installed.installedPath, "SKILL.md"))).toBe(true);
+      expect(manifest).toMatchObject({
+        manifestVersion: 2,
+        candidate: expect.objectContaining({
+          sourceProvider: "github",
+          sourceType: "git_url",
+          sourceRef: repoDir,
+          repositoryUrl: repoDir,
+        }),
+        resolvedUpstream: {
+          url: repoDir,
+          ref: "HEAD",
+          version: expectedHead,
+        },
+      });
+      expect(service.listHistory(1)).toEqual([
+        expect.objectContaining({
+          action: "install",
+          outcome: "accepted",
+          sourceProvider: "github",
+          sourceType: "git_url",
+          sourceRef: repoDir,
+          skillId: "git-runtime-tool",
+        }),
+      ]);
+    },
+  );
 });
 
 function createGitSkillRepo(rootDir: string): string {

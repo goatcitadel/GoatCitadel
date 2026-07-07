@@ -146,4 +146,29 @@ describe("startBackgroundInterval", () => {
     await drain(inflight);
     expect(task).not.toHaveBeenCalled();
   });
+
+  it("skips a tick while a previous tick's work is still in flight (Finding 9)", async () => {
+    let resolveTask: (() => void) | undefined;
+    const task = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveTask = resolve;
+        }),
+    );
+    const { inflight } = createHarness({ task, intervalMs: 1000 });
+
+    // First interval fires the tick, which stays pending.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(task).toHaveBeenCalledTimes(1);
+
+    // A second interval elapses while the first tick is still in flight → skipped.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(task).toHaveBeenCalledTimes(1);
+
+    // Complete the first tick; the next interval then runs a fresh tick.
+    resolveTask?.();
+    await drain(inflight);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(task).toHaveBeenCalledTimes(2);
+  });
 });

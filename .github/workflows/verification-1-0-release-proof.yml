@@ -2,9 +2,18 @@ name: Verification 1.0 Release Proof
 
 on:
   workflow_dispatch:
+  schedule:
+    # Nightly release-proof run so the full matrix guards `main` even between
+    # tagged releases (review Finding 5: the matrix went dark for 458 commits
+    # because it only fired on `v*` tags the current release line does not use).
+    - cron: "0 7 * * *"
   push:
     tags:
       - "v*"
+      # Release lines without a leading `v` (e.g. `0.1.0-rc.1`, `1.0.0`) must
+      # still trigger the release-proof matrix.
+      - "*.*.*"
+      - "*.*.*-*"
 
 permissions:
   contents: read

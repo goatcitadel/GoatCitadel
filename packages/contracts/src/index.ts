@@ -90,6 +90,7 @@ export * from "./improvement.js";
 export * from "./workspaces.js";
 export * from "./hooks.js";
 export * from "./durable.js";
+export * from "./run-status.js";
 export * from "./replay.js";
 export * from "./dev-diagnostics.js";
 export * from "./verification.js";
