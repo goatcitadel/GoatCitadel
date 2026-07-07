@@ -3181,7 +3181,9 @@ export class GatewayService {
       scope: "chat",
       sessionId: input.sessionId,
       // Finding 1: scope prewarm memory-item collection to the session's workspace.
-      workspaceId: this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? "default",
+      // Optional-chained: some facade/test compositions invoke this method without a
+      // full storage (mirrors the guard in memory-context-service); prod always has it.
+      workspaceId: this.storage?.chatSessionMeta?.get(input.sessionId)?.workspaceId ?? "default",
       prompt: input.prompt,
       relationScope: input.relationScope,
       workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
