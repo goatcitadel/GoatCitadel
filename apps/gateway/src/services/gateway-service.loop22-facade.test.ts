@@ -254,55 +254,25 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
 });
 
 describe("GatewayService loop 22 durable and async lifecycle helpers", () => {
-  it("updates durable run state with the current version and preserves current fields by default", () => {
-    const current = {
-      runId: "run-1",
-      status: "running",
-      metadata: { prior: true },
-      version: 7,
-    };
-    const updateRun = vi.fn((input: Record<string, unknown>) => ({ ...input, version: 8 }));
+  it("delegates durable run-state updates to DurableRunService (body moved in B2)", () => {
+    const updateRunState = vi.fn((input: Record<string, unknown>) => ({ ...input, version: 8 }));
     const gateway = createGatewayHarness({
-      storage: {
-        durableRuns: {
-          getRun: vi.fn(() => current),
-          updateRun,
-        },
-      },
+      durableRunService: { updateRunState },
     });
 
-    expect(
-      GatewayService.prototype.updateDurableRunState.call(gateway, {
-        runId: "run-1",
-        status: "completed",
-        metadata: { next: true },
-        clearLastError: true,
-        finishedAt: "2026-05-14T21:30:00.000Z",
-      }),
-    ).toMatchObject({
+    const input = {
+      runId: "run-1",
+      status: "completed" as const,
+      metadata: { next: true },
+      clearLastError: true,
+      finishedAt: "2026-05-14T21:30:00.000Z",
+    };
+    expect(GatewayService.prototype.updateDurableRunState.call(gateway, input)).toMatchObject({
       runId: "run-1",
       status: "completed",
-      metadata: { next: true },
-      expectedVersion: 7,
       version: 8,
     });
-    expect(updateRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        clearLastError: true,
-        expectedVersion: 7,
-        updatedAt: expect.stringMatching(/T.*Z$/),
-      }),
-    );
-
-    GatewayService.prototype.updateDurableRunState.call(gateway, { runId: "run-1" });
-    expect(updateRun).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        status: "running",
-        metadata: { prior: true },
-        expectedVersion: 7,
-      }),
-    );
+    expect(updateRunState).toHaveBeenCalledWith(input);
   });
 
   it("delegates realtime publishing and creates checkpoints with the current git ref", () => {

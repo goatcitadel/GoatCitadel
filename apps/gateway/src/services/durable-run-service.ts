@@ -384,6 +384,35 @@ export class DurableRunService {
 
   // ── mutations ────────────────────────────────────────────────────
 
+  /**
+   * Optimistic read-modify-write of a run's coarse state. Unspecified fields keep
+   * the current record's values; the update is versioned against the record read
+   * here, so a concurrent writer surfaces as a version conflict instead of a
+   * silent lost update.
+   */
+  updateRunState(input: {
+    runId: string;
+    status?: DurableRunRecord["status"];
+    metadata?: Record<string, unknown>;
+    lastError?: string;
+    clearLastError?: boolean;
+    finishedAt?: string;
+    clearFinishedAt?: boolean;
+  }): DurableRunRecord {
+    const current = this.ctx.storage.durableRuns.getRun(input.runId);
+    return this.ctx.storage.durableRuns.updateRun({
+      runId: input.runId,
+      status: input.status ?? current.status,
+      metadata: input.metadata ?? current.metadata,
+      lastError: input.lastError,
+      clearLastError: input.clearLastError,
+      finishedAt: input.finishedAt,
+      clearFinishedAt: input.clearFinishedAt,
+      updatedAt: new Date().toISOString(),
+      expectedVersion: current.version,
+    });
+  }
+
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const workflowKey = input.workflowKey.trim();
@@ -1744,6 +1773,34 @@ function isAutonomousDurableRunForKillSwitch(run: DurableRunRecord): boolean {
 
 function isDurableRunUpdateConflict(error: unknown): boolean {
   return error instanceof Error && /durable run .* update conflict/i.test(error.message);
+}
+
+/**
+ * Durable execution is a shipped always-on baseline: report every config/stored-flag
+ * field that has drifted away from it. Pure — the caller decides how to surface drift.
+ */
+export function computeDurableBaselineDrift(input: {
+  durable: { enabled: boolean; executionEnabled: boolean; chatAutoPromoteEnabled: boolean };
+  configuredFeatureFlag: boolean | undefined;
+  storedDurableKernelFlag: boolean | undefined;
+}): string[] {
+  const driftedFields: string[] = [];
+  if (!input.durable.enabled) {
+    driftedFields.push("assistant.durable.enabled");
+  }
+  if (!input.durable.executionEnabled) {
+    driftedFields.push("assistant.durable.executionEnabled");
+  }
+  if (!input.durable.chatAutoPromoteEnabled) {
+    driftedFields.push("assistant.durable.chatAutoPromoteEnabled");
+  }
+  if (!input.configuredFeatureFlag) {
+    driftedFields.push("features.durableKernelV1Enabled");
+  }
+  if (input.storedDurableKernelFlag === false) {
+    driftedFields.push("feature_flags_v1.durableKernelV1Enabled");
+  }
+  return driftedFields;
 }
 
 function resolveCheckpointPruneConfig(): { keepPerRun: number; diskBudgetBytes: number } {

@@ -869,8 +869,11 @@ function createFinalizeState(options?: {
     recordDurableTimelineEvent: (runId, eventType, payload) => {
       timelineEvents.push({ runId, eventType, payload });
     },
-    patchDurableTraceIfPresent: (turnId, patch) => {
-      tracePatches.push({ turnId, patch: patch as Record<string, unknown> });
+    chatTurnTraces: {
+      patch: (turnId, patch) => {
+        tracePatches.push({ turnId, patch: patch as Record<string, unknown> });
+        return { turnId } as unknown as ReturnType<ChatDurableRunFinalizeDeps["chatTurnTraces"]["patch"]>;
+      },
     },
   };
   return { deps, runs, checkpoints, timelineEvents, tracePatches };

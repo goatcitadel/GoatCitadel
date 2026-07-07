@@ -9,7 +9,7 @@ import type {
   DurableRunStatus,
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
-import { isDurableRunTerminal } from "@goatcitadel/contracts";
+import { isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
@@ -131,7 +131,8 @@ export interface ChatDurableRunBeginDeps {
     },
     durableRunId?: string,
   ): void;
-  persistInitialTrace?(prepared: PreparedAgentChatTurn, input: ChatSendMessageRequest, run: DurableRunRecord): void;
+  /** When present, the initial durable chat-turn trace is persisted through this store. */
+  chatTurnTraces?: Pick<Storage["chatTurnTraces"], "get" | "create">;
   requestDurableRunProcessing(runId: string): void;
 }
 
@@ -145,7 +146,7 @@ export interface ChatDurableRunFinalizeDeps {
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
   ): void;
-  patchDurableTraceIfPresent(turnId: string, input: Parameters<Storage["chatTurnTraces"]["patch"]>[1]): void;
+  chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">;
 }
 
 export function beginDurableChatRun(
@@ -167,7 +168,9 @@ export function beginDurableChatRun(
       objective: prepared.content,
     },
   });
-  deps.persistInitialTrace?.(prepared, input, run);
+  if (deps.chatTurnTraces) {
+    persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
+  }
   deps.persistChatStreamChunk(
     {
       type: "message_start",
@@ -184,6 +187,70 @@ export function beginDurableChatRun(
   return run;
 }
 
+/**
+ * Persist the initial "running" chat-turn trace for a freshly-begun durable run.
+ * Idempotent: if a trace already exists for the turn (e.g. a retry re-entered the
+ * durable path) it is left untouched.
+ */
+export function persistInitialDurableChatTurnTrace(
+  deps: { chatTurnTraces: Pick<Storage["chatTurnTraces"], "get" | "create"> },
+  prepared: PreparedAgentChatTurn,
+  input: ChatSendMessageRequest,
+  run: DurableRunRecord,
+): void {
+  try {
+    deps.chatTurnTraces.get(prepared.turnId);
+    return;
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  deps.chatTurnTraces.create({
+    turnId: prepared.turnId,
+    sessionId: prepared.session.sessionId,
+    userMessageId: prepared.userEventId,
+    parentTurnId: prepared.parentTurnId,
+    branchKind: prepared.branchKind,
+    sourceTurnId: prepared.sourceTurnId,
+    status: "running",
+    mode: resolvePreparedTurnMode(prepared),
+    model: input.model ?? prepared.prefs.model,
+    webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+    memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+    thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+    speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+    subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
+    effectiveToolAutonomy: prepared.effectiveToolAutonomy,
+    routing: {
+      primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+      primaryModel: input.model ?? prepared.prefs.model,
+      effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
+      effectiveModel: input.model ?? prepared.prefs.model,
+      modelRouter: prepared.modelRouterDecision,
+    },
+    durable: {
+      runId: run.runId,
+      status: run.status,
+    },
+  });
+}
+
+/** Patch a chat-turn trace, tolerating a trace that was never created for the turn. */
+function patchDurableTraceIfPresent(
+  chatTurnTraces: Pick<Storage["chatTurnTraces"], "patch">,
+  turnId: string,
+  input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
+): void {
+  try {
+    chatTurnTraces.patch(turnId, input);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+}
+
 export function finalizeDurableChatRun(
   deps: ChatDurableRunFinalizeDeps,
   runId: string,
@@ -193,7 +260,7 @@ export function finalizeDurableChatRun(
   const now = new Date().toISOString();
   const currentRun = deps.durableRuns.getRun?.(runId);
   if (currentRun && isDurableRunTerminal(currentRun.status)) {
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: currentRun.status,
@@ -203,7 +270,7 @@ export function finalizeDurableChatRun(
     return;
   }
   if (currentRun && currentRun.status !== "running") {
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: currentRun.status,
@@ -241,7 +308,7 @@ export function finalizeDurableChatRun(
       state: checkpointState,
     });
     deps.recordDurableTimelineEvent(runId, "run_waiting", checkpointState);
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: "waiting",
@@ -266,7 +333,7 @@ export function finalizeDurableChatRun(
       state: checkpointState,
     });
     deps.recordDurableTimelineEvent(runId, "run_cancelled", checkpointState);
-    deps.patchDurableTraceIfPresent(prepared.turnId, {
+    patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
       durable: {
         runId,
         status: "cancelled",
@@ -295,7 +362,7 @@ export function finalizeDurableChatRun(
     state: checkpointState,
   });
   deps.recordDurableTimelineEvent(runId, failed ? "run_failed" : "run_completed", checkpointState);
-  deps.patchDurableTraceIfPresent(prepared.turnId, {
+  patchDurableTraceIfPresent(deps.chatTurnTraces, prepared.turnId, {
     durable: {
       runId,
       status: nextStatus,

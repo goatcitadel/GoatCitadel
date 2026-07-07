@@ -575,7 +575,7 @@ import {
 } from "./chat-turn-planning-helpers.js";
 import { buildMemoryContextSystemMessage } from "./llm-completion-helpers.js";
 import { ChatProjectService } from "./chat-project-service.js";
-import { DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
+import { computeDurableBaselineDrift, DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
 import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
@@ -6129,7 +6129,12 @@ export class GatewayService {
     if (policyContext.permissionProfile && policyContext.permissionProfileId) {
       this.registerSyntheticPermissionProfile(policyContext.permissionProfile);
     }
-    this.persistInitialDurableChatTurnTrace(prepared, request, run);
+    chatDurableRunService.persistInitialDurableChatTurnTrace(
+      { chatTurnTraces: this.storage.chatTurnTraces },
+      prepared,
+      request,
+      run,
+    );
     this.persistChatStreamChunk(
       {
         type: "message_start",
@@ -6290,57 +6295,13 @@ export class GatewayService {
         buildDurablePayloadRecord: (preparedTurn, request, eventType) =>
           durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(preparedTurn, request, eventType)),
         persistChatStreamChunk: (chunk, durableRunId) => this.persistChatStreamChunk(chunk, durableRunId),
-        persistInitialTrace: (preparedTurn, request, run) =>
-          this.persistInitialDurableChatTurnTrace(preparedTurn, request, run),
+        chatTurnTraces: this.storage.chatTurnTraces,
         requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       },
       prepared,
       input,
       threadEventType,
     );
-  }
-
-  private persistInitialDurableChatTurnTrace(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
-    input: ChatSendMessageRequest,
-    run: DurableRunRecord,
-  ): void {
-    try {
-      this.storage.chatTurnTraces.get(prepared.turnId);
-      return;
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
-      }
-    }
-    this.storage.chatTurnTraces.create({
-      turnId: prepared.turnId,
-      sessionId: prepared.session.sessionId,
-      userMessageId: prepared.userEventId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-      status: "running",
-      mode: chatTurnPrepService.resolvePreparedTurnMode(prepared),
-      model: input.model ?? prepared.prefs.model,
-      webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-      memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-      thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-      speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-      subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
-      effectiveToolAutonomy: prepared.effectiveToolAutonomy,
-      routing: {
-        primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-        primaryModel: input.model ?? prepared.prefs.model,
-        effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
-        effectiveModel: input.model ?? prepared.prefs.model,
-        modelRouter: prepared.modelRouterDecision,
-      },
-      durable: {
-        runId: run.runId,
-        status: run.status,
-      },
-    });
   }
 
   public finalizeDurableChatRun(
@@ -6356,22 +6317,12 @@ export class GatewayService {
         chatMessages: this.storage.chatMessages,
         recordDurableTimelineEvent: (durableRunId, eventType, payload) =>
           this.recordDurableTimelineEvent(durableRunId, eventType, payload),
-        patchDurableTraceIfPresent: (turnId, patch) => this.patchDurableTraceIfPresent(turnId, patch),
+        chatTurnTraces: this.storage.chatTurnTraces,
       },
       runId,
       prepared,
       trace,
     );
-  }
-
-  private patchDurableTraceIfPresent(turnId: string, input: Parameters<Storage["chatTurnTraces"]["patch"]>[1]): void {
-    try {
-      this.storage.chatTurnTraces.patch(turnId, input);
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
-      }
-    }
   }
 
   private async executePreparedAgentChatTurnBackground(
@@ -8723,18 +8674,7 @@ export class GatewayService {
     finishedAt?: string;
     clearFinishedAt?: boolean;
   }): DurableRunRecord {
-    const current = this.storage.durableRuns.getRun(input.runId);
-    return this.storage.durableRuns.updateRun({
-      runId: input.runId,
-      status: input.status ?? current.status,
-      metadata: input.metadata ?? current.metadata,
-      lastError: input.lastError,
-      clearLastError: input.clearLastError,
-      finishedAt: input.finishedAt,
-      clearFinishedAt: input.clearFinishedAt,
-      updatedAt: new Date().toISOString(),
-      expectedVersion: current.version,
-    });
+    return this.durableRunService.updateRunState(input);
   }
 
   /** @internal */ public async executeDurableOrchestrationRun(
@@ -8750,27 +8690,13 @@ export class GatewayService {
   }
 
   private enforceDurableExecutionBaseline(): void {
-    const durable = this.config.assistant.durable;
-    const configuredFeatureFlag = this.config.assistant.features.durableKernelV1Enabled;
     const stored =
       this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
-    const driftedFields: string[] = [];
-    if (!durable.enabled) {
-      driftedFields.push("assistant.durable.enabled");
-    }
-    if (!durable.executionEnabled) {
-      driftedFields.push("assistant.durable.executionEnabled");
-    }
-    if (!durable.chatAutoPromoteEnabled) {
-      driftedFields.push("assistant.durable.chatAutoPromoteEnabled");
-    }
-    if (!configuredFeatureFlag) {
-      driftedFields.push("features.durableKernelV1Enabled");
-    }
-    if (stored?.durableKernelV1Enabled === false) {
-      driftedFields.push("feature_flags_v1.durableKernelV1Enabled");
-    }
-
+    const driftedFields = computeDurableBaselineDrift({
+      durable: this.config.assistant.durable,
+      configuredFeatureFlag: this.config.assistant.features.durableKernelV1Enabled,
+      storedDurableKernelFlag: stored?.durableKernelV1Enabled,
+    });
     if (driftedFields.length > 0) {
       log.warn("durable baseline drift detected; coercing always-on durable execution", {
         driftedFields,

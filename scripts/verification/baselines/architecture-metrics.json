@@ -1,63 +1,63 @@
 {
-  "generatedAt": "2026-07-06T21:43:54.902Z",
-  "gatewayLineCount": 11432,
+  "generatedAt": "2026-07-07T04:32:36.685Z",
+  "gatewayLineCount": 11398,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
-      "lineCount": 13052,
-      "bytes": 541390
+      "lineCount": 13548,
+      "bytes": 550805
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 10584,
-      "bytes": 427193
+      "lineCount": 11398,
+      "bytes": 456180
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
-      "lineCount": 9292,
-      "bytes": 350553
+      "lineCount": 9303,
+      "bytes": 350980
     },
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
-      "lineCount": 5824,
-      "bytes": 221630
+      "lineCount": 5911,
+      "bytes": 219293
     },
     {
       "path": "apps/gateway/src/services/capability-system-service.ts",
-      "lineCount": 4230,
-      "bytes": 158555
+      "lineCount": 4635,
+      "bytes": 169156
     },
     {
       "path": "apps/gateway/src/services/llm-service.ts",
-      "lineCount": 3807,
-      "bytes": 139111
+      "lineCount": 4076,
+      "bytes": 147329
     },
     {
       "path": "apps/gateway/src/services/memory-lifecycle-service.ts",
-      "lineCount": 3516,
-      "bytes": 128483
+      "lineCount": 3521,
+      "bytes": 125317
     },
     {
       "path": "apps/gateway/src/services/skill-import-service.ts",
-      "lineCount": 2782,
-      "bytes": 104617
+      "lineCount": 2838,
+      "bytes": 103634
     },
     {
       "path": "apps/gateway/src/services/chat-proactive-service.ts",
-      "lineCount": 2573,
-      "bytes": 94036
+      "lineCount": 2612,
+      "bytes": 94199
     },
     {
       "path": "apps/gateway/src/services/chat-turn-stream-service.ts",
-      "lineCount": 2227,
-      "bytes": 85232
+      "lineCount": 2552,
+      "bytes": 97067
     }
   ],
   "gatewayPublicMethodCount": 268,
   "gatewayPublicMethodsByRegion": {
     "approvals": 18,
     "chat-sessions": 14,
-    "chat-turn-runtime": 21,
+    "chat-turn-runtime": 22,
     "composition-helpers": 12,
     "dashboard-workspace": 9,
     "durable": 20,
@@ -66,7 +66,7 @@
     "mcp": 17,
     "memory": 6,
     "orchestration": 8,
-    "other": 77,
+    "other": 80,
     "prompt-packs": 1,
     "realtime-events": 3,
     "runtime-provider": 4,
@@ -108,7 +108,7 @@
   "gatewayRouteCompositionPortMemberCount": 164,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 908,
+  "totalHostCallbacks": 911,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/activepieces-run-status-action.ts": 3,
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 7,
@@ -116,29 +116,33 @@
     "apps/gateway/src/services/approval-remote-token-service.ts": 7,
     "apps/gateway/src/services/channel-setup-helpers.ts": 1,
     "apps/gateway/src/services/channel-setup-service.ts": 34,
+    "apps/gateway/src/services/channel-voice-inbound-service.ts": 1,
     "apps/gateway/src/services/chat-agent-orchestrator.ts": 5,
     "apps/gateway/src/services/chat-turn-dispatch-service.ts": 41,
-    "apps/gateway/src/services/chat-turn-entry-service.ts": 87,
+    "apps/gateway/src/services/chat-turn-entry-service.ts": 91,
     "apps/gateway/src/services/chat-turn-helpers.ts": 1,
-    "apps/gateway/src/services/chat-turn-prep-service.ts": 40,
+    "apps/gateway/src/services/chat-turn-mobile-context.ts": 2,
+    "apps/gateway/src/services/chat-turn-prep-service.ts": 34,
+    "apps/gateway/src/services/chat-turn-runtime-decisions.ts": 2,
+    "apps/gateway/src/services/chat-turn-side-chat.ts": 6,
     "apps/gateway/src/services/chat-turn-stream-events.ts": 2,
-    "apps/gateway/src/services/chat-turn-stream-service.ts": 96,
+    "apps/gateway/src/services/chat-turn-stream-service.ts": 102,
     "apps/gateway/src/services/code-mode-execution-backends.ts": 13,
     "apps/gateway/src/services/comms-service.ts": 7,
     "apps/gateway/src/services/connection-url-helpers.ts": 1,
     "apps/gateway/src/services/connector-diagnostics-helpers.ts": 1,
-    "apps/gateway/src/services/cron-job-config-helpers.ts": 14,
+    "apps/gateway/src/services/cron-job-config-helpers.ts": 16,
     "apps/gateway/src/services/cron-scheduler-service.ts": 11,
     "apps/gateway/src/services/daemon-route-service.ts": 1,
     "apps/gateway/src/services/discord-pairing-helpers.ts": 5,
     "apps/gateway/src/services/discord-runtime-bridge-service.ts": 33,
-    "apps/gateway/src/services/durable-execution-service.ts": 54,
+    "apps/gateway/src/services/durable-execution-service.ts": 56,
     "apps/gateway/src/services/evidence-receipt-signing-key.ts": 1,
     "apps/gateway/src/services/guidance-document-helpers.ts": 4,
     "apps/gateway/src/services/integration-action-service.ts": 32,
-    "apps/gateway/src/services/llm-completion-memory-context.ts": 6,
-    "apps/gateway/src/services/llm-completion-service.ts": 50,
-    "apps/gateway/src/services/llm-service.ts": 9,
+    "apps/gateway/src/services/llm-completion-memory-context.ts": 7,
+    "apps/gateway/src/services/llm-completion-service.ts": 54,
+    "apps/gateway/src/services/llm-service.ts": 10,
     "apps/gateway/src/services/mcp-diagnostics-service.ts": 6,
     "apps/gateway/src/services/mcp-server-admin-service.ts": 29,
     "apps/gateway/src/services/memory-item-helpers.ts": 3,
@@ -151,7 +155,8 @@
     "apps/gateway/src/services/runtime-lifecycle-read-service.ts": 25,
     "apps/gateway/src/services/skill-evaluation-service.ts": 10,
     "apps/gateway/src/services/skill-import-service.ts": 4,
-    "apps/gateway/src/services/tool-invocation-coordinator-service.ts": 50,
+    "apps/gateway/src/services/surface-router-entry.ts": 17,
+    "apps/gateway/src/services/tool-invocation-coordinator-service.ts": 54,
     "apps/gateway/src/services/workflow-recipe-service.ts": 4
   },
   "settingsHostCallbackCount": 0,
@@ -167,6 +172,7 @@
     "apps/gateway/src/services/autonomy-control-route-service.ts",
     "apps/gateway/src/services/capabilities-route-service.ts",
     "apps/gateway/src/services/capability-packs-route-service.ts",
+    "apps/gateway/src/services/capability-scope-route-service.ts",
     "apps/gateway/src/services/channel-setup-route-service.ts",
     "apps/gateway/src/services/chat-attachments-route-service.ts",
     "apps/gateway/src/services/chat-delegate-route-service.ts",

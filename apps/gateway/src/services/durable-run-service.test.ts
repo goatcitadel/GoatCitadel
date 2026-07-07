@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DurableRetryRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
 import {
+  computeDurableBaselineDrift,
   DurableRunService,
   resolveDurableWorkflowTimeoutMs,
   type DurableRunServiceLogger,
@@ -32,6 +33,90 @@ describe("DurableRunService", () => {
 
     expect(resolveDurableWorkflowTimeoutMs(chatRun, 300_000)).toBe(300_000);
     expect(resolveDurableWorkflowTimeoutMs(connectorRun, 300_000)).toBe(300_000);
+  });
+
+  it("updates run state against the current version and preserves unspecified fields (moved from the gateway facade, B2)", () => {
+    const current = {
+      runId: "run-1",
+      status: "running",
+      metadata: { prior: true },
+      version: 7,
+    };
+    const updateRun = vi.fn((input: Record<string, unknown>) => ({ ...input, version: 8 }));
+    const service = new DurableRunService({
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => current),
+          updateRun,
+        },
+      },
+    } as unknown as ServiceContext);
+
+    expect(
+      service.updateRunState({
+        runId: "run-1",
+        status: "completed",
+        metadata: { next: true },
+        clearLastError: true,
+        finishedAt: "2026-05-14T21:30:00.000Z",
+      }),
+    ).toMatchObject({
+      runId: "run-1",
+      status: "completed",
+      metadata: { next: true },
+      expectedVersion: 7,
+      version: 8,
+    });
+    expect(updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        clearLastError: true,
+        expectedVersion: 7,
+        updatedAt: expect.stringMatching(/T.*Z$/),
+      }),
+    );
+
+    service.updateRunState({ runId: "run-1" });
+    expect(updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "running",
+        metadata: { prior: true },
+        expectedVersion: 7,
+      }),
+    );
+  });
+
+  it("reports each config and stored-flag field that drifted from the always-on durable baseline", () => {
+    expect(
+      computeDurableBaselineDrift({
+        durable: { enabled: true, executionEnabled: true, chatAutoPromoteEnabled: true },
+        configuredFeatureFlag: true,
+        storedDurableKernelFlag: undefined,
+      }),
+    ).toEqual([]);
+
+    expect(
+      computeDurableBaselineDrift({
+        durable: { enabled: false, executionEnabled: false, chatAutoPromoteEnabled: false },
+        configuredFeatureFlag: false,
+        storedDurableKernelFlag: false,
+      }),
+    ).toEqual([
+      "assistant.durable.enabled",
+      "assistant.durable.executionEnabled",
+      "assistant.durable.chatAutoPromoteEnabled",
+      "features.durableKernelV1Enabled",
+      "feature_flags_v1.durableKernelV1Enabled",
+    ]);
+
+    // A stored flag that is merely absent (vs explicitly false) is not drift.
+    expect(
+      computeDurableBaselineDrift({
+        durable: { enabled: true, executionEnabled: true, chatAutoPromoteEnabled: true },
+        configuredFeatureFlag: true,
+        storedDurableKernelFlag: true,
+      }),
+    ).toEqual([]);
   });
 
   it("preserves caller metadata when creating durable runs", () => {

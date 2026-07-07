@@ -383,7 +383,6 @@ describe("GatewayService Loop 13 chat facade forwarding", () => {
     const { gateway } = createGatewayHarness({
       createDurableRun: vi.fn((input: Record<string, unknown>) => ({ runId: "run-created", input })),
       durableRunService: { requestRunProcessing: vi.fn() },
-      patchDurableTraceIfPresent: vi.fn(),
       persistChatStreamChunk: vi.fn(),
       recordDurableTimelineEvent: vi.fn(),
       storage: {
