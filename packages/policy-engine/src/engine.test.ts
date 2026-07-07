@@ -585,6 +585,182 @@ describe("ToolPolicyEngine citadel scope", () => {
 
     expect(listWards).not.toHaveBeenCalled();
   });
+
+  // --- Review Finding 2 / slice 3.1a: surface the matched Ward effect on the
+  // runtime result and audit the previously-silent effects via reason codes. ---
+  const wardStorageFor = (effect: "require_dry_run" | "route_local" | "redact"): Storage => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "c1"
+            ? [
+                {
+                  wardId: `w-${effect}`,
+                  citadelId: "c1",
+                  name: `Ward ${effect}`,
+                  actionPattern: "custom.*",
+                  effect,
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    return storage;
+  };
+
+  const recordedReasonCodesFor = (storage: Storage): string[] | undefined =>
+    vi
+      .mocked(storage.toolAccessDecisions.record)
+      .mock.calls.find(([decision]) => decision.toolName === "custom.allowed")?.[0].reasonCodes;
+
+  it("surfaces a require_dry_run Ward effect on the result and records citadel_ward_require_dry_run", () => {
+    const storage = wardStorageFor("require_dry_run");
+    const engine = new ToolPolicyEngine(policyConfig, storage, createCustomAllowedRegistry());
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "custom.allowed",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.wardEffect).toBe("require_dry_run");
+    expect(evaluation.reasonCodes).toContain("citadel_ward_require_dry_run");
+    expect(recordedReasonCodesFor(storage)).toContain("citadel_ward_require_dry_run");
+  });
+
+  it("surfaces a route_local Ward effect on the result without silently dropping it", () => {
+    const storage = wardStorageFor("route_local");
+    const engine = new ToolPolicyEngine(policyConfig, storage, createCustomAllowedRegistry());
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "custom.allowed",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.wardEffect).toBe("route_local");
+    expect(evaluation.reasonCodes).toContain("citadel_ward_route_local");
+    expect(recordedReasonCodesFor(storage)).toContain("citadel_ward_route_local");
+  });
+
+  it("surfaces a redact Ward effect on the result without silently dropping it", () => {
+    const storage = wardStorageFor("redact");
+    const engine = new ToolPolicyEngine(policyConfig, storage, createCustomAllowedRegistry());
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "custom.allowed",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.wardEffect).toBe("redact");
+    expect(evaluation.reasonCodes).toContain("citadel_ward_redact");
+    expect(recordedReasonCodesFor(storage)).toContain("citadel_ward_redact");
+  });
+
+  it("leaves a non-warded request with no wardEffect and no citadel_ward_* reason code", () => {
+    const storage = createStorageStub();
+    const listWards = vi.fn(() => []);
+    Object.assign(storage, { citadels: { listWards } });
+    const engine = new ToolPolicyEngine(policyConfig, storage, createCustomAllowedRegistry());
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "custom.allowed",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.wardEffect).toBeUndefined();
+    expect(evaluation.reasonCodes.some((code) => code.startsWith("citadel_ward_"))).toBe(false);
+    expect((recordedReasonCodesFor(storage) ?? []).some((code) => code.startsWith("citadel_ward_"))).toBe(false);
+  });
+
+  it("carries wardEffect on a deny-by-Ward result while preserving the existing deny behavior", () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "c1"
+            ? [
+                {
+                  wardId: "w-deny",
+                  citadelId: "c1",
+                  name: "No shell",
+                  actionPattern: "shell.*",
+                  effect: "deny",
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("citadel_ward_deny");
+    expect(evaluation.wardEffect).toBe("deny");
+  });
+
+  it("keeps require_approval Wards emitting citadel_ward_requires_approval and no silent-effect code", () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "c1"
+            ? [
+                {
+                  wardId: "w-approve",
+                  citadelId: "c1",
+                  name: "Review shell",
+                  actionPattern: "shell.*",
+                  effect: "require_approval",
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hi" },
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "c1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.reasonCodes).toContain("citadel_ward_requires_approval");
+    expect(evaluation.reasonCodes).not.toContain("citadel_ward_require_approval");
+    expect(evaluation.wardEffect).toBe("require_approval");
+  });
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {

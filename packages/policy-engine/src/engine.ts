@@ -64,6 +64,13 @@ interface AccessEvaluation {
   localOperatorOverrideId?: string;
   approvalMode?: ToolApprovalMode;
   matchedGrantAllowedHosts?: string[];
+  /**
+   * Raw matched Citadel Ward effect (collapsed to `undefined` on no-match/`allow`).
+   * Surfaced to callers so downstream execution can enforce the effects the engine
+   * does not itself gate (`require_dry_run`, `route_local`, `redact`). Set on every
+   * post-ward return path; never set on the two pre-ward early returns.
+   */
+  wardEffect?: WardEffect;
 }
 
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
@@ -250,6 +257,7 @@ export class ToolPolicyEngine {
       riskLevel: evaluation.riskLevel,
       permissionProfileId: evaluation.permissionProfileId,
       localOperatorOverrideId: evaluation.localOperatorOverrideId,
+      wardEffect: evaluation.wardEffect,
     };
   }
 
@@ -692,15 +700,30 @@ export class ToolPolicyEngine {
     const effectiveCitadelId = request.citadelId;
 
     // Citadel Wards (deny-wins) gate the request before grants.
-    const wardEffect = effectiveCitadelId ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName) : undefined;
-    if (wardEffect === "deny") {
-      return withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`));
+    const rawWardEffect = effectiveCitadelId
+      ? this.evaluateCitadelWards(effectiveCitadelId, request.toolName)
+      : undefined;
+    // The matched effect surfaced to callers: `evaluateWards` returns "allow" on
+    // no-match, so collapse both "allow" and absence to `undefined`. Set ONLY when
+    // a Ward actually matched with a non-allow effect. Threaded onto every post-ward
+    // return via `withWard` so downstream execution can enforce the effects the
+    // engine does not itself gate (require_dry_run / route_local / redact).
+    const matchedWardEffect: WardEffect | undefined =
+      rawWardEffect && rawWardEffect !== "allow" ? rawWardEffect : undefined;
+    const withWard = (evaluation: AccessEvaluation): AccessEvaluation => ({
+      ...evaluation,
+      wardEffect: matchedWardEffect,
+    });
+    if (rawWardEffect === "deny") {
+      return withWard(
+        withPolicy(deny(riskLevel, "citadel_ward_deny", `tool ${request.toolName} denied by a Citadel Ward`)),
+      );
     }
-    const wardRequiresApproval = wardEffect === "require_approval";
+    const wardRequiresApproval = rawWardEffect === "require_approval";
 
     const grantDecision = this.resolveGrantDecision(request, toolDef);
     if (grantDecision?.decision === "deny") {
-      return {
+      return withWard({
         allowed: false,
         reasonCodes: ["grant_deny"],
         requiresApproval: false,
@@ -710,7 +733,7 @@ export class ToolPolicyEngine {
         permissionProfileId: policy.permissionProfileId,
         localOperatorOverrideId: localOperatorOverrideAuditId,
         approvalMode: policy.approvalMode,
-      };
+      });
     }
 
     const allowGrants =
@@ -718,21 +741,23 @@ export class ToolPolicyEngine {
 
     const structuralError = this.validateStructuralSafety(request, policy, allowGrants);
     if (structuralError) {
-      return withPolicy(deny(riskLevel, "structural_safety_block", structuralError));
+      return withWard(withPolicy(deny(riskLevel, "structural_safety_block", structuralError)));
     }
 
     if (isUntrustedToolEscalation(resolveToolTrustLevel(request), capabilityPolicy)) {
-      return withPolicy(
-        deny(
-          riskLevel,
-          "untrusted_source_privileged_tool_block",
-          `tool ${request.toolName} is blocked because untrusted external content cannot escalate into privileged execution`,
+      return withWard(
+        withPolicy(
+          deny(
+            riskLevel,
+            "untrusted_source_privileged_tool_block",
+            `tool ${request.toolName} is blocked because untrusted external content cannot escalate into privileged execution`,
+          ),
         ),
       );
     }
 
     if (grantDecision?.decision === "allow" && grantDecision.constraintsError) {
-      return {
+      return withWard({
         allowed: false,
         reasonCodes: ["grant_constraints_block"],
         requiresApproval: false,
@@ -742,13 +767,13 @@ export class ToolPolicyEngine {
         permissionProfileId: policy.permissionProfileId,
         localOperatorOverrideId: localOperatorOverrideAuditId,
         approvalMode: policy.approvalMode,
-      };
+      });
     }
 
     const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
     const hasAllowGrant = grantDecision?.decision === "allow";
     if (!inProfile && !hasAllowGrant) {
-      return withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy"));
+      return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
     }
 
     let requiresApproval =
@@ -815,6 +840,7 @@ export class ToolPolicyEngine {
       localOperatorOverrideAuditId,
       codeModeRunPreapproved,
       wardRequiresApproval,
+      matchedWardEffect,
       riskLevel,
       hasAllowGrant,
       requiresApproval,
@@ -827,7 +853,7 @@ export class ToolPolicyEngine {
         ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
         : undefined;
 
-    return {
+    return withWard({
       allowed: true,
       reasonCodes,
       requiresApproval,
@@ -839,7 +865,7 @@ export class ToolPolicyEngine {
       permissionProfileId: policy.permissionProfileId,
       localOperatorOverrideId: localOperatorOverrideAuditId,
       approvalMode: policy.approvalMode,
-    };
+    });
   }
 
   /**
@@ -852,6 +878,7 @@ export class ToolPolicyEngine {
     localOperatorOverrideAuditId: string | undefined;
     codeModeRunPreapproved: boolean;
     wardRequiresApproval: boolean;
+    matchedWardEffect: WardEffect | undefined;
     riskLevel: AccessEvaluation["riskLevel"];
     hasAllowGrant: boolean;
     requiresApproval: boolean;
@@ -864,6 +891,7 @@ export class ToolPolicyEngine {
       localOperatorOverrideAuditId,
       codeModeRunPreapproved,
       wardRequiresApproval,
+      matchedWardEffect,
       riskLevel,
       hasAllowGrant,
       requiresApproval,
@@ -883,6 +911,17 @@ export class ToolPolicyEngine {
     }
     if (wardRequiresApproval) {
       reasonCodes.push("citadel_ward_requires_approval");
+    }
+    // Audit the previously-silent Ward effects (require_dry_run / route_local /
+    // redact) so a matched-but-dropped Ward leaves evidence in reason_codes. deny
+    // and require_approval already emit their own codes upstream, so they are the
+    // only WardEffects excluded here.
+    if (
+      matchedWardEffect === "require_dry_run" ||
+      matchedWardEffect === "route_local" ||
+      matchedWardEffect === "redact"
+    ) {
+      reasonCodes.push(`citadel_ward_${matchedWardEffect}`);
     }
     if (policy.approvalMode === "bypass") {
       reasonCodes.push("approval_bypass_mode");
