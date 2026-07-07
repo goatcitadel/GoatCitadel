@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 
 const TOKEN = "security-review-token-1234567890";
-const RATE_LIMIT_TEST_TIMEOUT_MS = 45_000;
+// Full Fastify app boots are import-heavy; under a loaded machine (verify lanes
+// building concurrently) 45s was routinely exceeded. Generous by design — a real
+// hang still fails, just later.
+const RATE_LIMIT_TEST_TIMEOUT_MS = 120_000;
 const ENV_KEYS = [
   "GATEWAY_HOST",
   "GOATCITADEL_ALLOWED_ORIGINS",
