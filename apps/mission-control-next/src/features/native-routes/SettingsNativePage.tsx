@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- SettingsNativePage intentionally keeps the new settings routes in one editable module while the product surface is still settling. */
+/* eslint-disable max-lines -- SettingsNativePage keeps the settings route frame, the per-section dispatcher, and the exported settings helpers that the helper test suites import; the section components themselves live in ./settings/sections/. */
 import { useCallback } from "react";
 import {
   providerTemplates,
