@@ -476,7 +476,7 @@ export function forgetExpiredMemoryItemsForFlush(
   }
   const ledger = deps.memoryLifecycle.inspectExpiredActiveMemoryLedger({ nowIso });
   return {
-    expiredActiveCount: ledger.totalCount + forgottenItems.length,
+    expiredActiveCount: ledger.totalCount,
     forgottenCount: forgottenItems.length,
     retainedPinnedCount: ledger.retainedPinnedCount,
     remainingExpiredUnpinnedCount: ledger.unpinnedCount,
