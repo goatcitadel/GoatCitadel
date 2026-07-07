@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { ApprovalCreateInput, ApprovalRequest, IntegrationConnection } from "@goatcitadel/contracts";
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
+import { approveDryRun, createInMemoryDryRunCommitStore } from "./dry-run-commit-service.js";
 
 function createConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -1427,6 +1428,303 @@ describe("integration-action-service", () => {
 
       expect(result.status).toBe("executed");
       expect(host.fetchWithDiagnosticsTimeout).toHaveBeenCalled();
+    });
+
+    describe("dry-run commit loop (Stage 2)", () => {
+      function guardedGmailConnection(): IntegrationConnection {
+        return createConnection({
+          catalogId: "automation.gmail",
+          key: "gmail",
+          kind: "automation",
+          label: "Gmail",
+          workspaceId: "ws-guarded",
+          config: { accessToken: "gmail-token" },
+        });
+      }
+
+      function dryRunHost(connection: IntegrationConnection) {
+        const store = createInMemoryDryRunCommitStore();
+        const upserts: Array<Record<string, unknown>> = [];
+        const approvalEvents: Array<Record<string, unknown>> = [];
+        const createApproval = vi.fn(async (input: ApprovalCreateInput): Promise<ApprovalRequest> => {
+          return {
+            approvalId: "approval-dryrun-1",
+            kind: input.kind,
+            riskLevel: input.riskLevel,
+            status: "pending",
+            payload: input.payload,
+            preview: input.preview,
+            linkage: input.linkage,
+            createdAt: "2026-07-07T00:00:00.000Z",
+            expiresAt: input.expiresAt ?? undefined,
+            explanationStatus: "not_requested",
+          };
+        });
+        const base = wardHost(
+          connection,
+          [{ actionPattern: "integration.automation.gmail.write", effect: "require_dry_run" }],
+          {
+            fetchWithDiagnosticsTimeout: vi.fn(
+              async () => new Response(JSON.stringify({ id: "msg-1" }), { status: 200 }),
+            ),
+            createApproval,
+          },
+        );
+        const host: IntegrationActionHost = {
+          ...base,
+          storage: {
+            ...base.storage,
+            dryRunCommits: store,
+            pendingApprovalActions: {
+              upsertPending: (input) => {
+                upserts.push(input as unknown as Record<string, unknown>);
+                return {
+                  approvalId: input.approvalId,
+                  actionType: input.actionType,
+                  request: input.request,
+                  createdAt: input.createdAt ?? "2026-07-07T00:00:00.000Z",
+                  expiresAt: input.expiresAt,
+                  resolutionStatus: "pending",
+                };
+              },
+            },
+            approvalEvents: {
+              append: (input) => {
+                approvalEvents.push(input as unknown as Record<string, unknown>);
+                return input;
+              },
+            },
+          },
+        };
+        return { host, store, upserts, approvalEvents, createApproval };
+      }
+
+      const gmailWriteInput = { to: "ops@example.com", subject: "s", bodyText: "b" };
+
+      async function openPreview(host: IntegrationActionHost, connection: IntegrationConnection) {
+        const refusal = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+          input: gmailWriteInput,
+        });
+        const dryRunId = (refusal.output as Record<string, unknown>).dryRunId as string;
+        return { refusal, dryRunId };
+      }
+
+      it("opens a persisted preview + approval when a require_dry_run write is refused", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store, upserts, approvalEvents, createApproval } = dryRunHost(connection);
+
+        const { refusal, dryRunId } = await openPreview(host, connection);
+
+        expect(refusal.status).toBe("blocked");
+        expect(refusal.blockedReason).toBe("external_side_effect_dry_run_required");
+        expect(refusal.output).toMatchObject({
+          dryRunId: expect.stringMatching(/^dryrun-/),
+          dryRunState: "awaiting_commit",
+          approvalId: "approval-dryrun-1",
+        });
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+
+        const record = store.get(dryRunId);
+        expect(record).toMatchObject({
+          state: "awaiting_commit",
+          boundary: "integration_operator_action",
+          workspaceId: "ws-guarded",
+          plannedAction: {
+            route: "integration.automation.gmail.write",
+            // The sanitized resolved endpoint is part of the hashed target so a
+            // destination edit between preview and approval refuses the commit.
+            target: `${connection.connectionId}:write@https://gmail.googleapis.com/gmail/v1/users/me/messages/send`,
+            payload: { provider: "gmail", to: "ops@example.com", subject: "s", bodyText: "b" },
+          },
+        });
+        expect(createApproval).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "integration.dry_run_commit",
+            payload: expect.objectContaining({ dryRunId, connectionId: connection.connectionId, actionId: "write" }),
+          }),
+        );
+        expect(upserts).toHaveLength(1);
+        expect(upserts[0]).toMatchObject({
+          approvalId: "approval-dryrun-1",
+          actionType: "integration.dry_run_commit",
+          request: expect.objectContaining({
+            dryRunId,
+            connectionId: connection.connectionId,
+            actionId: "write",
+            invokeRequest: { input: gmailWriteInput },
+          }),
+        });
+        expect(approvalEvents[0]).toMatchObject({ eventType: "pending_action_registered" });
+      });
+
+      it("commits an approved dry-run through the hash moat and crosses the boundary once", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        const committed = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(committed.status).toBe("executed");
+        expect(host.fetchWithDiagnosticsTimeout).toHaveBeenCalledTimes(1);
+        expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
+      });
+
+      it("refuses a commit whose rebuilt action diverges from the approved preview (hash mismatch)", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        const tampered = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: { ...gmailWriteInput, bodyText: "SOMETHING ELSE ENTIRELY" } },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(tampered.status).toBe("blocked");
+        expect(tampered.blockedReason).toBe("dry_run_commit_hash_mismatch");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        expect(store.get(dryRunId)).toMatchObject({ state: "rejected_hash_mismatch" });
+        expect(tampered.output).toMatchObject({
+          dryRunId,
+          dryRunState: "rejected_hash_mismatch",
+        });
+      });
+
+      it("refuses an unapproved commit before the boundary", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+
+        const premature = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId } },
+        );
+
+        expect(premature.status).toBe("blocked");
+        expect(premature.blockedReason).toBe("dry_run_commit_not_approved");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        expect(store.get(dryRunId)).toMatchObject({ state: "awaiting_commit" });
+      });
+
+      it("refuses a commit when the resolved destination changed since the preview", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        // Same inputs, same payload — only the endpoint the send would hit moved.
+        vi.stubEnv("GOATCITADEL_GMAIL_API_BASE_URL", "https://attacker.example.test");
+        const rewired = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(rewired.status).toBe("blocked");
+        expect(rewired.blockedReason).toBe("dry_run_commit_hash_mismatch");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        expect(store.get(dryRunId)).toMatchObject({ state: "rejected_hash_mismatch" });
+      });
+
+      it("records a retried commit whose payload already crossed the boundary as committed (duplicate)", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        // Simulate a first attempt that sent the request and died before the ledger
+        // update: the idempotency layer reports duplicate, the record still awaits.
+        (host.mutationStore!.claim as ReturnType<typeof vi.fn>).mockReturnValue({ outcome: "duplicate" });
+
+        const retried = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(retried.status).toBe("blocked");
+        expect(retried.blockedReason).toBe("external_side_effect_duplicate");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
+      });
+
+      it("restores awaiting_commit when a retried commit collides with an in-flight attempt", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        (host.mutationStore!.claim as ReturnType<typeof vi.fn>).mockReturnValue({ outcome: "in_progress" });
+
+        const colliding = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(colliding.status).toBe("blocked");
+        expect(colliding.blockedReason).toBe("external_side_effect_in_progress");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        // Not terminalized: the in-flight attempt (or a later retry) can still conclude it.
+        expect(store.get(dryRunId)).toMatchObject({ state: "awaiting_commit" });
+      });
+
+      it("keeps the plain refusal when persisting the preview fails, instead of throwing", async () => {
+        const connection = guardedGmailConnection();
+        const { host } = dryRunHost(connection);
+        host.storage.dryRunCommits = {
+          create: () => {
+            throw new Error("ledger down");
+          },
+          get: () => undefined,
+          update: () => undefined,
+        };
+
+        const refusal = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+          input: gmailWriteInput,
+        });
+
+        expect(refusal.status).toBe("blocked");
+        expect(refusal.blockedReason).toBe("external_side_effect_dry_run_required");
+        expect(refusal.output).toMatchObject({ dryRunLedgerError: "ledger down" });
+        expect((refusal.output as Record<string, unknown>).approvalId).toBeUndefined();
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+      });
+
+      it("stays block-only (Stage 1) when the host lacks the approval members", async () => {
+        const connection = guardedGmailConnection();
+        const host = wardHost(connection, [
+          { actionPattern: "integration.automation.gmail.write", effect: "require_dry_run" },
+        ]);
+
+        const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+          input: gmailWriteInput,
+        });
+
+        expect(result.status).toBe("blocked");
+        expect(result.blockedReason).toBe("external_side_effect_dry_run_required");
+        expect((result.output as Record<string, unknown>).dryRunId).toBeUndefined();
+        expect((result.output as Record<string, unknown>).approvalId).toBeUndefined();
+      });
     });
   });
 });

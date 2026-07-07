@@ -26,7 +26,10 @@ import {
   resolveIntegrationCatalogMaturity,
   resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
-import { invokeIntegrationConnectionAction as invokeIntegrationConnectionActionImpl } from "./integration-action-service.js";
+import {
+  invokeIntegrationConnectionAction as invokeIntegrationConnectionActionImpl,
+  type IntegrationActionHost,
+} from "./integration-action-service.js";
 import { readIntegrationPlugins, writeIntegrationPlugins } from "./integration-plugin-store.js";
 import {
   IntegrationChannelService,
@@ -151,17 +154,7 @@ export function composeIntegrationChannelRouteDependencies(
     installIntegrationPlugin: (input) => integrationChannel.installIntegrationPlugin(input),
     invokeIntegrationConnectionAction: (connectionId, actionId, input = {}) =>
       invokeIntegrationConnectionActionImpl(
-        {
-          storage: gateway.storage,
-          fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
-          readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
-          resolveConnectionSecret: (config, directKey, envKey) =>
-            gateway.resolveConnectionSecret(config, directKey, envKey),
-          publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
-          evidenceEnvelopeService: gateway.evidenceEnvelopeService,
-          mutationStore: gateway.mutationIdempotencyStore,
-          sideEffectRunStore: gateway.storage.externalSideEffectRuns,
-        },
+        buildIntegrationActionHostForGateway(gateway),
         connectionId,
         actionId,
         input,
@@ -346,4 +339,23 @@ function assertDiscordConnection(connection: IntegrationConnection): void {
   if (connection.kind !== "channel" || connection.key !== "discord") {
     throw new Error("Integration connection is not a Discord channel");
   }
+}
+
+/**
+ * The single construction site for the integration-action host. Used by the route
+ * composition above AND by the gateway's approved dry-run commit replay, so the two
+ * callers can never drift apart on which gateway capabilities the action runtime sees.
+ */
+export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompositionPort): IntegrationActionHost {
+  return {
+    storage: gateway.storage,
+    fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
+    readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
+    resolveConnectionSecret: (config, directKey, envKey) => gateway.resolveConnectionSecret(config, directKey, envKey),
+    publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+    evidenceEnvelopeService: gateway.evidenceEnvelopeService,
+    mutationStore: gateway.mutationIdempotencyStore,
+    sideEffectRunStore: gateway.storage.externalSideEffectRuns,
+    createApproval: (input) => gateway.createApproval(input),
+  };
 }

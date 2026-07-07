@@ -462,6 +462,35 @@ describe("gateway service host guard", () => {
       expect(serviceSource).not.toMatch(/<\s*GatewayRouteComposition(?:Port|PrivateDependencies|Host)\s*>/);
     }
   }, 15_000);
+
+  it("routes dry-run commit approvals through the single integration-action host construction site", async () => {
+    const files = await readServiceSources();
+    const gatewayService = files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "";
+    const composition =
+      files.find(({ relativePath }) => relativePath === "gateway-route-composition-integrations.ts")?.source ?? "";
+
+    // The approved dry-run replay dispatch must claim the pending action BEFORE the
+    // external-runtime/tool.invoke fallthroughs, and both callers of the integration
+    // action runtime must share buildIntegrationActionHostForGateway so the host
+    // members (createApproval, dryRunCommits via storage) cannot drift apart.
+    expect(gatewayService).toMatch(
+      /pending\?\.actionType === "integration\.dry_run_commit"[\s\S]{0,120}executeApprovedIntegrationDryRunCommit/,
+    );
+    expect(gatewayService).toMatch(/buildIntegrationActionHostForGateway\(this\.getRouteCompositionPort\(\)\)/);
+    expect(gatewayService).not.toMatch(/invokeIntegrationConnectionAction\(\s*\{/);
+    expect(composition).toMatch(/export function buildIntegrationActionHostForGateway\(/);
+    expect(composition).toMatch(
+      /invokeIntegrationConnectionActionImpl\(\s*buildIntegrationActionHostForGateway\(gateway\)/,
+    );
+    expect(composition).toMatch(/createApproval: \(input\) => gateway\.createApproval\(input\)/);
+    const inlineHostBuilders = files
+      .filter(({ relativePath }) => relativePath !== "gateway-route-composition-integrations.ts")
+      .filter(({ source: serviceSource }) =>
+        /invokeIntegrationConnectionAction(?:Impl)?\(\s*\{\s*storage:/.test(serviceSource),
+      )
+      .map(({ relativePath }) => relativePath);
+    expect(inlineHostBuilders).toEqual([]);
+  }, 15_000);
 });
 
 function normalizeTypeAlias(source: string): string {

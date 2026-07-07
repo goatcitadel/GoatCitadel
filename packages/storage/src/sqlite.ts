@@ -1608,7 +1608,39 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "integration_connections", "workspace_id", "TEXT");
     },
   },
+  {
+    version: 135,
+    name: "dry_run_commits_ledger_parity",
+    up: createDryRunCommitSchema,
+  },
 ];
+
+function createDryRunCommitSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dry_run_commits (
+      dry_run_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      boundary TEXT NOT NULL,
+      workspace_id TEXT,
+      planned_action_json TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      dry_run_hash TEXT NOT NULL,
+      state TEXT NOT NULL,
+      approved_at TEXT,
+      approved_by TEXT,
+      committed_at TEXT,
+      diagnostic_json TEXT,
+      external_reference_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dry_run_commits_run
+      ON dry_run_commits(run_id);
+    CREATE INDEX IF NOT EXISTS idx_dry_run_commits_state_created
+      ON dry_run_commits(state, created_at DESC);
+  `);
+}
 
 function ensureChatDelegationParentRunIdSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "parent_run_id", "TEXT");

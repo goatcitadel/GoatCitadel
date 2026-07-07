@@ -19,6 +19,7 @@ export {
   createSettingsRuntimeDependenciesForGateway,
 } from "./gateway-route-composition-shared.js";
 export {
+  buildIntegrationActionHostForGateway,
   createCommsHostForGateway,
   createIntegrationChannelServiceForGateway,
   createIntegrationDiagnosticsServiceForGateway,

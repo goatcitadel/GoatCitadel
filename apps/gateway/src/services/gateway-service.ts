@@ -483,6 +483,7 @@ import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/u
 import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
+  buildIntegrationActionHostForGateway,
   composeGatewayRouteServices,
   createChatThreadKnowledgeDependenciesForGateway,
   createCommsHostForGateway,
@@ -493,6 +494,8 @@ import {
   createSettingsRuntimeDependenciesForGateway,
   type GatewayRouteCompositionPort,
 } from "./gateway-route-service-composition.js";
+import { approveDryRun } from "./dry-run-commit-service.js";
+import { invokeIntegrationConnectionAction } from "./integration-action-service.js";
 import { RealtimeEventService } from "./realtime-event-service.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
@@ -6541,10 +6544,104 @@ export class GatewayService {
       return undefined;
     }
     const pending = this.storage.pendingApprovalActions.find(approvalId);
+    if (pending?.actionType === "integration.dry_run_commit") {
+      return this.executeApprovedIntegrationDryRunCommit(approvalId, pending);
+    }
     if (isApprovedExternalRuntimePendingAction(pending)) {
       return this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal);
     }
     return this.policyEngine.executeApprovedAction(approvalId, signal);
+  }
+
+  /**
+   * Approved dry-run commit replay (integration operator actions, dry-run Stage 2).
+   * Marks the operator approval on the persisted preview, then re-invokes the SAME
+   * action in commit mode: the owning write path rebuilds the planned action from
+   * live state and `commitDryRun` refuses pre-boundary unless its hash matches the
+   * approved preview byte-for-byte. Ward effects are re-evaluated on replay, so a
+   * deny that landed after the preview still wins over the approval.
+   */
+  private async executeApprovedIntegrationDryRunCommit(
+    approvalId: string,
+    pending: PendingApprovalAction,
+  ): Promise<ToolInvokeResult | undefined> {
+    const request = pending.request;
+    const dryRunId = readRecordString(request, "dryRunId");
+    const connectionId = readRecordString(request, "connectionId");
+    const actionId = readRecordString(request, "actionId");
+    const invokeRequest = isRecord(request.invokeRequest) ? request.invokeRequest : {};
+    const finish = (result: ToolInvokeResult): ToolInvokeResult => {
+      this.storage.pendingApprovalActions.markResolved(
+        approvalId,
+        result.outcome === "executed" ? "executed" : "failed",
+        toolInvokeResultRecord(result),
+      );
+      this.storage.approvalEvents.append({
+        approvalId,
+        eventType: "approved_action_executed",
+        actorId: "system",
+        payload: {
+          actionType: "integration.dry_run_commit",
+          outcome: result.outcome,
+          policyReason: result.policyReason,
+          dryRunId,
+          connectionId,
+          actionId,
+        },
+      });
+      return result;
+    };
+    if (!dryRunId || !connectionId || !actionId) {
+      return finish({
+        outcome: "blocked",
+        policyReason:
+          "Approved dry-run commit is missing its linkage (dryRunId/connectionId/actionId); nothing was executed.",
+        auditEventId: randomUUID(),
+      });
+    }
+    let approvedBy = "operator";
+    try {
+      approvedBy = this.storage.approvals.get(approvalId).resolvedBy ?? "operator";
+    } catch {
+      // Keep the fallback actor; the commit still verifies against the approved hash.
+    }
+    approveDryRun(this.storage.dryRunCommits, dryRunId, {
+      approvedBy,
+      approvedAt: new Date().toISOString(),
+    });
+    try {
+      const idempotencyKey = readRecordString(invokeRequest, "idempotencyKey");
+      const actionResult = await invokeIntegrationConnectionAction(
+        buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
+        connectionId,
+        actionId,
+        {
+          input: isRecord(invokeRequest.input) ? invokeRequest.input : {},
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        },
+        { dryRunCommit: { dryRunId, approvedBy } },
+      );
+      return finish({
+        outcome: actionResult.status === "executed" ? "executed" : "blocked",
+        policyReason: actionResult.message,
+        auditEventId: randomUUID(),
+        result: {
+          connectionId,
+          actionId,
+          dryRunId,
+          status: actionResult.status,
+          ...(actionResult.blockedReason ? { blockedReason: actionResult.blockedReason } : {}),
+          ...(actionResult.output ? { output: actionResult.output } : {}),
+        },
+      });
+    } catch (error) {
+      return finish({
+        outcome: "blocked",
+        policyReason:
+          error instanceof Error ? error.message : "Approved dry-run commit failed before reaching the boundary.",
+        auditEventId: randomUUID(),
+      });
+    }
   }
 
   private async executeApprovedExternalRuntimePendingAction(

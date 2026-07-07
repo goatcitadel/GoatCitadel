@@ -99,6 +99,7 @@ import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
 import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 import { ExternalSideEffectRunRepository } from "./external-side-effect-run-repo.js";
+import { DryRunCommitRepository } from "./dry-run-commit-repo.js";
 import { A2ATaskBindingRepository } from "./a2a-task-binding-repo.js";
 import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
 import { RuntimeDecisionTraceRepository } from "./runtime-decision-trace-repo.js";
@@ -224,6 +225,7 @@ export class Storage {
   public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
   public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
   public readonly externalSideEffectRuns: ExternalSideEffectRunRepository;
+  public readonly dryRunCommits: DryRunCommitRepository;
   public readonly a2aTaskBindings: A2ATaskBindingRepository;
   public readonly a2aTaskPushConfigs: A2ATaskPushConfigRepository;
   public readonly runtimeDecisionTraces: RuntimeDecisionTraceRepository;
@@ -340,6 +342,7 @@ export class Storage {
     this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
     this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
     this.externalSideEffectRuns = new ExternalSideEffectRunRepository(this.db);
+    this.dryRunCommits = new DryRunCommitRepository(this.db);
     this.a2aTaskBindings = new A2ATaskBindingRepository(this.db);
     this.a2aTaskPushConfigs = new A2ATaskPushConfigRepository(this.db);
     this.runtimeDecisionTraces = new RuntimeDecisionTraceRepository(this.db);
