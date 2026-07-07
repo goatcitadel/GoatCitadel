@@ -161,6 +161,12 @@ export function NativePageFrame({
         ) : null}
       </header>
       {lead ? <div className="mc-next-directory-lead">{lead}</div> : null}
+      {/*
+       * Error / loading / children are mutually exclusive (review Finding 10). Rendering
+       * children beside the error banner surfaced null/stale data as legitimate-looking
+       * empty-state copy ("No Charter found") that silently contradicted the error above
+       * it — an operator could not tell a real fetch failure from genuinely-empty data.
+       */}
       {error ? (
         <ErrorState
           size="inline"
@@ -174,8 +180,11 @@ export function NativePageFrame({
             ) : undefined
           }
         />
-      ) : null}
-      {loading ? <BlocksShuffleLoader compact label="Loading current route data…" /> : children}
+      ) : loading ? (
+        <BlocksShuffleLoader compact label="Loading current route data…" />
+      ) : (
+        children
+      )}
     </section>
   );
 }
@@ -312,7 +321,11 @@ export function NativeList({
         computeItemKey={(index, item) => nativeListItemKey(item, index)}
         itemContent={(_index, item) => (
           <div
-            className={["mc-next-directory-list-item", "mc-next-directory-list-item-virtual", density === "compact" ? "is-compact" : ""]
+            className={[
+              "mc-next-directory-list-item",
+              "mc-next-directory-list-item-virtual",
+              density === "compact" ? "is-compact" : "",
+            ]
               .filter(Boolean)
               .join(" ")}
           >

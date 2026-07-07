@@ -44,4 +44,20 @@ describe("NativePageFrame error state (STATE-01)", () => {
     expect(renderer.root.findByProps({ className: "mc-next-error-state" })).toBeTruthy();
     expect(renderer.root.findAllByProps({ className: "gc-button" })).toHaveLength(0);
   });
+
+  it("does NOT render children while an error is shown (Finding 10)", () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <NativePageFrame kicker="Library" title="Citadel" description="Overview" loading={false} error="Fetch failed">
+          <div data-testid="stale-children">No Charter found.</div>
+        </NativePageFrame>,
+      );
+    });
+    expect(renderer.root.findByProps({ className: "mc-next-error-state" })).toBeTruthy();
+    // The (null/stale-data) children must NOT render underneath the error banner, or an
+    // operator can't tell a real fetch failure from genuinely-empty data.
+    expect(renderer.root.findAllByProps({ "data-testid": "stale-children" })).toHaveLength(0);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("No Charter found.");
+  });
 });
