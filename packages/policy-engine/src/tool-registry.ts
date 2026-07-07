@@ -258,7 +258,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       {
         title: "Read a focused TypeScript range",
         args: {
-          path: "./apps/gateway/src/services/chat-agent-orchestrator.ts",
+          path: "./apps/gateway/src/services/chat-turn-agent-runner.ts",
           startLine: 880,
           endLine: 980,
         },
@@ -351,7 +351,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     examples: [
       {
         title: "Find test files for a service",
-        args: { path: "./apps/gateway/src", query: "chat-agent-orchestrator", limit: 20 },
+        args: { path: "./apps/gateway/src", query: "chat-turn-agent-runner", limit: 20 },
       },
     ],
     pack: "devops",

@@ -1,11 +1,11 @@
 import type { TurnRuntime, TurnRuntimeRequest, TurnRuntimeResult } from "@goatcitadel/orchestration";
-import { ChatAgentOrchestrator, type ChatAgentOrchestratorDeps } from "./chat-agent-orchestrator.js";
+import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
 
 export class GatewayTurnRuntime implements TurnRuntime {
-  private readonly orchestrator: ChatAgentOrchestrator;
+  private readonly orchestrator: ChatTurnAgentRunner;
 
-  public constructor(deps: ChatAgentOrchestratorDeps) {
-    this.orchestrator = new ChatAgentOrchestrator(deps);
+  public constructor(deps: ChatTurnAgentRunnerDeps) {
+    this.orchestrator = new ChatTurnAgentRunner(deps);
   }
 
   public run(input: TurnRuntimeRequest): Promise<TurnRuntimeResult> {

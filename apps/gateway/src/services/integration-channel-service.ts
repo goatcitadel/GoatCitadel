@@ -199,7 +199,7 @@ export class IntegrationChannelService {
  * them. An operator who genuinely wants an open posture for one of those
  * channels must opt in via `inboundAccessMode: "open_legacy"`.
  */
-const OPEN_INBOUND_CHANNELS = new Set(["tui", "ntfy"]);
+export const OPEN_INBOUND_CHANNELS: ReadonlySet<string> = new Set(["tui", "ntfy"]);
 
 export function listIntegrationConnections(
   deps: IntegrationChannelPort,

@@ -63,6 +63,19 @@ class DryRunCommitInnerResultError<TValue> extends Error {
 
 type BlockedRunResult<TValue> = Extract<IdempotentExternalSideEffectRunResult<TValue>, { status: "blocked" }>;
 type ExecutedRunResult<TValue> = Extract<IdempotentExternalSideEffectRunResult<TValue>, { status: "executed" }>;
+/** What a hash-matched commit may hand back across the boundary seam: a real execution, or the
+ * idempotency layer's proof that this exact payload already crossed (duplicate). */
+type CommitBoundaryValue<TValue> = ExecutedRunResult<TValue> | BlockedRunResult<TValue>;
+
+export interface WardGateRunOptions {
+  /**
+   * The resolved external endpoint this action would hit (webhook URL, bridge URL, provider API
+   * URL). Folded — sanitized to origin+path — into the hashed planned action so an endpoint edit
+   * between preview and approval refuses the commit instead of sending the approved payload to a
+   * different destination.
+   */
+  externalDestination?: string;
+}
 
 /**
  * The single runner entry point for ward-gated integration write paths.
@@ -75,13 +88,14 @@ export async function runWardGatedExternalSideEffect<TValue>(
   host: IntegrationActionHost,
   ward: IntegrationWardContext | undefined,
   input: IdempotentExternalSideEffectRunInput<TValue>,
+  gateOptions: WardGateRunOptions = {},
 ): Promise<IdempotentExternalSideEffectRunResult<TValue>> {
   if (ward?.dryRunCommit) {
-    return commitApprovedDryRunSideEffect(host, ward, ward.dryRunCommit, input);
+    return commitApprovedDryRunSideEffect(host, ward, ward.dryRunCommit, input, gateOptions);
   }
   const result = await runIdempotentExternalSideEffect({ ...input, wardEffect: ward?.effect });
   if (ward && result.status === "blocked" && result.blockedReason === "external_side_effect_dry_run_required") {
-    return openDryRunPreviewForWardRefusal(host, ward, input, result);
+    return openDryRunPreviewForWardRefusal(host, ward, input, result, gateOptions);
   }
   return result;
 }
@@ -96,6 +110,7 @@ async function openDryRunPreviewForWardRefusal<TValue>(
   ward: IntegrationWardContext,
   input: IdempotentExternalSideEffectRunInput<TValue>,
   refusal: BlockedRunResult<TValue>,
+  gateOptions: WardGateRunOptions,
 ): Promise<BlockedRunResult<TValue>> {
   const store = host.storage.dryRunCommits;
   const pendingActions = host.storage.pendingApprovalActions;
@@ -103,14 +118,27 @@ async function openDryRunPreviewForWardRefusal<TValue>(
   if (!store || !pendingActions || !createApproval || !input.connectionId || !input.actionId) {
     return refusal;
   }
-  const record = createDryRunPreview(store, {
-    runId: refusal.claim.sideEffectRunId ?? refusal.claim.idempotencyKey,
-    boundary: input.boundary,
-    plannedAction: buildIntegrationPlannedAction(ward, input),
-    payloadHash: refusal.claim.payloadHash,
-    workspaceId: input.workspaceId,
-    createdAt: input.checkedAt,
-  });
+  let record: ReturnType<typeof createDryRunPreview>;
+  try {
+    record = createDryRunPreview(store, {
+      runId: refusal.claim.sideEffectRunId ?? refusal.claim.idempotencyKey,
+      boundary: input.boundary,
+      plannedAction: buildIntegrationPlannedAction(ward, input, gateOptions),
+      payloadHash: refusal.claim.payloadHash,
+      workspaceId: input.workspaceId,
+      createdAt: input.checkedAt,
+    });
+  } catch (error) {
+    // A ledger write failure must not escalate a fail-closed refusal into a thrown
+    // request error; the refusal stands (block-only) and says why no preview opened.
+    return {
+      ...refusal,
+      output: {
+        ...refusal.output,
+        dryRunLedgerError: error instanceof Error ? error.message : "dry_run_preview_persist_failed",
+      },
+    };
+  }
   try {
     const expiresAt = new Date(Date.parse(input.checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString();
     const approval = await createApproval({
@@ -203,6 +231,7 @@ async function commitApprovedDryRunSideEffect<TValue>(
   ward: IntegrationWardContext,
   commitRef: IntegrationDryRunCommitRef,
   input: IdempotentExternalSideEffectRunInput<TValue>,
+  gateOptions: WardGateRunOptions,
 ): Promise<IdempotentExternalSideEffectRunResult<TValue>> {
   const store = host.storage.dryRunCommits;
   if (!store) {
@@ -212,16 +241,23 @@ async function commitApprovedDryRunSideEffect<TValue>(
       dryRunId: commitRef.dryRunId,
     });
   }
-  const committedAction = buildIntegrationPlannedAction(ward, input);
-  let commit: Awaited<ReturnType<typeof commitDryRun<ExecutedRunResult<TValue>>>>;
+  const committedAction = buildIntegrationPlannedAction(ward, input, gateOptions);
+  let commit: Awaited<ReturnType<typeof commitDryRun<CommitBoundaryValue<TValue>>>>;
   try {
-    commit = await commitDryRun<ExecutedRunResult<TValue>>(store, {
+    commit = await commitDryRun<CommitBoundaryValue<TValue>>(store, {
       dryRunId: commitRef.dryRunId,
       committedAction,
       committedAt: input.checkedAt,
       async execute(context) {
         const result = await runIdempotentExternalSideEffect({ ...input, wardEffect: undefined });
         if (result.status === "executed") {
+          context.markExternalCallStarted();
+          return result;
+        }
+        if (result.status === "blocked" && result.blockedReason === "external_side_effect_duplicate") {
+          // This exact payload+key already crossed the boundary (an earlier commit
+          // attempt sent it and died before bookkeeping). The moat's at-most-once
+          // guarantee held — record the commit instead of terminalizing it as failed.
           context.markExternalCallStarted();
           return result;
         }
@@ -243,8 +279,24 @@ async function commitApprovedDryRunSideEffect<TValue>(
     return commit.value;
   }
   if (commit.status === "failed" && commit.error instanceof DryRunCommitInnerResultError) {
+    const inner = (commit.error as DryRunCommitInnerResultError<TValue>).result;
+    if (inner.status === "blocked" && inner.blockedReason === "external_side_effect_in_progress") {
+      // A concurrent commit attempt for this approval is still mid-flight; this retry
+      // must not terminalize the approved preview. Restore awaiting_commit (approval
+      // and hash kept) so the in-flight attempt — or a later retry — can conclude it.
+      store.update(commitRef.dryRunId, {
+        state: "awaiting_commit",
+        diagnostic: {
+          code: "commit_execution_failed",
+          message:
+            "Commit retry observed another attempt in progress for the same idempotency key; the preview was restored to awaiting_commit.",
+          recordedAt: input.checkedAt,
+        },
+        updatedAt: input.checkedAt,
+      });
+    }
     // The hash matched; the runner itself blocked or failed. Surface its structured result.
-    return (commit.error as DryRunCommitInnerResultError<TValue>).result;
+    return inner;
   }
   return refuseCommitPreBoundary(input, {
     blockedReason: `dry_run_commit_${commit.diagnostic.code}`,
@@ -285,18 +337,40 @@ async function refuseCommitPreBoundary<TValue>(
 
 /**
  * The hashed contract between preview and commit: ward action name as the route, the concrete
- * connection:action as the target, and the exact runner payload. Built from live inputs on BOTH
- * sides so any drift (changed config default, edited input) breaks the hash and refuses the commit.
+ * connection:action (+ the sanitized resolved endpoint) as the target, and the exact runner
+ * payload. Built from live inputs on BOTH sides so any drift — changed config default, edited
+ * input, or a rewired destination URL — breaks the hash and refuses the commit.
  */
 function buildIntegrationPlannedAction(
   ward: IntegrationWardContext,
   input: IdempotentExternalSideEffectRunInput<unknown>,
+  gateOptions: WardGateRunOptions,
 ): DryRunPlannedAction {
+  const destination = sanitizeExternalDestination(gateOptions.externalDestination);
   return {
     route: ward.action,
-    target: `${input.connectionId ?? "unknown_connection"}:${input.actionId ?? "unknown_action"}`,
+    target: `${input.connectionId ?? "unknown_connection"}:${input.actionId ?? "unknown_action"}${
+      destination ? `@${destination}` : ""
+    }`,
     payload: input.payload,
   };
+}
+
+/**
+ * Origin + path only: enough to pin WHERE the approved payload will be sent (host/route swaps
+ * refuse the commit) without persisting query-string credentials into the preview/ledger.
+ */
+function sanitizeExternalDestination(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return trimmed;
+  }
 }
 
 /** Structural slices of the approval stores the host may optionally provide (Stage 2). */

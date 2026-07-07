@@ -22,9 +22,9 @@
 //   improvement_tune_live_intent_threshold_v1  → buildRetrievalTrace (live-data
 //       web-escalation gate, chat-turn-planning-helpers.ts).
 //   improvement_tune_retry_threshold_v1        → the incomplete-completion
-//       repair gate in chat-agent-orchestrator.ts (repairIncompleteAssistantCompletion).
+//       repair gate in chat-turn-agent-runner.ts (repairIncompleteAssistantCompletion).
 //   improvement_tune_blocker_template_v1       → buildToolFailureGuidance
-//       (blocked-tool explanation assembly, chat-agent-orchestrator.ts).
+//       (blocked-tool explanation assembly, chat-turn-agent-runner.ts).
 
 /**
  * The three setting keys the weekly tuner writes. Kept here (not imported from
@@ -68,11 +68,7 @@ export interface SystemSettingsReader {
   get<T = unknown>(key: string): { value: T } | undefined;
 }
 
-function readNumericSetting(
-  settings: SystemSettingsReader | undefined,
-  key: string,
-  fallback: number,
-): number {
+function readNumericSetting(settings: SystemSettingsReader | undefined, key: string, fallback: number): number {
   if (!settings) {
     return fallback;
   }
@@ -100,7 +96,11 @@ export function resolveBlockerTemplateStrictness(raw: number): number {
 
 export function readBlockerTemplateStrictness(settings: SystemSettingsReader | undefined): number {
   return resolveBlockerTemplateStrictness(
-    readNumericSetting(settings, IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate, IMPROVEMENT_TUNE_DEFAULTS.blockerTemplate),
+    readNumericSetting(
+      settings,
+      IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate,
+      IMPROVEMENT_TUNE_DEFAULTS.blockerTemplate,
+    ),
   );
 }
 
@@ -125,7 +125,11 @@ export function resolveRetryRepairThreshold(raw: number): number {
 
 export function readRetryRepairThreshold(settings: SystemSettingsReader | undefined): number {
   return resolveRetryRepairThreshold(
-    readNumericSetting(settings, IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold, IMPROVEMENT_TUNE_DEFAULTS.retryThreshold),
+    readNumericSetting(
+      settings,
+      IMPROVEMENT_TUNE_SETTING_KEYS.retryThreshold,
+      IMPROVEMENT_TUNE_DEFAULTS.retryThreshold,
+    ),
   );
 }
 

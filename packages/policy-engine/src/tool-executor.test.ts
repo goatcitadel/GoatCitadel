@@ -804,7 +804,9 @@ describe("executeTool", () => {
 
   it("searches file names with code.search_files", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const filePath = path.join(testWorkspaceRoot, "src", "chat-agent-orchestrator.test.ts");
+    // Fixture name is deliberately synthetic (not a real module name) so
+    // repo-wide renames can never desync it from the query below.
+    const filePath = path.join(testWorkspaceRoot, "src", "sample-orchestrator.test.ts");
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "test('ok')\n", "utf8");
 
