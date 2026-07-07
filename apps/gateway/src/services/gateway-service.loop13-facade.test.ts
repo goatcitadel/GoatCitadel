@@ -145,6 +145,7 @@ import * as commsService from "./comms-service.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
+import { McpServerStore } from "./mcp-server-store.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 
@@ -162,6 +163,9 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     backgroundTasks: new Set<Promise<unknown>>(),
     chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
     syntheticPermissionProfiles: new Map(),
+    // Real store over the harness's map-backed systemSettings (B5a): MCP
+    // read/write behavior assertions keep flowing through systemSettingsStore.
+    mcpServerStore: new McpServerStore({ systemSettings }),
     closing: false,
     config: {
       rootDir: "F:/code/personal-ai",
