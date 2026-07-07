@@ -585,7 +585,7 @@ describe("streamPreparedAgentChatTurn", () => {
     // re-emit loop must forward "thinking_delta" the same way it forwards the
     // adjacent "usage"/"citation" chunk types. Stubbing turnRuntime.runStream
     // stands in for the orchestrator with chatThinkingStreamV1Enabled ON (that
-    // flag gate is covered separately in chat-agent-orchestrator.thinking-stream
+    // flag gate is covered separately in chat-turn-agent-runner.thinking-stream
     // .test.ts; here we only need to prove the stream/dispatch layers don't
     // silently drop the chunk once the orchestrator has emitted it).
     const host = createHost();
@@ -644,7 +644,7 @@ describe("streamPreparedAgentChatTurn", () => {
     // the final assistant content once the turn completes; asserting on its
     // captured payload here is the storage-layer analog of the existing
     // stream-layer safety invariant in
-    // chat-agent-orchestrator.thinking-stream.test.ts.
+    // chat-turn-agent-runner.thinking-stream.test.ts.
     const assistantIngestCall = (host.ingestEvent as ReturnType<typeof vi.fn>).mock.calls.find(
       ([, payload]) => (payload as { message?: { role?: string } })?.message?.role === "assistant",
     );
