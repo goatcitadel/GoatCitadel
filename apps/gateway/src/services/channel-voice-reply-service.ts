@@ -91,11 +91,11 @@ export function shouldSynthesizeVoiceReply(input: { mode: ChannelVoiceReplyMode;
   }
   // mode === "voice_on_voice": synthesize only when the inbound message that
   // triggered this reply was itself voice. The reply path (gateway-service
-  // `maybeBuildChannelVoiceReplyAttachment`) now threads `wasVoiceInbound`, derived
+  // `maybeBuildChannelVoiceReplyAttachment`) threads `wasVoiceInbound`, derived
   // from the `[voice transcript — untrusted, auto-transcribed]` content framing.
-  // An `undefined` marker (a caller that does not report inbound modality) still
-  // defaults to synthesize, preserving behavior for any path that omits it.
-  return input.wasVoiceInbound !== false;
+  // Strict on purpose: an `undefined` marker (a caller that does not report
+  // inbound modality) degrades to text-only rather than synthesizing.
+  return input.wasVoiceInbound === true;
 }
 
 function channelAcceptsNativeInlineAudio(channelKey: string, mimeType: string): boolean {

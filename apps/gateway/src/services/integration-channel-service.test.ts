@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { evaluateChannelInboundAccess, type IntegrationConnection } from "@goatcitadel/contracts";
 import {
   createIntegrationConnection,
+  getIntegrationConnectionChannelRuntimeStatus,
   updateIntegrationConnection,
   type IntegrationChannelPort,
 } from "./integration-channel-service.js";
@@ -57,6 +58,7 @@ function createDeps(): IntegrationChannelPort {
     },
     publishRealtime: vi.fn(),
     requireFeatureEnabled: vi.fn(),
+    isFeatureEnabled: vi.fn(() => true),
     buildIntegrationConnectionChecks: vi.fn(() => []),
     runIntegrationConnectionLiveChecks: vi.fn(async () => ({ checks: [] })),
     pickConnectorDiagnosticAction: vi.fn(),
@@ -256,5 +258,40 @@ describe("integration-channel-service inbound access defaults", () => {
       accessTokenEnv: "WHATSAPP_TOKEN_V2",
       inboundAccessMode: "open_legacy",
     });
+  });
+});
+
+describe("integration-channel-service runtime status", () => {
+  it("marks configured Signal inbound polling unready when the feature flag is disabled", () => {
+    const deps = createDeps();
+    deps.isFeatureEnabled = vi.fn((flag) => flag !== "signalInboundV1Enabled");
+    const connection = createIntegrationConnection(deps, {
+      catalogId: "channel.signal",
+      label: "Signal",
+      config: {
+        baseUrl: "http://127.0.0.1:8080",
+        accountId: "+15550001111",
+        inboundEnabled: true,
+      },
+    });
+    updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-07-05T12:00:00.000Z",
+    });
+
+    const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+
+    expect(status.ready).toBe(false);
+    expect(status.runtimePosture.inboundReadiness).toBe("unsupported");
+    expect(status.metadata).toMatchObject({
+      readinessSource: "feature_flag",
+      featureFlag: "signalInboundV1Enabled",
+      featureEnabled: false,
+    });
+    expect(status.metadata.setupDiagnostics).toEqual(
+      expect.arrayContaining([
+        "Signal inbound polling is configured on this connection, but signalInboundV1Enabled is disabled.",
+      ]),
+    );
   });
 });

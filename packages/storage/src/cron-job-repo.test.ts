@@ -148,13 +148,26 @@ describe("CronJobRepository workdir/contextFrom/lastRunOutput/lastRunId", () => 
       contextFrom: "upstream",
       lastRunOutput: "alert",
       lastRunId: "run-1",
+      lastRunStatus: "failed",
+      lastRunEvidenceEnvelopeId: "env-cron-1",
+      lastFailureAt: "2026-07-05T12:00:00.000Z",
+      lastFailure: { message: "downstream refused", code: "ProviderError" },
+      failureCount: 2,
+      backoffUntil: "2026-07-05T12:02:00.000Z",
     });
     const reloaded = repo.get("probe");
     assert.equal(reloaded?.workdir, "/tmp/test");
     assert.equal(reloaded?.contextFrom, "upstream");
     assert.equal(reloaded?.lastRunOutput, "alert");
     assert.equal(reloaded?.lastRunId, "run-1");
+    assert.equal(reloaded?.lastRunStatus, "failed");
+    assert.equal(reloaded?.lastRunEvidenceEnvelopeId, "env-cron-1");
+    assert.equal(reloaded?.lastFailureAt, "2026-07-05T12:00:00.000Z");
+    assert.deepEqual(reloaded?.lastFailure, { message: "downstream refused", code: "ProviderError" });
+    assert.equal(reloaded?.failureCount, 2);
+    assert.equal(reloaded?.backoffUntil, "2026-07-05T12:02:00.000Z");
     assert.equal(reloaded?.action, "no_agent");
     assert.equal(saved.workdir, "/tmp/test");
+    assert.equal(saved.lastRunEvidenceEnvelopeId, "env-cron-1");
   });
 });

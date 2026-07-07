@@ -434,8 +434,12 @@ import { MediaVoiceService } from "./media-voice-service.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
+  computeCronBackoffUntil,
+  computeNextCronRunAt,
+  isCronJobBackedOff,
   MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
+  normalizeCronFailureMessage,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
@@ -602,6 +606,7 @@ import {
   type ChannelDeliveryRuntimeRecord,
   type ChannelDeliveryRuntimeSendInput,
 } from "./channel-delivery-runtime-service.js";
+import { VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import {
   evaluateDeploymentProfileToolAccess,
@@ -622,7 +627,6 @@ import {
   type CommsHost,
 } from "./comms-service.js";
 import { buildChannelVoiceReplyAttachment } from "./channel-voice-reply-service.js";
-import { VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
 import {
   MCP_APPROVAL_INBOX_URL,
@@ -814,6 +818,8 @@ function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): Ga
     },
   };
 }
+
+type SystemCronSchedulerOptions = { force?: boolean; recordCronState?: boolean };
 
 export class GatewayService {
   public config: GatewayRuntimeConfig;
@@ -1307,19 +1313,19 @@ export class GatewayService {
           await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true });
         },
         backup: async () => {
-          await this.runPrivateBetaBackupSchedulerIfDue({ force: true });
+          await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryFlush: async () => {
-          await this.runMemoryFlushSchedulerIfDue({ force: true });
+          await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryConsolidation: async () => {
-          await this.runMemoryConsolidationSchedulerIfDue({ force: true });
+          await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
         },
         costReport: async () => {
-          await this.runCostReportSchedulerIfDue({ force: true });
+          await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
         },
         updateReview: async () => {
-          await this.runUpdateReviewSchedulerIfDue({ force: true });
+          await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
         },
         curator: async () => {
           await this.curatorService.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
@@ -2583,7 +2589,7 @@ export class GatewayService {
         // 3.6: an inbound voice message is framed with VOICE_TRANSCRIPT_CONTENT_PREFIX,
         // so the reply path can honor the connection's voice_on_voice mode instead of
         // treating it as "always".
-        const wasVoiceInbound = userMessage.content.startsWith(VOICE_TRANSCRIPT_CONTENT_PREFIX);
+        const wasVoiceInbound = userMessage.content.trimStart().startsWith(VOICE_TRANSCRIPT_CONTENT_PREFIX);
         const voiceReplyAttachment = await this.maybeBuildChannelVoiceReplyAttachment(
           binding.connectionId,
           assistantContent,
@@ -3165,12 +3171,181 @@ export class GatewayService {
     this.registerBackgroundTask(task);
   }
 
-  private async runPrivateBetaBackupSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+  private shouldRecordSystemCronState(options: SystemCronSchedulerOptions): boolean {
+    return options.recordCronState !== false;
+  }
+
+  private computeSystemCronNextRunAt(
+    job: CronJobRecord,
+    finishedAtIso: string,
+    fallbackDelayMs: number,
+  ): string | undefined {
+    if (typeof job.schedule === "string" && job.schedule.trim()) {
+      const computed = computeNextCronRunAt(job.schedule, new Date(finishedAtIso), job.endAt);
+      if (computed) {
+        return computed;
+      }
+    }
+    return new Date(new Date(finishedAtIso).getTime() + fallbackDelayMs).toISOString();
+  }
+
+  private async runSystemCronBody<T>(
+    job: CronJobRecord,
+    options: SystemCronSchedulerOptions,
+    body: (context: { runId: string }) => Promise<T>,
+  ): Promise<T> {
+    const runId = randomUUID();
+    try {
+      return await body({ runId });
+    } catch (error) {
+      if (this.shouldRecordSystemCronState(options)) {
+        try {
+          this.recordSystemCronRunFailure(job, runId, error, new Date());
+        } catch (recordError) {
+          log.warn("failed to record system cron failure state", {
+            jobId: job.jobId,
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+      throw error;
+    }
+  }
+
+  private recordSystemCronRunSuccess(
+    job: CronJobRecord,
+    input: {
+      runId: string;
+      finishedAtIso: string;
+      nextRunAt?: string;
+      lastRunOutput?: string;
+      summary?: Record<string, unknown>;
+    },
+  ): CronJobRecord {
+    const evidenceEnvelopeId = this.recordSystemCronRunEvidence(job, input.runId, "ok", input.finishedAtIso, {
+      summary: input.summary,
+    });
+    const updated: CronJobRecord = {
+      ...job,
+      lastRunAt: input.finishedAtIso,
+      lastRunId: input.runId,
+      lastRunStatus: "ok",
+      lastRunEvidenceEnvelopeId: evidenceEnvelopeId,
+      lastFailureAt: undefined,
+      lastFailure: undefined,
+      failureCount: 0,
+      backoffUntil: undefined,
+      nextRunAt: input.nextRunAt,
+    };
+    if (input.lastRunOutput !== undefined) {
+      updated.lastRunOutput = input.lastRunOutput;
+    }
+    const saved = this.storage.cronJobs.upsert(updated);
+    this.persistCronJobsConfig();
+    return saved;
+  }
+
+  private recordSystemCronRunFailure(job: CronJobRecord, runId: string, error: unknown, failedAt: Date): CronJobRecord {
+    const failedAtIso = failedAt.toISOString();
+    const message = normalizeCronFailureMessage(error);
+    const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
+    const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
+    const saved = this.storage.cronJobs.upsert({
+      ...job,
+      lastRunAt: failedAtIso,
+      lastRunId: runId,
+      lastRunStatus: "failed",
+      lastRunEvidenceEnvelopeId: this.recordSystemCronRunEvidence(job, runId, "failed", failedAtIso, {
+        failureMessage: message,
+      }),
+      lastFailureAt: failedAtIso,
+      lastFailure: {
+        message,
+        ...(error instanceof Error && error.name ? { code: error.name } : {}),
+      },
+      failureCount,
+      backoffUntil,
+      nextRunAt: typeof job.schedule === "string" ? computeNextCronRunAt(job.schedule, failedAt, job.endAt) : undefined,
+    });
+    this.persistCronJobsConfig();
+    this.publishRealtime("cron_job_run", "cron", {
+      type: "cron_job_run_failed",
+      jobId: saved.jobId,
+      name: saved.name,
+      runId,
+      action: saved.action,
+      message,
+      failureCount,
+      backoffUntil,
+    });
+    return saved;
+  }
+
+  private recordSystemCronRunEvidence(
+    job: CronJobRecord,
+    runId: string,
+    status: "ok" | "failed",
+    finishedAtIso: string,
+    details: { summary?: Record<string, unknown>; failureMessage?: string } = {},
+  ): string | undefined {
+    const evidenceEnabled = (() => {
+      try {
+        return this.isFeatureEnabled("cronEvidenceV1Enabled") === true;
+      } catch {
+        return false;
+      }
+    })();
+    if (!evidenceEnabled || !this.evidenceEnvelopeService) {
+      return undefined;
+    }
+    const outputHash = details.summary
+      ? createHash("sha256").update(JSON.stringify(details.summary), "utf8").digest("hex")
+      : undefined;
+    try {
+      const envelope = this.evidenceEnvelopeService.createEnvelope({
+        eventKind: "cron_job_executed",
+        runId,
+        createdAt: finishedAtIso,
+        metadata: {
+          jobId: job.jobId,
+          jobName: job.name,
+          action: job.action,
+          schedule: job.schedule,
+          status,
+          systemScheduler: true,
+          ...(outputHash ? { outputHash } : {}),
+          ...(details.failureMessage ? { failureMessage: details.failureMessage } : {}),
+        },
+      });
+      return envelope.envelopeId;
+    } catch (error) {
+      try {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "evidence",
+          event: "evidence.envelope.failed",
+          message: "Failed to record system cron run evidence envelope",
+          context: {
+            jobId: job.jobId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch {
+        // Evidence is best-effort and must not fail a scheduler run.
+      }
+      return undefined;
+    }
+  }
+
+  private async runPrivateBetaBackupSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
     const job = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
     if (!job?.enabled) {
       return;
     }
     const now = new Date();
+    if (!options.force && isCronJobBackedOff(job, now)) {
+      return;
+    }
     if (
       !options.force &&
       !isCronJobDueNow(job, now, {
@@ -3188,36 +3363,52 @@ export class GatewayService {
       return;
     }
 
-    const backupName = `private-beta-${dayKey.replaceAll("-", "")}`;
-    const backup = await this.createBackup({ name: backupName });
-    await this.pruneRetention({ dryRun: false });
-    this.storage.systemSettings.set(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY, dayKey);
+    await this.runSystemCronBody(job, options, async ({ runId }) => {
+      const backupName = `private-beta-${dayKey.replaceAll("-", "")}`;
+      const backup = await this.createBackup({ name: backupName });
+      await this.pruneRetention({ dryRun: false });
+      this.storage.systemSettings.set(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY, dayKey);
 
-    const finishedAt = new Date().toISOString();
-    this.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    });
-    this.publishRealtime("backup_created", "system", {
-      type: "private_beta_daily_backup",
-      backupId: backup.backupId,
-      outputPath: backup.outputPath,
-      bytes: backup.bytes,
+      const finishedAt = new Date().toISOString();
+      if (this.shouldRecordSystemCronState(options)) {
+        this.recordSystemCronRunSuccess(job, {
+          runId,
+          finishedAtIso: finishedAt,
+          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
+          summary: {
+            type: "private_beta_daily_backup",
+            backupId: backup.backupId,
+            bytes: backup.bytes,
+          },
+        });
+      }
+      this.publishRealtime("backup_created", "system", {
+        type: "private_beta_daily_backup",
+        backupId: backup.backupId,
+        outputPath: backup.outputPath,
+        bytes: backup.bytes,
+      });
     });
   }
 
-  private async runMemoryConsolidationSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+  private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
     const job = this.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
     if (!job?.enabled) {
       return;
     }
     // Both gates are re-checked inside the service too; checking here avoids
     // bookkeeping writes for a run that would immediately no-op.
-    if (!this.isFeatureEnabled("memoryConsolidationV1Enabled") || this.isFeatureEnabled("autonomyV1Disabled")) {
+    if (
+      !this.isFeatureEnabled("memoryConsolidationV1Enabled") ||
+      !this.isFeatureEnabled("memoryLifecycleAdminV1Enabled") ||
+      this.isFeatureEnabled("autonomyV1Disabled")
+    ) {
       return;
     }
     const now = new Date();
+    if (!options.force && isCronJobBackedOff(job, now)) {
+      return;
+    }
     if (!options.force) {
       // Weekly: Sundays in the 2 AM hour in the configured timezone.
       const parts = getZonedDateParts(now, MEMORY_CONSOLIDATION_TIME_ZONE);
@@ -3230,26 +3421,34 @@ export class GatewayService {
     if (!options.force && lastWeekKey === weekKey) {
       return;
     }
-    const summary = await this.memoryConsolidationService.runConsolidation();
-    this.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
-    const finishedAt = new Date().toISOString();
-    this.storage.cronJobs.upsert(
-      {
-        ...job,
-        lastRunAt: finishedAt,
-        lastRunOutput: JSON.stringify(summary),
-        nextRunAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      finishedAt,
-    );
+    await this.runSystemCronBody(job, options, async ({ runId }) => {
+      const summary = await this.memoryConsolidationService.runConsolidation();
+      if (summary.status !== "completed") {
+        return;
+      }
+      this.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
+      const finishedAt = new Date().toISOString();
+      if (this.shouldRecordSystemCronState(options)) {
+        this.recordSystemCronRunSuccess(job, {
+          runId,
+          finishedAtIso: finishedAt,
+          lastRunOutput: JSON.stringify(summary),
+          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 7 * 24 * 60 * 60 * 1000),
+          summary: { ...summary },
+        });
+      }
+    });
   }
 
-  private async runMemoryFlushSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+  private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
     const job = this.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
     if (!job?.enabled) {
       return;
     }
     const now = new Date();
+    if (!options.force && isCronJobBackedOff(job, now)) {
+      return;
+    }
     if (
       !options.force &&
       !isCronJobDueNow(job, now, {
@@ -3267,42 +3466,50 @@ export class GatewayService {
       return;
     }
 
-    const nowIso = now.toISOString();
-    const cutoffIso = new Date(now.getTime() - MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
-    const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
-    const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
-    const expiredMemoryLedger = this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled")
-      ? this.forgetExpiredMemoryItemsForFlush(nowIso)
-      : this.inspectExpiredMemoryItemsForFlush(nowIso);
+    await this.runSystemCronBody(job, options, async ({ runId }) => {
+      const nowIso = now.toISOString();
+      const cutoffIso = new Date(now.getTime() - MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
+      const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
+      const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
+      const expiredMemoryLedger = this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled")
+        ? this.forgetExpiredMemoryItemsForFlush(nowIso)
+        : this.inspectExpiredMemoryItemsForFlush(nowIso);
 
-    this.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
-    const finishedAt = new Date().toISOString();
-    this.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    });
-    this.publishRealtime("cron_job_run", "cron", {
-      type: "memory_flush_daily",
-      jobId: MEMORY_FLUSH_DAILY_JOB_ID,
-      cutoffIso,
-      prunedExpiredContextPacks,
-      prunedOldContextPacks,
-      prunedOldQmdRuns,
-      expiredActiveMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
-      expiredMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
-      forgottenExpiredMemoryItemCount: expiredMemoryLedger.forgottenCount,
-      retainedPinnedExpiredMemoryItemCount: expiredMemoryLedger.retainedPinnedCount,
-      remainingExpiredUnpinnedMemoryItemCount: expiredMemoryLedger.remainingExpiredUnpinnedCount,
-      expiredMemoryFlushTruncated: expiredMemoryLedger.truncated,
-      memoryLifecycleAutoForgetEnabled: this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled"),
-      expiredMemoryItemIds: expiredMemoryLedger.forgottenItems.map((item) => item.itemId),
-      expiredMemoryNamespacesSample: [...new Set(expiredMemoryLedger.forgottenItems.map((item) => item.namespace))],
-      retainedPinnedExpiredMemoryItemIds: expiredMemoryLedger.retainedPinnedItems.map((item) => item.itemId),
-      retainedPinnedExpiredMemoryNamespacesSample: [
-        ...new Set(expiredMemoryLedger.retainedPinnedItems.map((item) => item.namespace)),
-      ],
+      this.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
+      const finishedAt = new Date().toISOString();
+      const summary = {
+        type: "memory_flush_daily",
+        cutoffIso,
+        prunedExpiredContextPacks,
+        prunedOldContextPacks,
+        prunedOldQmdRuns,
+        expiredActiveMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
+        forgottenExpiredMemoryItemCount: expiredMemoryLedger.forgottenCount,
+        retainedPinnedExpiredMemoryItemCount: expiredMemoryLedger.retainedPinnedCount,
+        remainingExpiredUnpinnedMemoryItemCount: expiredMemoryLedger.remainingExpiredUnpinnedCount,
+        expiredMemoryFlushTruncated: expiredMemoryLedger.truncated,
+      };
+      if (this.shouldRecordSystemCronState(options)) {
+        this.recordSystemCronRunSuccess(job, {
+          runId,
+          finishedAtIso: finishedAt,
+          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
+          summary,
+        });
+      }
+      this.publishRealtime("cron_job_run", "cron", {
+        ...summary,
+        jobId: MEMORY_FLUSH_DAILY_JOB_ID,
+        expiredMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
+        memoryLifecycleAutoForgetEnabled: this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled"),
+        expiredMemoryItemIds: expiredMemoryLedger.forgottenItems.map((item) => item.itemId),
+        expiredMemoryNamespacesSample: [...new Set(expiredMemoryLedger.forgottenItems.map((item) => item.namespace))],
+        retainedPinnedExpiredMemoryItemIds: expiredMemoryLedger.retainedPinnedItems.map((item) => item.itemId),
+        retainedPinnedExpiredMemoryNamespacesSample: [
+          ...new Set(expiredMemoryLedger.retainedPinnedItems.map((item) => item.namespace)),
+        ],
+      });
     });
   }
 
@@ -3360,12 +3567,15 @@ export class GatewayService {
     };
   }
 
-  private async runCostReportSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+  private async runCostReportSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
     const job = this.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
     if (!job?.enabled) {
       return;
     }
     const now = new Date();
+    if (!options.force && isCronJobBackedOff(job, now)) {
+      return;
+    }
     if (
       !options.force &&
       !isCronJobDueNow(job, now, {
@@ -3383,94 +3593,105 @@ export class GatewayService {
       return;
     }
 
-    const windowEndIso = now.toISOString();
-    const windowStartIso = new Date(now.getTime() - COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
-    const byDay = this.storage.costLedger.summary("day", windowStartIso, windowEndIso);
-    const bySession = this.storage.costLedger.summary("session", windowStartIso, windowEndIso);
-    const byAgent = this.storage.costLedger.summary("agent", windowStartIso, windowEndIso);
-    const byTask = this.storage.costLedger.summary("task", windowStartIso, windowEndIso);
-    const usageAvailability = this.storage.costLedger.usageAvailability(windowStartIso, windowEndIso);
-    const totalCostUsd = byDay.reduce((sum, row) => sum + row.costUsd, 0);
-    const totalTokens = byDay.reduce((sum, row) => sum + row.tokenTotal, 0);
+    await this.runSystemCronBody(job, options, async ({ runId }) => {
+      const windowEndIso = now.toISOString();
+      const windowStartIso = new Date(now.getTime() - COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
+      const byDay = this.storage.costLedger.summary("day", windowStartIso, windowEndIso);
+      const bySession = this.storage.costLedger.summary("session", windowStartIso, windowEndIso);
+      const byAgent = this.storage.costLedger.summary("agent", windowStartIso, windowEndIso);
+      const byTask = this.storage.costLedger.summary("task", windowStartIso, windowEndIso);
+      const usageAvailability = this.storage.costLedger.usageAvailability(windowStartIso, windowEndIso);
+      const totalCostUsd = byDay.reduce((sum, row) => sum + row.costUsd, 0);
+      const totalTokens = byDay.reduce((sum, row) => sum + row.tokenTotal, 0);
 
-    const lines: string[] = [];
-    lines.push(`# Cost Report (${COST_REPORT_LOOKBACK_HOURS}h)`);
-    lines.push("");
-    lines.push(`- Generated: ${windowEndIso}`);
-    lines.push(`- Window: ${windowStartIso} -> ${windowEndIso}`);
-    lines.push(`- Total cost: $${totalCostUsd.toFixed(6)}`);
-    lines.push(`- Total tokens: ${totalTokens}`);
-    lines.push(`- Tracked events: ${usageAvailability.trackedEvents}`);
-    lines.push(`- Usage unavailable events: ${usageAvailability.unknownEvents}`);
-    lines.push(`- Total agent events: ${usageAvailability.totalAgentEvents}`);
-    lines.push("");
-
-    const appendSummaryTable = (
-      title: string,
-      keyLabel: string,
-      rows: Array<{
-        key: string;
-        tokenInput: number;
-        tokenOutput: number;
-        tokenCachedInput: number;
-        tokenTotal: number;
-        costUsd: number;
-      }>,
-    ) => {
-      lines.push(`## ${title}`);
+      const lines: string[] = [];
+      lines.push(`# Cost Report (${COST_REPORT_LOOKBACK_HOURS}h)`);
       lines.push("");
-      if (rows.length === 0) {
-        lines.push("_No data in this window._");
+      lines.push(`- Generated: ${windowEndIso}`);
+      lines.push(`- Window: ${windowStartIso} -> ${windowEndIso}`);
+      lines.push(`- Total cost: $${totalCostUsd.toFixed(6)}`);
+      lines.push(`- Total tokens: ${totalTokens}`);
+      lines.push(`- Tracked events: ${usageAvailability.trackedEvents}`);
+      lines.push(`- Usage unavailable events: ${usageAvailability.unknownEvents}`);
+      lines.push(`- Total agent events: ${usageAvailability.totalAgentEvents}`);
+      lines.push("");
+
+      const appendSummaryTable = (
+        title: string,
+        keyLabel: string,
+        rows: Array<{
+          key: string;
+          tokenInput: number;
+          tokenOutput: number;
+          tokenCachedInput: number;
+          tokenTotal: number;
+          costUsd: number;
+        }>,
+      ) => {
+        lines.push(`## ${title}`);
         lines.push("");
-        return;
+        if (rows.length === 0) {
+          lines.push("_No data in this window._");
+          lines.push("");
+          return;
+        }
+        lines.push(`| ${keyLabel} | Token In | Token Out | Cached In | Token Total | Cost USD |`);
+        lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+        for (const row of rows) {
+          lines.push(
+            `| ${row.key || "-"} | ${row.tokenInput} | ${row.tokenOutput} | ${row.tokenCachedInput} | ${row.tokenTotal} | ${row.costUsd.toFixed(6)} |`,
+          );
+        }
+        lines.push("");
+      };
+
+      appendSummaryTable("By Session", "Session", bySession.slice(0, 25));
+      appendSummaryTable("By Agent", "Agent", byAgent.slice(0, 25));
+      appendSummaryTable("By Task", "Task", byTask.slice(0, 25));
+      appendSummaryTable("By Day", "Day", byDay.slice(0, 25));
+
+      const reportDir = path.join(this.config.rootDir, COST_REPORT_OUTPUT_DIR);
+      await fs.mkdir(reportDir, { recursive: true });
+      const reportFileName = `cost-report-${hourKey}.md`;
+      const outputPath = path.join(reportDir, reportFileName);
+      await fs.writeFile(outputPath, `${lines.join("\n")}\n`, "utf8");
+
+      this.storage.systemSettings.set(COST_REPORT_HOURLY_DEDUP_SETTING_KEY, hourKey);
+      const finishedAt = new Date().toISOString();
+      const summary = {
+        type: "cost_report_hourly",
+        outputPath,
+        totalCostUsd: Number(totalCostUsd.toFixed(6)),
+        totalTokens,
+        trackedEvents: usageAvailability.trackedEvents,
+        unknownEvents: usageAvailability.unknownEvents,
+        windowStartIso,
+        windowEndIso,
+      };
+      if (this.shouldRecordSystemCronState(options)) {
+        this.recordSystemCronRunSuccess(job, {
+          runId,
+          finishedAtIso: finishedAt,
+          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 60 * 60 * 1000),
+          summary,
+        });
       }
-      lines.push(`| ${keyLabel} | Token In | Token Out | Cached In | Token Total | Cost USD |`);
-      lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
-      for (const row of rows) {
-        lines.push(
-          `| ${row.key || "-"} | ${row.tokenInput} | ${row.tokenOutput} | ${row.tokenCachedInput} | ${row.tokenTotal} | ${row.costUsd.toFixed(6)} |`,
-        );
-      }
-      lines.push("");
-    };
-
-    appendSummaryTable("By Session", "Session", bySession.slice(0, 25));
-    appendSummaryTable("By Agent", "Agent", byAgent.slice(0, 25));
-    appendSummaryTable("By Task", "Task", byTask.slice(0, 25));
-    appendSummaryTable("By Day", "Day", byDay.slice(0, 25));
-
-    const reportDir = path.join(this.config.rootDir, COST_REPORT_OUTPUT_DIR);
-    await fs.mkdir(reportDir, { recursive: true });
-    const reportFileName = `cost-report-${hourKey}.md`;
-    const outputPath = path.join(reportDir, reportFileName);
-    await fs.writeFile(outputPath, `${lines.join("\n")}\n`, "utf8");
-
-    this.storage.systemSettings.set(COST_REPORT_HOURLY_DEDUP_SETTING_KEY, hourKey);
-    const finishedAt = new Date().toISOString();
-    this.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-    });
-    this.publishRealtime("cron_job_run", "cron", {
-      type: "cost_report_hourly",
-      jobId: COST_REPORT_HOURLY_JOB_ID,
-      outputPath,
-      totalCostUsd: Number(totalCostUsd.toFixed(6)),
-      totalTokens,
-      trackedEvents: usageAvailability.trackedEvents,
-      unknownEvents: usageAvailability.unknownEvents,
-      windowStartIso,
-      windowEndIso,
+      this.publishRealtime("cron_job_run", "cron", {
+        ...summary,
+        jobId: COST_REPORT_HOURLY_JOB_ID,
+      });
     });
   }
 
-  private async runUpdateReviewSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+  private async runUpdateReviewSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
     const job = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
     if (!job?.enabled) {
       return;
     }
     const now = new Date();
+    if (!options.force && isCronJobBackedOff(job, now)) {
+      return;
+    }
     if (
       !options.force &&
       !isCronJobDueNow(job, now, {
@@ -3488,57 +3709,65 @@ export class GatewayService {
       return;
     }
 
-    const report = await createDailyUpdateReview(this.config.rootDir);
-    const reportDir = path.join(this.config.rootDir, UPDATE_REVIEW_OUTPUT_DIR);
-    await fs.mkdir(reportDir, { recursive: true });
-    const reportFileName = `update-review-${dayKey}.md`;
-    const outputPath = path.join(reportDir, reportFileName);
-    await fs.writeFile(outputPath, `${renderUpdateReviewMarkdown(report)}\n`, "utf8");
+    await this.runSystemCronBody(job, options, async ({ runId }) => {
+      const report = await createDailyUpdateReview(this.config.rootDir);
+      const reportDir = path.join(this.config.rootDir, UPDATE_REVIEW_OUTPUT_DIR);
+      await fs.mkdir(reportDir, { recursive: true });
+      const reportFileName = `update-review-${dayKey}.md`;
+      const outputPath = path.join(reportDir, reportFileName);
+      await fs.writeFile(outputPath, `${renderUpdateReviewMarkdown(report)}\n`, "utf8");
 
-    this.storage.systemSettings.set(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY, dayKey);
-    const finishedAt = new Date().toISOString();
-    this.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    });
+      this.storage.systemSettings.set(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY, dayKey);
+      const finishedAt = new Date().toISOString();
+      const summary = {
+        type: "update_review_daily",
+        outputPath,
+        outdatedDependencyCount: report.summary.outdatedDependencyCount,
+        changedSkillSourceCount: report.summary.changedSkillSourceCount,
+        warningCount: report.summary.warningCount,
+        checkedSkillCount: report.summary.checkedSkillCount,
+      };
+      if (this.shouldRecordSystemCronState(options)) {
+        this.recordSystemCronRunSuccess(job, {
+          runId,
+          finishedAtIso: finishedAt,
+          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
+          summary,
+        });
+      }
 
-    const hasAlerts =
-      report.summary.outdatedDependencyCount > 0 ||
-      report.summary.changedSkillSourceCount > 0 ||
-      report.summary.warningCount > 0;
-    if (this.isFeatureEnabled("cronReviewQueueV1Enabled")) {
-      this.cronAutomationService.recordCronReviewItem({
+      const hasAlerts =
+        report.summary.outdatedDependencyCount > 0 ||
+        report.summary.changedSkillSourceCount > 0 ||
+        report.summary.warningCount > 0;
+      if (this.isFeatureEnabled("cronReviewQueueV1Enabled")) {
+        this.cronAutomationService.recordCronReviewItem({
+          jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+          runId,
+          severity: hasAlerts ? "medium" : "low",
+          status: hasAlerts ? "open" : "resolved",
+          summary: {
+            trigger: options.force ? "manual_run" : "scheduler",
+            outputPath: path.relative(this.config.rootDir, outputPath).replaceAll("\\", "/"),
+            outdatedDependencyCount: report.summary.outdatedDependencyCount,
+            changedSkillSourceCount: report.summary.changedSkillSourceCount,
+            warningCount: report.summary.warningCount,
+            checkedSkillCount: report.summary.checkedSkillCount,
+          },
+          diff: {
+            type: "update_review_daily",
+            changed: hasAlerts,
+            outdatedDependencyCount: report.summary.outdatedDependencyCount,
+            changedSkillSourceCount: report.summary.changedSkillSourceCount,
+            warningCount: report.summary.warningCount,
+          },
+        });
+      }
+
+      this.publishRealtime("cron_job_run", "cron", {
+        ...summary,
         jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-        runId: randomUUID(),
-        severity: hasAlerts ? "medium" : "low",
-        status: hasAlerts ? "open" : "resolved",
-        summary: {
-          trigger: options.force ? "manual_run" : "scheduler",
-          outputPath: path.relative(this.config.rootDir, outputPath).replaceAll("\\", "/"),
-          outdatedDependencyCount: report.summary.outdatedDependencyCount,
-          changedSkillSourceCount: report.summary.changedSkillSourceCount,
-          warningCount: report.summary.warningCount,
-          checkedSkillCount: report.summary.checkedSkillCount,
-        },
-        diff: {
-          type: "update_review_daily",
-          changed: hasAlerts,
-          outdatedDependencyCount: report.summary.outdatedDependencyCount,
-          changedSkillSourceCount: report.summary.changedSkillSourceCount,
-          warningCount: report.summary.warningCount,
-        },
       });
-    }
-
-    this.publishRealtime("cron_job_run", "cron", {
-      type: "update_review_daily",
-      jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-      outputPath,
-      outdatedDependencyCount: report.summary.outdatedDependencyCount,
-      changedSkillSourceCount: report.summary.changedSkillSourceCount,
-      warningCount: report.summary.warningCount,
-      checkedSkillCount: report.summary.checkedSkillCount,
     });
   }
 

@@ -771,6 +771,7 @@ export const CronJobSchema = z
     lastRunOutput: z.string().optional(),
     lastRunId: z.string().optional(),
     lastRunStatus: z.enum(["ok", "failed"]).optional(),
+    lastRunEvidenceEnvelopeId: z.string().optional(),
     lastFailureAt: z.string().optional(),
     lastFailure: z
       .object({

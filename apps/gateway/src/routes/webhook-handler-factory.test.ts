@@ -60,6 +60,18 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(replayed.toString("utf8")).toBe("hello world");
   });
 
+  it("maps streamed oversized pre-parsing payloads to a 413 error", async () => {
+    const preParsing = createWebhookPreParsing("telegramRawBody");
+    const request = createRequest({ telegramRawBody: undefined });
+    const payload = Readable.from([Buffer.alloc(CHANNEL_INBOUND_MAX_BYTES + 1)]);
+
+    await expect(preParsing(request, createReply() as any, payload)).rejects.toMatchObject({
+      statusCode: 413,
+      message: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+    });
+    expect((request as WebhookRawBodyRequest).telegramRawBody).toBeUndefined();
+  });
+
   it("rejects oversized inbound payloads before connector lookup", async () => {
     const integrationWebhooks = {
       getIntegrationConnection: vi.fn(),
@@ -659,6 +671,42 @@ describe("dispatchInboundVoiceWebhookMessage (channelVoiceInboundV1Enabled)", ()
     );
     await vi.waitFor(() => {
       expect(gateway.respondToExistingChatMessage).toHaveBeenCalledWith("session-voice", "voice-1");
+    });
+  });
+
+  it("dedupes concurrent voice retries before repeating download or transcription", async () => {
+    const gateway = createVoiceGateway();
+    let resolveTranscription!: (value: { ok: true; transcript: string }) => void;
+    const transcribe = vi.fn(
+      () =>
+        new Promise<{ ok: true; transcript: string }>((resolve) => {
+          resolveTranscription = resolve;
+        }),
+    );
+    const options = {
+      ...baseOptions,
+      allowedSenders: ["u-owner"],
+      voice: { transcribe, fallbackContent: baseOptions.message.content },
+    };
+
+    const firstAck = await dispatchInboundVoiceWebhookMessage(gateway as any, options);
+    const retryAck = await dispatchInboundVoiceWebhookMessage(gateway as any, options);
+
+    expect(firstAck).toEqual(expect.objectContaining({ queued: true, transcription: "pending" }));
+    expect(retryAck).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: false,
+        deduped: true,
+        queued: false,
+        transcription: "deduped",
+      }),
+    );
+    expect(transcribe).toHaveBeenCalledTimes(1);
+
+    resolveTranscription({ ok: true, transcript: "buy milk tomorrow" });
+    await vi.waitFor(() => {
+      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
     });
   });
 

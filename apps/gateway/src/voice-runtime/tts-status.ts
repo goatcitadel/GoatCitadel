@@ -64,6 +64,7 @@ export async function writeManagedTtsManifest(manifest: ManagedTtsManifest): Pro
 }
 
 export async function getManagedTtsRuntimeStatus(): Promise<TtsRuntimeStatus> {
+  const runtimePaths = resolveVoiceRuntimePaths();
   const manifest = await readManagedTtsManifest();
   const envBinaryPath = process.env.GOATCITADEL_PIPER_BIN?.trim();
   const envVoicePath = process.env.GOATCITADEL_PIPER_VOICE_PATH?.trim();
@@ -99,7 +100,7 @@ export async function getManagedTtsRuntimeStatus(): Promise<TtsRuntimeStatus> {
     selectedVoiceId: derivedSelectedVoiceId,
     selectedVoiceModelPath: voiceModelPath,
     selectedVoiceConfigPath: voiceConfigPath,
-    manifestPath: resolveVoiceRuntimePaths().ttsManifestPath,
+    manifestPath: runtimePaths.ttsManifestPath,
     lastError: manifest?.lastError,
   };
 }

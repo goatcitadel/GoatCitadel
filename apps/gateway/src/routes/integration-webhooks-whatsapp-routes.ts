@@ -141,6 +141,15 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
         };
         const voiceMedia = parsed.voiceMedia;
         if (voiceMedia) {
+          const transcribeChannelVoice = fastify.services.integrationWebhooks.transcribeChannelVoice;
+          if (!transcribeChannelVoice) {
+            return {
+              ok: false as const,
+              statusCode: 503,
+              error: "Voice transcription is not configured",
+              logReason: "voice_transcription_not_configured",
+            };
+          }
           // channelVoiceInboundV1Enabled path (voiceMedia only exists when the
           // flag is on): trust gate first (no download for unknown senders),
           // fast webhook ack, async download/transcription/ingest, placeholder
@@ -149,7 +158,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
             ...dispatchOptions,
             voice: {
               transcribe: () =>
-                fastify.services.integrationWebhooks.transcribeChannelVoice({
+                transcribeChannelVoice({
                   channel: "whatsapp",
                   connectionConfig: connection.config,
                   mediaId: voiceMedia.mediaId,

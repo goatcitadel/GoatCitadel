@@ -146,6 +146,7 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
         lastRunOutput: sanitized.lastRunOutput ?? existing?.lastRunOutput,
         lastRunId: sanitized.lastRunId ?? existing?.lastRunId,
         lastRunStatus: sanitized.lastRunStatus ?? existing?.lastRunStatus,
+        lastRunEvidenceEnvelopeId: sanitized.lastRunEvidenceEnvelopeId ?? existing?.lastRunEvidenceEnvelopeId,
         lastFailureAt: sanitized.lastFailureAt ?? existing?.lastFailureAt,
         lastFailure: sanitized.lastFailure ?? existing?.lastFailure,
         failureCount: sanitized.failureCount ?? existing?.failureCount,
@@ -171,6 +172,7 @@ interface SanitizedCronJobRow {
   lastRunOutput?: string;
   lastRunId?: string;
   lastRunStatus?: CronJobRecord["lastRunStatus"];
+  lastRunEvidenceEnvelopeId?: string;
   lastFailureAt?: string;
   lastFailure?: CronJobRecord["lastFailure"];
   failureCount?: number;
@@ -201,6 +203,8 @@ function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
     lastRunId: typeof record.lastRunId === "string" ? record.lastRunId : undefined,
     lastRunStatus:
       record.lastRunStatus === "ok" || record.lastRunStatus === "failed" ? record.lastRunStatus : undefined,
+    lastRunEvidenceEnvelopeId:
+      typeof record.lastRunEvidenceEnvelopeId === "string" ? record.lastRunEvidenceEnvelopeId : undefined,
     lastFailureAt: typeof record.lastFailureAt === "string" ? record.lastFailureAt : undefined,
     lastFailure: sanitizeCronLastFailure(record.lastFailure),
     failureCount:
@@ -262,6 +266,7 @@ export function persistCronJobsConfig(host: CronJobConfigHost): void {
     lastRunOutput: job.lastRunOutput,
     lastRunId: job.lastRunId,
     lastRunStatus: job.lastRunStatus,
+    lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId,
     lastFailureAt: job.lastFailureAt,
     lastFailure: job.lastFailure,
     failureCount: job.failureCount,
@@ -290,6 +295,7 @@ export function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): void {
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
       lastRunStatus: existing?.lastRunStatus,
+      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
       lastFailureAt: existing?.lastFailureAt,
       lastFailure: existing?.lastFailure,
       failureCount: existing?.failureCount,
@@ -318,6 +324,7 @@ export function ensureMemoryFlushCronJob(host: CronJobConfigHost): void {
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
       lastRunStatus: existing?.lastRunStatus,
+      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
       lastFailureAt: existing?.lastFailureAt,
       lastFailure: existing?.lastFailure,
       failureCount: existing?.failureCount,
@@ -350,6 +357,7 @@ export function ensureMemoryConsolidationCronJob(host: CronJobConfigHost): void 
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
       lastRunStatus: existing?.lastRunStatus,
+      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
       lastFailureAt: existing?.lastFailureAt,
       lastFailure: existing?.lastFailure,
       failureCount: existing?.failureCount,
@@ -378,6 +386,7 @@ export function ensureCostReportCronJob(host: CronJobConfigHost): void {
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
       lastRunStatus: existing?.lastRunStatus,
+      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
       lastFailureAt: existing?.lastFailureAt,
       lastFailure: existing?.lastFailure,
       failureCount: existing?.failureCount,
@@ -406,6 +415,7 @@ export function ensureUpdateReviewCronJob(host: CronJobConfigHost): void {
       lastRunOutput: existing?.lastRunOutput,
       lastRunId: existing?.lastRunId,
       lastRunStatus: existing?.lastRunStatus,
+      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
       lastFailureAt: existing?.lastFailureAt,
       lastFailure: existing?.lastFailure,
       failureCount: existing?.failureCount,

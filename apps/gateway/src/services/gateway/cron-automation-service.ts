@@ -1,11 +1,12 @@
 /* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
 import { createHash, randomUUID } from "node:crypto";
-import type {
-  CronJobRecord,
-  CronReviewItem,
-  CronRunDiff,
-  CronWatchdogCheckId,
-  CronWatchdogRunResult,
+import {
+  redactSecretText,
+  type CronJobRecord,
+  type CronReviewItem,
+  type CronRunDiff,
+  type CronWatchdogCheckId,
+  type CronWatchdogRunResult,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeCreateRequest } from "../evidence-envelope-service.js";
 import type { Storage } from "@goatcitadel/storage";
@@ -1222,18 +1223,19 @@ export function isCronJobBackedOff(job: CronJobRecord, now: Date): boolean {
   return Number.isFinite(parsed) && parsed > now.getTime();
 }
 
-function computeCronBackoffUntil(failedAt: Date, failureCount: number): string {
+export function computeCronBackoffUntil(failedAt: Date, failureCount: number): string {
   const exponent = Math.max(0, Math.min(10, failureCount - 1));
   const delayMs = Math.min(CRON_BACKOFF_MAX_MS, CRON_BACKOFF_BASE_MS * 2 ** exponent);
   return new Date(failedAt.getTime() + delayMs).toISOString();
 }
 
-function normalizeCronFailureMessage(error: unknown): string {
+export function normalizeCronFailureMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   const normalized = raw.replace(/\s+/g, " ").trim() || "Cron job failed.";
-  return normalized.length > CRON_FAILURE_MESSAGE_MAX_LENGTH
-    ? `${normalized.slice(0, CRON_FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
-    : normalized;
+  const redacted = redactSecretText(normalized).value;
+  return redacted.length > CRON_FAILURE_MESSAGE_MAX_LENGTH
+    ? `${redacted.slice(0, CRON_FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
+    : redacted;
 }
 
 export function computeNextCronRunAt(schedule: string, from: Date, endAt?: string): string | undefined {

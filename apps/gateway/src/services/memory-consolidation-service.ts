@@ -145,6 +145,7 @@ export class MemoryConsolidationService {
     };
 
     const seenInsights = this.deps.listExistingInsightsForDedup().map(tokenizeInsight);
+    const processedSessionIds = new Set<string>();
     for (const session of sessions) {
       // The autonomy kill switch may flip mid-run; re-check before every
       // session so an engaged switch halts further proposals immediately.
@@ -170,6 +171,7 @@ export class MemoryConsolidationService {
         });
         continue;
       }
+      processedSessionIds.add(session.sessionId);
       for (const candidate of drafted) {
         if (summary.proposed >= MAX_CANDIDATES_PER_RUN) {
           break;
@@ -202,10 +204,7 @@ export class MemoryConsolidationService {
     const madeProgress =
       sessions.length === 0 || summary.sessionsFailed < summary.sessionsSampled || summary.status !== "completed";
     if (summary.status === "completed" && madeProgress && traces.length > 0) {
-      const nextWatermark = traces.reduce(
-        (latest, trace) => (trace.startedAt > latest ? trace.startedAt : latest),
-        watermark,
-      );
+      const nextWatermark = computeProcessedTraceWatermark(traces, processedSessionIds, watermark);
       this.deps.setWatermark(nextWatermark);
       summary.nextWatermark = nextWatermark;
     } else if (summary.status === "completed" && traces.length === 0) {
@@ -268,6 +267,26 @@ function pickSessions(traces: ChatTurnTraceRecord[], limit: number): Array<{ ses
     .map(([sessionId, turnIds]) => ({ sessionId, turnIds }))
     .sort((a, b) => b.turnIds.length - a.turnIds.length)
     .slice(0, limit);
+}
+
+function computeProcessedTraceWatermark(
+  traces: ChatTurnTraceRecord[],
+  processedSessionIds: ReadonlySet<string>,
+  currentWatermark: string,
+): string {
+  let nextWatermark = currentWatermark;
+  for (const trace of traces) {
+    if (isQualifyingTrace(trace) && !processedSessionIds.has(trace.sessionId)) {
+      if (nextWatermark >= trace.startedAt) {
+        return currentWatermark;
+      }
+      break;
+    }
+    if (trace.startedAt > nextWatermark) {
+      nextWatermark = trace.startedAt;
+    }
+  }
+  return nextWatermark;
 }
 
 function buildTranscriptDigest(events: TranscriptEvent[]): string {

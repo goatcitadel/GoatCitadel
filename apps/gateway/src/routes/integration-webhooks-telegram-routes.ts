@@ -294,6 +294,10 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         };
         const voiceMedia = parsed.voiceMedia;
         if (voiceMedia) {
+          const transcribeChannelVoice = fastify.services.integrationWebhooks.transcribeChannelVoice;
+          if (typeof transcribeChannelVoice !== "function") {
+            return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
+          }
           // channelVoiceInboundV1Enabled path (voiceMedia only exists when the
           // flag is on): the trust gate runs first inside the voice dispatch,
           // the webhook is acked fast, and download/transcription/ingest run
@@ -303,7 +307,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             ...dispatchOptions,
             voice: {
               transcribe: () =>
-                fastify.services.integrationWebhooks.transcribeChannelVoice({
+                transcribeChannelVoice({
                   channel: "telegram",
                   connectionConfig: connection.config,
                   fileId: voiceMedia.fileId,

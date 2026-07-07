@@ -368,6 +368,8 @@ export async function dispatchInboundWebhookMessage(
  */
 export const VOICE_TRANSCRIPT_CONTENT_PREFIX = "[voice transcript — untrusted, auto-transcribed]";
 
+const inFlightVoiceIngestIdempotencyKeys = new Set<string>();
+
 export type InboundVoiceDispatchOptions = InboundWebhookDispatchOptions & {
   voice: {
     /** Downloads + transcribes the referenced media. Only invoked AFTER the sender trust gate passes. */
@@ -397,7 +399,19 @@ export async function dispatchInboundVoiceWebhookMessage(
   if (!gate.allowed) {
     return gate.response;
   }
-  void runInboundVoiceIngestTask(integrationWebhooks, options, loopGuard);
+  if (!reserveInboundVoiceIngest(options.idempotencyKey)) {
+    return {
+      accepted: true,
+      replied: false,
+      deduped: true as const,
+      queued: false as const,
+      transcription: "deduped" as const,
+      eventType: options.eventType,
+    };
+  }
+  void runInboundVoiceIngestTask(integrationWebhooks, options, loopGuard).finally(() => {
+    releaseInboundVoiceIngest(options.idempotencyKey);
+  });
   return {
     accepted: true,
     replied: false,
@@ -405,6 +419,18 @@ export async function dispatchInboundVoiceWebhookMessage(
     transcription: "pending" as const,
     eventType: options.eventType,
   };
+}
+
+function reserveInboundVoiceIngest(idempotencyKey: string): boolean {
+  if (inFlightVoiceIngestIdempotencyKeys.has(idempotencyKey)) {
+    return false;
+  }
+  inFlightVoiceIngestIdempotencyKeys.add(idempotencyKey);
+  return true;
+}
+
+function releaseInboundVoiceIngest(idempotencyKey: string): void {
+  inFlightVoiceIngestIdempotencyKeys.delete(idempotencyKey);
 }
 
 async function runInboundVoiceIngestTask(

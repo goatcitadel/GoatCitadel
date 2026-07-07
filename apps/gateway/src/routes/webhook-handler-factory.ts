@@ -24,6 +24,15 @@ export type {
 
 export const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
 
+class WebhookPayloadTooLargeError extends Error {
+  public readonly statusCode = 413;
+
+  public constructor() {
+    super(`Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`);
+    this.name = "WebhookPayloadTooLargeError";
+  }
+}
+
 const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
 });
@@ -232,7 +241,7 @@ async function readPayloadBuffer(payload: NodeJS.ReadableStream): Promise<Buffer
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buf.length;
     if (totalBytes > CHANNEL_INBOUND_MAX_BYTES) {
-      throw new Error(`Inbound channel payload exceeded ${CHANNEL_INBOUND_MAX_BYTES} bytes during streaming read.`);
+      throw new WebhookPayloadTooLargeError();
     }
     chunks.push(buf);
   }

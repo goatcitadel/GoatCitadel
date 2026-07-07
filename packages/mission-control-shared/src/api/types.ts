@@ -578,6 +578,24 @@ export interface RuntimeSettingsResponse {
     computerUseGuardrailsV1Enabled: boolean;
     cronReviewQueueV1Enabled: boolean;
     replayRegressionV1Enabled: boolean;
+    codeModeV1Enabled?: boolean;
+    improvementLedgerV1Enabled?: boolean;
+    improvementActivationV1Enabled?: boolean;
+    coworkRuntimeQualityV1Disabled?: boolean;
+    orchestrationFinalStreamingV1Disabled?: boolean;
+    autonomyV1Disabled?: boolean;
+    chatThinkingStreamV1Enabled?: boolean;
+    channelVoiceInboundV1Enabled?: boolean;
+    signalInboundV1Enabled?: boolean;
+    plannerFastPathV1Disabled?: boolean;
+    parallelToolExecutionV1Disabled?: boolean;
+    streamIdleWatchdogV1Disabled?: boolean;
+    plannerFanoutV1Disabled?: boolean;
+    subagentFanoutV1Disabled?: boolean;
+    channelVoiceReplyV1Enabled?: boolean;
+    memoryConsolidationV1Enabled?: boolean;
+    cronEvidenceV1Enabled?: boolean;
+    utilityModelRoutingV1Enabled?: boolean;
   };
 }
 

@@ -406,8 +406,11 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
         };
         if !response.status().is_success() {
             if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-                if bridge_token_required {
-                    token = refresh_desktop_event_stream_token(&gateway_url);
+                let refreshed_token = refresh_desktop_event_stream_token(&gateway_url);
+                if refreshed_token.is_some() {
+                    token = refreshed_token;
+                    auth_failure_notified = false;
+                } else if bridge_token_required {
                     emit_watcher_error(
                         &app,
                         "desktop_sse_auth_failed",
