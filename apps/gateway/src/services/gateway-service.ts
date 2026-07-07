@@ -604,7 +604,10 @@ import {
   type ChannelDeliveryRuntimeSendInput,
 } from "./channel-delivery-runtime-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
-import { evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
+import {
+  evaluateDeploymentProfileToolAccess,
+  policyContextHasOperatorApproval,
+} from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import {
@@ -1546,7 +1549,9 @@ export class GatewayService {
       },
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
-        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args),
+        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args, {
+          operatorApproved: policyContextHasOperatorApproval(request.policyContext),
+        }),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       resolveToolHookWorkspaceId: (request) => this.resolveToolHookWorkspaceId(request),
       primeToolApprovalLifecycle: (approvalId, request) =>
