@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-07T06:13:46.580Z",
-  "gatewayLineCount": 10872,
+  "generatedAt": "2026-07-07T06:23:36.510Z",
+  "gatewayLineCount": 10722,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
@@ -9,8 +9,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 10872,
-      "bytes": 437713
+      "lineCount": 10722,
+      "bytes": 432121
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",

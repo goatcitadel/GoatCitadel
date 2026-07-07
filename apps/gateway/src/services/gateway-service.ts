@@ -81,7 +81,6 @@ import {
   DEFAULT_CITADEL_ID,
   inferProviderForModelId,
   isChatTurnActiveStatus,
-  isChatTurnTerminalStatus,
   NotFoundError,
   PolicyViolationError,
   providerAllowsForeignModelIds,
@@ -515,6 +514,7 @@ import * as durableExecutionService from "./durable-execution-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
+import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
   ChatDelegationService,
@@ -2689,64 +2689,14 @@ export class GatewayService {
     childrenByTurnId: Map<string, string[]>;
     activeLeafTurnId?: string;
   }> {
-    await this.ensureChatMessageProjection(sessionId);
-    const rawTraces = this.storage.chatTurnTraces.listBySession(sessionId, 2_000);
-    const turnLineageById = new Map(
-      rawTraces.map((trace) => [
-        trace.turnId,
-        {
-          turnId: trace.turnId,
-          parentTurnId: trace.parentTurnId,
-        },
-      ]),
+    return chatTurnTraceHydration.loadChatTurnSessionState(
+      {
+        storage: this.storage,
+        ensureChatMessageProjection: (targetSessionId) => this.ensureChatMessageProjection(targetSessionId),
+      },
+      sessionId,
+      options,
     );
-    const activeLeafTurnId = this.resolveChatActiveLeafTurnId(sessionId, rawTraces);
-    const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
-    const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
-    const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
-    const siblingTracesByParent = this.storage.chatTurnTraces.listSiblingsByParentTurnIds(sessionId, pathParentTurnIds);
-    const visibleTurnIds = new Set(selectedPathTurnIds);
-    for (const siblings of siblingTracesByParent.values()) {
-      for (const sibling of siblings) {
-        visibleTurnIds.add(sibling.turnId);
-        if (!rawTraceById.has(sibling.turnId)) {
-          rawTraceById.set(sibling.turnId, sibling);
-        }
-      }
-    }
-    const visibleRawTraces = [...visibleTurnIds]
-      .map((turnId) => rawTraceById.get(turnId))
-      .filter((trace): trace is ChatTurnTraceRecord => Boolean(trace));
-    const hydratedVisibleTracesById = new Map(
-      chatTurnTraceHydration
-        .hydrateChatTurnTraces(this, visibleRawTraces, {
-          includeDecisionTrace: options.includeDecisionTrace === true,
-        })
-        .map((trace) => [trace.turnId, trace]),
-    );
-    const traces = rawTraces.map((trace) => hydratedVisibleTracesById.get(trace.turnId) ?? trace);
-    const messageIds = visibleRawTraces.flatMap((trace) => [
-      trace.userMessageId,
-      ...(trace.assistantMessageId ? [trace.assistantMessageId] : []),
-    ]);
-    const messagesById = this.storage.chatMessages.listByMessageIds(messageIds);
-    const messages = [...messagesById.values()].sort((left, right) => {
-      const leftTimestamp = Date.parse(left.timestamp) || 0;
-      const rightTimestamp = Date.parse(right.timestamp) || 0;
-      if (leftTimestamp !== rightTimestamp) {
-        return leftTimestamp - rightTimestamp;
-      }
-      return left.messageId.localeCompare(right.messageId);
-    });
-    return {
-      traces,
-      tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
-      turnLineageById,
-      messages,
-      messagesById,
-      childrenByTurnId: this.buildChatTurnChildrenMap(traces),
-      activeLeafTurnId,
-    };
   }
 
   private buildChatThreadKnowledgeDependencies(): chatThreadKnowledgeService.ChatThreadKnowledgeDependencies {
@@ -3988,119 +3938,20 @@ export class GatewayService {
   }
 
   public markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord {
-    let current: ChatTurnTraceRecord;
-    try {
-      current = this.storage.chatTurnTraces.get(turnId);
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
-      }
-      const recovered = this.createRunningTraceForActiveStreamCancellation(sessionId, turnId);
-      if (!recovered) {
-        throw error;
-      }
-      current = recovered;
-    }
-    if (current.sessionId !== sessionId) {
-      throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
-    }
-    if (current.status === "cancelled") {
-      return this.createHydratedChatTurnTrace(turnId, current);
-    }
-    if (isChatTurnTerminalStatus(current.status)) {
-      return this.createHydratedChatTurnTrace(turnId, current);
-    }
-    const trace = this.storage.chatTurnTraces.patch(turnId, {
-      status: "cancelled",
-      failure: undefined,
-      completion: {
-        finishReason: current.completion?.finishReason,
-        status: "interrupted",
-        repaired: Boolean(current.completion?.repaired),
+    return markChatTurnCancelled(
+      {
+        storage: this.storage,
+        getActiveChatTurnStream: (targetTurnId) => this.getActiveChatTurnStream(targetTurnId),
+        parseDurableChatTurnPayload: (run) => this.parseDurableChatTurnPayload(run),
+        createHydratedChatTurnTrace: (targetTurnId, trace) => this.createHydratedChatTurnTrace(targetTurnId, trace),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+        publishRealtime: (eventType, source, payload, options) =>
+          this.publishRealtime(eventType, source, payload, options),
       },
-      finishedAt: new Date().toISOString(),
-    });
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "chat.turn.cancelled",
-      message: "Cancelled active chat turn",
       sessionId,
       turnId,
-      context: {
-        cancelledBy,
-      },
-    });
-    this.publishRealtime(
-      "chat_thread_updated",
-      "chat",
-      {
-        type: "chat_thread_turn_cancelled",
-        sessionId,
-        turnId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
-          sessionId,
-          turnId,
-        },
-      },
+      cancelledBy,
     );
-    return this.createHydratedChatTurnTrace(turnId, trace);
-  }
-
-  private createRunningTraceForActiveStreamCancellation(
-    sessionId: string,
-    turnId: string,
-  ): ChatTurnTraceRecord | undefined {
-    const activeStream = this.getActiveChatTurnStream(turnId);
-    if (!activeStream || activeStream.sessionId !== sessionId || !activeStream.runId) {
-      return undefined;
-    }
-    let run: DurableRunRecord;
-    try {
-      run = this.storage.durableRuns.getRun(activeStream.runId);
-    } catch {
-      return undefined;
-    }
-    const payload = this.parseDurableChatTurnPayload(run);
-    if (!payload || payload.sessionId !== sessionId || payload.turnId !== turnId) {
-      return undefined;
-    }
-    const prefs = this.storage.chatSessionPrefs.get(sessionId);
-    const request = payload.request;
-    const mode: ChatMode = request.mode ?? request.prefsOverride?.mode ?? prefs?.mode ?? "chat";
-    return this.storage.chatTurnTraces.create({
-      turnId,
-      sessionId,
-      userMessageId: payload.userMessageId,
-      parentTurnId: payload.parentTurnId,
-      branchKind: payload.branchKind,
-      sourceTurnId: payload.sourceTurnId,
-      status: "running",
-      mode,
-      model: request.model ?? prefs?.model,
-      webMode: request.webMode ?? request.prefsOverride?.webMode ?? prefs?.webMode ?? "auto",
-      memoryMode: request.memoryMode ?? request.prefsOverride?.memoryMode ?? prefs?.memoryMode ?? "auto",
-      thinkingLevel:
-        request.thinkingLevel ?? request.prefsOverride?.thinkingLevel ?? prefs?.thinkingLevel ?? "standard",
-      speedMode: request.speedMode ?? request.prefsOverride?.speedMode ?? prefs?.speedMode,
-      subagentPolicy: request.subagentPolicy ?? request.prefsOverride?.subagentPolicy ?? prefs?.subagentPolicy,
-      effectiveToolAutonomy: request.prefsOverride?.toolAutonomy ?? prefs?.toolAutonomy,
-      startedAt: activeStream.startedAt,
-      routing: {
-        primaryProviderId: request.providerId ?? prefs?.providerId,
-        primaryModel: request.model ?? prefs?.model,
-        effectiveProviderId: request.providerId ?? prefs?.providerId,
-        effectiveModel: request.model ?? prefs?.model,
-      },
-      durable: {
-        runId: activeStream.runId,
-        status: run.status,
-      },
-    });
   }
 
   private getSessionIdleSeconds(sessionId: string): number {

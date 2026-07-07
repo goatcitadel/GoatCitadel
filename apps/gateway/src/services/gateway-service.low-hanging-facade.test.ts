@@ -1301,17 +1301,14 @@ describe("GatewayService low-hanging facade delegation", () => {
         startedAt: "2026-05-03T16:01:00.000Z",
       },
     ];
-    gateway.buildChatTurnChildrenMap = vi.fn((traces: Array<{ turnId: string; parentTurnId?: string }>) => {
-      const children = new Map<string, string[]>();
-      for (const trace of traces) {
-        if (trace.parentTurnId) {
-          children.set(trace.parentTurnId, [...(children.get(trace.parentTurnId) ?? []), trace.turnId]);
-        }
-      }
-      return children;
-    });
-    gateway.resolveChatActiveLeafTurnId = vi.fn(() => "turn-child");
+    // Children-map building and active-leaf resolution moved into
+    // chat-turn-trace-hydration (B3b); the branch-state store drives the
+    // active leaf instead of a gateway-method stub.
     gateway.storage = {
+      chatSessionBranchState: {
+        get: vi.fn(() => ({ activeLeafTurnId: "turn-child" })),
+        setActiveLeaf: vi.fn(),
+      },
       chatTurnTraces: {
         listBySession: vi.fn(() => traces),
         listSiblingsByParentTurnIds: vi.fn(
