@@ -758,4 +758,69 @@ describe("ChatTurnTraceRepository", () => {
     assert.equal(map.get("missing"), undefined);
     assert.equal(repo.getByTurnIds([]).size, 0);
   });
+
+  it("lists active (non-terminal) traces across sessions, oldest first", () => {
+    const { repo } = createStore();
+    repo.create(
+      baseTrace({
+        turnId: "turn-running",
+        sessionId: "session-1",
+        userMessageId: "msg-1",
+        status: "running",
+        startedAt: "2026-03-26T00:00:02.000Z",
+      }),
+    );
+    repo.create(
+      baseTrace({
+        turnId: "turn-waiting",
+        sessionId: "session-2",
+        userMessageId: "msg-2",
+        status: "waiting_for_tool",
+        startedAt: "2026-03-26T00:00:01.000Z",
+      }),
+    );
+    repo.create(
+      baseTrace({
+        turnId: "turn-completed",
+        sessionId: "session-1",
+        userMessageId: "msg-3",
+        status: "completed",
+        finishedAt: "2026-03-26T00:00:03.000Z",
+      }),
+    );
+    repo.create(
+      baseTrace({
+        turnId: "turn-failed",
+        sessionId: "session-2",
+        userMessageId: "msg-4",
+        status: "failed",
+        finishedAt: "2026-03-26T00:00:04.000Z",
+      }),
+    );
+
+    const active = repo.listActive();
+
+    assert.deepEqual(
+      active.map((trace) => trace.turnId),
+      ["turn-waiting", "turn-running"],
+    );
+  });
+
+  it("caps and honours the listActive limit", () => {
+    const { repo } = createStore();
+    for (let index = 0; index < 3; index += 1) {
+      repo.create(
+        baseTrace({
+          turnId: `turn-active-${index}`,
+          sessionId: "session-limit",
+          userMessageId: `msg-${index}`,
+          status: "running",
+          startedAt: `2026-03-26T00:00:0${index}.000Z`,
+        }),
+      );
+    }
+
+    assert.equal(repo.listActive(2).length, 2);
+    assert.equal(repo.listActive().length, 3);
+  });
 });

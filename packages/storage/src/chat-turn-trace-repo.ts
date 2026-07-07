@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./db.js";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { CHAT_TURN_ACTIVE_STATUSES, NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCitationRecord,
@@ -116,6 +116,7 @@ export class ChatTurnTraceRepository {
   private readonly patchStmt;
   private readonly listBySessionStmt;
   private readonly listCompletedSinceStmt;
+  private readonly listActiveStmt;
   private readonly deleteByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly getByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
@@ -178,6 +179,13 @@ export class ChatTurnTraceRepository {
       WHERE status = 'completed' AND started_at > @sinceIso
       ORDER BY started_at ASC
       LIMIT @limit
+    `);
+    const activeStatusPlaceholders = CHAT_TURN_ACTIVE_STATUSES.map(() => "?").join(", ");
+    this.listActiveStmt = db.prepare(`
+      SELECT * FROM chat_turn_traces
+      WHERE status IN (${activeStatusPlaceholders})
+      ORDER BY started_at ASC, turn_id ASC
+      LIMIT ?
     `);
   }
 
@@ -291,6 +299,18 @@ export class ChatTurnTraceRepository {
         sinceIso,
         limit: Math.max(1, Math.min(limit, 1000)),
       }),
+    );
+    return rows.map(mapRow);
+  }
+
+  /**
+   * Traces still in a non-terminal status across all sessions, oldest first.
+   * Used by the boot-time interruption reconciler: after a restart no in-process
+   * turn can still be running, so every row here is either durable-owned or dead.
+   */
+  public listActive(limit = 500): ChatTurnTraceRecord[] {
+    const rows = toChatTurnTraceRows(
+      this.listActiveStmt.all(...CHAT_TURN_ACTIVE_STATUSES, Math.max(1, Math.min(limit, 1000))),
     );
     return rows.map(mapRow);
   }

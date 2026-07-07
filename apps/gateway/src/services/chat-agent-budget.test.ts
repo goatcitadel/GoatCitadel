@@ -429,6 +429,9 @@ describe("chat-agent-budget", () => {
       expect(buildUserSafeFailureMessage({ failureClass, message: "raw", retryable: true })).not.toBe("raw");
     }
     expect(
+      buildUserSafeFailureMessage({ failureClass: "interrupted_by_restart", message: "raw", retryable: true }),
+    ).toContain("gateway restarted");
+    expect(
       buildUserSafeFailureMessage({ failureClass: "unknown" as never, message: "raw", retryable: false }),
     ).toContain("failed before completion");
   });

@@ -118,6 +118,7 @@ describe("chat contract helpers", () => {
       turn_budget_exceeded: "switch_to_deep_mode",
       budget_exceeded: "switch_to_deep_mode",
       approval_required: "approve_pending_step",
+      interrupted_by_restart: "retry",
       unknown: "retry",
     };
 

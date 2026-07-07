@@ -523,6 +523,7 @@ import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
+import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery-service.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
   ChatDelegationService,
@@ -2320,6 +2321,12 @@ export class GatewayService {
       this.startMaintenanceScheduler();
       this.startOrchestrationWorktreeReapScheduler();
     }
+    // Convert chat turns stranded by the previous process death into honest
+    // retryable interrupted_by_restart failure traces before the durable worker
+    // starts resuming runs (durable-owned turns are skipped and left to it).
+    if (!this.isFeatureEnabled("chatTurnInterruptionRecoveryV1Disabled")) {
+      this.reconcileInterruptedChatTurnsOnBoot();
+    }
     this.durableRunService.startWorker();
     if (!this.isFeatureEnabled("autonomyV1Disabled")) {
       // Recover autonomous runs that were parked while the kill switch was engaged
@@ -2345,6 +2352,34 @@ export class GatewayService {
       log.info("feature flags", { flags: this.readFeatureFlags() });
     } else {
       log.info("runtime ready");
+    }
+  }
+
+  /**
+   * Boot-time runtime-truth repair: fail-closed conversion of chat turns
+   * stranded by the previous process death into retryable
+   * interrupted_by_restart failure traces. Failure here must never block
+   * startup — the reconciler re-runs on the next boot.
+   */
+  private reconcileInterruptedChatTurnsOnBoot(): void {
+    try {
+      const reconciled = reconcileInterruptedChatTurns({
+        storage: this.storage,
+        publishRealtime: (eventType, source, payload, options) =>
+          this.publishRealtime(eventType, source, payload, options),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      });
+      if (reconciled.interruptedTurnIds.length > 0 || reconciled.synthesizedTurnIds.length > 0) {
+        log.info("reconciled chat turns interrupted by a previous gateway shutdown", {
+          interrupted: reconciled.interruptedTurnIds.length,
+          synthesized: reconciled.synthesizedTurnIds.length,
+          skippedDurableOwned: reconciled.skippedDurableOwnedTurnIds.length,
+        });
+      }
+    } catch (error) {
+      log.warn("Failed to reconcile interrupted chat turns on startup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -7454,6 +7489,8 @@ export class GatewayService {
       memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
       cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
       utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
+      chatTurnInterruptionRecoveryV1Disabled:
+        patch.chatTurnInterruptionRecoveryV1Disabled ?? current.chatTurnInterruptionRecoveryV1Disabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -7524,6 +7561,8 @@ export class GatewayService {
       memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
       cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
       utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
+      chatTurnInterruptionRecoveryV1Disabled:
+        stored?.chatTurnInterruptionRecoveryV1Disabled ?? fromConfig.chatTurnInterruptionRecoveryV1Disabled,
     };
     this.featureFlagsCache = resolved;
     this.featureFlagsCacheAtMs = nowMs;

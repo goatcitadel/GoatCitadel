@@ -131,5 +131,7 @@ export interface RuntimeSettings {
     cronEvidenceV1Enabled?: boolean;
     /** Opt-in: routes background LLM calls (improvement scans, judges, classifiers, prompt packs) to the cheap utility-model slot. Absent/false ⇒ today's selection. */
     utilityModelRoutingV1Enabled?: boolean;
+    /** Kill switch: disables the boot-time chat-turn interruption reconciler. Absent/false ⇒ reconciler runs on every boot. */
+    chatTurnInterruptionRecoveryV1Disabled?: boolean;
   };
 }

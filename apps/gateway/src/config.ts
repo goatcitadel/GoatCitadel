@@ -138,6 +138,12 @@ export interface FeatureFlagsConfig {
    * model selection exactly.
    */
   utilityModelRoutingV1Enabled?: boolean;
+  /**
+   * Kill switch for the boot-time chat-turn interruption reconciler (turns
+   * stranded by a gateway death become retryable interrupted_by_restart
+   * failure traces). Absent/false (default) ⇒ reconciler runs on every boot.
+   */
+  chatTurnInterruptionRecoveryV1Disabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -747,6 +753,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
     ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
+    [
+      "chatTurnInterruptionRecoveryV1Disabled",
+      process.env.GOATCITADEL_FEATURE_CHAT_TURN_INTERRUPTION_RECOVERY_V1_DISABLED,
+    ],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1309,6 +1319,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // Opt-in utility-model tier for background LLM calls. `?? false` keeps
       // background model selection byte-identical until an operator enables it.
       utilityModelRoutingV1Enabled: featuresInput.utilityModelRoutingV1Enabled ?? false,
+      // Kill switch for the boot-time chat-turn interruption reconciler.
+      // `?? false` keeps the reconciler active unless an operator disables it.
+      chatTurnInterruptionRecoveryV1Disabled: featuresInput.chatTurnInterruptionRecoveryV1Disabled ?? false,
     },
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {

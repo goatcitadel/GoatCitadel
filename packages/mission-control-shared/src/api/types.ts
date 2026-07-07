@@ -596,6 +596,7 @@ export interface RuntimeSettingsResponse {
     memoryConsolidationV1Enabled?: boolean;
     cronEvidenceV1Enabled?: boolean;
     utilityModelRoutingV1Enabled?: boolean;
+    chatTurnInterruptionRecoveryV1Disabled?: boolean;
   };
 }
 
