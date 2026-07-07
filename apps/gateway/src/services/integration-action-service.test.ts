@@ -1734,6 +1734,58 @@ describe("integration-action-service", () => {
         expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
       });
 
+      it("does not restore over a concurrent terminal failure needing manual reconciliation", async () => {
+        const connection = guardedGmailConnection();
+        // Same race window, worse outcome: right after this retry's own
+        // rejected_commit_failed write, the in-flight attempt concludes with an
+        // unknown external outcome — also rejected_commit_failed, but carrying the
+        // manual-reconciliation diagnostic. The restore must recognize the record is
+        // no longer its own write and leave that evidence untouched.
+        const manualReviewDiagnostic = {
+          code: "commit_execution_failed" as const,
+          message:
+            "commit matched the approved dry-run but the external execution failed: provider timeout (the external boundary may have been crossed; manual reconciliation required)",
+          recordedAt: "2026-07-07T00:02:31.000Z",
+        };
+        const inner = createInMemoryDryRunCommitStore();
+        let interleaved = false;
+        const interleavingStore: DryRunCommitStore = {
+          create: (record) => inner.create(record),
+          get: (dryRunId) => inner.get(dryRunId),
+          update: (dryRunId, patch) => {
+            const updated = inner.update(dryRunId, patch);
+            if (patch.state === "rejected_commit_failed" && !interleaved) {
+              interleaved = true;
+              inner.update(dryRunId, {
+                state: "rejected_commit_failed",
+                diagnostic: manualReviewDiagnostic,
+                updatedAt: manualReviewDiagnostic.recordedAt,
+              });
+            }
+            return updated;
+          },
+        };
+        const { host, store } = dryRunHost(connection, interleavingStore);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        (host.mutationStore!.claim as ReturnType<typeof vi.fn>).mockReturnValue({ outcome: "in_progress" });
+
+        const colliding = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(colliding.status).toBe("blocked");
+        expect(store.get(dryRunId)).toMatchObject({
+          state: "rejected_commit_failed",
+          diagnostic: manualReviewDiagnostic,
+        });
+      });
+
       it("keeps the plain refusal when persisting the preview fails, instead of throwing", async () => {
         const connection = guardedGmailConnection();
         const { host } = dryRunHost(connection);

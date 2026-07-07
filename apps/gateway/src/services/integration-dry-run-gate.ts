@@ -284,11 +284,18 @@ async function commitApprovedDryRunSideEffect<TValue>(
       // A concurrent commit attempt for this approval is still mid-flight; this retry
       // must not terminalize the approved preview. Restore awaiting_commit (approval
       // and hash kept) so the in-flight attempt — or a later retry — can conclude it.
-      // Conditional on the state THIS attempt just wrote: if the in-flight attempt's
-      // "committed" (or any other) update has already landed, leave it alone — an
-      // unconditional restore would stomp a genuinely committed record back to
-      // awaiting_commit.
-      if (store.get(commitRef.dryRunId)?.state === "rejected_commit_failed") {
+      // Conditional on the record holding EXACTLY the failure THIS attempt just wrote
+      // (state + diagnostic identity): a bare state check is not enough, because the
+      // in-flight attempt can itself conclude with rejected_commit_failed carrying a
+      // manual-reconciliation diagnostic (unknown external outcome) — restoring over
+      // that would erase the operator's evidence and mark a boundary-maybe-crossed
+      // record as cleanly retryable. Anything not our own write is left alone.
+      const current = store.get(commitRef.dryRunId);
+      const failureIsOurs =
+        current?.state === "rejected_commit_failed" &&
+        current.diagnostic?.recordedAt === commit.diagnostic.recordedAt &&
+        current.diagnostic?.message === commit.diagnostic.message;
+      if (failureIsOurs) {
         store.update(commitRef.dryRunId, {
           state: "awaiting_commit",
           diagnostic: {
