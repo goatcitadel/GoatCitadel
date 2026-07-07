@@ -284,16 +284,29 @@ async function commitApprovedDryRunSideEffect<TValue>(
       // A concurrent commit attempt for this approval is still mid-flight; this retry
       // must not terminalize the approved preview. Restore awaiting_commit (approval
       // and hash kept) so the in-flight attempt — or a later retry — can conclude it.
-      store.update(commitRef.dryRunId, {
-        state: "awaiting_commit",
-        diagnostic: {
-          code: "commit_execution_failed",
-          message:
-            "Commit retry observed another attempt in progress for the same idempotency key; the preview was restored to awaiting_commit.",
-          recordedAt: input.checkedAt,
-        },
-        updatedAt: input.checkedAt,
-      });
+      // Conditional on the record holding EXACTLY the failure THIS attempt just wrote
+      // (state + diagnostic identity): a bare state check is not enough, because the
+      // in-flight attempt can itself conclude with rejected_commit_failed carrying a
+      // manual-reconciliation diagnostic (unknown external outcome) — restoring over
+      // that would erase the operator's evidence and mark a boundary-maybe-crossed
+      // record as cleanly retryable. Anything not our own write is left alone.
+      const current = store.get(commitRef.dryRunId);
+      const failureIsOurs =
+        current?.state === "rejected_commit_failed" &&
+        current.diagnostic?.recordedAt === commit.diagnostic.recordedAt &&
+        current.diagnostic?.message === commit.diagnostic.message;
+      if (failureIsOurs) {
+        store.update(commitRef.dryRunId, {
+          state: "awaiting_commit",
+          diagnostic: {
+            code: "commit_execution_failed",
+            message:
+              "Commit retry observed another attempt in progress for the same idempotency key; the preview was restored to awaiting_commit.",
+            recordedAt: input.checkedAt,
+          },
+          updatedAt: input.checkedAt,
+        });
+      }
     }
     // The hash matched; the runner itself blocked or failed. Surface its structured result.
     return inner;
