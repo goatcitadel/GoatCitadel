@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApprovalCreateInput, ApprovalRequest, IntegrationConnection } from "@goatcitadel/contracts";
+import type {
+  ApprovalCreateInput,
+  ApprovalRequest,
+  DryRunCommitStore,
+  IntegrationConnection,
+} from "@goatcitadel/contracts";
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 import { approveDryRun, createInMemoryDryRunCommitStore } from "./dry-run-commit-service.js";
@@ -1442,8 +1447,8 @@ describe("integration-action-service", () => {
         });
       }
 
-      function dryRunHost(connection: IntegrationConnection) {
-        const store = createInMemoryDryRunCommitStore();
+      function dryRunHost(connection: IntegrationConnection, storeOverride?: DryRunCommitStore) {
+        const store = storeOverride ?? createInMemoryDryRunCommitStore();
         const upserts: Array<Record<string, unknown>> = [];
         const approvalEvents: Array<Record<string, unknown>> = [];
         const createApproval = vi.fn(async (input: ApprovalCreateInput): Promise<ApprovalRequest> => {
@@ -1686,6 +1691,47 @@ describe("integration-action-service", () => {
         expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
         // Not terminalized: the in-flight attempt (or a later retry) can still conclude it.
         expect(store.get(dryRunId)).toMatchObject({ state: "awaiting_commit" });
+      });
+
+      it("does not stomp a concurrently-landed commit when restoring after an in_progress collision", async () => {
+        const connection = guardedGmailConnection();
+        // Interleaving store: the moment the colliding retry terminalizes the record
+        // (rejected_commit_failed), the in-flight attempt's own "committed" update
+        // lands — exactly the race window between commitDryRun's write and the
+        // gate's restore. The restore must then leave the committed record alone.
+        const inner = createInMemoryDryRunCommitStore();
+        const interleavingStore: DryRunCommitStore = {
+          create: (record) => inner.create(record),
+          get: (dryRunId) => inner.get(dryRunId),
+          update: (dryRunId, patch) => {
+            const updated = inner.update(dryRunId, patch);
+            if (patch.state === "rejected_commit_failed") {
+              inner.update(dryRunId, {
+                state: "committed",
+                committedAt: "2026-07-07T00:02:30.000Z",
+                updatedAt: "2026-07-07T00:02:30.000Z",
+              });
+            }
+            return updated;
+          },
+        };
+        const { host, store } = dryRunHost(connection, interleavingStore);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        (host.mutationStore!.claim as ReturnType<typeof vi.fn>).mockReturnValue({ outcome: "in_progress" });
+
+        const colliding = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(colliding.status).toBe("blocked");
+        expect(colliding.blockedReason).toBe("external_side_effect_in_progress");
+        expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
       });
 
       it("keeps the plain refusal when persisting the preview fails, instead of throwing", async () => {

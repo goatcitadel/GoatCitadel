@@ -284,16 +284,22 @@ async function commitApprovedDryRunSideEffect<TValue>(
       // A concurrent commit attempt for this approval is still mid-flight; this retry
       // must not terminalize the approved preview. Restore awaiting_commit (approval
       // and hash kept) so the in-flight attempt — or a later retry — can conclude it.
-      store.update(commitRef.dryRunId, {
-        state: "awaiting_commit",
-        diagnostic: {
-          code: "commit_execution_failed",
-          message:
-            "Commit retry observed another attempt in progress for the same idempotency key; the preview was restored to awaiting_commit.",
-          recordedAt: input.checkedAt,
-        },
-        updatedAt: input.checkedAt,
-      });
+      // Conditional on the state THIS attempt just wrote: if the in-flight attempt's
+      // "committed" (or any other) update has already landed, leave it alone — an
+      // unconditional restore would stomp a genuinely committed record back to
+      // awaiting_commit.
+      if (store.get(commitRef.dryRunId)?.state === "rejected_commit_failed") {
+        store.update(commitRef.dryRunId, {
+          state: "awaiting_commit",
+          diagnostic: {
+            code: "commit_execution_failed",
+            message:
+              "Commit retry observed another attempt in progress for the same idempotency key; the preview was restored to awaiting_commit.",
+            recordedAt: input.checkedAt,
+          },
+          updatedAt: input.checkedAt,
+        });
+      }
     }
     // The hash matched; the runner itself blocked or failed. Surface its structured result.
     return inner;
