@@ -115,7 +115,7 @@ export class IntegrationConnectionRepository {
       configJson: JSON.stringify(input.config ?? {}),
       pluginId: input.pluginId ?? null,
       pluginVersion: input.pluginVersion ?? null,
-      pluginEnabled: input.pluginEnabled ? 1 : 0,
+      pluginEnabled: input.pluginEnabled == null ? null : input.pluginEnabled ? 1 : 0,
       pluginMetaJson: null,
       createdAt: now,
       updatedAt: now,
