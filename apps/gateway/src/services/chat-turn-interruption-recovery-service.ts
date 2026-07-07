@@ -87,6 +87,9 @@ export function reconcileInterruptedChatTurns(
         status: "interrupted",
         repaired: Boolean(trace.completion?.repaired),
       },
+      // A waiting_for_user_input turn can never collect its answer after the
+      // process died; clear the prompt so it doesn't sit on a terminal row.
+      pendingUserInput: null,
       finishedAt: now,
     });
     result.interruptedTurnIds.push(trace.turnId);

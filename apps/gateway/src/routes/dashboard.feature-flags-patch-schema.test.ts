@@ -40,6 +40,7 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   memoryConsolidationV1Enabled: true,
   cronEvidenceV1Enabled: true,
   utilityModelRoutingV1Enabled: true,
+  chatTurnInterruptionRecoveryV1Disabled: true,
 };
 
 describe("settings PATCH schema feature-flag coverage (Phase 3.2)", () => {

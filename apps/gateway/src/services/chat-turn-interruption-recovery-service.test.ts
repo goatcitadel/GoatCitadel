@@ -120,6 +120,44 @@ describe("reconcileInterruptedChatTurns", () => {
     );
   });
 
+  it("clears stale pendingUserInput when failing a waiting_for_user_input trace", () => {
+    const storage = createStorage();
+    storage.chatMessages.upsert(userMessage());
+    storage.chatTurnTraces.create({
+      ...activeTrace({ status: "waiting_for_user_input" }),
+      pendingUserInput: {
+        promptId: "prompt-1",
+        question: "Which environment?",
+        createdAt: "2026-07-07T19:46:25.000Z",
+      } as never,
+    });
+    const deps = buildDeps(storage);
+
+    reconcileInterruptedChatTurns(deps);
+
+    const trace = storage.chatTurnTraces.get("turn-active");
+    expect(trace.status).toBe("failed");
+    expect(trace.pendingUserInput).toBeUndefined();
+  });
+
+  it("is a no-op when run a second time after a reconciling boot", () => {
+    const storage = createStorage();
+    storage.chatMessages.upsert(userMessage());
+    storage.chatTurnTraces.create(activeTrace());
+    storage.chatMessages.upsert(userMessage({ sessionId: "session-orphan", messageId: "msg-orphan" }));
+    const first = reconcileInterruptedChatTurns(buildDeps(storage));
+    expect(first.interruptedTurnIds).toHaveLength(1);
+    expect(first.synthesizedTurnIds).toHaveLength(1);
+
+    const secondDeps = buildDeps(storage);
+    const second = reconcileInterruptedChatTurns(secondDeps);
+
+    expect(second.interruptedTurnIds).toEqual([]);
+    expect(second.synthesizedTurnIds).toEqual([]);
+    expect(second.skippedDurableOwnedTurnIds).toEqual([]);
+    expect(secondDeps.publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("skips active traces owned by a live durable run (durable boot recovery owns them)", () => {
     const storage = createStorage();
     const run = storage.durableRuns.createRun({

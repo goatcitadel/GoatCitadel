@@ -180,12 +180,12 @@ export class ChatTurnTraceRepository {
       ORDER BY started_at ASC
       LIMIT @limit
     `);
-    const activeStatusList = CHAT_TURN_ACTIVE_STATUSES.map((status) => `'${status}'`).join(", ");
+    const activeStatusPlaceholders = CHAT_TURN_ACTIVE_STATUSES.map(() => "?").join(", ");
     this.listActiveStmt = db.prepare(`
       SELECT * FROM chat_turn_traces
-      WHERE status IN (${activeStatusList})
+      WHERE status IN (${activeStatusPlaceholders})
       ORDER BY started_at ASC, turn_id ASC
-      LIMIT @limit
+      LIMIT ?
     `);
   }
 
@@ -310,9 +310,7 @@ export class ChatTurnTraceRepository {
    */
   public listActive(limit = 500): ChatTurnTraceRecord[] {
     const rows = toChatTurnTraceRows(
-      this.listActiveStmt.all({
-        limit: Math.max(1, Math.min(limit, 1000)),
-      }),
+      this.listActiveStmt.all(...CHAT_TURN_ACTIVE_STATUSES, Math.max(1, Math.min(limit, 1000))),
     );
     return rows.map(mapRow);
   }

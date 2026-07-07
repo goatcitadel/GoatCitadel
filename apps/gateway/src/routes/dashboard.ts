@@ -247,6 +247,7 @@ export const updateSettingsSchema = z.object({
       streamIdleWatchdogV1Disabled: z.boolean().optional(),
       plannerFanoutV1Disabled: z.boolean().optional(),
       subagentFanoutV1Disabled: z.boolean().optional(),
+      chatTurnInterruptionRecoveryV1Disabled: z.boolean().optional(),
       chatThinkingStreamV1Enabled: z.boolean().optional(),
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
