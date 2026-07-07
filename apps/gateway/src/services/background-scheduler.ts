@@ -10,6 +10,8 @@
  *     shutdown,
  *   - each tick failure-isolated (a throw/rejection is reported, never
  *     surfaced as an unhandled rejection or allowed to crash the process),
+ *   - ticks are non-overlapping: a tick is skipped while the previous tick's
+ *     work is still in flight (no overlapping passes under load),
  *   - each in-flight tick registered into a shared task set so `close()` can
  *     await drain, and
  *   - work skipped entirely while the owner is shutting down.
@@ -75,13 +77,23 @@ export interface BackgroundIntervalHandle {
 export function startBackgroundInterval(options: BackgroundIntervalOptions): BackgroundIntervalHandle {
   const { label, intervalMs, bootDelayMs, task, isClosing, registerInflight, onError } = options;
 
+  // Re-entrancy guard (Finding 9): if a previous tick's work is still in flight
+  // (e.g. a maintenance sweep that ran longer than intervalMs under load), skip
+  // this tick rather than run overlapping passes — overlapping ticks can
+  // double-run the same period's work. Mirrors dev-supervisor's inflight guard.
+  let running = false;
   const runTick = (): void => {
-    if (isClosing()) {
+    if (isClosing() || running) {
       return;
     }
-    const inflight = task().catch((error: unknown) => {
-      onError(error, label);
-    });
+    running = true;
+    const inflight = task()
+      .catch((error: unknown) => {
+        onError(error, label);
+      })
+      .finally(() => {
+        running = false;
+      });
     registerInflight(inflight);
   };
 
