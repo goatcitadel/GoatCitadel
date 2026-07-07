@@ -17,6 +17,7 @@ import {
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
+import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 
 export interface A2APeerAuthContext {
   peerId: string;
@@ -181,6 +182,45 @@ export class A2APushNotificationService {
     checkedAt: string,
   ): Promise<A2ATaskPushDeliveryResult> {
     const attemptCount = config.attemptCount + 1;
+
+    // Citadel Ward gate (Stage 1): the push binding is workspace-scoped, so it
+    // evaluates against that workspace's citadel. deny/require_approval block
+    // here (recorded as a blocked delivery — retrying cannot change a ward);
+    // require_dry_run threads to the runner, which refuses pre-boundary.
+    const ward = resolveWardEffectForExternalAction({
+      storage: this.deps.storage,
+      workspaceId: binding.workspaceId,
+      action: buildA2AOutboundWardAction("push"),
+    });
+    if (ward.effect === "deny" || ward.effect === "require_approval") {
+      const wardError =
+        ward.effect === "deny"
+          ? `A Citadel Ward denies a2a.outbound.push (citadel ${ward.citadelId}).`
+          : `A Citadel Ward requires approval for a2a.outbound.push (citadel ${ward.citadelId}); approval-gated push delivery is not wired, so delivery is blocked.`;
+      const updated = this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+        task.id,
+        binding.peerId,
+        {
+          status: "blocked",
+          attemptCount,
+          error: wardError,
+          lastEventSequence: event.sequence,
+        },
+        checkedAt,
+      );
+      return {
+        taskId: task.id,
+        peerId: binding.peerId,
+        url: updated.url,
+        eventSequence: event.sequence,
+        eventKind: event.kind,
+        status: "blocked",
+        attemptCount: updated.attemptCount,
+        checkedAt,
+        error: wardError,
+      };
+    }
+
     const payload = buildPushPayload(task, event, binding.peerId, attemptCount, checkedAt);
     const run = await runIdempotentExternalSideEffect<{ statusCode: number; ok: boolean }>({
       mutationStore: this.deps.mutationIdempotencyStore,
@@ -192,6 +232,7 @@ export class A2APushNotificationService {
       actionId: "push_notification",
       actorScope: `a2a:${binding.peerId}`,
       checkedAt,
+      wardEffect: ward.effect,
       idempotencyKey: buildPushIdempotencyKey(task, event, binding.peerId),
       payload,
       label: "A2A task push notification",
@@ -236,7 +277,9 @@ export class A2APushNotificationService {
           ? "Push delivery idempotency is unavailable."
           : run.message;
     const status: A2ATaskPushDeliveryResult["status"] =
-      run.status === "blocked" && run.claim.replayOutcome === "idempotency_unavailable"
+      run.status === "blocked" &&
+      (run.claim.replayOutcome === "idempotency_unavailable" ||
+        run.blockedReason === "external_side_effect_dry_run_required")
         ? "blocked"
         : attemptCount >= config.maxAttempts
           ? "dead_lettered"

@@ -4,6 +4,7 @@ import type {
   A2AOutboundPreviewRequest,
   A2AOutboundPreviewResponse,
   A2AOutboundSendResponse,
+  WardEffect,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
@@ -32,6 +33,8 @@ export async function sendOutboundGrpc(input: {
   preview: A2AOutboundPreviewResponse;
   idempotencyKey: string;
   peer: A2AOutboundPeer;
+  /** Pre-evaluated Citadel Ward effect (the caller owns deny/require_approval). */
+  wardEffect?: WardEffect;
   deps: A2AOutboundGrpcDependencies;
 }): Promise<A2AOutboundSendResponse> {
   const { actorId, checkedAt, deps, idempotencyKey, peer, preview, request } = input;
@@ -44,6 +47,7 @@ export async function sendOutboundGrpc(input: {
     actionId: request.method,
     actorScope: actorId,
     checkedAt,
+    wardEffect: input.wardEffect,
     idempotencyKey,
     payload: { ...preview.envelope, transport: "GRPC" },
     label: "A2A gRPC outbound call",
@@ -63,12 +67,15 @@ export async function sendOutboundGrpc(input: {
   });
 
   if (run.status === "blocked") {
+    // Governance refusals are honest blocks; only idempotency-duplicate
+    // outcomes read as "replayed".
+    const governanceRefusal = run.blockedReason === "external_side_effect_dry_run_required";
     return {
       checkedAt,
       peerId: request.peerId,
       method: request.method,
       transport: "GRPC",
-      status: "replayed",
+      status: governanceRefusal ? "blocked" : "replayed",
       agentCardUrl: peer.agentCardUrl,
       grpcUrl: preview.grpcUrl,
       idempotencyKey,

@@ -1327,4 +1327,106 @@ describe("integration-action-service", () => {
       },
     });
   });
+
+  describe("citadel ward gate (Stage 1)", () => {
+    function wardHost(
+      connection: IntegrationConnection,
+      wards: Array<{ actionPattern: string; effect: string }>,
+      overrides: Partial<IntegrationActionHost> = {},
+    ): IntegrationActionHost {
+      const base = createHost(connection, overrides);
+      return {
+        ...base,
+        storage: {
+          ...base.storage,
+          workspaces: { find: (id: string) => (id === "ws-guarded" ? { citadelId: "citadel-guarded" } : undefined) },
+          citadels: { listWards: (citadelId: string) => (citadelId === "citadel-guarded" ? (wards as never) : []) },
+        },
+      };
+    }
+
+    it("refuses require_dry_run gmail writes before the boundary", async () => {
+      const connection = createConnection({
+        catalogId: "automation.gmail",
+        key: "gmail",
+        kind: "automation",
+        label: "Gmail",
+        workspaceId: "ws-guarded",
+        config: { accessToken: "gmail-token" },
+      });
+      const host = wardHost(connection, [
+        { actionPattern: "integration.automation.gmail.*", effect: "require_dry_run" },
+      ]);
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+        input: { to: "ops@example.com", subject: "s", bodyText: "b" },
+      });
+
+      expect(result.status).toBe("blocked");
+      expect(result.blockedReason).toBe("external_side_effect_dry_run_required");
+      expect(result.output).toMatchObject({ dryRunRequired: true });
+      expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+    });
+
+    it("denies even READ actions when a deny ward matches, before any provider call", async () => {
+      const connection = createConnection({
+        catalogId: "productivity.trello",
+        key: "trello",
+        kind: "productivity",
+        label: "Trello",
+        workspaceId: "ws-guarded",
+        config: { apiKey: "k", token: "t" },
+      });
+      const host = wardHost(connection, [{ actionPattern: "integration.productivity.trello.*", effect: "deny" }]);
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "read");
+
+      expect(result.status).toBe("blocked");
+      expect(result.blockedReason).toBe("citadel_ward_deny");
+      expect(result.output).toMatchObject({
+        wardAction: "integration.productivity.trello.read",
+        citadelId: "citadel-guarded",
+      });
+      expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+      expect(host.publishRealtime).toHaveBeenCalled();
+    });
+
+    it("blocks require_approval fail-closed until the approval loop is wired (Stage 2)", async () => {
+      const connection = createConnection({
+        catalogId: "automation.activepieces",
+        key: "activepieces",
+        kind: "automation",
+        label: "Activepieces",
+        workspaceId: "ws-guarded",
+        config: { webhookUrl: "https://flows.example.test/hook" },
+      });
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }]);
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook");
+
+      expect(result.status).toBe("blocked");
+      expect(result.blockedReason).toBe("citadel_ward_approval_required");
+      expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+    });
+
+    it("resolves the personal citadel (no wards) for unbound connections — behavior unchanged", async () => {
+      const connection = createConnection({
+        catalogId: "productivity.trello",
+        key: "trello",
+        kind: "productivity",
+        label: "Trello",
+        config: { apiKey: "k", token: "t" },
+      });
+      // Ward storage present, but the connection has no workspaceId → personal
+      // citadel → no wards → identical to pre-ward behavior.
+      const host = wardHost(connection, [{ actionPattern: "*", effect: "deny" }], {
+        fetchWithDiagnosticsTimeout: vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "read");
+
+      expect(result.status).toBe("executed");
+      expect(host.fetchWithDiagnosticsTimeout).toHaveBeenCalled();
+    });
+  });
 });

@@ -70,6 +70,37 @@ describe("IntegrationConnectionRepository", () => {
     assert.throws(() => repo.get(created.connectionId), /Integration connection .* not found/);
   });
 
+  it("round-trips the optional workspace binding, including clearing it", () => {
+    const repo = createRepo();
+
+    const created = repo.create({
+      catalogId: "automation.gmail",
+      kind: "automation",
+      key: "gmail",
+      label: "Gmail",
+      workspaceId: "ws-guarded",
+      config: {},
+    });
+    assert.equal(created.workspaceId, "ws-guarded");
+    assert.equal(repo.get(created.connectionId).workspaceId, "ws-guarded");
+
+    // Unrelated updates preserve the binding.
+    assert.equal(repo.update(created.connectionId, { label: "Gmail Ops" }).workspaceId, "ws-guarded");
+    // Rebinding and clearing (null) both persist.
+    assert.equal(repo.update(created.connectionId, { workspaceId: "ws-other" }).workspaceId, "ws-other");
+    assert.equal(repo.update(created.connectionId, { workspaceId: null }).workspaceId, undefined);
+
+    // Unbound creates stay unbound.
+    const unbound = repo.create({
+      catalogId: "productivity.trello",
+      kind: "productivity",
+      key: "trello",
+      label: "Trello",
+      config: {},
+    });
+    assert.equal(unbound.workspaceId, undefined);
+  });
+
   it("maps plugin fields and filters malformed adapter rows", () => {
     const repo = createRepo();
     const created = repo.create({

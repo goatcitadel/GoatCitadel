@@ -16,13 +16,27 @@ import {
   runIdempotentExternalSideEffect,
 } from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
+import { invokeGifSearchAction } from "./gif-search-action.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+import type { WardEffect } from "@goatcitadel/contracts";
+import {
+  buildIntegrationWardAction,
+  resolveWardEffectForExternalAction,
+  type CitadelWardGateStorage,
+} from "./citadel-ward-gate.js";
 
 export interface IntegrationActionHost {
   storage: {
     integrationConnections: {
       get(connectionId: string): IntegrationConnection;
     };
+    /**
+     * Optional Citadel Ward inputs (workspaces + citadels). Hosts that omit
+     * them (narrow test hosts) skip ward evaluation entirely — identical to
+     * pre-ward behavior.
+     */
+    workspaces?: CitadelWardGateStorage["workspaces"];
+    citadels?: CitadelWardGateStorage["citadels"];
   };
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
@@ -49,15 +63,41 @@ export async function invokeIntegrationConnectionAction(
   }
 
   const checkedAt = new Date().toISOString();
+
+  // Citadel Ward gate (Stage 1): evaluate once per action against the
+  // connection's workspace citadel (personal when unbound). The side-effect
+  // runner only enforces require_dry_run, so deny/require_approval MUST be
+  // blocked here — before any provider work, including reads.
+  const wardAction = buildIntegrationWardAction(connection.catalogId, actionId);
+  const ward = resolveWardEffectForExternalAction({
+    storage: host.storage,
+    workspaceId: connection.workspaceId,
+    action: wardAction,
+  });
+  const wardEffect: WardEffect | undefined = ward.effect;
+
   let result: IntegrationActionInvokeResult;
-  if (isLocalBridgeCatalogId(connection.catalogId)) {
-    result = await invokeLocalBridgeAction(host, connection, action, request, checkedAt);
+  if (ward.effect === "deny" || ward.effect === "require_approval") {
+    // Blocked results fall through the shared writeback-envelope + realtime
+    // tail below, so ward refusals are audited exactly like provider results.
+    result = blocked(
+      connection,
+      actionId,
+      checkedAt,
+      ward.effect === "deny"
+        ? `A Citadel Ward denies ${wardAction} for this connection's citadel.`
+        : `A Citadel Ward requires approval for ${wardAction}; approval-gated execution for integration actions is not wired yet, so the action is blocked.`,
+      ward.effect === "deny" ? "citadel_ward_deny" : "citadel_ward_approval_required",
+      { wardAction, wardEffect: ward.effect, citadelId: ward.citadelId },
+    );
+  } else if (isLocalBridgeCatalogId(connection.catalogId)) {
+    result = await invokeLocalBridgeAction(host, connection, action, request, checkedAt, wardEffect);
   } else if (connection.catalogId === "productivity.trello") {
-    result = await invokeTrelloAction(host, connection, actionId, request, checkedAt);
+    result = await invokeTrelloAction(host, connection, actionId, request, checkedAt, wardEffect);
   } else if (connection.catalogId === "automation.gmail") {
-    result = await invokeGmailAction(host, connection, actionId, request, checkedAt);
+    result = await invokeGmailAction(host, connection, actionId, request, checkedAt, wardEffect);
   } else if (connection.catalogId === "automation.activepieces") {
-    result = await invokeActivepiecesAction(host, connection, actionId, request, checkedAt);
+    result = await invokeActivepiecesAction(host, connection, actionId, request, checkedAt, wardEffect);
   } else if (connection.catalogId === "automation.gif-search") {
     result = await invokeGifSearchAction(host, connection, actionId, request, checkedAt);
   } else {
@@ -92,6 +132,7 @@ async function invokeLocalBridgeAction(
   action: IntegrationOperatorAction,
   request: IntegrationActionInvokeInput,
   checkedAt: string,
+  wardEffect?: WardEffect,
 ): Promise<IntegrationActionInvokeResult> {
   const bridgeUrl =
     host.readConnectionConfigValue(connection.config, "bridgeUrl") ??
@@ -138,6 +179,8 @@ async function invokeLocalBridgeAction(
       connectionId: connection.connectionId,
       actionId: action.actionId,
       checkedAt,
+      wardEffect,
+      workspaceId: connection.workspaceId,
       idempotencyKey: request.idempotencyKey,
       payload: {
         provider: "local_bridge",
@@ -252,6 +295,7 @@ async function invokeActivepiecesAction(
   actionId: string,
   request: IntegrationActionInvokeInput,
   checkedAt: string,
+  wardEffect?: WardEffect,
 ): Promise<IntegrationActionInvokeResult> {
   if (actionId === "check_run_status") {
     return invokeActivepiecesRunStatusAction(host, connection, request, checkedAt);
@@ -288,6 +332,8 @@ async function invokeActivepiecesAction(
     connectionId: connection.connectionId,
     actionId,
     checkedAt,
+    wardEffect,
+    workspaceId: connection.workspaceId,
     idempotencyKey: request.idempotencyKey,
     payload: {
       provider: "activepieces",
@@ -350,6 +396,7 @@ async function invokeTrelloAction(
   actionId: string,
   request: IntegrationActionInvokeInput,
   checkedAt: string,
+  wardEffect?: WardEffect,
 ): Promise<IntegrationActionInvokeResult> {
   const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv");
   const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv");
@@ -419,6 +466,8 @@ async function invokeTrelloAction(
       connectionId: connection.connectionId,
       actionId,
       checkedAt,
+      wardEffect,
+      workspaceId: connection.workspaceId,
       idempotencyKey: request.idempotencyKey,
       payload: {
         provider: "trello",
@@ -479,6 +528,7 @@ async function invokeGmailAction(
   actionId: string,
   request: IntegrationActionInvokeInput,
   checkedAt: string,
+  wardEffect?: WardEffect,
 ): Promise<IntegrationActionInvokeResult> {
   const token = host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv");
   if (!token) {
@@ -554,6 +604,8 @@ async function invokeGmailAction(
       connectionId: connection.connectionId,
       actionId,
       checkedAt,
+      wardEffect,
+      workspaceId: connection.workspaceId,
       idempotencyKey: request.idempotencyKey,
       payload: {
         provider: "gmail",
@@ -618,60 +670,6 @@ async function invokeGmailAction(
     `Unsupported Gmail operator action: ${actionId}.`,
     "action_unsupported",
   );
-}
-
-async function invokeGifSearchAction(
-  host: IntegrationActionHost,
-  connection: IntegrationConnection,
-  actionId: string,
-  request: IntegrationActionInvokeInput,
-  checkedAt: string,
-): Promise<IntegrationActionInvokeResult> {
-  if (actionId !== "search") {
-    return blocked(
-      connection,
-      actionId,
-      checkedAt,
-      `Unsupported GIF search operator action: ${actionId}.`,
-      "action_unsupported",
-    );
-  }
-  const provider = (host.readConnectionConfigValue(connection.config, "provider") ?? "tenor").trim().toLowerCase();
-  const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv");
-  if (!apiKey) {
-    return blocked(
-      connection,
-      actionId,
-      checkedAt,
-      "Configure a GIF provider API key before running search.",
-      "gif_api_key_missing",
-    );
-  }
-  const query = readStringInput(request.input, "query") ?? "happy goat";
-  const locale = host.readConnectionConfigValue(connection.config, "defaultLocale") ?? "en_US";
-  const url = provider === "giphy" ? buildGiphyUrl(apiKey, query) : buildTenorUrl(apiKey, query, locale);
-  const response = await host.fetchWithDiagnosticsTimeout(url, { method: "GET" });
-  const parsed = await parseResponse(response);
-  if (!response.ok) {
-    return failed(connection, actionId, checkedAt, parsed.message ?? `GIF search failed (${response.status}).`, {
-      provider,
-      query,
-    });
-  }
-  const items = provider === "giphy" ? normalizeGiphyResults(parsed.output) : normalizeTenorResults(parsed.output);
-  return {
-    connectionId: connection.connectionId,
-    catalogId: connection.catalogId,
-    actionId,
-    status: "executed",
-    message: `Fetched ${items.length} GIF result${items.length === 1 ? "" : "s"} from ${provider}.`,
-    output: {
-      provider,
-      query,
-      items,
-    },
-    checkedAt,
-  };
 }
 
 function blocked(
@@ -950,94 +948,12 @@ function parseHttpUrl(value: string, label: string): string {
   }
 }
 
-function buildTenorUrl(apiKey: string, query: string, locale: string): string {
-  const url = new URL("/v2/search", resolveTenorApiBaseUrl());
-  url.searchParams.set("key", apiKey);
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", "5");
-  url.searchParams.set("locale", locale);
-  return url.toString();
-}
-
-function buildGiphyUrl(apiKey: string, query: string): string {
-  const url = new URL("/v1/gifs/search", resolveGiphyApiBaseUrl());
-  url.searchParams.set("api_key", apiKey);
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", "5");
-  url.searchParams.set("rating", "pg-13");
-  return url.toString();
-}
-
-function normalizeTenorResults(value: unknown): Array<Record<string, unknown>> {
-  if (!isRecord(value) || !Array.isArray(value.results)) {
-    return [];
-  }
-  return value.results
-    .filter(isRecord)
-    .map((item) => ({
-      id: item.id,
-      title: typeof item.content_description === "string" ? item.content_description : item.id,
-      url: readTenorMediaUrl(item),
-    }))
-    .slice(0, 5);
-}
-
-function readTenorMediaUrl(item: Record<string, unknown>): string | undefined {
-  const mediaFormats = isRecord(item.media_formats) ? item.media_formats : undefined;
-  if (!mediaFormats) {
-    return undefined;
-  }
-  for (const key of ["gif", "mediumgif", "tinygif"]) {
-    const entry = mediaFormats[key];
-    if (isRecord(entry) && typeof entry.url === "string") {
-      return entry.url;
-    }
-  }
-  return undefined;
-}
-
-function normalizeGiphyResults(value: unknown): Array<Record<string, unknown>> {
-  if (!isRecord(value) || !Array.isArray(value.data)) {
-    return [];
-  }
-  return value.data
-    .filter(isRecord)
-    .map((item) => ({
-      id: item.id,
-      title: typeof item.title === "string" ? item.title : item.id,
-      url: readGiphyMediaUrl(item),
-    }))
-    .slice(0, 5);
-}
-
-function readGiphyMediaUrl(item: Record<string, unknown>): string | undefined {
-  const images = isRecord(item.images) ? item.images : undefined;
-  if (!images) {
-    return undefined;
-  }
-  for (const key of ["original", "downsized", "fixed_height"]) {
-    const entry = images[key];
-    if (isRecord(entry) && typeof entry.url === "string") {
-      return entry.url;
-    }
-  }
-  return undefined;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveTrelloApiBaseUrl(): string {
   return resolveApiBaseUrl("GOATCITADEL_TRELLO_API_BASE_URL", "https://api.trello.com");
-}
-
-function resolveTenorApiBaseUrl(): string {
-  return resolveApiBaseUrl("GOATCITADEL_TENOR_API_BASE_URL", "https://tenor.googleapis.com");
-}
-
-function resolveGiphyApiBaseUrl(): string {
-  return resolveApiBaseUrl("GOATCITADEL_GIPHY_API_BASE_URL", "https://api.giphy.com");
 }
 
 function resolveGmailApiBaseUrl(): string {

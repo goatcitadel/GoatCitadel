@@ -39,6 +39,7 @@ import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2APushNotificationService } from "./a2a-push-notification-service.js";
 import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
+import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import {
   buildInboundIdempotencyKey,
@@ -513,6 +514,34 @@ export class A2ARouteService {
       };
     }
 
+    // Citadel Ward gate (Stage 1): a2a peers carry no workspace binding, so
+    // outbound calls evaluate against the default personal citadel — a real
+    // global hook (an operator ward on `a2a.outbound.*` gates every peer).
+    // deny/require_approval block here, before either transport; require_dry_run
+    // threads to the runner, which refuses pre-boundary.
+    const wardAction = buildA2AOutboundWardAction(preview.transport === "GRPC" ? "grpc" : "jsonrpc", input.method);
+    const ward = resolveWardEffectForExternalAction({
+      storage: this.deps.storage,
+      action: wardAction,
+    });
+    if (ward.effect === "deny" || ward.effect === "require_approval") {
+      return {
+        checkedAt,
+        peerId: input.peerId,
+        method: input.method,
+        transport: preview.transport,
+        status: "blocked",
+        agentCardUrl: peer.agentCardUrl,
+        grpcUrl: preview.grpcUrl,
+        idempotencyKey,
+        warnings: [
+          ward.effect === "deny"
+            ? `A Citadel Ward denies ${wardAction} (citadel ${ward.citadelId}).`
+            : `A Citadel Ward requires approval for ${wardAction} (citadel ${ward.citadelId}); approval-gated a2a outbound is not wired, so the call is blocked.`,
+        ],
+      };
+    }
+
     if (preview.transport === "GRPC") {
       return sendOutboundGrpc({
         request: input,
@@ -521,6 +550,7 @@ export class A2ARouteService {
         preview,
         idempotencyKey,
         peer,
+        wardEffect: ward.effect,
         deps: {
           config: this.deps.config,
           storage: this.deps.storage,
@@ -540,6 +570,7 @@ export class A2ARouteService {
       actionId: input.method,
       actorScope: actorId,
       checkedAt,
+      wardEffect: ward.effect,
       idempotencyKey,
       payload: preview.envelope,
       label: "A2A JSON-RPC outbound call",
@@ -568,12 +599,15 @@ export class A2ARouteService {
     });
 
     if (run.status === "blocked") {
+      // Governance refusals are honest blocks; only idempotency-duplicate
+      // outcomes read as "replayed".
+      const governanceRefusal = run.blockedReason === "external_side_effect_dry_run_required";
       return {
         checkedAt,
         peerId: input.peerId,
         method: input.method,
         transport: "JSONRPC",
-        status: "replayed",
+        status: governanceRefusal ? "blocked" : "replayed",
         agentCardUrl: peer.agentCardUrl,
         idempotencyKey,
         auditRef: run.claim.sideEffectRunId,
