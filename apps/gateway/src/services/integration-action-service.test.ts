@@ -1531,7 +1531,9 @@ describe("integration-action-service", () => {
           workspaceId: "ws-guarded",
           plannedAction: {
             route: "integration.automation.gmail.write",
-            target: `${connection.connectionId}:write`,
+            // The sanitized resolved endpoint is part of the hashed target so a
+            // destination edit between preview and approval refuses the commit.
+            target: `${connection.connectionId}:write@https://gmail.googleapis.com/gmail/v1/users/me/messages/send`,
             payload: { provider: "gmail", to: "ops@example.com", subject: "s", bodyText: "b" },
           },
         });
@@ -1615,6 +1617,97 @@ describe("integration-action-service", () => {
         expect(premature.blockedReason).toBe("dry_run_commit_not_approved");
         expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
         expect(store.get(dryRunId)).toMatchObject({ state: "awaiting_commit" });
+      });
+
+      it("refuses a commit when the resolved destination changed since the preview", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        // Same inputs, same payload — only the endpoint the send would hit moved.
+        vi.stubEnv("GOATCITADEL_GMAIL_API_BASE_URL", "https://attacker.example.test");
+        const rewired = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(rewired.status).toBe("blocked");
+        expect(rewired.blockedReason).toBe("dry_run_commit_hash_mismatch");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        expect(store.get(dryRunId)).toMatchObject({ state: "rejected_hash_mismatch" });
+      });
+
+      it("records a retried commit whose payload already crossed the boundary as committed (duplicate)", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        // Simulate a first attempt that sent the request and died before the ledger
+        // update: the idempotency layer reports duplicate, the record still awaits.
+        (host.mutationStore!.claim as ReturnType<typeof vi.fn>).mockReturnValue({ outcome: "duplicate" });
+
+        const retried = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(retried.status).toBe("blocked");
+        expect(retried.blockedReason).toBe("external_side_effect_duplicate");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
+      });
+
+      it("restores awaiting_commit when a retried commit collides with an in-flight attempt", async () => {
+        const connection = guardedGmailConnection();
+        const { host, store } = dryRunHost(connection);
+        const { dryRunId } = await openPreview(host, connection);
+        approveDryRun(store, dryRunId, { approvedBy: "operator", approvedAt: "2026-07-07T00:01:00.000Z" });
+
+        (host.mutationStore!.claim as ReturnType<typeof vi.fn>).mockReturnValue({ outcome: "in_progress" });
+
+        const colliding = await invokeIntegrationConnectionAction(
+          host,
+          connection.connectionId,
+          "write",
+          { input: gmailWriteInput },
+          { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+        );
+
+        expect(colliding.status).toBe("blocked");
+        expect(colliding.blockedReason).toBe("external_side_effect_in_progress");
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+        // Not terminalized: the in-flight attempt (or a later retry) can still conclude it.
+        expect(store.get(dryRunId)).toMatchObject({ state: "awaiting_commit" });
+      });
+
+      it("keeps the plain refusal when persisting the preview fails, instead of throwing", async () => {
+        const connection = guardedGmailConnection();
+        const { host } = dryRunHost(connection);
+        host.storage.dryRunCommits = {
+          create: () => {
+            throw new Error("ledger down");
+          },
+          get: () => undefined,
+          update: () => undefined,
+        };
+
+        const refusal = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+          input: gmailWriteInput,
+        });
+
+        expect(refusal.status).toBe("blocked");
+        expect(refusal.blockedReason).toBe("external_side_effect_dry_run_required");
+        expect(refusal.output).toMatchObject({ dryRunLedgerError: "ledger down" });
+        expect((refusal.output as Record<string, unknown>).approvalId).toBeUndefined();
+        expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
       });
 
       it("stays block-only (Stage 1) when the host lacks the approval members", async () => {
