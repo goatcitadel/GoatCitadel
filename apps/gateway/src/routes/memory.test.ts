@@ -34,6 +34,18 @@ describe("memory routes", () => {
     app = null;
   });
 
+  it("defaults the item-list status to active so forgotten content is not returned by default", async () => {
+    const listItems = vi.fn(() => []);
+    const built = buildApp({ listItems });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/memory/items" });
+
+    expect(response.statusCode).toBe(200);
+    expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ status: "active" }));
+  });
+
   it("rejects bulk forget without any criteria", async () => {
     const forgetMemory = vi.fn();
     const built = buildApp({

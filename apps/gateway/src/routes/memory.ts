@@ -102,7 +102,10 @@ const maintenanceRecommendationParamsSchema = z.object({
 
 const listItemsQuerySchema = z.object({
   namespace: z.string().optional(),
-  status: z.enum(["active", "forgotten", "all"]).optional(),
+  // Finding (memory privacy): default to "active" so a request that omits `status`
+  // does NOT return forgotten items' content. Callers must opt in explicitly with
+  // `status=forgotten` or `status=all` to see forgotten records.
+  status: z.enum(["active", "forgotten", "all"]).default("active"),
   query: z.string().optional(),
   limit: z.coerce.number().int().positive().max(500).default(200),
 });
