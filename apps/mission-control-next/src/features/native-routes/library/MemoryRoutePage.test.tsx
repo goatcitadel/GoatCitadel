@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   asRecord,
   buildMemoryGraphProjection,
@@ -794,6 +795,16 @@ describe("MemoryRoutePage", () => {
       findButton(renderer!.root, "completed").props.onClick();
     });
 
+    // Forget is now confirm-gated (5.2): clicking "Forget item" opens the modal;
+    // the actual forget only fires after confirming. The GCModal renders through a
+    // portal (absent from the react-test-renderer tree), so drive the confirm via the
+    // ConfirmModal instance directly (see CuratorRoutePage archive-confirm pattern).
+    const forgetModal = renderer!.root.findByType(ConfirmModal);
+    expect(forgetModal.props.open).toBe(true);
+    await act(async () => {
+      await forgetModal.props.onConfirm();
+    });
+
     expect(memorySnapshot.setSelectedItemId).toHaveBeenCalledWith("mem-1");
     expect(memorySnapshot.saveItemPatch).toHaveBeenCalledWith("mem-1", {
       title: "Deployment note updated",
@@ -825,6 +836,52 @@ describe("MemoryRoutePage", () => {
     expect(memorySnapshot.resolveRecommendation).toHaveBeenCalledWith("rec-1", "accept");
     expect(memorySnapshot.resolveRecommendation).toHaveBeenCalledWith("rec-1", "reject");
     expect(memorySnapshot.setSelectedRunId).toHaveBeenCalledWith("run-1");
+  });
+
+  it("gates memory forget behind a confirmation modal and never forgets without confirm (5.2)", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Deployment note").props.onClick();
+    });
+
+    // Clicking the trigger opens the modal but must NOT forget yet.
+    await act(async () => {
+      findButton(renderer!.root, "Forget item").props.onClick();
+    });
+    const modal = renderer!.root.findByType(ConfirmModal);
+    expect(modal.props.open).toBe(true);
+    expect(memorySnapshot.forgetSelectedItem).not.toHaveBeenCalled();
+
+    // Cancelling dismisses the modal without forgetting.
+    await act(async () => {
+      modal.props.onCancel();
+    });
+    expect(memorySnapshot.forgetSelectedItem).not.toHaveBeenCalled();
+    expect(renderer!.root.findByType(ConfirmModal).props.open).toBe(false);
+
+    // Re-opening and confirming performs the forget exactly once.
+    await act(async () => {
+      findButton(renderer!.root, "Forget item").props.onClick();
+    });
+    await act(async () => {
+      await renderer!.root.findByType(ConfirmModal).props.onConfirm();
+    });
+    expect(memorySnapshot.forgetSelectedItem).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes memory write-gate evidence and surfaces envelope load failures", async () => {
