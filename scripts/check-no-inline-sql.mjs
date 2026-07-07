@@ -16,7 +16,7 @@ const allowlist = new Set([
   "apps/gateway/src/services/gateway/cron-automation-service.ts",
 ]);
 
-const pattern = /(storage\.db|gatewayDb|gatewaySql|ctx\.gatewaySql|this\.gatewaySql|this\.ctx\.gatewaySql)\.(prepare|exec)\(/g;
+const pattern = /(storage\.db|gatewayDb|gatewaySql|ctx\.gatewaySql|this\.gatewaySql|this\.ctx\.gatewaySql)\.(prepare|exec)\(/;
 const files = await collectFiles(servicesRoot);
 const hits = [];
 
@@ -33,7 +33,6 @@ for (const filePath of files) {
         allowlisted: allowlist.has(relPath),
       });
     }
-    pattern.lastIndex = 0;
   }
 }
 
