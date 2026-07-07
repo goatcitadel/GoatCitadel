@@ -65,6 +65,10 @@ describe("NativeRoutePageLayout", () => {
     });
 
     expect(container.textContent).toContain("Runtime source failed");
+    // Error and children are mutually exclusive (review Finding 10): the error state
+    // replaces the route body, so the scrollable child (and its scroll container) must
+    // not render — the tall-layout diagnostic therefore counts zero scroll containers.
+    expect(container.textContent).not.toContain("Tall content");
     expect(diagnosticMocks.recordClientDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "native.route.frame.mounted",
@@ -76,7 +80,7 @@ describe("NativeRoutePageLayout", () => {
         event: "native.route.layout.tall",
         level: "warn",
         route: "Ops",
-        context: expect.objectContaining({ routeHeight: 2000, viewportHeight: 800, scrollContainers: 1 }),
+        context: expect.objectContaining({ routeHeight: 2000, viewportHeight: 800, scrollContainers: 0 }),
       }),
     );
   });
