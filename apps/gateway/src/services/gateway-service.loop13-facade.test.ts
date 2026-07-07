@@ -835,13 +835,17 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
 
 describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () => {
   it("forwards settings, auth, personality, skill import, and memory facades", async () => {
-    const { gateway, systemSettings } = createGatewayHarness({
+    const { gateway } = createGatewayHarness({
       capabilitySystemService: {
         ensureSkillLifecycleBackfill: vi.fn(),
         executeApprovedCodeModeRun: vi.fn(async (approvalId: string) => ({ approvalId, executed: true })),
         listSkills: vi.fn(() => [{ skillId: "skill-1" }]),
       },
-      ensureSkillStates: vi.fn(),
+      skillStateService: {
+        ensureSkillStates: vi.fn(),
+        getActivationPolicy: vi.fn(() => ({ guardedAutoThreshold: 0.72, requireFirstUseConfirmation: true })),
+        updateActivationPolicy: vi.fn(() => ({ guardedAutoThreshold: 1, requireFirstUseConfirmation: false })),
+      },
       guidanceService: { resolveRuntimeGuidance: vi.fn(async (workspaceId: string) => ({ workspaceId })) },
       memoryLifecycleService: {
         listMemoryFiles: vi.fn(async (relativeDir: string) => [{ relativePath: relativeDir }]),
@@ -918,6 +922,9 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     ).resolves.toEqual({ queryOrUrl: "https://example.test/skill", limit: 2 });
     expect(GatewayService.prototype.listSkillImportHistory.call(gateway, 7)).toEqual([{ limit: 7 }]);
 
+    // Activation-policy behavior (defaults, clamping, persistence) moved to
+    // SkillStateService (B4) and is asserted in skill-state-service.test.ts;
+    // the facade only forwards.
     expect(GatewayService.prototype.getSkillActivationPolicy.call(gateway)).toEqual({
       guardedAutoThreshold: 0.72,
       requireFirstUseConfirmation: true,
@@ -928,8 +935,8 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
         requireFirstUseConfirmation: false,
       }),
     ).toEqual({ guardedAutoThreshold: 1, requireFirstUseConfirmation: false });
-    expect(systemSettings.set).toHaveBeenCalledWith("skill_activation_policy_v1", {
-      guardedAutoThreshold: 1,
+    expect(gateway.skillStateService.updateActivationPolicy).toHaveBeenCalledWith({
+      guardedAutoThreshold: 2,
       requireFirstUseConfirmation: false,
     });
     await expect(GatewayService.prototype.resolveRuntimeGuidance.call(gateway, "workspace-a")).resolves.toEqual({
@@ -1275,6 +1282,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       recordDevDiagnostic: vi.fn(),
       runDeferredInit: vi.fn(() => deferred),
       skillsService: { reload: vi.fn(async () => [{ skillId: "skill-1" }]) },
+      skillStateService: { ensureSkillStates: vi.fn() },
       startDeferredInit: vi.fn(async () => undefined),
       storage: {
         ...createGatewayHarness().gateway.storage,

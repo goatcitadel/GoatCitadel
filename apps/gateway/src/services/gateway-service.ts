@@ -421,6 +421,7 @@ import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
+import { SkillStateService } from "./skill-state-service.js";
 import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
 import { AddonsService } from "./addons-service.js";
 import { AddonSlotService } from "./addon-slot-service.js";
@@ -655,7 +656,6 @@ const GATEWAY_OWNED_MCP_SERVER_IDS = new Set([
   "goatcitadel-internal-durable-tasks",
 ]);
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
-const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // Perf (Finding 6): the resolved feature-flag set is read 5-15x per chat turn, each
 // call previously issuing a synchronous systemSettings.get (a blocking worker
@@ -670,11 +670,6 @@ import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
-const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
-  guardedAutoThreshold: 0.72,
-  requireFirstUseConfirmation: true,
-};
-const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "browser.search",
   "browser.navigate",
@@ -874,6 +869,7 @@ export class GatewayService {
   private readonly chatProjectService: ChatProjectService;
   public readonly durableRunService: DurableRunService;
   private readonly durableOperatorService: DurableOperatorService;
+  private readonly skillStateService: SkillStateService;
   private readonly durableWorkflowRegistry: durableExecutionService.DurableWorkflowExecutorRegistry;
   public readonly hooksService: HooksService;
   public readonly approvalWaitRunService: ApprovalWaitRunService;
@@ -1072,7 +1068,7 @@ export class GatewayService {
       readFeatureFlags: () => this.readFeatureFlags(),
       listToolCatalog: () => this.listToolCatalog(),
       listLoadedSkills: () => this.skillsService.list(),
-      readSkillStates: () => this.readSkillStates(),
+      readSkillStates: () => this.skillStateService.readSkillStates(),
       invokeTool: (request) => this.invokeTool(request),
       createApproval: (input) => this.createApproval(input),
       publishRealtime: (eventType, source, payload) => {
@@ -1696,7 +1692,7 @@ export class GatewayService {
       idleSweep: {
         isWorkspaceIdle: () => !this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
         isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-        snapshotSkill: (skillId) => this.captureCuratorIdleSkillSnapshot(skillId),
+        snapshotSkill: (skillId) => this.skillStateService.captureCuratorIdleSnapshot(skillId),
       },
     });
     // Cross-cutting kill-switch & rollback. Ties every subsystem's existing
@@ -1794,6 +1790,16 @@ export class GatewayService {
       hooksService: this.hooksService,
       resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
     });
+    // Host callbacks are lazy closures, so fields assigned later in this constructor
+    // (skillsService, autonomyControlService) are safe to reference here.
+    this.skillStateService = new SkillStateService(
+      { gatewaySql: this.storage.gatewaySql, systemSettings: this.storage.systemSettings },
+      {
+        listSkills: () => this.skillsService.list(),
+        recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      },
+    );
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
       durableExecutionService.buildDurableWorkflowExecutors({
         memoryMaintenance: {
@@ -2226,7 +2232,7 @@ export class GatewayService {
     });
     const skills = await traceInitStep("skillsService.reload", () => this.skillsService.reload());
     await traceInitStep("ensureSkillStates", () => {
-      this.ensureSkillStates(skills.map((skill) => skill.skillId));
+      this.skillStateService.ensureSkillStates(skills.map((skill) => skill.skillId));
     });
     this.criticalInitComplete = true;
   }
@@ -7473,7 +7479,7 @@ export class GatewayService {
   }
 
   public listSkills(): SkillListItem[] {
-    this.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
+    this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
     return this.capabilitySystemService.listSkills();
   }
 
@@ -7538,7 +7544,7 @@ export class GatewayService {
 
   public async reloadSkills(): Promise<SkillListItem[]> {
     const loaded = await this.skillsService.reload();
-    this.ensureSkillStates(loaded.map((skill) => skill.skillId));
+    this.skillStateService.ensureSkillStates(loaded.map((skill) => skill.skillId));
     this.capabilitySystemService.ensureSkillLifecycleBackfill();
     return this.listSkills();
   }
@@ -7577,127 +7583,19 @@ export class GatewayService {
   }
 
   public getSkillActivationPolicy(): SkillActivationPolicy {
-    const stored = this.storage.systemSettings.get<SkillActivationPolicy>(SKILL_ACTIVATION_POLICY_SETTING_KEY)?.value;
-    if (!stored) {
-      return { ...DEFAULT_SKILL_ACTIVATION_POLICY };
-    }
-    return {
-      guardedAutoThreshold: clamp01(
-        stored.guardedAutoThreshold ?? DEFAULT_SKILL_ACTIVATION_POLICY.guardedAutoThreshold,
-      ),
-      requireFirstUseConfirmation:
-        stored.requireFirstUseConfirmation ?? DEFAULT_SKILL_ACTIVATION_POLICY.requireFirstUseConfirmation,
-    };
+    return this.skillStateService.getActivationPolicy();
   }
 
   public updateSkillActivationPolicy(input: Partial<SkillActivationPolicy>): SkillActivationPolicy {
-    const current = this.getSkillActivationPolicy();
-    const next: SkillActivationPolicy = {
-      guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
-      requireFirstUseConfirmation: input.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
-    };
-    this.storage.systemSettings.set(SKILL_ACTIVATION_POLICY_SETTING_KEY, next);
-    return next;
+    return this.skillStateService.updateActivationPolicy(input);
   }
 
   public setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord {
-    const knownSkill = this.skillsService.list().find((skill) => skill.skillId === skillId);
-    if (!knownSkill) {
-      throw new Error(`Unknown skill: ${skillId}`);
-    }
-    const currentState = this.readSkillStates().get(skillId);
-    if (currentState?.pinned && currentState.state !== state) {
-      throw new Error(`Pinned skill ${skillId} cannot be changed directly; create a skill mutation proposal first.`);
-    }
-    const now = new Date().toISOString();
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
-      VALUES (@skillId, @state, @note, @updatedAt, NULL)
-      ON CONFLICT(skill_id) DO UPDATE SET
-        state = excluded.state,
-        note = excluded.note,
-        updated_at = excluded.updated_at
-    `,
-      )
-      .run({
-        skillId,
-        state,
-        note: note?.trim() || null,
-        updatedAt: now,
-      });
-
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO skill_activation_events (
-        event_id, skill_id, event_type, payload_json, created_at
-      ) VALUES (
-        @eventId, @skillId, @eventType, @payloadJson, @createdAt
-      )
-    `,
-      )
-      .run({
-        eventId: randomUUID(),
-        skillId,
-        eventType: "state_updated",
-        payloadJson: JSON.stringify({ state, note: note?.trim() || undefined }),
-        createdAt: now,
-      });
-
-    const updated = this.readSkillStates().get(skillId);
-    if (!updated) {
-      throw new Error(`Failed to persist skill state for ${skillId}`);
-    }
-
-    return updated;
+    return this.skillStateService.setSkillState(skillId, state, note);
   }
 
   public bulkSetSkillState(skillIds: string[], state: SkillRuntimeState, note?: string): SkillStateRecord[] {
-    const uniqueIds = [...new Set(skillIds)];
-    const updated: SkillStateRecord[] = [];
-    for (const skillId of uniqueIds) {
-      updated.push(this.setSkillState(skillId, state, note));
-    }
-    return updated;
-  }
-
-  /**
-   * Capture a reversible snapshot of a skill's prior runtime-state row before the
-   * S3 idle janitor archives (disables) it. Persisted into `system_settings` so
-   * the global "revert autonomous changes" path can restore the exact prior
-   * state/note via {@link restoreCuratorIdleSkillSnapshot}. Best-effort: a
-   * snapshot failure must not abort the sweep (which is itself failure-isolated),
-   * so this swallows errors. The archive is reversible regardless — a
-   * curator-archived skill is a `disabled` row re-enableable from the snapshot.
-   */
-  private captureCuratorIdleSkillSnapshot(skillId: string): void {
-    try {
-      const prior = this.readSkillStates().get(skillId);
-      this.storage.systemSettings.set(this.curatorIdleSnapshotKey(skillId), {
-        skillId,
-        priorState: prior?.state ?? "enabled",
-        priorNote: prior?.note,
-        priorPinned: prior?.pinned ?? false,
-        capturedAt: new Date().toISOString(),
-      });
-      // Unified audit: the snapshot self-persists in system_settings under the
-      // deterministic key, so the restoreRef only needs the skillId (best-effort).
-      this.autonomyControlService.recordAutonomousMutation({
-        kind: "curator_archive",
-        targetKey: skillId,
-        restoreRef: { kind: "curator_archive", skillId },
-      });
-    } catch (error) {
-      this.recordDevDiagnostic({
-        level: "warn",
-        category: "cron",
-        event: "curator_idle_snapshot_failed",
-        message: "failed to snapshot skill state before idle archive",
-        context: { skillId, error: error instanceof Error ? error.message : String(error) },
-      });
-    }
+    return this.skillStateService.bulkSetSkillState(skillIds, state, note);
   }
 
   /**
@@ -7706,27 +7604,13 @@ export class GatewayService {
    * autonomous-rollback path.
    */
   public restoreCuratorIdleSkillSnapshot(skillId: string): boolean {
-    const snapshot = this.storage.systemSettings.get<{
-      skillId: string;
-      priorState: SkillRuntimeState;
-      priorNote?: string;
-      priorPinned?: boolean;
-    }>(this.curatorIdleSnapshotKey(skillId))?.value;
-    if (!snapshot || snapshot.skillId !== skillId) {
-      return false;
-    }
-    this.setSkillState(skillId, snapshot.priorState, snapshot.priorNote);
-    return true;
-  }
-
-  private curatorIdleSnapshotKey(skillId: string): string {
-    return `curator_idle_skill_snapshot_v1:${skillId}`;
+    return this.skillStateService.restoreCuratorIdleSnapshot(skillId);
   }
 
   public resolveSkillActivation(input: SkillResolveInput) {
     const policy = this.getSkillActivationPolicy();
     const base = this.skillsService.resolveActivation(input);
-    const stateMap = this.readSkillStates();
+    const stateMap = this.skillStateService.readSkillStates();
     const selected: Array<
       SkillListItem & {
         confidence: number;
@@ -7778,7 +7662,7 @@ export class GatewayService {
       });
     }
 
-    this.recordSkillUsage(selected.map((skill) => skill.skillId));
+    this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
 
     return {
       ...base,
@@ -8119,7 +8003,7 @@ export class GatewayService {
     sourceProvider?: SkillSourceProvider;
   }): Promise<SkillImportValidationResult> {
     const validation = await this.skillImportService.validateImport(input);
-    this.recordSkillImportEvent(validation, "import_validated");
+    this.skillStateService.recordSkillImportEvent(validation, "import_validated");
     this.publishRealtime("system", "skills", {
       type: "skill_import_validated",
       sourceProvider: validation.candidate.sourceProvider,
@@ -8151,7 +8035,7 @@ export class GatewayService {
     if (installedSkill) {
       this.setSkillState(installedSkill.skillId, "disabled", "Imported skill starts disabled by default.");
     }
-    this.recordSkillImportEvent(installed.validation, "import_installed");
+    this.skillStateService.recordSkillImportEvent(installed.validation, "import_installed");
     this.publishRealtime("system", "skills", {
       type: "skill_import_installed",
       sourceProvider: installed.validation.candidate.sourceProvider,
@@ -9174,127 +9058,6 @@ export class GatewayService {
   private isMcpToolApproved(serverId: string, toolName: string): boolean {
     const approved = this.readMcpFirstApprovals();
     return approved[serverId]?.includes(toolName) ?? false;
-  }
-
-  private readSkillStates(): Map<string, SkillStateRecord> {
-    const rows = toSkillStateRows(
-      this.gatewaySql
-        .prepare(
-          `
-      SELECT skill_id AS skillId, state, note, updated_at AS updatedAt, first_auto_approved_at AS firstAutoApprovedAt
-      FROM skill_state
-    `,
-        )
-        .all(),
-    );
-    const metadata = this.readSkillStateMetadata();
-
-    return new Map(
-      rows.map((row) => [
-        row.skillId,
-        {
-          ...row,
-          pinned: metadata[row.skillId]?.pinned,
-          usageCount: metadata[row.skillId]?.usageCount,
-          lastUsedAt: metadata[row.skillId]?.lastUsedAt,
-        },
-      ]),
-    );
-  }
-
-  private readSkillStateMetadata(): Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> {
-    const value = this.storage.systemSettings.get<
-      Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>
-    >(SKILL_STATE_METADATA_SETTING_KEY)?.value;
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    const output: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> = {};
-    for (const [skillId, metadata] of Object.entries(value)) {
-      if (!isRecord(metadata)) {
-        continue;
-      }
-      output[skillId] = {
-        pinned: metadata.pinned === true ? true : undefined,
-        usageCount:
-          typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
-        lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : undefined,
-      };
-    }
-    return output;
-  }
-
-  private recordSkillUsage(skillIds: string[]): void {
-    const uniqueSkillIds = [...new Set(skillIds.filter((skillId) => skillId.trim().length > 0))];
-    if (uniqueSkillIds.length === 0) {
-      return;
-    }
-    const metadata = this.readSkillStateMetadata();
-    const now = new Date().toISOString();
-    for (const skillId of uniqueSkillIds) {
-      const current = metadata[skillId] ?? {};
-      metadata[skillId] = {
-        ...current,
-        usageCount: (current.usageCount ?? 0) + 1,
-        lastUsedAt: now,
-      };
-    }
-    this.storage.systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, metadata);
-  }
-
-  private ensureSkillStates(skillIds: string[]): void {
-    const unique = [...new Set(skillIds)];
-    const now = new Date().toISOString();
-    const insert = this.gatewaySql.prepare(`
-      INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
-      VALUES (@skillId, @state, @note, @updatedAt, NULL)
-      ON CONFLICT (skill_id) DO NOTHING
-    `);
-    for (const skillId of unique) {
-      insert.run({
-        skillId,
-        state: "enabled",
-        note: null,
-        updatedAt: now,
-      });
-    }
-  }
-
-  private recordSkillImportEvent(
-    validation: SkillImportValidationResult,
-    eventType: "import_validated" | "import_installed",
-  ): void {
-    const now = new Date().toISOString();
-    const skillId = validation.inferredSkillId
-      ? `import:${validation.inferredSkillId}`
-      : `import:${createHash("sha1").update(validation.candidate.canonicalKey).digest("hex").slice(0, 12)}`;
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO skill_activation_events (
-        event_id, skill_id, event_type, payload_json, created_at
-      ) VALUES (
-        @eventId, @skillId, @eventType, @payloadJson, @createdAt
-      )
-    `,
-      )
-      .run({
-        eventId: randomUUID(),
-        skillId,
-        eventType,
-        payloadJson: JSON.stringify({
-          sourceProvider: validation.candidate.sourceProvider,
-          sourceRef: validation.candidate.sourceRef,
-          canonicalKey: validation.candidate.canonicalKey,
-          valid: validation.valid,
-          riskLevel: validation.riskLevel,
-          skillName: validation.inferredSkillName,
-          skillId: validation.inferredSkillId,
-          warnings: validation.warnings,
-          errors: validation.errors,
-        }),
-        createdAt: now,
-      });
   }
 
   public async close(): Promise<void> {
@@ -11380,18 +11143,4 @@ function readRequiredString(value: unknown, label: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function toSkillStateRows(value: unknown): SkillStateRecord[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (row): row is SkillStateRecord =>
-          isRecord(row) &&
-          typeof row.skillId === "string" &&
-          typeof row.state === "string" &&
-          (typeof row.note === "string" || row.note === null) &&
-          typeof row.updatedAt === "string" &&
-          (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null),
-      )
-    : [];
 }

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-07T04:32:36.685Z",
-  "gatewayLineCount": 11398,
+  "generatedAt": "2026-07-07T05:31:00.339Z",
+  "gatewayLineCount": 11148,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
@@ -9,8 +9,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 11398,
-      "bytes": 456180
+      "lineCount": 11148,
+      "bytes": 447663
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
@@ -108,7 +108,7 @@
   "gatewayRouteCompositionPortMemberCount": 164,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 911,
+  "totalHostCallbacks": 914,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/activepieces-run-status-action.ts": 3,
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 7,
@@ -155,6 +155,7 @@
     "apps/gateway/src/services/runtime-lifecycle-read-service.ts": 25,
     "apps/gateway/src/services/skill-evaluation-service.ts": 10,
     "apps/gateway/src/services/skill-import-service.ts": 4,
+    "apps/gateway/src/services/skill-state-service.ts": 3,
     "apps/gateway/src/services/surface-router-entry.ts": 17,
     "apps/gateway/src/services/tool-invocation-coordinator-service.ts": 54,
     "apps/gateway/src/services/workflow-recipe-service.ts": 4

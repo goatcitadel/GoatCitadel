@@ -44,7 +44,7 @@ describe("GatewayService loop44 facade behavior", () => {
           sourceManifestPath: "F:/repo/skills/extra/fs-reviewer/goat-skill.json",
         })),
       },
-      recordSkillImportEvent: vi.fn(),
+      skillStateService: { recordSkillImportEvent: vi.fn() },
       publishRealtime: vi.fn(),
       reloadSkills: vi.fn(async () => [
         {
@@ -78,7 +78,7 @@ describe("GatewayService loop44 facade behavior", () => {
         sourceProvider: "local",
       }),
     ).resolves.toBe(validation);
-    expect(gateway.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_validated");
+    expect(gateway.skillStateService.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_validated");
     expect(gateway.publishRealtime).toHaveBeenCalledWith("system", "skills", {
       type: "skill_import_validated",
       sourceProvider: "local",
@@ -103,7 +103,7 @@ describe("GatewayService loop44 facade behavior", () => {
       "disabled",
       "Imported skill starts disabled by default.",
     );
-    expect(gateway.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_installed");
+    expect(gateway.skillStateService.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_installed");
     expect(gateway.publishRealtime).toHaveBeenCalledWith("system", "skills", {
       type: "skill_import_installed",
       sourceProvider: "local",
