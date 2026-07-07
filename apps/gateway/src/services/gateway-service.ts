@@ -92,8 +92,6 @@ import { isLoopbackDevOrigin } from "../cors-origin-guard.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
-import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "./scheduler-timing.js";
-import { toWeekKeyForTimezone } from "./improvement-replay.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
@@ -431,18 +429,16 @@ import {
 } from "../dev-diagnostics/service.js";
 import { serializePathWithinRoot } from "./security-utils.js";
 import { MediaVoiceService } from "./media-voice-service.js";
+import { CronAutomationService } from "./gateway/cron-automation-service.js";
 import {
-  COST_REPORT_HOURLY_JOB_ID,
-  CronAutomationService,
-  computeCronBackoffUntil,
-  computeNextCronRunAt,
-  isCronJobBackedOff,
-  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
-  MEMORY_FLUSH_DAILY_JOB_ID,
-  normalizeCronFailureMessage,
-  PRIVATE_BETA_BACKUP_JOB_ID,
-  UPDATE_REVIEW_DAILY_JOB_ID,
-} from "./gateway/cron-automation-service.js";
+  runCostReportSchedulerIfDue,
+  runMemoryConsolidationSchedulerIfDue,
+  runMemoryFlushSchedulerIfDue,
+  runPrivateBetaBackupSchedulerIfDue,
+  runUpdateReviewSchedulerIfDue,
+  type SystemCronSchedulerDeps,
+  type SystemCronSchedulerOptions,
+} from "./gateway/system-cron-schedulers.js";
 import {
   EXISTING_LEARNINGS_DEDUP_LIMIT,
   MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY,
@@ -453,33 +449,26 @@ import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
 import {
   type AutonomousTurnKind,
-  buildAutonomousTurnContext,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
+import {
+  type ChatAutonomousTurnDeps,
+  enqueueAutonomousChatTurn,
+  isHeartbeatEligibleSession,
+  runCommitmentSweep,
+  runCronAgentTurn,
+  runHeartbeatSweep,
+  scheduleManage,
+} from "./chat-autonomous-turn-service.js";
 import { BackgroundReviewService } from "./background-review-service.js";
 import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
-import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
-import {
-  buildScheduledCreatorIntersectionProfile,
-  permissionProfileAppliesToCreator,
-} from "./gateway/scheduled-profile-intersection.js";
-import { runHeartbeatTick } from "./gateway/heartbeat-service.js";
-import {
-  buildScheduleCreateActionConfig,
-  isScheduledTurnContext,
-  parseScheduleManageArgs,
-  resolveScheduleCreatorKey,
-  summarizeScheduleJob,
-  validateScheduleCreate,
-} from "./gateway/schedule-tool-support.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
 import { SignalInboundRuntimeService } from "./signal-inbound-runtime-service.js";
-import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/update-review.js";
 import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
@@ -679,19 +668,10 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
 export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
-const MEMORY_FLUSH_DAILY_TIME_ZONE = "America/Los_Angeles";
 export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
-const COST_REPORT_HOURLY_TIME_ZONE = "America/Los_Angeles";
 export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
-const UPDATE_REVIEW_DAILY_TIME_ZONE = "America/Los_Angeles";
 export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
-const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
-const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
-const MEMORY_CONSOLIDATION_TIME_ZONE = "America/Los_Angeles";
-const MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY = "memory_consolidation_weekly_last_week_key_v1";
-const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v1";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
  * this counter; the self-improvement review runs (and resets it) once it reaches
@@ -699,7 +679,6 @@ const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v
  */
 const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
 const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
-const UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY = "update_review_daily_last_day_key_v1";
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const maintenanceSchedulerDisabled =
   process.env.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER?.trim().toLowerCase() === "true";
@@ -709,12 +688,6 @@ const maintenanceSchedulerDisabled =
 // via its own active-run + min-age (~1h) + path-jail guards.
 const ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS = 60 * 60 * 1000;
 const ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS = 30_000;
-const MEMORY_FLUSH_HISTORY_DAYS = 30;
-const MEMORY_FLUSH_EXPIRED_BATCH_LIMIT = 500;
-const MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT = 10_000;
-const COST_REPORT_LOOKBACK_HOURS = 1;
-const COST_REPORT_OUTPUT_DIR = "artifacts/cost-reports";
-const UPDATE_REVIEW_OUTPUT_DIR = "artifacts/update-review";
 const IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY = "improvement_repair_policy_config_v1";
 const IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY = "improvement_routing_policy_config_v1";
 const PIPELINE_TEMPLATES: Record<string, string[]> = {
@@ -822,8 +795,6 @@ function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): Ga
     },
   };
 }
-
-type SystemCronSchedulerOptions = { force?: boolean; recordCronState?: boolean };
 
 export class GatewayService {
   public config: GatewayRuntimeConfig;
@@ -1413,7 +1384,8 @@ export class GatewayService {
       createChatCompletion: (request) => this.createChatCompletion(request),
       resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-      isProactiveDeNovoEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
+      isProactiveDeNovoEligibleSession: (sessionId) =>
+        isHeartbeatEligibleSession(this.chatAutonomousTurnDeps(), sessionId),
       backgroundTasks: this.backgroundTasks,
       get closing() {
         return self.closing;
@@ -3189,604 +3161,41 @@ export class GatewayService {
     this.registerBackgroundTask(task);
   }
 
-  private shouldRecordSystemCronState(options: SystemCronSchedulerOptions): boolean {
-    return options.recordCronState !== false;
-  }
-
-  private computeSystemCronNextRunAt(
-    job: CronJobRecord,
-    finishedAtIso: string,
-    fallbackDelayMs: number,
-  ): string | undefined {
-    if (typeof job.schedule === "string" && job.schedule.trim()) {
-      const computed = computeNextCronRunAt(job.schedule, new Date(finishedAtIso), job.endAt);
-      if (computed) {
-        return computed;
-      }
-    }
-    return new Date(new Date(finishedAtIso).getTime() + fallbackDelayMs).toISOString();
-  }
-
-  private async runSystemCronBody<T>(
-    job: CronJobRecord,
-    options: SystemCronSchedulerOptions,
-    body: (context: { runId: string }) => Promise<T>,
-  ): Promise<T> {
-    const runId = randomUUID();
-    try {
-      return await body({ runId });
-    } catch (error) {
-      if (this.shouldRecordSystemCronState(options)) {
-        try {
-          this.recordSystemCronRunFailure(job, runId, error, new Date());
-        } catch (recordError) {
-          log.warn("failed to record system cron failure state", {
-            jobId: job.jobId,
-            error: recordError instanceof Error ? recordError.message : String(recordError),
-          });
-        }
-      }
-      throw error;
-    }
-  }
-
-  private recordSystemCronRunSuccess(
-    job: CronJobRecord,
-    input: {
-      runId: string;
-      finishedAtIso: string;
-      nextRunAt?: string;
-      lastRunOutput?: string;
-      summary?: Record<string, unknown>;
-    },
-  ): CronJobRecord {
-    const evidenceEnvelopeId = this.recordSystemCronRunEvidence(job, input.runId, "ok", input.finishedAtIso, {
-      summary: input.summary,
-    });
-    const updated: CronJobRecord = {
-      ...job,
-      lastRunAt: input.finishedAtIso,
-      lastRunId: input.runId,
-      lastRunStatus: "ok",
-      lastRunEvidenceEnvelopeId: evidenceEnvelopeId,
-      lastFailureAt: undefined,
-      lastFailure: undefined,
-      failureCount: 0,
-      backoffUntil: undefined,
-      nextRunAt: input.nextRunAt,
+  private systemCronSchedulerDeps(): SystemCronSchedulerDeps {
+    return {
+      storage: this.storage,
+      rootDir: this.config.rootDir,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      persistCronJobsConfig: () => this.persistCronJobsConfig(),
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload ?? {}),
+      evidenceEnvelopeService: this.evidenceEnvelopeService,
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      createBackup: (input) => this.createBackup(input),
+      pruneRetention: (options) => this.pruneRetention(options),
+      runMemoryConsolidation: () => this.memoryConsolidationService.runConsolidation(),
+      memoryLifecycle: this.memoryLifecycleService,
+      recordCronReviewItem: (input) => this.cronAutomationService.recordCronReviewItem(input),
     };
-    if (input.lastRunOutput !== undefined) {
-      updated.lastRunOutput = input.lastRunOutput;
-    }
-    const saved = this.storage.cronJobs.upsert(updated);
-    this.persistCronJobsConfig();
-    return saved;
-  }
-
-  private recordSystemCronRunFailure(job: CronJobRecord, runId: string, error: unknown, failedAt: Date): CronJobRecord {
-    const failedAtIso = failedAt.toISOString();
-    const message = normalizeCronFailureMessage(error);
-    const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
-    const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
-    const saved = this.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: failedAtIso,
-      lastRunId: runId,
-      lastRunStatus: "failed",
-      lastRunEvidenceEnvelopeId: this.recordSystemCronRunEvidence(job, runId, "failed", failedAtIso, {
-        failureMessage: message,
-      }),
-      lastFailureAt: failedAtIso,
-      lastFailure: {
-        message,
-        ...(error instanceof Error && error.name ? { code: error.name } : {}),
-      },
-      failureCount,
-      backoffUntil,
-      nextRunAt: typeof job.schedule === "string" ? computeNextCronRunAt(job.schedule, failedAt, job.endAt) : undefined,
-    });
-    this.persistCronJobsConfig();
-    this.publishRealtime("cron_job_run", "cron", {
-      type: "cron_job_run_failed",
-      jobId: saved.jobId,
-      name: saved.name,
-      runId,
-      action: saved.action,
-      message,
-      failureCount,
-      backoffUntil,
-    });
-    return saved;
-  }
-
-  private recordSystemCronRunEvidence(
-    job: CronJobRecord,
-    runId: string,
-    status: "ok" | "failed",
-    finishedAtIso: string,
-    details: { summary?: Record<string, unknown>; failureMessage?: string } = {},
-  ): string | undefined {
-    const evidenceEnabled = (() => {
-      try {
-        return this.isFeatureEnabled("cronEvidenceV1Enabled") === true;
-      } catch {
-        return false;
-      }
-    })();
-    if (!evidenceEnabled || !this.evidenceEnvelopeService) {
-      return undefined;
-    }
-    const outputHash = details.summary
-      ? createHash("sha256").update(JSON.stringify(details.summary), "utf8").digest("hex")
-      : undefined;
-    try {
-      const envelope = this.evidenceEnvelopeService.createEnvelope({
-        eventKind: "cron_job_executed",
-        runId,
-        createdAt: finishedAtIso,
-        metadata: {
-          jobId: job.jobId,
-          jobName: job.name,
-          action: job.action,
-          schedule: job.schedule,
-          status,
-          systemScheduler: true,
-          ...(outputHash ? { outputHash } : {}),
-          ...(details.failureMessage ? { failureMessage: details.failureMessage } : {}),
-        },
-      });
-      return envelope.envelopeId;
-    } catch (error) {
-      try {
-        this.recordDevDiagnostic({
-          level: "warn",
-          category: "evidence",
-          event: "evidence.envelope.failed",
-          message: "Failed to record system cron run evidence envelope",
-          context: {
-            jobId: job.jobId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      } catch {
-        // Evidence is best-effort and must not fail a scheduler run.
-      }
-      return undefined;
-    }
   }
 
   private async runPrivateBetaBackupSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    const job = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
-    if (!job?.enabled) {
-      return;
-    }
-    const now = new Date();
-    if (!options.force && isCronJobBackedOff(job, now)) {
-      return;
-    }
-    if (
-      !options.force &&
-      !isCronJobDueNow(job, now, {
-        defaultHour: 2,
-        defaultMinute: 30,
-        defaultWeekday: undefined,
-        defaultTimeZone: PRIVATE_BETA_BACKUP_TIME_ZONE,
-      })
-    ) {
-      return;
-    }
-    const dayKey = toDayKeyForTimezone(now, PRIVATE_BETA_BACKUP_TIME_ZONE);
-    const lastDayKey = this.storage.systemSettings.get<string>(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY)?.value;
-    if (!options.force && dayKey === lastDayKey) {
-      return;
-    }
-
-    await this.runSystemCronBody(job, options, async ({ runId }) => {
-      const backupName = `private-beta-${dayKey.replaceAll("-", "")}`;
-      const backup = await this.createBackup({ name: backupName });
-      await this.pruneRetention({ dryRun: false });
-      this.storage.systemSettings.set(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY, dayKey);
-
-      const finishedAt = new Date().toISOString();
-      if (this.shouldRecordSystemCronState(options)) {
-        this.recordSystemCronRunSuccess(job, {
-          runId,
-          finishedAtIso: finishedAt,
-          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
-          summary: {
-            type: "private_beta_daily_backup",
-            backupId: backup.backupId,
-            bytes: backup.bytes,
-          },
-        });
-      }
-      this.publishRealtime("backup_created", "system", {
-        type: "private_beta_daily_backup",
-        backupId: backup.backupId,
-        outputPath: backup.outputPath,
-        bytes: backup.bytes,
-      });
-    });
+    await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    const job = this.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
-    if (!job?.enabled) {
-      return;
-    }
-    // Both gates are re-checked inside the service too; checking here avoids
-    // bookkeeping writes for a run that would immediately no-op.
-    if (
-      !this.isFeatureEnabled("memoryConsolidationV1Enabled") ||
-      !this.isFeatureEnabled("memoryLifecycleAdminV1Enabled") ||
-      this.isFeatureEnabled("autonomyV1Disabled")
-    ) {
-      return;
-    }
-    const now = new Date();
-    if (!options.force && isCronJobBackedOff(job, now)) {
-      return;
-    }
-    if (!options.force) {
-      // Weekly: Sundays in the 2 AM hour in the configured timezone.
-      const parts = getZonedDateParts(now, MEMORY_CONSOLIDATION_TIME_ZONE);
-      if (parts.weekday !== 0 || parts.hour !== 2) {
-        return;
-      }
-    }
-    const weekKey = toWeekKeyForTimezone(now, MEMORY_CONSOLIDATION_TIME_ZONE);
-    const lastWeekKey = this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY)?.value;
-    if (!options.force && lastWeekKey === weekKey) {
-      return;
-    }
-    await this.runSystemCronBody(job, options, async ({ runId }) => {
-      const summary = await this.memoryConsolidationService.runConsolidation();
-      if (summary.status !== "completed") {
-        return;
-      }
-      this.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
-      const finishedAt = new Date().toISOString();
-      if (this.shouldRecordSystemCronState(options)) {
-        this.recordSystemCronRunSuccess(job, {
-          runId,
-          finishedAtIso: finishedAt,
-          lastRunOutput: JSON.stringify(summary),
-          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 7 * 24 * 60 * 60 * 1000),
-          summary: { ...summary },
-        });
-      }
-    });
+    await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    const job = this.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
-    if (!job?.enabled) {
-      return;
-    }
-    const now = new Date();
-    if (!options.force && isCronJobBackedOff(job, now)) {
-      return;
-    }
-    if (
-      !options.force &&
-      !isCronJobDueNow(job, now, {
-        defaultHour: 3,
-        defaultMinute: 0,
-        defaultWeekday: undefined,
-        defaultTimeZone: MEMORY_FLUSH_DAILY_TIME_ZONE,
-      })
-    ) {
-      return;
-    }
-    const dayKey = toDayKeyForTimezone(now, MEMORY_FLUSH_DAILY_TIME_ZONE);
-    const lastDayKey = this.storage.systemSettings.get<string>(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY)?.value;
-    if (!options.force && dayKey === lastDayKey) {
-      return;
-    }
-
-    await this.runSystemCronBody(job, options, async ({ runId }) => {
-      const nowIso = now.toISOString();
-      const cutoffIso = new Date(now.getTime() - MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
-      const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
-      const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
-      const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
-      const expiredMemoryLedger = this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled")
-        ? this.forgetExpiredMemoryItemsForFlush(nowIso)
-        : this.inspectExpiredMemoryItemsForFlush(nowIso);
-
-      this.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
-      const finishedAt = new Date().toISOString();
-      const summary = {
-        type: "memory_flush_daily",
-        cutoffIso,
-        prunedExpiredContextPacks,
-        prunedOldContextPacks,
-        prunedOldQmdRuns,
-        expiredActiveMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
-        forgottenExpiredMemoryItemCount: expiredMemoryLedger.forgottenCount,
-        retainedPinnedExpiredMemoryItemCount: expiredMemoryLedger.retainedPinnedCount,
-        remainingExpiredUnpinnedMemoryItemCount: expiredMemoryLedger.remainingExpiredUnpinnedCount,
-        expiredMemoryFlushTruncated: expiredMemoryLedger.truncated,
-      };
-      if (this.shouldRecordSystemCronState(options)) {
-        this.recordSystemCronRunSuccess(job, {
-          runId,
-          finishedAtIso: finishedAt,
-          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
-          summary,
-        });
-      }
-      this.publishRealtime("cron_job_run", "cron", {
-        ...summary,
-        jobId: MEMORY_FLUSH_DAILY_JOB_ID,
-        expiredMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
-        memoryLifecycleAutoForgetEnabled: this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled"),
-        expiredMemoryItemIds: expiredMemoryLedger.forgottenItems.map((item) => item.itemId),
-        expiredMemoryNamespacesSample: [...new Set(expiredMemoryLedger.forgottenItems.map((item) => item.namespace))],
-        retainedPinnedExpiredMemoryItemIds: expiredMemoryLedger.retainedPinnedItems.map((item) => item.itemId),
-        retainedPinnedExpiredMemoryNamespacesSample: [
-          ...new Set(expiredMemoryLedger.retainedPinnedItems.map((item) => item.namespace)),
-        ],
-      });
-    });
-  }
-
-  private forgetExpiredMemoryItemsForFlush(nowIso: string): {
-    expiredActiveCount: number;
-    forgottenCount: number;
-    retainedPinnedCount: number;
-    remainingExpiredUnpinnedCount: number;
-    truncated: boolean;
-    forgottenItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["forgottenItems"];
-    retainedPinnedItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["retainedPinnedItems"];
-  } {
-    const forgottenItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["forgottenItems"] = [];
-    while (forgottenItems.length < MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT) {
-      const remainingCapacity = MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT - forgottenItems.length;
-      const batch = this.memoryLifecycleService.forgetExpiredActiveMemoryItems({
-        nowIso,
-        limit: Math.min(MEMORY_FLUSH_EXPIRED_BATCH_LIMIT, remainingCapacity),
-      });
-      forgottenItems.push(...batch.forgottenItems);
-      if (batch.forgottenItems.length === 0 || batch.remainingUnpinnedCount === 0) {
-        break;
-      }
-    }
-    const ledger = this.memoryLifecycleService.inspectExpiredActiveMemoryLedger({ nowIso });
-    return {
-      expiredActiveCount: ledger.totalCount + forgottenItems.length,
-      forgottenCount: forgottenItems.length,
-      retainedPinnedCount: ledger.retainedPinnedCount,
-      remainingExpiredUnpinnedCount: ledger.unpinnedCount,
-      truncated: ledger.unpinnedCount > 0,
-      forgottenItems,
-      retainedPinnedItems: ledger.retainedPinnedItems,
-    };
-  }
-
-  private inspectExpiredMemoryItemsForFlush(nowIso: string): {
-    expiredActiveCount: number;
-    forgottenCount: number;
-    retainedPinnedCount: number;
-    remainingExpiredUnpinnedCount: number;
-    truncated: boolean;
-    forgottenItems: [];
-    retainedPinnedItems: ReturnType<MemoryLifecycleService["inspectExpiredActiveMemoryLedger"]>["retainedPinnedItems"];
-  } {
-    const ledger = this.memoryLifecycleService.inspectExpiredActiveMemoryLedger({ nowIso });
-    return {
-      expiredActiveCount: ledger.totalCount,
-      forgottenCount: 0,
-      retainedPinnedCount: ledger.retainedPinnedCount,
-      remainingExpiredUnpinnedCount: ledger.unpinnedCount,
-      truncated: ledger.unpinnedCount > 0,
-      forgottenItems: [],
-      retainedPinnedItems: ledger.retainedPinnedItems,
-    };
+    await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   private async runCostReportSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    const job = this.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
-    if (!job?.enabled) {
-      return;
-    }
-    const now = new Date();
-    if (!options.force && isCronJobBackedOff(job, now)) {
-      return;
-    }
-    if (
-      !options.force &&
-      !isCronJobDueNow(job, now, {
-        defaultHour: 0,
-        defaultMinute: 0,
-        defaultWeekday: undefined,
-        defaultTimeZone: COST_REPORT_HOURLY_TIME_ZONE,
-      })
-    ) {
-      return;
-    }
-    const hourKey = toHourKeyForTimezone(now, COST_REPORT_HOURLY_TIME_ZONE);
-    const lastHourKey = this.storage.systemSettings.get<string>(COST_REPORT_HOURLY_DEDUP_SETTING_KEY)?.value;
-    if (!options.force && hourKey === lastHourKey) {
-      return;
-    }
-
-    await this.runSystemCronBody(job, options, async ({ runId }) => {
-      const windowEndIso = now.toISOString();
-      const windowStartIso = new Date(now.getTime() - COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
-      const byDay = this.storage.costLedger.summary("day", windowStartIso, windowEndIso);
-      const bySession = this.storage.costLedger.summary("session", windowStartIso, windowEndIso);
-      const byAgent = this.storage.costLedger.summary("agent", windowStartIso, windowEndIso);
-      const byTask = this.storage.costLedger.summary("task", windowStartIso, windowEndIso);
-      const usageAvailability = this.storage.costLedger.usageAvailability(windowStartIso, windowEndIso);
-      const totalCostUsd = byDay.reduce((sum, row) => sum + row.costUsd, 0);
-      const totalTokens = byDay.reduce((sum, row) => sum + row.tokenTotal, 0);
-
-      const lines: string[] = [];
-      lines.push(`# Cost Report (${COST_REPORT_LOOKBACK_HOURS}h)`);
-      lines.push("");
-      lines.push(`- Generated: ${windowEndIso}`);
-      lines.push(`- Window: ${windowStartIso} -> ${windowEndIso}`);
-      lines.push(`- Total cost: $${totalCostUsd.toFixed(6)}`);
-      lines.push(`- Total tokens: ${totalTokens}`);
-      lines.push(`- Tracked events: ${usageAvailability.trackedEvents}`);
-      lines.push(`- Usage unavailable events: ${usageAvailability.unknownEvents}`);
-      lines.push(`- Total agent events: ${usageAvailability.totalAgentEvents}`);
-      lines.push("");
-
-      const appendSummaryTable = (
-        title: string,
-        keyLabel: string,
-        rows: Array<{
-          key: string;
-          tokenInput: number;
-          tokenOutput: number;
-          tokenCachedInput: number;
-          tokenTotal: number;
-          costUsd: number;
-        }>,
-      ) => {
-        lines.push(`## ${title}`);
-        lines.push("");
-        if (rows.length === 0) {
-          lines.push("_No data in this window._");
-          lines.push("");
-          return;
-        }
-        lines.push(`| ${keyLabel} | Token In | Token Out | Cached In | Token Total | Cost USD |`);
-        lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
-        for (const row of rows) {
-          lines.push(
-            `| ${row.key || "-"} | ${row.tokenInput} | ${row.tokenOutput} | ${row.tokenCachedInput} | ${row.tokenTotal} | ${row.costUsd.toFixed(6)} |`,
-          );
-        }
-        lines.push("");
-      };
-
-      appendSummaryTable("By Session", "Session", bySession.slice(0, 25));
-      appendSummaryTable("By Agent", "Agent", byAgent.slice(0, 25));
-      appendSummaryTable("By Task", "Task", byTask.slice(0, 25));
-      appendSummaryTable("By Day", "Day", byDay.slice(0, 25));
-
-      const reportDir = path.join(this.config.rootDir, COST_REPORT_OUTPUT_DIR);
-      await fs.mkdir(reportDir, { recursive: true });
-      const reportFileName = `cost-report-${hourKey}.md`;
-      const outputPath = path.join(reportDir, reportFileName);
-      await fs.writeFile(outputPath, `${lines.join("\n")}\n`, "utf8");
-
-      this.storage.systemSettings.set(COST_REPORT_HOURLY_DEDUP_SETTING_KEY, hourKey);
-      const finishedAt = new Date().toISOString();
-      const summary = {
-        type: "cost_report_hourly",
-        outputPath,
-        totalCostUsd: Number(totalCostUsd.toFixed(6)),
-        totalTokens,
-        trackedEvents: usageAvailability.trackedEvents,
-        unknownEvents: usageAvailability.unknownEvents,
-        windowStartIso,
-        windowEndIso,
-      };
-      if (this.shouldRecordSystemCronState(options)) {
-        this.recordSystemCronRunSuccess(job, {
-          runId,
-          finishedAtIso: finishedAt,
-          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 60 * 60 * 1000),
-          summary,
-        });
-      }
-      this.publishRealtime("cron_job_run", "cron", {
-        ...summary,
-        jobId: COST_REPORT_HOURLY_JOB_ID,
-      });
-    });
+    await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   private async runUpdateReviewSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    const job = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
-    if (!job?.enabled) {
-      return;
-    }
-    const now = new Date();
-    if (!options.force && isCronJobBackedOff(job, now)) {
-      return;
-    }
-    if (
-      !options.force &&
-      !isCronJobDueNow(job, now, {
-        defaultHour: 4,
-        defaultMinute: 15,
-        defaultWeekday: undefined,
-        defaultTimeZone: UPDATE_REVIEW_DAILY_TIME_ZONE,
-      })
-    ) {
-      return;
-    }
-    const dayKey = toDayKeyForTimezone(now, UPDATE_REVIEW_DAILY_TIME_ZONE);
-    const lastDayKey = this.storage.systemSettings.get<string>(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY)?.value;
-    if (!options.force && dayKey === lastDayKey) {
-      return;
-    }
-
-    await this.runSystemCronBody(job, options, async ({ runId }) => {
-      const report = await createDailyUpdateReview(this.config.rootDir);
-      const reportDir = path.join(this.config.rootDir, UPDATE_REVIEW_OUTPUT_DIR);
-      await fs.mkdir(reportDir, { recursive: true });
-      const reportFileName = `update-review-${dayKey}.md`;
-      const outputPath = path.join(reportDir, reportFileName);
-      await fs.writeFile(outputPath, `${renderUpdateReviewMarkdown(report)}\n`, "utf8");
-
-      this.storage.systemSettings.set(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY, dayKey);
-      const finishedAt = new Date().toISOString();
-      const summary = {
-        type: "update_review_daily",
-        outputPath,
-        outdatedDependencyCount: report.summary.outdatedDependencyCount,
-        changedSkillSourceCount: report.summary.changedSkillSourceCount,
-        warningCount: report.summary.warningCount,
-        checkedSkillCount: report.summary.checkedSkillCount,
-      };
-      if (this.shouldRecordSystemCronState(options)) {
-        this.recordSystemCronRunSuccess(job, {
-          runId,
-          finishedAtIso: finishedAt,
-          nextRunAt: this.computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
-          summary,
-        });
-      }
-
-      const hasAlerts =
-        report.summary.outdatedDependencyCount > 0 ||
-        report.summary.changedSkillSourceCount > 0 ||
-        report.summary.warningCount > 0;
-      if (this.isFeatureEnabled("cronReviewQueueV1Enabled")) {
-        this.cronAutomationService.recordCronReviewItem({
-          jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-          runId,
-          severity: hasAlerts ? "medium" : "low",
-          status: hasAlerts ? "open" : "resolved",
-          summary: {
-            trigger: options.force ? "manual_run" : "scheduler",
-            outputPath: path.relative(this.config.rootDir, outputPath).replaceAll("\\", "/"),
-            outdatedDependencyCount: report.summary.outdatedDependencyCount,
-            changedSkillSourceCount: report.summary.changedSkillSourceCount,
-            warningCount: report.summary.warningCount,
-            checkedSkillCount: report.summary.checkedSkillCount,
-          },
-          diff: {
-            type: "update_review_daily",
-            changed: hasAlerts,
-            outdatedDependencyCount: report.summary.outdatedDependencyCount,
-            changedSkillSourceCount: report.summary.changedSkillSourceCount,
-            warningCount: report.summary.warningCount,
-          },
-        });
-      }
-
-      this.publishRealtime("cron_job_run", "cron", {
-        ...summary,
-        jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-      });
-    });
+    await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   public hasRunningTurn(sessionId: string): boolean {
@@ -5739,156 +5148,53 @@ export class GatewayService {
    * `authActorSource:"none"`, and `permissionProfileId:"scheduled-restricted"`
    * so dangerous tools become approvals rather than silent actions.
    */
+  private chatAutonomousTurnDeps(): ChatAutonomousTurnDeps {
+    return {
+      storage: this.storage,
+      cron: this.cronAutomationService,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      createCronInboxTask: (job) => this.createCronInboxTask(job),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      patchSessionAutonomyPrefs: (sessionId, patch) => {
+        this.patchSessionAutonomyPrefs(sessionId, patch);
+      },
+      listChatSessions: (query) => this.listChatSessions(query),
+      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
+      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
+      getSession: (sessionId) => this.getSession(sessionId),
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      ensureChatSessionRuntimeGrants: (sessionId) => {
+        this.ensureChatSessionRuntimeGrants(sessionId);
+      },
+      listConnectorRecords: (kind) => this.listConnectorRecords(kind),
+      listToolCatalog: () => this.listToolCatalog(),
+      registerSyntheticPermissionProfile: (profile) => this.registerSyntheticPermissionProfile(profile),
+      prepareAgentChatTurn: (sessionId, request, options) => this.prepareAgentChatTurn(sessionId, request, options),
+      buildDurableChatTurnPayloadRecord: (prepared, request) =>
+        durableChatTurnPayloadToRecord(
+          this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
+        ),
+      createDurableRun: (input) => this.createDurableRun(input),
+      persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
+      requestDurableRunProcessing: (runId) => this.requestDurableRunProcessing(runId),
+    };
+  }
+
   private async runCronAgentTurn(input: {
     job: CronJobRecord;
     runId: string;
     config: CronAgentTurnConfig;
   }): Promise<AgentTurnCronRunOutcome> {
-    const autonomyDisabled = this.isFeatureEnabled("autonomyV1Disabled");
-    if (autonomyDisabled || input.config.inertInboxFallback) {
-      const task = this.createCronInboxTask(input.job);
-      return { mode: "inbox", taskId: task.taskId };
-    }
-    const sessionId = this.ensureCronAgentSession(input.job.jobId, input.config.sessionId);
-    const createdBy = input.config.createdBy;
-    const systemActorId = createdBy?.operatorId?.trim() || createdBy?.authActorId?.trim() || "system-cron";
-    const scheduledPolicy = this.resolveScheduledAgentTurnPolicy({
-      config: input.config,
-      jobId: input.job.jobId,
-      runId: input.runId,
-      sessionId,
-      systemActorId,
-    });
-    if ("failClosedReason" in scheduledPolicy) {
-      const task = this.createCronInboxTask(input.job);
-      return {
-        mode: "inbox",
-        taskId: task.taskId,
-        profilePosture: scheduledPolicy.profilePosture,
-        profileWarning: scheduledPolicy.failClosedReason,
-      };
-    }
-    const run = await this.enqueueAutonomousChatTurn({
-      sessionId,
-      prompt: input.config.prompt,
-      runId: input.runId,
-      systemActorId,
-      reason: `cron agent_turn:${input.job.jobId}`,
-      deliveryChannel: input.config.deliveryChannel,
-      deliverMode: input.config.deliverMode ?? "always",
-      policyContext: scheduledPolicy.policyContext,
-      profilePosture: scheduledPolicy.profilePosture,
-    });
-    return {
-      mode: "agent_turn",
-      durableRunId: run?.runId,
-      sessionId,
-      turnId: run?.turnId,
-      profilePosture: scheduledPolicy.profilePosture,
-    };
+    return runCronAgentTurn(this.chatAutonomousTurnDeps(), input);
   }
 
-  /**
-   * Maintenance-tick commitment sweep (P1-F3). Delivers due + pending inferred
-   * check-ins (oldest-due first) as autonomous (restricted-profile) turns seeded
-   * with the suggested text, respecting per-session cooldown + active-hours, then
-   * marks them delivery-pending. No-op while the master autonomy switch is off
-   * or durable execution is disabled (the delivery path requires a durable run).
-   * Superseded / dismissed / already-queued rows are excluded by `listDue`
-   * (pending-only).
-   */
   private async runCommitmentSweep(): Promise<void> {
-    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
-      return;
-    }
-    await runCommitmentSweep({
-      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-      listDueCommitments: (nowIso, limit) => this.storage.agentCommitments.listDue(nowIso, limit),
-      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
-      deliverCommitment: async (commitment) => {
-        const deliveryChannel = this.resolveCommitmentDeliveryChannel(commitment.sessionId);
-        if (!deliveryChannel) {
-          return false;
-        }
-        const run = await this.enqueueAutonomousChatTurn({
-          sessionId: commitment.sessionId,
-          prompt: buildCommitmentCheckInPrompt(commitment.suggestedText),
-          runId: `commitment_${commitment.commitmentId}`,
-          systemActorId: "system-commitment",
-          reason: `commitment check-in:${commitment.commitmentId}`,
-          deliveryChannel,
-          deliverMode: "always",
-          commitmentId: commitment.commitmentId,
-        });
-        return Boolean(run?.runId);
-      },
-      markDeliveryPending: (commitmentId) => this.storage.agentCommitments.markDeliveryPending(commitmentId),
-      markDeliveryFailed: (commitmentId) => this.storage.agentCommitments.markDeliveryFailed(commitmentId),
-    });
+    await runCommitmentSweep(this.chatAutonomousTurnDeps());
   }
 
-  private resolveCommitmentDeliveryChannel(sessionId: string): CronAgentTurnConfig["deliveryChannel"] | undefined {
-    const binding = this.storage.chatSessionBindings.get(sessionId);
-    if (
-      !binding ||
-      binding.transport !== "integration" ||
-      !binding.writable ||
-      !binding.connectionId ||
-      !binding.target
-    ) {
-      return undefined;
-    }
-    const connector = this.listConnectorRecords("integration_connection").find(
-      (item) => item.status === "active" && item.sourceId === binding.connectionId,
-    );
-    const channelKey = typeof connector?.metadata?.key === "string" ? connector.metadata.key.trim() : "";
-    const target = binding.target.trim();
-    if (!channelKey || !target) {
-      return undefined;
-    }
-    return { channelKey, target };
-  }
-
-  /**
-   * Maintenance-tick heartbeat sweep (P1-F4). For each eligible idle session,
-   * fires a single silent self-wake turn under the read-only `heartbeat-restricted`
-   * profile with `deliverMode:"on_notify"` — the turn stays silent unless it emits
-   * `{notify:true}`. Multi-gate rate limiting (heartbeat-enabled × eligibility ×
-   * active-hours × idle floor × no-running-turn × cooldown × interval) lives in the
-   * pure `runHeartbeatTick`. No-op while the master autonomy switch is off or
-   * durable execution is disabled (the turn path requires a durable run).
-   * Eval-integrity / non-human / replay-scratch sessions are excluded.
-   */
   private async runHeartbeatSweep(): Promise<void> {
-    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
-      return;
-    }
-    await runHeartbeatTick({
-      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-      listSessions: (limit) =>
-        this.listChatSessions({ scope: "mission", view: "active", limit }).map((session) => ({
-          sessionId: session.sessionId,
-          lastActivityAt: session.lastActivityAt,
-        })),
-      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
-      isHeartbeatEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
-      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
-      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
-      enqueueHeartbeatTurn: async ({ sessionId, prompt }) => {
-        const run = await this.enqueueAutonomousChatTurn({
-          sessionId,
-          prompt,
-          // Collision-resistant: `Date.now()` could repeat within a tick across
-          // sessions/retries; a UUID guarantees a unique durable run id.
-          runId: `heartbeat_${randomUUID()}`,
-          systemActorId: "system-heartbeat",
-          reason: `heartbeat self-wake:${sessionId}`,
-          kind: "heartbeat",
-          deliverMode: "on_notify",
-        });
-        return Boolean(run?.runId);
-      },
-    });
+    await runHeartbeatSweep(this.chatAutonomousTurnDeps());
   }
 
   /**
@@ -5918,139 +5224,6 @@ export class GatewayService {
     } catch (error) {
       this.logMaintenanceTaskFailure(event, error);
     }
-  }
-
-  /**
-   * Whether a session may receive silent heartbeats. Mirrors the human-session /
-   * eval-integrity guard used for the commitment classifier: skip `system` and
-   * `prompt_pack` origins and replay-scratch sessions (safety invariant:
-   * eval-integrity turns are never affected).
-   */
-  private isHeartbeatEligibleSession(sessionId: string): boolean {
-    const origin = this.storage.chatSessionMeta.get(sessionId)?.origin;
-    if (origin === "system" || origin === "prompt_pack") {
-      return false;
-    }
-    return !this.isReplayScratchSession(sessionId);
-  }
-
-  /**
-   * Resolve a stable cron session for an `agent_turn` job. Reuses an explicitly
-   * configured session id when present, otherwise derives a deterministic
-   * per-job session and creates it (proactiveMode off, system origin) if it does
-   * not yet exist. Immutable: reuses existing rows; only creates when missing.
-   */
-  private ensureCronAgentSession(jobId: string, configuredSessionId?: string): string {
-    const explicit = configuredSessionId?.trim();
-    if (explicit && this.getSession(explicit)) {
-      return explicit;
-    }
-    const peer = `cron_${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}`;
-    const sessionKey = `mission:scheduler:${peer}`;
-    const sessionId = `sess_${createHash("sha256").update(sessionKey).digest("hex").slice(0, 24)}`;
-    if (this.getSession(sessionId)) {
-      return sessionId;
-    }
-    const now = new Date().toISOString();
-    const workspaceId = this.normalizeWorkspaceId(undefined);
-    this.storage.runImmediateTransaction(() => {
-      this.storage.sessions.upsert({
-        sessionId,
-        sessionKey,
-        kind: "dm",
-        channel: "mission",
-        account: "scheduler",
-        displayName: `Cron ${jobId}`,
-        timestamp: now,
-      });
-      this.storage.chatSessionMeta.ensure(sessionId, now, workspaceId);
-      this.storage.chatSessionPrefs.ensure(sessionId, now);
-      this.storage.chatSessionMeta.patch(
-        sessionId,
-        { workspaceId, title: `Cron ${jobId}`, origin: "system", includeInHistory: false },
-        now,
-      );
-      this.storage.chatSessionBindings.upsert({ sessionId, workspaceId, transport: "llm", writable: true }, now);
-    });
-    this.ensureChatSessionRuntimeGrants(sessionId);
-    this.patchSessionAutonomyPrefs(sessionId, { proactiveMode: "off" });
-    return sessionId;
-  }
-
-  private resolveScheduledAgentTurnPolicy(input: {
-    config: CronAgentTurnConfig;
-    jobId: string;
-    runId: string;
-    sessionId: string;
-    systemActorId: string;
-  }):
-    | { policyContext: ToolPolicyActorContext; profilePosture: "scheduled_restricted" | "creator_intersection" }
-    | {
-        profilePosture:
-          | "creator_profile_missing"
-          | "creator_profile_archived"
-          | "creator_profile_scope_mismatch"
-          | "creator_profile_invalid";
-        failClosedReason: string;
-      } {
-    const base = buildAutonomousTurnContext({
-      kind: "scheduled",
-      systemActorId: input.systemActorId,
-      runId: input.runId,
-      sessionId: input.sessionId,
-    });
-    const createdBy = input.config.createdBy;
-    if (!createdBy) {
-      return { policyContext: base.policyContext, profilePosture: "scheduled_restricted" };
-    }
-    const creatorProfileId = createdBy.permissionProfileId?.trim();
-    if (!creatorProfileId) {
-      return {
-        profilePosture: "creator_profile_missing",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} was created by a model/tool call without permission profile provenance.`,
-      };
-    }
-
-    const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
-    let creatorProfile: PermissionProfileRecord;
-    try {
-      creatorProfile = this.storage.permissionProfiles.getProfile(creatorProfileId);
-    } catch (error) {
-      return {
-        profilePosture: "creator_profile_missing",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      };
-    }
-    if (creatorProfile.status !== "active") {
-      return {
-        profilePosture: "creator_profile_archived",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is not active.`,
-      };
-    }
-    const creatorActorId = createdBy.operatorId?.trim() || createdBy.authActorId?.trim();
-    if (!permissionProfileAppliesToCreator({ profile: creatorProfile, creatorActorId, workspaceId })) {
-      return {
-        profilePosture: "creator_profile_scope_mismatch",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is no longer active for the creator/workspace scope.`,
-      };
-    }
-
-    const profile = buildScheduledCreatorIntersectionProfile({
-      creatorProfile,
-      runId: input.runId,
-      knownToolNames: this.listToolCatalog().map((tool) => tool.toolName),
-    });
-    return {
-      profilePosture: "creator_intersection",
-      policyContext: {
-        ...base.policyContext,
-        permissionProfileId: profile.profileId,
-        permissionProfile: profile,
-        workspaceId,
-      },
-    };
   }
 
   private registerSyntheticPermissionProfile(profile: PermissionProfileRecord): void {
@@ -6094,20 +5267,12 @@ export class GatewayService {
     return this.syntheticPermissionProfiles instanceof Map ? this.syntheticPermissionProfiles : undefined;
   }
 
-  /**
-   * Prepare + enqueue a `chat.turn.execute` durable run for an autonomous
-   * (cron/heartbeat/proactive) turn. Persists the user message + trace via
-   * `prepareAgentChatTurn` (the durable payload's precondition), then creates
-   * the durable run tagged with `metadata.autonomous` so the post-turn delivery
-   * hook in `durable-execution-service.ts` can route the reply to a channel.
-   */
   private async enqueueAutonomousChatTurn(input: {
     sessionId: string;
     prompt: string;
     runId: string;
     systemActorId: string;
     reason: string;
-    /** Restricted profile selector; defaults to `scheduled` (cron/commitment). */
     kind?: AutonomousTurnKind;
     deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
     deliverMode: NonNullable<CronAgentTurnConfig["deliverMode"]>;
@@ -6115,205 +5280,14 @@ export class GatewayService {
     profilePosture?: AgentTurnCronRunOutcome["profilePosture"];
     commitmentId?: string;
   }): Promise<{ runId: string; turnId: string } | undefined> {
-    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
-      throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
-    }
-    if (this.isFeatureEnabled("autonomyV1Disabled")) {
-      throw new Error("Autonomous chat turn execution is disabled while the autonomy kill switch is engaged.");
-    }
-    const kind: AutonomousTurnKind = input.kind ?? "scheduled";
-    const permissionProfileId =
-      kind === "heartbeat" ? HEARTBEAT_PERMISSION_PROFILE_ID : SCHEDULED_TURN_PERMISSION_PROFILE_ID;
-    const autonomousContext = buildAutonomousTurnContext({
-      kind,
-      systemActorId: input.systemActorId,
-      runId: input.runId,
-      sessionId: input.sessionId,
-    });
-    const policyContext = input.policyContext ?? autonomousContext.policyContext;
-    const request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext } = {
-      content: input.prompt,
-      operatorId: autonomousContext.policyContext.operatorId,
-      authActorId: autonomousContext.policyContext.authActorId,
-      authActorSource: autonomousContext.policyContext.authActorSource,
-      permissionProfileId,
-      policyContext,
-    };
-    const prepared = await this.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
-    const run = this.createDurableRun({
-      workflowKey: "chat.turn.execute",
-      payload: durableChatTurnPayloadToRecord(
-        this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
-      ),
-      metadata: {
-        surface: chatTurnPrepService.resolvePreparedTurnMode(prepared),
-        objective: prepared.content,
-        autonomous: {
-          kind,
-          systemActorId: input.systemActorId,
-          reason: input.reason,
-          deliverMode: input.deliverMode,
-          ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
-          ...(input.profilePosture ? { profilePosture: input.profilePosture } : {}),
-          ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
-        },
-      },
-    });
-    if (policyContext.permissionProfile && policyContext.permissionProfileId) {
-      this.registerSyntheticPermissionProfile(policyContext.permissionProfile);
-    }
-    chatDurableRunService.persistInitialDurableChatTurnTrace(
-      { chatTurnTraces: this.storage.chatTurnTraces },
-      prepared,
-      request,
-      run,
-    );
-    this.persistChatStreamChunk(
-      {
-        type: "message_start",
-        sessionId: prepared.session.sessionId,
-        turnId: prepared.turnId,
-        messageId: prepared.assistantMessageId,
-        parentTurnId: prepared.parentTurnId,
-        branchKind: prepared.branchKind,
-        sourceTurnId: prepared.sourceTurnId,
-      },
-      run.runId,
-    );
-    this.requestDurableRunProcessing(run.runId);
-    return { runId: run.runId, turnId: prepared.turnId };
+    return enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), input);
   }
 
-  /**
-   * Runtime-hook impl for the model-callable `schedule.manage` tool (P1-F2).
-   *
-   * Routed here by the policy-engine executor (`scheduleManage` hook) *after* the
-   * engine has authorized the call — `schedule.manage` is `danger` +
-   * `requiresApproval`, so the normal approval gate fires first for interactive
-   * operators, and the restricted `scheduled-restricted` profile makes a
-   * scheduled turn's call require approval too (anti-recursion). This method:
-   *  - maps `op` to the existing `cronAutomationService` create/list/delete,
-   *  - forces `action:"agent_turn"` for created jobs,
-   *  - stamps the creator actor + permission profile from `policyContext` onto the
-   *    job for ownership, anti-recursion, and audit while fired turns stay on the
-   *    restricted scheduled profile, and
-   *  - enforces the per-creator cap, the >=15min interval floor, and the depth-1
-   *    chain cap (all in the pure `schedule-tool-support` validator).
-   *
-   * The master autonomy kill switch (`autonomyV1Disabled`) hard-disables the
-   * whole tool so no schedule can be created/listed/cancelled while autonomy is
-   * halted.
-   */
   private async scheduleManage(
     args: Record<string, unknown>,
     policyContext: ToolPolicyActorContext | undefined,
   ): Promise<Record<string, unknown>> {
-    if (this.isFeatureEnabled("autonomyV1Disabled")) {
-      throw new Error("schedule.manage is disabled while the autonomy kill switch is engaged (autonomyV1Disabled).");
-    }
-    const parsed = parseScheduleManageArgs(args);
-    if (parsed.op === "list") {
-      const creatorKey = resolveScheduleCreatorKey(policyContext);
-      const jobs = this.cronAutomationService
-        .listCronJobs()
-        .filter((job) => job.action === "agent_turn")
-        .filter((job) => {
-          if (!creatorKey) {
-            return false;
-          }
-          const createdBy = job.actionConfig?.agentTurn?.createdBy;
-          return createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey;
-        })
-        .map((job) => summarizeScheduleJob(job));
-      return { op: "list", count: jobs.length, jobs };
-    }
-    if (parsed.op === "cancel") {
-      const jobId = parsed.jobId?.trim();
-      if (!jobId) {
-        throw new Error('schedule.manage cancel requires a "jobId".');
-      }
-      const creatorKey = resolveScheduleCreatorKey(policyContext);
-      const existing = this.cronAutomationService.getCronJob(jobId);
-      if (existing.action !== "agent_turn") {
-        throw new Error(`schedule.manage cancel refused: ${jobId} is not an agent_turn schedule.`);
-      }
-      const createdBy = existing.actionConfig?.agentTurn?.createdBy;
-      const owned = !!creatorKey && (createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey);
-      if (!owned) {
-        throw new Error(`schedule.manage cancel refused: ${jobId} is not owned by the caller.`);
-      }
-      const result = this.cronAutomationService.deleteCronJob(jobId);
-      return { op: "cancel", jobId: result.jobId, deleted: result.deleted };
-    }
-    // op === "create"
-    const createdByJobId = this.resolveSchedulingTurnJobId(policyContext);
-    const validated = validateScheduleCreate({
-      args: parsed,
-      policyContext,
-      existingJobs: this.cronAutomationService.listCronJobs(),
-      ...(createdByJobId ? { createdByJobId } : {}),
-    });
-    const jobId = this.generateScheduleJobId(validated.name);
-    const created = this.cronAutomationService.createCronJob({
-      jobId,
-      name: validated.name,
-      action: "agent_turn",
-      schedule: validated.schedule,
-      ...(validated.endAt ? { endAt: validated.endAt } : {}),
-      actionConfig: buildScheduleCreateActionConfig(validated),
-    });
-    return {
-      op: "create",
-      jobId: created.jobId,
-      name: created.name,
-      schedule: created.schedule,
-      enabled: created.enabled,
-      ...(created.nextRunAt ? { nextRunAt: created.nextRunAt } : {}),
-      requiresApprovalToRun: false,
-      createdBy: validated.createdBy,
-    };
-  }
-
-  /**
-   * Best-effort: when the calling turn is itself a scheduled (restricted) turn,
-   * find the cron `agent_turn` job that owns the caller's session so the new job
-   * records its parent for the anti-recursion chain. Returns undefined for
-   * interactive callers (depth 0).
-   */
-  private resolveSchedulingTurnJobId(policyContext: ToolPolicyActorContext | undefined): string | undefined {
-    if (!isScheduledTurnContext(policyContext) || !policyContext?.sessionId) {
-      return undefined;
-    }
-    const sessionId = policyContext.sessionId;
-    const match = this.cronAutomationService
-      .listCronJobs()
-      .find((job) => job.action === "agent_turn" && job.actionConfig?.agentTurn?.sessionId === sessionId);
-    return match?.jobId;
-  }
-
-  /**
-   * Generate a unique cron job id from a human name plus a short random suffix.
-   * Conforms to the cron id rules (`^[a-z0-9][a-z0-9_-]{2,63}$`) and retries on
-   * the (vanishingly rare) collision so a model-created schedule never clobbers
-   * an existing job.
-   */
-  private generateScheduleJobId(name: string): string {
-    const base = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40);
-    const slug = base.length >= 3 ? base : "scheduled-turn";
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
-      const candidate = `${slug}-${suffix}`.slice(0, 64);
-      try {
-        this.cronAutomationService.getCronJob(candidate);
-      } catch {
-        return candidate;
-      }
-    }
-    throw new Error("schedule.manage create: could not allocate a unique job id; please retry.");
+    return scheduleManage(this.chatAutonomousTurnDeps(), args, policyContext);
   }
 
   public beginDurableChatRun(
@@ -10107,138 +9081,6 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
       retrievalMode: input.retrievalMode,
       reflectionMode: input.reflectionMode,
     },
-  };
-}
-
-function isCronJobDueNow(
-  job: CronJobRecord,
-  now: Date,
-  defaults: {
-    defaultMinute: number;
-    defaultHour: number;
-    defaultWeekday?: number;
-    defaultTimeZone: string;
-  },
-): boolean {
-  if (job.endAt) {
-    const endAt = Date.parse(job.endAt);
-    if (Number.isFinite(endAt) && endAt < now.getTime()) {
-      return false;
-    }
-  }
-  const parsed = parseSimpleCronSchedule(job.schedule);
-  const minute = parsed?.minute ?? defaults.defaultMinute;
-  const hour = parsed?.hour ?? defaults.defaultHour;
-  const hourStep = parsed?.hourStep;
-  const wildcardMinute = parsed?.wildcardMinute ?? false;
-  const wildcardHour = parsed?.wildcardHour ?? false;
-  const wildcardWeekday = parsed?.wildcardWeekday ?? false;
-  const weekdays = parsed?.weekdays ?? (defaults.defaultWeekday === undefined ? undefined : [defaults.defaultWeekday]);
-  const timeZone = parsed?.timeZone ?? defaults.defaultTimeZone;
-  const window = getZonedDateParts(now, timeZone);
-  if (!wildcardHour) {
-    if (hourStep !== undefined) {
-      if (window.hour % hourStep !== 0) {
-        return false;
-      }
-    } else if (window.hour !== hour) {
-      return false;
-    }
-  }
-  if (!wildcardMinute && (window.minute < minute || window.minute >= minute + 5)) {
-    return false;
-  }
-  if (!wildcardWeekday && weekdays?.length && !weekdays.includes(window.weekday)) {
-    return false;
-  }
-  return true;
-}
-
-function parseSimpleCronSchedule(value: string): {
-  minute?: number;
-  hour?: number;
-  hourStep?: number;
-  weekdays?: number[];
-  timeZone?: string;
-  wildcardMinute: boolean;
-  wildcardHour: boolean;
-  wildcardWeekday: boolean;
-} | null {
-  const tokens = value.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length < 5) {
-    return null;
-  }
-  const minuteRaw = tokens[0];
-  const hourRaw = tokens[1];
-  const dayOfMonthRaw = tokens[2];
-  const monthRaw = tokens[3];
-  const dayOfWeekRaw = tokens[4];
-  const timezoneParts = tokens.slice(5);
-  if (!minuteRaw || !hourRaw || !dayOfMonthRaw || !monthRaw || !dayOfWeekRaw) {
-    return null;
-  }
-  if (dayOfMonthRaw !== "*" || monthRaw !== "*") {
-    return null;
-  }
-  let minute: number | undefined;
-  let hour: number | undefined;
-  let hourStep: number | undefined;
-  const wildcardMinute = minuteRaw === "*";
-  const wildcardHour = hourRaw === "*";
-  if (!wildcardMinute) {
-    if (!/^\d+$/.test(minuteRaw)) {
-      return null;
-    }
-    minute = Number.parseInt(minuteRaw, 10);
-    if (!Number.isFinite(minute) || minute < 0 || minute > 59) {
-      return null;
-    }
-  }
-  if (!wildcardHour) {
-    if (/^\*\/\d+$/.test(hourRaw)) {
-      hourStep = Number.parseInt(hourRaw.slice(2), 10);
-      if (!Number.isFinite(hourStep) || hourStep < 1 || hourStep > 23) {
-        return null;
-      }
-    } else if (!/^\d+$/.test(hourRaw)) {
-      return null;
-    } else {
-      hour = Number.parseInt(hourRaw, 10);
-      if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
-        return null;
-      }
-    }
-  }
-  let weekdays: number[] | undefined;
-  const wildcardWeekday = dayOfWeekRaw === "*";
-  if (!wildcardWeekday) {
-    const parsedWeekdays = [...new Set(dayOfWeekRaw.split(",").map((token) => Number.parseInt(token, 10)))];
-    if (
-      parsedWeekdays.length === 0 ||
-      parsedWeekdays.some((weekday) => !Number.isFinite(weekday) || weekday < 0 || weekday > 6)
-    ) {
-      return null;
-    }
-    weekdays = parsedWeekdays.sort((left, right) => left - right);
-  }
-  const timeZone = timezoneParts.length > 0 ? timezoneParts.join(" ") : undefined;
-  if (timeZone) {
-    try {
-      // Validate timezone eagerly so invalid values fail closed at write-time.
-      new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    } catch {
-      return null;
-    }
-  }
-  return {
-    minute,
-    hour,
-    hourStep,
-    weekdays,
-    timeZone,
-    wildcardMinute,
-    wildcardHour,
-    wildcardWeekday,
   };
 }
 

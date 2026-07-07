@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-07T14:36:56.952Z",
-  "gatewayLineCount": 10951,
+  "generatedAt": "2026-07-07T17:20:25.443Z",
+  "gatewayLineCount": 9905,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
@@ -9,8 +9,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 10951,
-      "bytes": 439906
+      "lineCount": 9905,
+      "bytes": 399550
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
@@ -108,7 +108,7 @@
   "gatewayRouteCompositionPortMemberCount": 164,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 914,
+  "totalHostCallbacks": 921,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/activepieces-run-status-action.ts": 3,
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 7,
@@ -138,8 +138,11 @@
     "apps/gateway/src/services/discord-runtime-bridge-service.ts": 33,
     "apps/gateway/src/services/durable-execution-service.ts": 56,
     "apps/gateway/src/services/evidence-receipt-signing-key.ts": 1,
+    "apps/gateway/src/services/gateway-route-composition-integrations.ts": 1,
+    "apps/gateway/src/services/gif-search-action.ts": 4,
     "apps/gateway/src/services/guidance-document-helpers.ts": 4,
-    "apps/gateway/src/services/integration-action-service.ts": 32,
+    "apps/gateway/src/services/integration-action-service.ts": 29,
+    "apps/gateway/src/services/integration-dry-run-gate.ts": 5,
     "apps/gateway/src/services/llm-completion-memory-context.ts": 7,
     "apps/gateway/src/services/llm-completion-service.ts": 54,
     "apps/gateway/src/services/llm-service.ts": 10,
