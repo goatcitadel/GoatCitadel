@@ -461,6 +461,18 @@ import {
   runHeartbeatSweep,
   scheduleManage,
 } from "./chat-autonomous-turn-service.js";
+import {
+  applyRepairPolicyCandidate,
+  applyRoutingPolicyCandidate,
+  applySkillRevisionCandidate,
+  captureRepairPolicySnapshot,
+  captureRoutingPolicySnapshot,
+  captureSkillRevisionSnapshot,
+  type ImprovementSnapshotDeps,
+  restoreRepairPolicySnapshot,
+  restoreRoutingPolicySnapshot,
+  restoreSkillRevisionSnapshot,
+} from "./improvement-snapshot-service.js";
 import { BackgroundReviewService } from "./background-review-service.js";
 import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
@@ -687,8 +699,6 @@ const maintenanceSchedulerDisabled =
 // via its own active-run + min-age (~1h) + path-jail guards.
 const ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS = 60 * 60 * 1000;
 const ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS = 30_000;
-const IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY = "improvement_repair_policy_config_v1";
-const IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY = "improvement_routing_policy_config_v1";
 const PIPELINE_TEMPLATES: Record<string, string[]> = {
   prd: ["product", "architect"],
   build: ["architect", "coder", "qa"],
@@ -1605,16 +1615,24 @@ export class GatewayService {
     });
     this.improvementService = new ImprovementService(serviceCtx, {
       createApproval: (input) => this.createApproval(input),
-      captureRepairPolicySnapshot: (targetKey) => this.captureRepairPolicySnapshot(targetKey),
-      applyRepairPolicyCandidate: (targetKey, revisionRef) => this.applyRepairPolicyCandidate(targetKey, revisionRef),
-      restoreRepairPolicySnapshot: (snapshotRef) => this.restoreRepairPolicySnapshot(snapshotRef),
-      captureRoutingPolicySnapshot: (targetKey) => this.captureRoutingPolicySnapshot(targetKey),
-      applyRoutingPolicyCandidate: (targetKey, revisionRef) => this.applyRoutingPolicyCandidate(targetKey, revisionRef),
-      restoreRoutingPolicySnapshot: (snapshotRef) => this.restoreRoutingPolicySnapshot(snapshotRef),
+      captureRepairPolicySnapshot: (targetKey) =>
+        captureRepairPolicySnapshot(this.improvementSnapshotDeps(), targetKey),
+      applyRepairPolicyCandidate: (targetKey, revisionRef) =>
+        applyRepairPolicyCandidate(this.improvementSnapshotDeps(), targetKey, revisionRef),
+      restoreRepairPolicySnapshot: (snapshotRef) =>
+        restoreRepairPolicySnapshot(this.improvementSnapshotDeps(), snapshotRef),
+      captureRoutingPolicySnapshot: (targetKey) =>
+        captureRoutingPolicySnapshot(this.improvementSnapshotDeps(), targetKey),
+      applyRoutingPolicyCandidate: (targetKey, revisionRef) =>
+        applyRoutingPolicyCandidate(this.improvementSnapshotDeps(), targetKey, revisionRef),
+      restoreRoutingPolicySnapshot: (snapshotRef) =>
+        restoreRoutingPolicySnapshot(this.improvementSnapshotDeps(), snapshotRef),
       captureSkillRevisionSnapshot: (targetKey, revisionRef) =>
-        this.captureSkillRevisionSnapshot(targetKey, revisionRef),
-      applySkillRevisionCandidate: (targetKey, revisionRef) => this.applySkillRevisionCandidate(targetKey, revisionRef),
-      restoreSkillRevisionSnapshot: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef),
+        captureSkillRevisionSnapshot(this.improvementSnapshotDeps(), targetKey, revisionRef),
+      applySkillRevisionCandidate: (targetKey, revisionRef) =>
+        applySkillRevisionCandidate(this.improvementSnapshotDeps(), targetKey, revisionRef),
+      restoreSkillRevisionSnapshot: (snapshotRef) =>
+        restoreSkillRevisionSnapshot(this.improvementSnapshotDeps(), snapshotRef),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       // P2-W3: report the runtime-effective tune values via the shared reader so
@@ -1680,7 +1698,8 @@ export class GatewayService {
         this.updateFeatureFlags({ autonomyV1Disabled: disabled });
       },
       restoreHandlers: {
-        restoreSkillRevision: (snapshotRef) => this.restoreSkillRevisionSnapshot(snapshotRef as ImprovementRef),
+        restoreSkillRevision: (snapshotRef) =>
+          restoreSkillRevisionSnapshot(this.improvementSnapshotDeps(), snapshotRef as ImprovementRef),
         restoreOperatorProfile: (priorSnapshot) =>
           this.operatorProfileService.restoreOperatorProfileSnapshot(priorSnapshot as OperatorProfileRecord),
         restoreCuratorArchive: (skillId) => this.restoreCuratorIdleSkillSnapshot(skillId),
@@ -4067,248 +4086,14 @@ export class GatewayService {
     return this.promptPackService.scorePromptPackLatestRunByCode(input);
   }
 
-  private captureRepairPolicySnapshot(targetKey: string): ImprovementRef {
-    return this.captureImprovementPolicySnapshot(
-      IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY,
-      "repair_policy_snapshot",
-      targetKey,
-    );
-  }
-
-  private applyRepairPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
-    return this.applyImprovementPolicyCandidate(
-      IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY,
-      "repair_policy_config",
-      targetKey,
-      revisionRef,
-    );
-  }
-
-  private restoreRepairPolicySnapshot(snapshotRef: ImprovementRef): void {
-    this.restoreImprovementPolicySnapshot(IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY, snapshotRef);
-  }
-
-  private captureRoutingPolicySnapshot(targetKey: string): ImprovementRef {
-    return this.captureImprovementPolicySnapshot(
-      IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
-      "routing_policy_snapshot",
-      targetKey,
-    );
-  }
-
-  private applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
-    return this.applyImprovementPolicyCandidate(
-      IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
-      "routing_policy_config",
-      targetKey,
-      revisionRef,
-    );
-  }
-
-  private restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void {
-    this.restoreImprovementPolicySnapshot(IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
-  }
-
-  // ── S2: skill self-authoring activation callbacks ─────────────────────────
-  // These delegate to SkillMutationService. They are the governed write path for
-  // skill_revision candidates flowing through improvement-service
-  // applyActivationChange. isSkillCallable is never bypassed: the candidate is
-  // written non-callable, and promotion to `approved` happens only under master
-  // autonomy and only through this recorded, reversible activation.
-
-  private captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
-    const { skillId, skillMarkdown } = this.readSkillRevisionRef(targetKey, revisionRef);
-    const snapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
-    // NOTE: the unified autonomy-audit entry is intentionally NOT appended here.
-    // This snapshot is captured at PROPOSAL time (an approval is then created and
-    // the apply happens only later, after approval — or never). Recording the
-    // audit now would leave a phantom entry for a mutation that never landed
-    // (rejected/expired approval, or a throwing apply), which revertAutonomous-
-    // ChangesSince would then "restore". The audit is appended in
-    // applySkillRevisionCandidate AFTER the write actually succeeds.
-    return this.buildSkillRevisionSnapshotRef(snapshot, targetKey);
-  }
-
-  /** Build the value-carrying snapshot ref consumed by restoreSkillRevisionSnapshot. */
-  private buildSkillRevisionSnapshotRef(snapshot: SkillMutationSnapshot, targetKey: string): ImprovementRef {
+  private improvementSnapshotDeps(): ImprovementSnapshotDeps {
     return {
-      refType: "skill_revision_snapshot",
-      refId: snapshot.skillId,
-      hash: createHash("sha1").update(JSON.stringify(snapshot)).digest("hex"),
-      metadata: {
-        targetKey,
-        skillId: snapshot.skillId,
-        snapshot: snapshot as unknown as Record<string, unknown>,
-      },
+      storage: this.storage,
+      skillMutation: this.skillMutationService,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      // Lazy: autonomy-control is constructed after improvement-service.
+      recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
     };
-  }
-
-  private applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
-    const { skillId, skillMarkdown, evaluationRunId, sourceTurnId, summary } = this.readSkillRevisionRef(
-      targetKey,
-      revisionRef,
-    );
-    if (!skillMarkdown) {
-      throw new Error(`Skill revision ${targetKey} is missing skill content; refusing to apply an empty mutation.`);
-    }
-    // Capture the prior state immediately BEFORE the write so the audit restoreRef
-    // carries the correct pre-mutation bytes (the proposal-time snapshot is on the
-    // activation rail; this one backs the unified autonomy-audit ledger).
-    const priorSnapshot = this.skillMutationService.captureSnapshotFor({ skillId, skillMarkdown });
-    // Validate + security-scan + secret-block + jail-write as non-callable candidate.
-    const result = this.skillMutationService.applySkillMutationSync({
-      skillMarkdown,
-      skillId,
-      evaluationRunId,
-      sourceTurnId,
-      summary,
-    });
-    // Full autonomy: promote to a callable `approved` state ONLY when the master
-    // autonomy switch is engaged. When off, the skill stays a non-callable
-    // `candidate` (pure proposal mode). Promotion is reversible by the snapshot.
-    const autonomyEnabled = !this.isFeatureEnabled("autonomyV1Disabled");
-    const lifecycle = autonomyEnabled
-      ? this.skillMutationService.promoteSelfAuthoredSkill(result.skillId)
-      : result.lifecycle;
-    // Unified audit: append ONLY now that the write (and any promote) has
-    // succeeded, so a failed/blocked apply never leaves a phantom ledger entry.
-    // The snapshot ref is value-carrying (prior bytes inline) and is exactly what
-    // restoreSkillRevisionSnapshot consumes. Best-effort; never blocks the apply.
-    this.autonomyControlService.recordAutonomousMutation({
-      kind: "skill_revision",
-      targetKey: result.skillId,
-      restoreRef: { kind: "skill_revision", snapshotRef: this.buildSkillRevisionSnapshotRef(priorSnapshot, targetKey) },
-    });
-    return {
-      refType: "skill_revision_config",
-      refId: result.skillId,
-      hash: result.changeHash,
-      metadata: {
-        targetKey,
-        skillId: result.skillId,
-        lifecycleState: lifecycle.lifecycleState,
-        autoPromoted: autonomyEnabled,
-        callable: lifecycle.lifecycleState === "approved" || lifecycle.lifecycleState === "trusted",
-      },
-    };
-  }
-
-  private restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void {
-    const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
-    const snapshot = metadata.snapshot;
-    if (!isRecord(snapshot) || typeof snapshot.skillId !== "string") {
-      throw new Error("Skill revision snapshot is missing its captured state; cannot restore.");
-    }
-    this.skillMutationService.restoreSnapshotSync(snapshot as unknown as SkillMutationSnapshot);
-  }
-
-  private readSkillRevisionRef(
-    targetKey: string,
-    revisionRef: ImprovementRef,
-  ): {
-    skillId?: string;
-    skillMarkdown?: string;
-    evaluationRunId?: string;
-    sourceTurnId?: string;
-    summary?: string;
-  } {
-    const metadata = isRecord(revisionRef.metadata) ? revisionRef.metadata : {};
-    const proposed = isRecord(metadata.proposedChange) ? metadata.proposedChange : {};
-    const readString = (value: unknown): string | undefined =>
-      typeof value === "string" && value.trim().length > 0 ? value : undefined;
-    const skillMarkdown =
-      readString(metadata.skillMarkdown) ??
-      readString(metadata.skillContent) ??
-      readString(proposed.skillMarkdown) ??
-      readString(proposed.skillContent);
-    const skillId =
-      readString(metadata.skillId) ??
-      readString(proposed.skillId) ??
-      readString(targetKey.startsWith("skill:") ? targetKey.slice("skill:".length) : undefined);
-    return {
-      skillId,
-      skillMarkdown,
-      evaluationRunId: readString(metadata.evaluationRunId) ?? readString(proposed.evaluationRunId),
-      sourceTurnId: readString(metadata.sourceTurnId) ?? readString(proposed.sourceTurnId),
-      summary: readString(metadata.summary) ?? readString(proposed.skillName) ?? readString(proposed.title),
-    };
-  }
-
-  private captureImprovementPolicySnapshot(
-    settingKey: string,
-    refType: ImprovementRef["refType"],
-    targetKey: string,
-  ): ImprovementRef {
-    const policies = this.readImprovementPolicyMap(settingKey);
-    const hadValue = Object.prototype.hasOwnProperty.call(policies, targetKey);
-    const previousValue = hadValue ? policies[targetKey] : null;
-    return {
-      refType,
-      refId: targetKey,
-      hash: createHash("sha1").update(JSON.stringify({ hadValue, previousValue })).digest("hex"),
-      metadata: {
-        settingKey,
-        targetKey,
-        hadValue,
-        previousValue,
-      },
-    };
-  }
-
-  private applyImprovementPolicyCandidate(
-    settingKey: string,
-    refType: ImprovementRef["refType"],
-    targetKey: string,
-    revisionRef: ImprovementRef,
-  ): ImprovementRef {
-    const policies = this.readImprovementPolicyMap(settingKey);
-    const proposedChange = isRecord(revisionRef.metadata) ? revisionRef.metadata.proposedChange : undefined;
-    const nextValue = proposedChange ?? revisionRef.metadata ?? {};
-    this.writeImprovementPolicyMap(settingKey, {
-      ...policies,
-      [targetKey]: nextValue,
-    });
-    return {
-      refType,
-      refId: targetKey,
-      hash: createHash("sha1").update(JSON.stringify(nextValue)).digest("hex"),
-      metadata: {
-        settingKey,
-        targetKey,
-        appliedValue: nextValue,
-      },
-    };
-  }
-
-  private restoreImprovementPolicySnapshot(expectedSettingKey: string, snapshotRef: ImprovementRef): void {
-    const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
-    const settingKey =
-      typeof metadata.settingKey === "string" && metadata.settingKey.trim().length > 0
-        ? metadata.settingKey
-        : expectedSettingKey;
-    const targetKey = typeof metadata.targetKey === "string" ? metadata.targetKey : snapshotRef.refId;
-    const hadValue = metadata.hadValue === true;
-    const policies = this.readImprovementPolicyMap(settingKey);
-    const next = { ...policies };
-    if (hadValue) {
-      next[targetKey] = metadata.previousValue;
-    } else {
-      delete next[targetKey];
-    }
-    this.writeImprovementPolicyMap(settingKey, next);
-  }
-
-  private readImprovementPolicyMap(settingKey: string): Record<string, unknown> {
-    const stored = this.storage.systemSettings.get<unknown>(settingKey)?.value;
-    return isRecord(stored) ? { ...stored } : {};
-  }
-
-  private writeImprovementPolicyMap(settingKey: string, next: Record<string, unknown>): void {
-    if (Object.keys(next).length === 0) {
-      this.storage.systemSettings.set(settingKey, null);
-      return;
-    }
-    this.storage.systemSettings.set(settingKey, next);
   }
 
   private evaluateDurableContinuationGate(run: DurableRunRecord) {
@@ -7965,29 +7750,15 @@ export class GatewayService {
     existingTools: McpToolRecord[],
     actorContext?: ToolPolicyActorContext,
   ): Promise<McpToolRecord[]> {
-    if (isInternalMcpApprovalInboxServer(server)) {
-      return createInternalMcpApprovalInboxTools(server.serverId);
-    }
-    if (isInternalMcpDurableTasksServer(server)) {
-      return createInternalMcpDurableTasksTools(server.serverId);
-    }
-    if (server.transport === "stdio") {
-      const discovered = await discoverMcpTools(server, undefined, { actorContext });
-      if (discovered.length > 0) {
-        return discovered;
-      }
-    }
-    if (server.transport === "http" || server.transport === "sse") {
-      const discovered = await discoverMcpTools(server, undefined, {
+    return mcpServerAdminService.resolveConnectedMcpTools(
+      {
         networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
-        oauthAccessTokenResolver: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
-        actorContext,
-      });
-      if (discovered.length > 0) {
-        return discovered;
-      }
-    }
-    return inferMcpToolsForServer(server, existingTools);
+        resolveOAuthAccessToken: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
+      },
+      server,
+      existingTools,
+      actorContext,
+    );
   }
 
   /** @internal */ public readMcpTools(): McpToolRecord[] {
