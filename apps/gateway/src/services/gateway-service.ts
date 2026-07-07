@@ -523,6 +523,7 @@ import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
+import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery-service.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import {
   ChatDelegationService,
@@ -2319,6 +2320,28 @@ export class GatewayService {
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
       this.startOrchestrationWorktreeReapScheduler();
+    }
+    // Convert chat turns stranded by the previous process death into honest
+    // retryable interrupted_by_restart failure traces before the durable worker
+    // starts resuming runs (durable-owned turns are skipped and left to it).
+    try {
+      const reconciled = reconcileInterruptedChatTurns({
+        storage: this.storage,
+        publishRealtime: (eventType, source, payload, options) =>
+          this.publishRealtime(eventType, source, payload, options),
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      });
+      if (reconciled.interruptedTurnIds.length > 0 || reconciled.synthesizedTurnIds.length > 0) {
+        log.info("reconciled chat turns interrupted by a previous gateway shutdown", {
+          interrupted: reconciled.interruptedTurnIds.length,
+          synthesized: reconciled.synthesizedTurnIds.length,
+          skippedDurableOwned: reconciled.skippedDurableOwnedTurnIds.length,
+        });
+      }
+    } catch (error) {
+      log.warn("Failed to reconcile interrupted chat turns on startup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     this.durableRunService.startWorker();
     if (!this.isFeatureEnabled("autonomyV1Disabled")) {

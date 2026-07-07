@@ -51,6 +51,15 @@ export function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): bool
   return Boolean(turn.trace.completion?.repaired);
 }
 
+/**
+ * A turn is retryable when it produced assistant output, or when it failed
+ * with a retryable failure (e.g. interrupted_by_restart) — those turns have no
+ * assistant message at all, yet retry is exactly the recovery they need.
+ */
+export function canRetryTurn(turn: Pick<ChatThreadTurnRecord, "assistantMessage" | "trace">): boolean {
+  return Boolean(turn.assistantMessage) || turn.trace.failure?.retryable === true;
+}
+
 export function getTraceTone(trace: ChatTurnTraceRecord): ChatTraceTone {
   if (trace.status === "failed") {
     return "critical";
@@ -80,6 +89,9 @@ export function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
     case "cancelled":
       return "Turn cancelled.";
     case "failed":
+      if (trace.failure?.failureClass === "interrupted_by_restart") {
+        return "Interrupted by a gateway restart — retry to run it again.";
+      }
       return trace.failure?.message ?? "Turn failed.";
     case "partial":
       return "Turn partially completed.";

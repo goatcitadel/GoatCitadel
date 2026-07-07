@@ -19,6 +19,7 @@ import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
 import { ChatThinkingSection } from "./ChatThinkingSection";
 import { ChatLiveActivityRail, ChatTurnActivityRows, formatToolRunElapsed } from "./ChatToolActivity";
 import {
+  canRetryTurn,
   getAssistantPendingLabel,
   getRecoveryStripLabel,
   getTraceTone,
@@ -961,7 +962,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const assistantPendingLabel = getAssistantPendingLabel(turn.trace, { isStreamingTurn });
   const isPlainChat = mode === "chat";
   const showContextToggle = Boolean(onToggleContextTurn);
-  const hasRetryAction = Boolean(turn.assistantMessage);
+  const hasRetryAction = canRetryTurn(turn);
   const hasStartNewThreadAction = Boolean(onStartNewThreadFromTurn);
   const hasEditAction = Boolean(onEditTurn);
   const hasGeneratedArtifactAction = Boolean(turn.assistantMessage);

@@ -446,6 +446,8 @@ export function buildUserSafeFailureMessage(failure: ChatTurnFailureRecord): str
       return "This turn hit the current execution budget before a full pass finished. Continue from the strongest leads or switch to a deeper mode.";
     case "approval_required":
       return "This turn is waiting for approval before it can continue.";
+    case "interrupted_by_restart":
+      return "The gateway restarted while this turn was running, so it never finished. Retry to run it again.";
     default:
       return "This turn failed before completion. Retry once, or narrow the request so the next pass can finish cleanly.";
   }

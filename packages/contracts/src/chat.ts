@@ -869,6 +869,7 @@ export type ChatTurnFailureClass =
   | "turn_budget_exceeded"
   | "budget_exceeded"
   | "approval_required"
+  | "interrupted_by_restart"
   | "unknown";
 
 export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
@@ -997,6 +998,8 @@ export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): C
       return "switch_to_deep_mode";
     case "approval_required":
       return "approve_pending_step";
+    case "interrupted_by_restart":
+      return "retry";
     default:
       return "retry";
   }
