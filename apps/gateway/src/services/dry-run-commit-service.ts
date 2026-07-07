@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   DryRunCommitDiagnostic,
   DryRunCommitRecord,
@@ -75,12 +75,8 @@ export function computeDryRunHash(plannedAction: DryRunPlannedAction): string {
     .digest("hex");
 }
 
-let dryRunCounter = 0;
-
-function nextDryRunId(seed: string): string {
-  dryRunCounter += 1;
-  const suffix = createHash("sha256").update(`${seed}:${dryRunCounter}:${Date.now()}`).digest("hex").slice(0, 16);
-  return `dryrun-${suffix}`;
+function nextDryRunId(): string {
+  return `dryrun-${randomUUID()}`;
 }
 
 /**
@@ -90,7 +86,7 @@ function nextDryRunId(seed: string): string {
 export function createDryRunPreview(store: DryRunCommitStore, input: DryRunPreviewInput): DryRunCommitRecord {
   const dryRunHash = computeDryRunHash(input.plannedAction);
   const record: DryRunCommitRecord = {
-    dryRunId: nextDryRunId(input.runId),
+    dryRunId: nextDryRunId(),
     runId: input.runId,
     boundary: input.boundary,
     workspaceId: input.workspaceId,

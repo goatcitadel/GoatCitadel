@@ -533,6 +533,27 @@ describe("integration-diagnostics-service contract behavior", () => {
         }),
       ]),
     );
+
+    // A connection the boot migration stamped (inboundAccessMigratedAt present)
+    // gets the auto-migrated copy variant on the same warn check.
+    const migratedChecks = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("slack", "channel", {
+        botToken: "slack-token",
+        signingSecret: "slack-secret",
+        inboundAccessMode: "open_legacy",
+        inboundAccessMigratedAt: "2026-07-07T12:00:00.000Z",
+      }),
+    );
+    expect(migratedChecks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "inbound_access_legacy_open",
+          status: "warn",
+          message: expect.stringContaining("auto-migrated from the legacy open default"),
+        }),
+      ]),
+    );
     expect(emptyAllowlistChecks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
