@@ -267,7 +267,7 @@ function deepEqualCanonical(left: unknown, right: unknown): boolean {
 
   for (let i = 0; i < leftKeys.length; i += 1) {
     const key = leftKeys[i];
-    if (key !== rightKeys[i]) {
+    if (key === undefined || key !== rightKeys[i]) {
       return false;
     }
     if (!deepEqualCanonical(leftRecord[key], rightRecord[key])) {
