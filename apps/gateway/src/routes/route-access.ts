@@ -63,6 +63,11 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/secrets", accessClass: "operator" },
   { prefix: "/api/v1/sessions", accessClass: "operator" },
   { prefix: "/api/v1/chat", accessClass: "operator" },
+  // Read-only surface classifier preview (POST /api/v1/surface/classify). It takes an
+  // arbitrary prompt plus workspace/citadel ids, so it stays operator-gated like the rest
+  // of the console — this makes the classification explicit (was resolving to the operator
+  // DEFAULT, which the auth-matrix flags as not-deliberately-classified).
+  { prefix: "/api/v1/surface", accessClass: "operator" },
   { prefix: "/api/v1/llm", accessClass: "operator" },
   { prefix: "/api/v1/local-ai", accessClass: "operator" },
   { prefix: "/api/v1/llamacpp", accessClass: "operator" },
