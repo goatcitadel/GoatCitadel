@@ -1601,6 +1601,13 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "cron_jobs", "backoff_until", "TEXT");
     },
   },
+  {
+    version: 134,
+    name: "integration_connections_workspace_scope_parity",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "integration_connections", "workspace_id", "TEXT");
+    },
+  },
 ];
 
 function ensureChatDelegationParentRunIdSchema(db: DatabaseSync): void {

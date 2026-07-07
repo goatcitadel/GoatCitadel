@@ -97,6 +97,7 @@ export const createConnectionSchema = z.object({
   label: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
   status: z.enum(["connected", "disconnected", "error", "paused"]).optional(),
+  workspaceId: z.string().trim().min(1).max(120).optional(),
   config: z.record(z.unknown()).optional(),
 });
 
@@ -104,6 +105,8 @@ export const updateConnectionSchema = z.object({
   label: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
   status: z.enum(["connected", "disconnected", "error", "paused"]).optional(),
+  // null clears an existing workspace binding.
+  workspaceId: z.string().trim().min(1).max(120).nullable().optional(),
   config: z.record(z.unknown()).optional(),
   lastSyncAt: z.string().datetime().optional(),
   lastError: z.string().max(4000).optional(),

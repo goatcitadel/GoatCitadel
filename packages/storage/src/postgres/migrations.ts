@@ -2217,4 +2217,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS backoff_until TEXT;
     `,
   },
+  {
+    version: 76,
+    name: "integration_connections_workspace_scope_parity",
+    sql: `
+      ALTER TABLE integration_connections
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT;
+    `,
+  },
 ];

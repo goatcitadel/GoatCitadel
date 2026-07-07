@@ -150,6 +150,46 @@ describe("A2A gRPC transport", () => {
     });
   });
 
+  it("blocks outbound sends when a personal-citadel ward matches a2a.outbound.*, before the runner", async () => {
+    const grpcClient: A2AGrpcClientPort = {
+      call: vi.fn(async () => ({ jsonrpc: "2.0", id: null, result: {} })),
+    };
+    const harness = createService({
+      grpcClient,
+      networkAllowlist: ["127.0.0.1"],
+      outboundEnabled: true,
+      outboundPeers: [{ peerId: "peer-remote", agentCardUrl: "http://127.0.0.1:1/agent-card.json" }],
+    });
+    // a2a peers carry no workspace binding, so outbound evaluates against the
+    // default personal citadel — a ward there is a global a2a hook.
+    harness.storage.citadels.addWard({
+      citadelId: "personal",
+      name: "Block outbound a2a",
+      actionPattern: "a2a.outbound.*",
+      effect: "deny",
+    });
+
+    const response = await harness.service.sendOutbound(
+      {
+        peerId: "peer-remote",
+        method: "SendMessage",
+        transport: "GRPC",
+        params: { text: "Ward-gated task." },
+        idempotencyKey: "grpc-outbound-warded",
+      },
+      "operator-1",
+      "2026-06-01T00:00:00.000Z",
+    );
+
+    expect(response).toMatchObject({
+      status: "blocked",
+      warnings: expect.arrayContaining([expect.stringContaining("Citadel Ward denies a2a.outbound.grpc.SendMessage")]),
+    });
+    expect(grpcClient.call).not.toHaveBeenCalled();
+    // Blocked BEFORE the runner: no side-effect run is recorded at all.
+    expect(harness.storage.externalSideEffectRuns.listByConnection("peer-remote")).toEqual([]);
+  });
+
   it("blocks outbound gRPC before the external client when discovery is not allowlisted", async () => {
     const agentCard = await startAgentCardServer({ supportedInterfaces: [] });
     const grpcClient: A2AGrpcClientPort = {

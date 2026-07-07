@@ -100,6 +100,12 @@ export interface IntegrationConnection {
   label: string;
   enabled: boolean;
   status: IntegrationConnectionStatus;
+  /**
+   * Optional workspace binding. Governance (Citadel Wards) resolves the
+   * connection's citadel through this workspace; unbound connections evaluate
+   * against the default personal citadel.
+   */
+  workspaceId?: string;
   config: Record<string, unknown>;
   pluginId?: string;
   pluginVersion?: string;
@@ -115,6 +121,7 @@ export interface IntegrationConnectionCreateInput {
   label?: string;
   enabled?: boolean;
   status?: IntegrationConnectionStatus;
+  workspaceId?: string;
   config?: Record<string, unknown>;
   pluginId?: string;
   pluginVersion?: string;
@@ -125,6 +132,8 @@ export interface IntegrationConnectionUpdateInput {
   label?: string;
   enabled?: boolean;
   status?: IntegrationConnectionStatus;
+  /** `null` clears an existing workspace binding. */
+  workspaceId?: string | null;
   config?: Record<string, unknown>;
   pluginId?: string;
   pluginVersion?: string;

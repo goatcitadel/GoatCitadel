@@ -26,6 +26,7 @@ interface IntegrationConnectionRow {
   plugin_version: string | null;
   plugin_enabled: number | null;
   plugin_meta_json: string | null;
+  workspace_id: string | null;
 }
 
 export class IntegrationConnectionRepository {
@@ -53,11 +54,11 @@ export class IntegrationConnectionRepository {
       INSERT INTO integration_connections (
         connection_id, catalog_id, kind, integration_key, label, enabled, status,
         config_json, plugin_id, plugin_version, plugin_enabled, plugin_meta_json,
-        created_at, updated_at, last_sync_at, last_error
+        created_at, updated_at, last_sync_at, last_error, workspace_id
       ) VALUES (
         @connectionId, @catalogId, @kind, @integrationKey, @label, @enabled, @status,
         @configJson, @pluginId, @pluginVersion, @pluginEnabled, @pluginMetaJson,
-        @createdAt, @updatedAt, @lastSyncAt, @lastError
+        @createdAt, @updatedAt, @lastSyncAt, @lastError, @workspaceId
       )
     `);
     this.updateStmt = db.prepare(`
@@ -73,7 +74,8 @@ export class IntegrationConnectionRepository {
         plugin_meta_json = @pluginMetaJson,
         updated_at = @updatedAt,
         last_sync_at = @lastSyncAt,
-        last_error = @lastError
+        last_error = @lastError,
+        workspace_id = @workspaceId
       WHERE connection_id = @connectionId
     `);
     this.deleteStmt = db.prepare("DELETE FROM integration_connections WHERE connection_id = ?");
@@ -119,6 +121,7 @@ export class IntegrationConnectionRepository {
       updatedAt: now,
       lastSyncAt: null,
       lastError: null,
+      workspaceId: input.workspaceId?.trim() || null,
     });
     return this.get(connectionId);
   }
@@ -142,6 +145,7 @@ export class IntegrationConnectionRepository {
       updatedAt: now,
       lastSyncAt: input.lastSyncAt ?? current.lastSyncAt ?? null,
       lastError: input.lastError === undefined ? (current.lastError ?? null) : input.lastError,
+      workspaceId: input.workspaceId === undefined ? (current.workspaceId ?? null) : input.workspaceId?.trim() || null,
     });
     return this.get(connectionId);
   }
@@ -173,6 +177,7 @@ function mapRow(row: IntegrationConnectionRow): IntegrationConnection {
     updatedAt: row.updated_at,
     lastSyncAt: row.last_sync_at ?? undefined,
     lastError: row.last_error ?? undefined,
+    workspaceId: row.workspace_id ?? undefined,
   };
 }
 
@@ -207,7 +212,8 @@ function isIntegrationConnectionRow(value: unknown): value is IntegrationConnect
     (typeof value.plugin_id === "string" || value.plugin_id === null) &&
     (typeof value.plugin_version === "string" || value.plugin_version === null) &&
     (typeof value.plugin_enabled === "number" || value.plugin_enabled === null) &&
-    (typeof value.plugin_meta_json === "string" || value.plugin_meta_json === null)
+    (typeof value.plugin_meta_json === "string" || value.plugin_meta_json === null) &&
+    (typeof value.workspace_id === "string" || value.workspace_id === null || value.workspace_id === undefined)
   );
 }
 
