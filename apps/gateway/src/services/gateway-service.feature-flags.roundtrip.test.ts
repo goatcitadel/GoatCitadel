@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FeatureFlagsConfig } from "../config.js";
 import { GatewayService } from "./gateway-service.js";
 
@@ -106,5 +106,19 @@ describe("GatewayService feature-flag round-trip", () => {
     });
     expect(after.streamIdleWatchdogV1Disabled).toBe(true);
     expect(after.plannerFastPathV1Disabled).toBe(true);
+  });
+
+  it("memoizes resolved flags within the TTL: one settings read across many reads (Finding 6)", () => {
+    const get = vi.fn(() => ({ value: {} as Partial<FeatureFlagsConfig> }));
+    const harness = {
+      storage: { systemSettings: { get } },
+      config: { assistant: { features: {} as FeatureFlagsConfig } },
+      featureFlagsCache: undefined,
+      featureFlagsCacheAtMs: 0,
+    };
+    for (let i = 0; i < 10; i += 1) {
+      GatewayService.prototype.readFeatureFlags.call(harness as never);
+    }
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });

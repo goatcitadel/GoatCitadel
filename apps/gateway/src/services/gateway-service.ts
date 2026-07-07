@@ -657,6 +657,12 @@ const GATEWAY_OWNED_MCP_SERVER_IDS = new Set([
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
+// Perf (Finding 6): the resolved feature-flag set is read 5-15x per chat turn, each
+// call previously issuing a synchronous systemSettings.get (a blocking worker
+// round-trip on Postgres). Memoize it for a short window; the sole writer
+// (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
+// hypothetical out-of-band settings write.
+const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
 const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 import { hashSensitiveToken } from "./device-access-helpers.js";
@@ -916,6 +922,8 @@ export class GatewayService {
   public readonly mutationIdempotencyStore: Storage["mutationIdempotency"];
   public readonly chatTurnExecutionRegistry = new ChatTurnExecutionRegistry();
   public readonly backgroundTasks = new Set<Promise<void>>();
+  private featureFlagsCache?: RuntimeSettings["features"];
+  private featureFlagsCacheAtMs = 0;
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
   private readonly syntheticPermissionProfiles = new Map<string, PermissionProfileRecord>();
@@ -8825,6 +8833,10 @@ export class GatewayService {
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
+    // Prime the read cache so the new flags are visible immediately (Finding 6);
+    // this is the sole writer, so no invalidation race with the TTL path.
+    this.featureFlagsCache = next;
+    this.featureFlagsCacheAtMs = Date.now();
     if (autonomyKillSwitchDisengaged) {
       // Runs parked while the kill switch was engaged wait on a per-run event that
       // nothing else emits; without an explicit resume they stay "waiting" forever.
@@ -8846,10 +8858,14 @@ export class GatewayService {
   }
 
   /** @internal */ public readFeatureFlags(): RuntimeSettings["features"] {
+    const nowMs = Date.now();
+    if (this.featureFlagsCache && nowMs - this.featureFlagsCacheAtMs < FEATURE_FLAGS_CACHE_TTL_MS) {
+      return this.featureFlagsCache;
+    }
     const stored =
       this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
     const fromConfig = this.config.assistant.features;
-    return {
+    const resolved: RuntimeSettings["features"] = {
       durableKernelV1Enabled: true,
       replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
@@ -8884,6 +8900,9 @@ export class GatewayService {
       cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
       utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
     };
+    this.featureFlagsCache = resolved;
+    this.featureFlagsCacheAtMs = nowMs;
+    return resolved;
   }
 
   private normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
