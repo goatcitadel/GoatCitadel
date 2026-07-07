@@ -7,6 +7,13 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import {
+  forgetExpiredMemoryItemsForFlush,
+  inspectExpiredMemoryItemsForFlush,
+  type SystemCronSchedulerDeps,
+} from "./gateway/system-cron-schedulers.js";
+
+type MemoryFlushDeps = Pick<SystemCronSchedulerDeps, "memoryLifecycle">;
 
 function createFeatureFlags() {
   return {
@@ -212,22 +219,11 @@ describe("GatewayService durable feature flags", () => {
         { itemId: "pinned-2", namespace: "workspace" },
       ],
     }));
-    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
-      memoryLifecycleService: {
-        forgetExpiredActiveMemoryItems: typeof forgetExpiredActiveMemoryItems;
-        inspectExpiredActiveMemoryLedger: typeof inspectExpiredActiveMemoryLedger;
-      };
-    };
-    gateway.memoryLifecycleService = {
-      forgetExpiredActiveMemoryItems,
-      inspectExpiredActiveMemoryLedger,
-    };
+    const deps = {
+      memoryLifecycle: { forgetExpiredActiveMemoryItems, inspectExpiredActiveMemoryLedger },
+    } as unknown as MemoryFlushDeps;
 
-    const result = (
-      GatewayService.prototype as unknown as {
-        forgetExpiredMemoryItemsForFlush(this: typeof gateway, nowIso: string): Record<string, unknown>;
-      }
-    ).forgetExpiredMemoryItemsForFlush.call(gateway, nowIso);
+    const result = forgetExpiredMemoryItemsForFlush(deps, nowIso);
 
     expect(forgetExpiredActiveMemoryItems).toHaveBeenCalledTimes(3);
     expect(forgetExpiredActiveMemoryItems).toHaveBeenNthCalledWith(1, { nowIso, limit: 500 });
@@ -258,22 +254,11 @@ describe("GatewayService durable feature flags", () => {
       unpinnedCount: 500,
       retainedPinnedItems: [],
     }));
-    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
-      memoryLifecycleService: {
-        forgetExpiredActiveMemoryItems: typeof forgetExpiredActiveMemoryItems;
-        inspectExpiredActiveMemoryLedger: typeof inspectExpiredActiveMemoryLedger;
-      };
-    };
-    gateway.memoryLifecycleService = {
-      forgetExpiredActiveMemoryItems,
-      inspectExpiredActiveMemoryLedger,
-    };
+    const deps = {
+      memoryLifecycle: { forgetExpiredActiveMemoryItems, inspectExpiredActiveMemoryLedger },
+    } as unknown as MemoryFlushDeps;
 
-    const result = (
-      GatewayService.prototype as unknown as {
-        forgetExpiredMemoryItemsForFlush(this: typeof gateway, nowIso: string): Record<string, unknown>;
-      }
-    ).forgetExpiredMemoryItemsForFlush.call(gateway, nowIso);
+    const result = forgetExpiredMemoryItemsForFlush(deps, nowIso);
 
     expect(forgetExpiredActiveMemoryItems).toHaveBeenCalledTimes(20);
     expect(result).toMatchObject({
@@ -293,22 +278,11 @@ describe("GatewayService durable feature flags", () => {
       unpinnedCount: 2,
       retainedPinnedItems: [{ itemId: "pinned-1", namespace: "user" }],
     }));
-    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
-      memoryLifecycleService: {
-        forgetExpiredActiveMemoryItems: typeof forgetExpiredActiveMemoryItems;
-        inspectExpiredActiveMemoryLedger: typeof inspectExpiredActiveMemoryLedger;
-      };
-    };
-    gateway.memoryLifecycleService = {
-      forgetExpiredActiveMemoryItems,
-      inspectExpiredActiveMemoryLedger,
-    };
+    const deps = {
+      memoryLifecycle: { forgetExpiredActiveMemoryItems, inspectExpiredActiveMemoryLedger },
+    } as unknown as MemoryFlushDeps;
 
-    const result = (
-      GatewayService.prototype as unknown as {
-        inspectExpiredMemoryItemsForFlush(this: typeof gateway, nowIso: string): Record<string, unknown>;
-      }
-    ).inspectExpiredMemoryItemsForFlush.call(gateway, nowIso);
+    const result = inspectExpiredMemoryItemsForFlush(deps, nowIso);
 
     expect(forgetExpiredActiveMemoryItems).not.toHaveBeenCalled();
     expect(result).toMatchObject({

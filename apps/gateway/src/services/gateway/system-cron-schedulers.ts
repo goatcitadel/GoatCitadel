@@ -449,8 +449,9 @@ export async function runMemoryFlushSchedulerIfDue(
   });
 }
 
-function forgetExpiredMemoryItemsForFlush(
-  deps: SystemCronSchedulerDeps,
+/** Exported for focused unit tests; the flush scheduler is the only production caller. */
+export function forgetExpiredMemoryItemsForFlush(
+  deps: Pick<SystemCronSchedulerDeps, "memoryLifecycle">,
   nowIso: string,
 ): {
   expiredActiveCount: number;
@@ -485,8 +486,9 @@ function forgetExpiredMemoryItemsForFlush(
   };
 }
 
-function inspectExpiredMemoryItemsForFlush(
-  deps: SystemCronSchedulerDeps,
+/** Exported for focused unit tests; the flush scheduler is the only production caller. */
+export function inspectExpiredMemoryItemsForFlush(
+  deps: Pick<SystemCronSchedulerDeps, "memoryLifecycle">,
   nowIso: string,
 ): {
   expiredActiveCount: number;

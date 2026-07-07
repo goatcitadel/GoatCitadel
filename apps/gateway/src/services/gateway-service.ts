@@ -449,26 +449,20 @@ import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
 import {
   type AutonomousTurnKind,
-  buildAutonomousTurnContext,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
+import {
+  type ChatAutonomousTurnDeps,
+  enqueueAutonomousChatTurn,
+  isHeartbeatEligibleSession,
+  runCommitmentSweep,
+  runCronAgentTurn,
+  runHeartbeatSweep,
+  scheduleManage,
+} from "./chat-autonomous-turn-service.js";
 import { BackgroundReviewService } from "./background-review-service.js";
 import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
-import { buildCommitmentCheckInPrompt, runCommitmentSweep } from "./gateway/commitment-sweep-service.js";
-import {
-  buildScheduledCreatorIntersectionProfile,
-  permissionProfileAppliesToCreator,
-} from "./gateway/scheduled-profile-intersection.js";
-import { runHeartbeatTick } from "./gateway/heartbeat-service.js";
-import {
-  buildScheduleCreateActionConfig,
-  isScheduledTurnContext,
-  parseScheduleManageArgs,
-  resolveScheduleCreatorKey,
-  summarizeScheduleJob,
-  validateScheduleCreate,
-} from "./gateway/schedule-tool-support.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -1389,7 +1383,8 @@ export class GatewayService {
       createChatCompletion: (request) => this.createChatCompletion(request),
       resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-      isProactiveDeNovoEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
+      isProactiveDeNovoEligibleSession: (sessionId) =>
+        isHeartbeatEligibleSession(this.chatAutonomousTurnDeps(), sessionId),
       backgroundTasks: this.backgroundTasks,
       get closing() {
         return self.closing;
@@ -5138,156 +5133,53 @@ export class GatewayService {
    * `authActorSource:"none"`, and `permissionProfileId:"scheduled-restricted"`
    * so dangerous tools become approvals rather than silent actions.
    */
+  private chatAutonomousTurnDeps(): ChatAutonomousTurnDeps {
+    return {
+      storage: this.storage,
+      cron: this.cronAutomationService,
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      createCronInboxTask: (job) => this.createCronInboxTask(job),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      patchSessionAutonomyPrefs: (sessionId, patch) => {
+        this.patchSessionAutonomyPrefs(sessionId, patch);
+      },
+      listChatSessions: (query) => this.listChatSessions(query),
+      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
+      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
+      getSession: (sessionId) => this.getSession(sessionId),
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      ensureChatSessionRuntimeGrants: (sessionId) => {
+        this.ensureChatSessionRuntimeGrants(sessionId);
+      },
+      listConnectorRecords: (kind) => this.listConnectorRecords(kind),
+      listToolCatalog: () => this.listToolCatalog(),
+      registerSyntheticPermissionProfile: (profile) => this.registerSyntheticPermissionProfile(profile),
+      prepareAgentChatTurn: (sessionId, request, options) => this.prepareAgentChatTurn(sessionId, request, options),
+      buildDurableChatTurnPayloadRecord: (prepared, request) =>
+        durableChatTurnPayloadToRecord(
+          this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
+        ),
+      createDurableRun: (input) => this.createDurableRun(input),
+      persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
+      requestDurableRunProcessing: (runId) => this.requestDurableRunProcessing(runId),
+    };
+  }
+
   private async runCronAgentTurn(input: {
     job: CronJobRecord;
     runId: string;
     config: CronAgentTurnConfig;
   }): Promise<AgentTurnCronRunOutcome> {
-    const autonomyDisabled = this.isFeatureEnabled("autonomyV1Disabled");
-    if (autonomyDisabled || input.config.inertInboxFallback) {
-      const task = this.createCronInboxTask(input.job);
-      return { mode: "inbox", taskId: task.taskId };
-    }
-    const sessionId = this.ensureCronAgentSession(input.job.jobId, input.config.sessionId);
-    const createdBy = input.config.createdBy;
-    const systemActorId = createdBy?.operatorId?.trim() || createdBy?.authActorId?.trim() || "system-cron";
-    const scheduledPolicy = this.resolveScheduledAgentTurnPolicy({
-      config: input.config,
-      jobId: input.job.jobId,
-      runId: input.runId,
-      sessionId,
-      systemActorId,
-    });
-    if ("failClosedReason" in scheduledPolicy) {
-      const task = this.createCronInboxTask(input.job);
-      return {
-        mode: "inbox",
-        taskId: task.taskId,
-        profilePosture: scheduledPolicy.profilePosture,
-        profileWarning: scheduledPolicy.failClosedReason,
-      };
-    }
-    const run = await this.enqueueAutonomousChatTurn({
-      sessionId,
-      prompt: input.config.prompt,
-      runId: input.runId,
-      systemActorId,
-      reason: `cron agent_turn:${input.job.jobId}`,
-      deliveryChannel: input.config.deliveryChannel,
-      deliverMode: input.config.deliverMode ?? "always",
-      policyContext: scheduledPolicy.policyContext,
-      profilePosture: scheduledPolicy.profilePosture,
-    });
-    return {
-      mode: "agent_turn",
-      durableRunId: run?.runId,
-      sessionId,
-      turnId: run?.turnId,
-      profilePosture: scheduledPolicy.profilePosture,
-    };
+    return runCronAgentTurn(this.chatAutonomousTurnDeps(), input);
   }
 
-  /**
-   * Maintenance-tick commitment sweep (P1-F3). Delivers due + pending inferred
-   * check-ins (oldest-due first) as autonomous (restricted-profile) turns seeded
-   * with the suggested text, respecting per-session cooldown + active-hours, then
-   * marks them delivery-pending. No-op while the master autonomy switch is off
-   * or durable execution is disabled (the delivery path requires a durable run).
-   * Superseded / dismissed / already-queued rows are excluded by `listDue`
-   * (pending-only).
-   */
   private async runCommitmentSweep(): Promise<void> {
-    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
-      return;
-    }
-    await runCommitmentSweep({
-      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-      listDueCommitments: (nowIso, limit) => this.storage.agentCommitments.listDue(nowIso, limit),
-      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
-      deliverCommitment: async (commitment) => {
-        const deliveryChannel = this.resolveCommitmentDeliveryChannel(commitment.sessionId);
-        if (!deliveryChannel) {
-          return false;
-        }
-        const run = await this.enqueueAutonomousChatTurn({
-          sessionId: commitment.sessionId,
-          prompt: buildCommitmentCheckInPrompt(commitment.suggestedText),
-          runId: `commitment_${commitment.commitmentId}`,
-          systemActorId: "system-commitment",
-          reason: `commitment check-in:${commitment.commitmentId}`,
-          deliveryChannel,
-          deliverMode: "always",
-          commitmentId: commitment.commitmentId,
-        });
-        return Boolean(run?.runId);
-      },
-      markDeliveryPending: (commitmentId) => this.storage.agentCommitments.markDeliveryPending(commitmentId),
-      markDeliveryFailed: (commitmentId) => this.storage.agentCommitments.markDeliveryFailed(commitmentId),
-    });
+    await runCommitmentSweep(this.chatAutonomousTurnDeps());
   }
 
-  private resolveCommitmentDeliveryChannel(sessionId: string): CronAgentTurnConfig["deliveryChannel"] | undefined {
-    const binding = this.storage.chatSessionBindings.get(sessionId);
-    if (
-      !binding ||
-      binding.transport !== "integration" ||
-      !binding.writable ||
-      !binding.connectionId ||
-      !binding.target
-    ) {
-      return undefined;
-    }
-    const connector = this.listConnectorRecords("integration_connection").find(
-      (item) => item.status === "active" && item.sourceId === binding.connectionId,
-    );
-    const channelKey = typeof connector?.metadata?.key === "string" ? connector.metadata.key.trim() : "";
-    const target = binding.target.trim();
-    if (!channelKey || !target) {
-      return undefined;
-    }
-    return { channelKey, target };
-  }
-
-  /**
-   * Maintenance-tick heartbeat sweep (P1-F4). For each eligible idle session,
-   * fires a single silent self-wake turn under the read-only `heartbeat-restricted`
-   * profile with `deliverMode:"on_notify"` — the turn stays silent unless it emits
-   * `{notify:true}`. Multi-gate rate limiting (heartbeat-enabled × eligibility ×
-   * active-hours × idle floor × no-running-turn × cooldown × interval) lives in the
-   * pure `runHeartbeatTick`. No-op while the master autonomy switch is off or
-   * durable execution is disabled (the turn path requires a durable run).
-   * Eval-integrity / non-human / replay-scratch sessions are excluded.
-   */
   private async runHeartbeatSweep(): Promise<void> {
-    if (this.isFeatureEnabled("autonomyV1Disabled") || !this.isFeatureEnabled("durableKernelV1Enabled")) {
-      return;
-    }
-    await runHeartbeatTick({
-      isAutonomyEnabled: () => !this.isFeatureEnabled("autonomyV1Disabled"),
-      listSessions: (limit) =>
-        this.listChatSessions({ scope: "mission", view: "active", limit }).map((session) => ({
-          sessionId: session.sessionId,
-          lastActivityAt: session.lastActivityAt,
-        })),
-      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
-      isHeartbeatEligibleSession: (sessionId) => this.isHeartbeatEligibleSession(sessionId),
-      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
-      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
-      enqueueHeartbeatTurn: async ({ sessionId, prompt }) => {
-        const run = await this.enqueueAutonomousChatTurn({
-          sessionId,
-          prompt,
-          // Collision-resistant: `Date.now()` could repeat within a tick across
-          // sessions/retries; a UUID guarantees a unique durable run id.
-          runId: `heartbeat_${randomUUID()}`,
-          systemActorId: "system-heartbeat",
-          reason: `heartbeat self-wake:${sessionId}`,
-          kind: "heartbeat",
-          deliverMode: "on_notify",
-        });
-        return Boolean(run?.runId);
-      },
-    });
+    await runHeartbeatSweep(this.chatAutonomousTurnDeps());
   }
 
   /**
@@ -5317,139 +5209,6 @@ export class GatewayService {
     } catch (error) {
       this.logMaintenanceTaskFailure(event, error);
     }
-  }
-
-  /**
-   * Whether a session may receive silent heartbeats. Mirrors the human-session /
-   * eval-integrity guard used for the commitment classifier: skip `system` and
-   * `prompt_pack` origins and replay-scratch sessions (safety invariant:
-   * eval-integrity turns are never affected).
-   */
-  private isHeartbeatEligibleSession(sessionId: string): boolean {
-    const origin = this.storage.chatSessionMeta.get(sessionId)?.origin;
-    if (origin === "system" || origin === "prompt_pack") {
-      return false;
-    }
-    return !this.isReplayScratchSession(sessionId);
-  }
-
-  /**
-   * Resolve a stable cron session for an `agent_turn` job. Reuses an explicitly
-   * configured session id when present, otherwise derives a deterministic
-   * per-job session and creates it (proactiveMode off, system origin) if it does
-   * not yet exist. Immutable: reuses existing rows; only creates when missing.
-   */
-  private ensureCronAgentSession(jobId: string, configuredSessionId?: string): string {
-    const explicit = configuredSessionId?.trim();
-    if (explicit && this.getSession(explicit)) {
-      return explicit;
-    }
-    const peer = `cron_${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}`;
-    const sessionKey = `mission:scheduler:${peer}`;
-    const sessionId = `sess_${createHash("sha256").update(sessionKey).digest("hex").slice(0, 24)}`;
-    if (this.getSession(sessionId)) {
-      return sessionId;
-    }
-    const now = new Date().toISOString();
-    const workspaceId = this.normalizeWorkspaceId(undefined);
-    this.storage.runImmediateTransaction(() => {
-      this.storage.sessions.upsert({
-        sessionId,
-        sessionKey,
-        kind: "dm",
-        channel: "mission",
-        account: "scheduler",
-        displayName: `Cron ${jobId}`,
-        timestamp: now,
-      });
-      this.storage.chatSessionMeta.ensure(sessionId, now, workspaceId);
-      this.storage.chatSessionPrefs.ensure(sessionId, now);
-      this.storage.chatSessionMeta.patch(
-        sessionId,
-        { workspaceId, title: `Cron ${jobId}`, origin: "system", includeInHistory: false },
-        now,
-      );
-      this.storage.chatSessionBindings.upsert({ sessionId, workspaceId, transport: "llm", writable: true }, now);
-    });
-    this.ensureChatSessionRuntimeGrants(sessionId);
-    this.patchSessionAutonomyPrefs(sessionId, { proactiveMode: "off" });
-    return sessionId;
-  }
-
-  private resolveScheduledAgentTurnPolicy(input: {
-    config: CronAgentTurnConfig;
-    jobId: string;
-    runId: string;
-    sessionId: string;
-    systemActorId: string;
-  }):
-    | { policyContext: ToolPolicyActorContext; profilePosture: "scheduled_restricted" | "creator_intersection" }
-    | {
-        profilePosture:
-          | "creator_profile_missing"
-          | "creator_profile_archived"
-          | "creator_profile_scope_mismatch"
-          | "creator_profile_invalid";
-        failClosedReason: string;
-      } {
-    const base = buildAutonomousTurnContext({
-      kind: "scheduled",
-      systemActorId: input.systemActorId,
-      runId: input.runId,
-      sessionId: input.sessionId,
-    });
-    const createdBy = input.config.createdBy;
-    if (!createdBy) {
-      return { policyContext: base.policyContext, profilePosture: "scheduled_restricted" };
-    }
-    const creatorProfileId = createdBy.permissionProfileId?.trim();
-    if (!creatorProfileId) {
-      return {
-        profilePosture: "creator_profile_missing",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} was created by a model/tool call without permission profile provenance.`,
-      };
-    }
-
-    const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
-    let creatorProfile: PermissionProfileRecord;
-    try {
-      creatorProfile = this.storage.permissionProfiles.getProfile(creatorProfileId);
-    } catch (error) {
-      return {
-        profilePosture: "creator_profile_missing",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      };
-    }
-    if (creatorProfile.status !== "active") {
-      return {
-        profilePosture: "creator_profile_archived",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is not active.`,
-      };
-    }
-    const creatorActorId = createdBy.operatorId?.trim() || createdBy.authActorId?.trim();
-    if (!permissionProfileAppliesToCreator({ profile: creatorProfile, creatorActorId, workspaceId })) {
-      return {
-        profilePosture: "creator_profile_scope_mismatch",
-        failClosedReason: `Scheduled agent_turn ${input.jobId} creator profile ${creatorProfileId} is no longer active for the creator/workspace scope.`,
-      };
-    }
-
-    const profile = buildScheduledCreatorIntersectionProfile({
-      creatorProfile,
-      runId: input.runId,
-      knownToolNames: this.listToolCatalog().map((tool) => tool.toolName),
-    });
-    return {
-      profilePosture: "creator_intersection",
-      policyContext: {
-        ...base.policyContext,
-        permissionProfileId: profile.profileId,
-        permissionProfile: profile,
-        workspaceId,
-      },
-    };
   }
 
   private registerSyntheticPermissionProfile(profile: PermissionProfileRecord): void {
@@ -5493,20 +5252,12 @@ export class GatewayService {
     return this.syntheticPermissionProfiles instanceof Map ? this.syntheticPermissionProfiles : undefined;
   }
 
-  /**
-   * Prepare + enqueue a `chat.turn.execute` durable run for an autonomous
-   * (cron/heartbeat/proactive) turn. Persists the user message + trace via
-   * `prepareAgentChatTurn` (the durable payload's precondition), then creates
-   * the durable run tagged with `metadata.autonomous` so the post-turn delivery
-   * hook in `durable-execution-service.ts` can route the reply to a channel.
-   */
   private async enqueueAutonomousChatTurn(input: {
     sessionId: string;
     prompt: string;
     runId: string;
     systemActorId: string;
     reason: string;
-    /** Restricted profile selector; defaults to `scheduled` (cron/commitment). */
     kind?: AutonomousTurnKind;
     deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
     deliverMode: NonNullable<CronAgentTurnConfig["deliverMode"]>;
@@ -5514,205 +5265,14 @@ export class GatewayService {
     profilePosture?: AgentTurnCronRunOutcome["profilePosture"];
     commitmentId?: string;
   }): Promise<{ runId: string; turnId: string } | undefined> {
-    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
-      throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
-    }
-    if (this.isFeatureEnabled("autonomyV1Disabled")) {
-      throw new Error("Autonomous chat turn execution is disabled while the autonomy kill switch is engaged.");
-    }
-    const kind: AutonomousTurnKind = input.kind ?? "scheduled";
-    const permissionProfileId =
-      kind === "heartbeat" ? HEARTBEAT_PERMISSION_PROFILE_ID : SCHEDULED_TURN_PERMISSION_PROFILE_ID;
-    const autonomousContext = buildAutonomousTurnContext({
-      kind,
-      systemActorId: input.systemActorId,
-      runId: input.runId,
-      sessionId: input.sessionId,
-    });
-    const policyContext = input.policyContext ?? autonomousContext.policyContext;
-    const request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext } = {
-      content: input.prompt,
-      operatorId: autonomousContext.policyContext.operatorId,
-      authActorId: autonomousContext.policyContext.authActorId,
-      authActorSource: autonomousContext.policyContext.authActorSource,
-      permissionProfileId,
-      policyContext,
-    };
-    const prepared = await this.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
-    const run = this.createDurableRun({
-      workflowKey: "chat.turn.execute",
-      payload: durableChatTurnPayloadToRecord(
-        this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
-      ),
-      metadata: {
-        surface: chatTurnPrepService.resolvePreparedTurnMode(prepared),
-        objective: prepared.content,
-        autonomous: {
-          kind,
-          systemActorId: input.systemActorId,
-          reason: input.reason,
-          deliverMode: input.deliverMode,
-          ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
-          ...(input.profilePosture ? { profilePosture: input.profilePosture } : {}),
-          ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
-        },
-      },
-    });
-    if (policyContext.permissionProfile && policyContext.permissionProfileId) {
-      this.registerSyntheticPermissionProfile(policyContext.permissionProfile);
-    }
-    chatDurableRunService.persistInitialDurableChatTurnTrace(
-      { chatTurnTraces: this.storage.chatTurnTraces },
-      prepared,
-      request,
-      run,
-    );
-    this.persistChatStreamChunk(
-      {
-        type: "message_start",
-        sessionId: prepared.session.sessionId,
-        turnId: prepared.turnId,
-        messageId: prepared.assistantMessageId,
-        parentTurnId: prepared.parentTurnId,
-        branchKind: prepared.branchKind,
-        sourceTurnId: prepared.sourceTurnId,
-      },
-      run.runId,
-    );
-    this.requestDurableRunProcessing(run.runId);
-    return { runId: run.runId, turnId: prepared.turnId };
+    return enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), input);
   }
 
-  /**
-   * Runtime-hook impl for the model-callable `schedule.manage` tool (P1-F2).
-   *
-   * Routed here by the policy-engine executor (`scheduleManage` hook) *after* the
-   * engine has authorized the call — `schedule.manage` is `danger` +
-   * `requiresApproval`, so the normal approval gate fires first for interactive
-   * operators, and the restricted `scheduled-restricted` profile makes a
-   * scheduled turn's call require approval too (anti-recursion). This method:
-   *  - maps `op` to the existing `cronAutomationService` create/list/delete,
-   *  - forces `action:"agent_turn"` for created jobs,
-   *  - stamps the creator actor + permission profile from `policyContext` onto the
-   *    job for ownership, anti-recursion, and audit while fired turns stay on the
-   *    restricted scheduled profile, and
-   *  - enforces the per-creator cap, the >=15min interval floor, and the depth-1
-   *    chain cap (all in the pure `schedule-tool-support` validator).
-   *
-   * The master autonomy kill switch (`autonomyV1Disabled`) hard-disables the
-   * whole tool so no schedule can be created/listed/cancelled while autonomy is
-   * halted.
-   */
   private async scheduleManage(
     args: Record<string, unknown>,
     policyContext: ToolPolicyActorContext | undefined,
   ): Promise<Record<string, unknown>> {
-    if (this.isFeatureEnabled("autonomyV1Disabled")) {
-      throw new Error("schedule.manage is disabled while the autonomy kill switch is engaged (autonomyV1Disabled).");
-    }
-    const parsed = parseScheduleManageArgs(args);
-    if (parsed.op === "list") {
-      const creatorKey = resolveScheduleCreatorKey(policyContext);
-      const jobs = this.cronAutomationService
-        .listCronJobs()
-        .filter((job) => job.action === "agent_turn")
-        .filter((job) => {
-          if (!creatorKey) {
-            return false;
-          }
-          const createdBy = job.actionConfig?.agentTurn?.createdBy;
-          return createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey;
-        })
-        .map((job) => summarizeScheduleJob(job));
-      return { op: "list", count: jobs.length, jobs };
-    }
-    if (parsed.op === "cancel") {
-      const jobId = parsed.jobId?.trim();
-      if (!jobId) {
-        throw new Error('schedule.manage cancel requires a "jobId".');
-      }
-      const creatorKey = resolveScheduleCreatorKey(policyContext);
-      const existing = this.cronAutomationService.getCronJob(jobId);
-      if (existing.action !== "agent_turn") {
-        throw new Error(`schedule.manage cancel refused: ${jobId} is not an agent_turn schedule.`);
-      }
-      const createdBy = existing.actionConfig?.agentTurn?.createdBy;
-      const owned = !!creatorKey && (createdBy?.operatorId === creatorKey || createdBy?.authActorId === creatorKey);
-      if (!owned) {
-        throw new Error(`schedule.manage cancel refused: ${jobId} is not owned by the caller.`);
-      }
-      const result = this.cronAutomationService.deleteCronJob(jobId);
-      return { op: "cancel", jobId: result.jobId, deleted: result.deleted };
-    }
-    // op === "create"
-    const createdByJobId = this.resolveSchedulingTurnJobId(policyContext);
-    const validated = validateScheduleCreate({
-      args: parsed,
-      policyContext,
-      existingJobs: this.cronAutomationService.listCronJobs(),
-      ...(createdByJobId ? { createdByJobId } : {}),
-    });
-    const jobId = this.generateScheduleJobId(validated.name);
-    const created = this.cronAutomationService.createCronJob({
-      jobId,
-      name: validated.name,
-      action: "agent_turn",
-      schedule: validated.schedule,
-      ...(validated.endAt ? { endAt: validated.endAt } : {}),
-      actionConfig: buildScheduleCreateActionConfig(validated),
-    });
-    return {
-      op: "create",
-      jobId: created.jobId,
-      name: created.name,
-      schedule: created.schedule,
-      enabled: created.enabled,
-      ...(created.nextRunAt ? { nextRunAt: created.nextRunAt } : {}),
-      requiresApprovalToRun: false,
-      createdBy: validated.createdBy,
-    };
-  }
-
-  /**
-   * Best-effort: when the calling turn is itself a scheduled (restricted) turn,
-   * find the cron `agent_turn` job that owns the caller's session so the new job
-   * records its parent for the anti-recursion chain. Returns undefined for
-   * interactive callers (depth 0).
-   */
-  private resolveSchedulingTurnJobId(policyContext: ToolPolicyActorContext | undefined): string | undefined {
-    if (!isScheduledTurnContext(policyContext) || !policyContext?.sessionId) {
-      return undefined;
-    }
-    const sessionId = policyContext.sessionId;
-    const match = this.cronAutomationService
-      .listCronJobs()
-      .find((job) => job.action === "agent_turn" && job.actionConfig?.agentTurn?.sessionId === sessionId);
-    return match?.jobId;
-  }
-
-  /**
-   * Generate a unique cron job id from a human name plus a short random suffix.
-   * Conforms to the cron id rules (`^[a-z0-9][a-z0-9_-]{2,63}$`) and retries on
-   * the (vanishingly rare) collision so a model-created schedule never clobbers
-   * an existing job.
-   */
-  private generateScheduleJobId(name: string): string {
-    const base = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40);
-    const slug = base.length >= 3 ? base : "scheduled-turn";
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
-      const candidate = `${slug}-${suffix}`.slice(0, 64);
-      try {
-        this.cronAutomationService.getCronJob(candidate);
-      } catch {
-        return candidate;
-      }
-    }
-    throw new Error("schedule.manage create: could not allocate a unique job id; please retry.");
+    return scheduleManage(this.chatAutonomousTurnDeps(), args, policyContext);
   }
 
   public beginDurableChatRun(
