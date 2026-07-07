@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Storage } from "@goatcitadel/storage";
 import {
   approveDryRun,
   commitDryRun,
@@ -47,9 +48,9 @@ describe("dry-run-commit-service", () => {
       const base = computeDryRunHash(PLANNED);
       expect(computeDryRunHash({ ...PLANNED, route: "integration.action.other" })).not.toBe(base);
       expect(computeDryRunHash({ ...PLANNED, target: "conn-2:trigger_webhook" })).not.toBe(base);
-      expect(
-        computeDryRunHash({ ...PLANNED, payload: { flowId: "flow-1", body: { message: "DRAINED" } } }),
-      ).not.toBe(base);
+      expect(computeDryRunHash({ ...PLANNED, payload: { flowId: "flow-1", body: { message: "DRAINED" } } })).not.toBe(
+        base,
+      );
     });
   });
 
@@ -291,6 +292,56 @@ describe("dry-run-commit-service", () => {
 
       expect(execute).toHaveBeenCalledTimes(1);
       expect(result.status).toBe("executed");
+    });
+  });
+
+  describe("durable storage ledger", () => {
+    it("runs preview → refuse-unapproved → approve → commit against the sqlite-backed store", async () => {
+      const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+      try {
+        const record = createDryRunPreview(storage.dryRunCommits, {
+          runId: "extfx-durable-1",
+          boundary: "integration_operator_action",
+          plannedAction: PLANNED,
+          payloadHash: "payload-hash",
+          workspaceId: "ws-1",
+          createdAt: "2026-07-07T00:00:00.000Z",
+        });
+        expect(storage.dryRunCommits.get(record.dryRunId)?.state).toBe("awaiting_commit");
+
+        const premature = await commitDryRun(storage.dryRunCommits, {
+          dryRunId: record.dryRunId,
+          committedAction: PLANNED,
+          committedAt: "2026-07-07T00:01:00.000Z",
+          execute: async () => "never",
+        });
+        expect(premature.status).toBe("rejected");
+        expect(storage.dryRunCommits.get(record.dryRunId)?.diagnostic?.code).toBe("not_approved");
+
+        approveDryRun(storage.dryRunCommits, record.dryRunId, {
+          approvedBy: "operator",
+          approvedAt: "2026-07-07T00:02:00.000Z",
+        });
+
+        const committed = await commitDryRun(storage.dryRunCommits, {
+          dryRunId: record.dryRunId,
+          committedAction: PLANNED,
+          committedAt: "2026-07-07T00:03:00.000Z",
+          execute: async (context) => {
+            context.markExternalCallStarted();
+            return { output: { id: "ext-1" } };
+          },
+        });
+        expect(committed.status).toBe("committed");
+        expect(storage.dryRunCommits.get(record.dryRunId)).toMatchObject({
+          state: "committed",
+          approvedBy: "operator",
+          committedAt: "2026-07-07T00:03:00.000Z",
+          externalReferenceId: "id:ext-1",
+        });
+      } finally {
+        storage.close();
+      }
     });
   });
 });

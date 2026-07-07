@@ -34,6 +34,7 @@ export * from "./citadel-blueprints.js";
 export * from "./citadel-vault.js";
 export * from "./citadel-model-routing.js";
 export * from "./citadel-wards.js";
+export * from "./dry-run-commits.js";
 export * from "./citadel-passages.js";
 export * from "./citadel-sharing.js";
 export * from "./citadel-automation.js";

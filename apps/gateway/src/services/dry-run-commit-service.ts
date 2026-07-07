@@ -1,6 +1,22 @@
 import { createHash } from "node:crypto";
-import type { WardEffect } from "@goatcitadel/contracts";
+import type {
+  DryRunCommitDiagnostic,
+  DryRunCommitRecord,
+  DryRunCommitStore,
+  DryRunPlannedAction,
+  WardEffect,
+} from "@goatcitadel/contracts";
 import { canonicalJsonBytes } from "./evidence-receipt-service.js";
+
+// The persistence-facing shapes moved to @goatcitadel/contracts so the storage package can
+// implement a durable ledger; re-export them so existing importers keep working.
+export type {
+  DryRunCommitDiagnostic,
+  DryRunCommitRecord,
+  DryRunCommitState,
+  DryRunCommitStore,
+  DryRunPlannedAction,
+} from "@goatcitadel/contracts";
 
 /**
  * Provable Dry-Run → Commit (C2 "destroyer" moat).
@@ -29,26 +45,6 @@ import { canonicalJsonBytes } from "./evidence-receipt-service.js";
 /** Domain-separation tag so a dry-run hash can never collide with another sha256 use in the system. */
 const DRY_RUN_COMMIT_DIGEST_DOMAIN_KEY = "goatcitadel:dry-run-commit-digest:v1";
 
-export type DryRunCommitState =
-  | "awaiting_commit"
-  | "committed"
-  | "rejected_hash_mismatch"
-  | "rejected_commit_failed";
-
-/**
- * The exact action that will cross (or has been refused at) the external boundary. This object —
- * and ONLY this object — is canonicalized and hashed. `route` + `target` + `payload` together fully
- * describe "what will happen", so any change to them changes `dryRunHash` and breaks the commit match.
- */
-export interface DryRunPlannedAction {
-  /** Logical route/operation, e.g. "integration.action.invoke" or "automation.webhook.trigger". */
-  route: string;
-  /** The concrete external target, e.g. "conn-1:trigger_webhook" or a sanitized destination. */
-  target: string;
-  /** The exact request payload that will be sent across the boundary. */
-  payload: unknown;
-}
-
 /** Inputs needed to open a dry-run preview for a planned side-effect. */
 export interface DryRunPreviewInput {
   /** The owning external side-effect run id (links the preview to the ledger lineage). */
@@ -61,48 +57,6 @@ export interface DryRunPreviewInput {
   payloadHash: string;
   workspaceId?: string;
   createdAt: string;
-}
-
-/**
- * A persisted dry-run preview record in an awaiting-commit state. No external boundary has been
- * crossed when this exists. `dryRunHash` is the operator-approved fingerprint the commit must match.
- */
-export interface DryRunCommitRecord {
-  dryRunId: string;
-  runId: string;
-  boundary: string;
-  workspaceId?: string;
-  plannedAction: DryRunPlannedAction;
-  payloadHash: string;
-  /** sha256 (domain-separated) over the canonical bytes of `plannedAction`, hex-encoded. */
-  dryRunHash: string;
-  state: DryRunCommitState;
-  /** Set once an operator approves the preview; the commit is refused until this is present. */
-  approvedAt?: string;
-  approvedBy?: string;
-  /** Set when the commit crosses the boundary (state === "committed"). */
-  committedAt?: string;
-  /** Durable diagnostic when a commit is refused (hash mismatch or downstream failure). */
-  diagnostic?: DryRunCommitDiagnostic;
-  externalReferenceId?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** A durable, surfacing-friendly record of *why* a commit was refused (the "can't lie" evidence). */
-export interface DryRunCommitDiagnostic {
-  code: "hash_mismatch" | "not_approved" | "not_awaiting_commit" | "commit_execution_failed";
-  message: string;
-  approvedDryRunHash?: string;
-  attemptedCommitHash?: string;
-  recordedAt: string;
-}
-
-/** Narrow persistence port (in-memory or storage-backed). Structural so storage can satisfy it. */
-export interface DryRunCommitStore {
-  create(record: DryRunCommitRecord): DryRunCommitRecord;
-  get(dryRunId: string): DryRunCommitRecord | undefined;
-  update(dryRunId: string, patch: Partial<DryRunCommitRecord>): DryRunCommitRecord | undefined;
 }
 
 /** Compute the canonical, domain-separated dry-run hash for a planned action. Pure + deterministic. */
@@ -125,10 +79,7 @@ let dryRunCounter = 0;
 
 function nextDryRunId(seed: string): string {
   dryRunCounter += 1;
-  const suffix = createHash("sha256")
-    .update(`${seed}:${dryRunCounter}:${Date.now()}`)
-    .digest("hex")
-    .slice(0, 16);
+  const suffix = createHash("sha256").update(`${seed}:${dryRunCounter}:${Date.now()}`).digest("hex").slice(0, 16);
   return `dryrun-${suffix}`;
 }
 
