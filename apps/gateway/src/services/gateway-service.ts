@@ -574,7 +574,7 @@ import {
   normalizeSpecialistCandidateFingerprint,
   type ResolvedRuntimeGuidance,
 } from "./chat-turn-planning-helpers.js";
-import { buildMemoryContextSystemMessage } from "./llm-completion-helpers.js";
+import { persistContextManifestForCompletionRequest } from "./llm-completion-memory-context.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { computeDurableBaselineDrift, DurableRunService, type DurableRunServiceLogger } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
@@ -7680,72 +7680,7 @@ export class GatewayService {
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
   }): void {
-    const turnId = input.request.memory?.turnId?.trim();
-    if (!turnId) {
-      return;
-    }
-
-    const manifest = this.storage.contextManifests.ensure({
-      scope: "chat_turn",
-      turnId,
-      sessionId: input.request.memory?.sessionId?.trim(),
-      taskId: input.request.memory?.taskId?.trim(),
-    });
-    const memoryContextSystemMessage = input.memoryContext
-      ? buildMemoryContextSystemMessage(input.memoryContext)
-      : undefined;
-    let entryIndex = 0;
-
-    for (const [messageIndex, message] of input.request.messages.entries()) {
-      if (message.role !== "system" || typeof message.content !== "string") {
-        continue;
-      }
-      const contentText = message.content.trim();
-      if (!contentText) {
-        continue;
-      }
-      if (memoryContextSystemMessage && contentText === memoryContextSystemMessage) {
-        continue;
-      }
-      this.storage.contextManifests.appendEntry({
-        manifestId: manifest.manifestId,
-        kind: "system_message",
-        entryIndex,
-        title: contentText.split(/\r?\n/u, 1)[0]?.slice(0, 120) || "System message",
-        sourceRef: `system:${messageIndex}`,
-        contentText,
-        metadata: {
-          role: message.role,
-          messageIndex,
-        },
-      });
-      entryIndex += 1;
-    }
-
-    if (!input.memoryContext) {
-      return;
-    }
-
-    this.storage.contextManifests.appendEntry({
-      manifestId: manifest.manifestId,
-      kind: "memory_context",
-      entryIndex,
-      title: "Memory context",
-      sourceRef: input.memoryContext.contextId,
-      contentText: input.memoryContext.contextText,
-      metadata: {
-        scope: input.memoryContext.scope,
-        status: input.memoryContext.quality.status,
-        reason: input.memoryContext.quality.reason,
-        citationsCount: input.memoryContext.citations.length,
-        originalTokenEstimate: input.memoryContext.originalTokenEstimate,
-        distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
-        assembly: input.memoryContext.quality.assembly,
-        placement: input.memoryContextPlacement,
-        createdAt: input.memoryContext.createdAt,
-        expiresAt: input.memoryContext.expiresAt,
-      },
-    });
+    persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests }, input);
   }
 
   public listMemoryItems(
