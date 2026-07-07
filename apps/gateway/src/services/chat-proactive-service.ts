@@ -357,6 +357,9 @@ export class ChatProactiveService {
       this.callbacks.backgroundTasks.add(task);
       task.finally(() => this.callbacks.backgroundTasks.delete(task));
     }, PROACTIVE_SCHEDULER_INTERVAL_MS);
+    // Don't let the scheduler timer keep the process/test-runner alive in paths that
+    // don't call stopScheduler() (matches the shared background-scheduler helper).
+    this.scheduler?.unref();
   }
 
   stopScheduler(): void {

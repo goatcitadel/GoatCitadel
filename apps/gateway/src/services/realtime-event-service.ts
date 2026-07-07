@@ -23,7 +23,13 @@ export interface RealtimeEventServiceDependencies {
 export class RealtimeEventService implements RealtimePublisher {
   private readonly events = new EventEmitter();
 
-  public constructor(private readonly deps: RealtimeEventServiceDependencies) {}
+  public constructor(private readonly deps: RealtimeEventServiceDependencies) {
+    // Each SSE subscription adds an "event" listener; with >10 concurrent streams
+    // Node's default max-listeners warning fires spuriously (and can mask real
+    // warnings). Listeners are removed on disconnect (subscribeRealtime's
+    // unsubscribe), so lift the ceiling rather than leak-warn.
+    this.events.setMaxListeners(0);
+  }
 
   public publishRealtime(
     eventType: string,
