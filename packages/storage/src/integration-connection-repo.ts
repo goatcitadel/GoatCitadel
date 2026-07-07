@@ -141,7 +141,7 @@ export class IntegrationConnectionRepository {
       pluginId: input.pluginId ?? current.pluginId ?? null,
       pluginVersion: input.pluginVersion ?? current.pluginVersion ?? null,
       pluginEnabled: input.pluginEnabled === undefined ? (current.pluginEnabled ? 1 : 0) : input.pluginEnabled ? 1 : 0,
-      pluginMetaJson: null,
+      pluginMetaJson: current.pluginMetaJson ?? null,
       updatedAt: now,
       lastSyncAt: input.lastSyncAt ?? current.lastSyncAt ?? null,
       lastError: input.lastError === undefined ? (current.lastError ?? null) : input.lastError,
