@@ -79,7 +79,6 @@ describe("SkillImportService loop42 git install behavior", () => {
         }),
       ]);
     },
-    15_000,
   );
 });
 
