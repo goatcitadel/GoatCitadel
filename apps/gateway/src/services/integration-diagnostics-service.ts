@@ -470,11 +470,14 @@ function buildChannelInboundAccessDiagnosticChecks(
   }
   const decision = evaluateChannelInboundAccess({ config });
   if (decision.legacyWarning) {
+    const migratedAt = typeof config.inboundAccessMigratedAt === "string" ? config.inboundAccessMigratedAt : undefined;
     return [
       {
         key: "inbound_access_legacy_open",
         status: "warn",
-        message: decision.legacyWarning,
+        message: migratedAt
+          ? `This connection was auto-migrated from the legacy open default on ${migratedAt}; it still accepts every sender. Configure allowedSenders and switch inboundAccessMode to "allowlist" to lock it down. ${decision.legacyWarning}`
+          : decision.legacyWarning,
       },
     ];
   }
