@@ -6,6 +6,7 @@ import type {
   ToolExecutionTrustLevel,
 } from "./internal-tooling.js";
 import type { ContextSourceAttribution } from "./ingestion.js";
+import type { WardEffect } from "./citadel-wards.js";
 
 export type ToolApprovalMode = "approve_all" | "approve_risky" | "bypass";
 
@@ -373,6 +374,15 @@ export interface ToolInvokeResult {
   internalCall?: InternalToolCallV1;
   internalResult?: InternalToolResultV1;
   audit?: ToolAuditRecord;
+  /**
+   * The raw Citadel Ward effect that matched this invocation, when a Ward matched
+   * with a non-`allow` effect. Surfaced (not persisted) so downstream execution can
+   * enforce the previously-silent effects (`require_dry_run`, `route_local`,
+   * `redact`) that the policy engine does not itself gate — e.g. the tool
+   * invocation coordinator scrubs known secret patterns from `result` when this is
+   * `"redact"`. `undefined` when no Ward matched or the match resolved to `allow`.
+   */
+  wardEffect?: WardEffect;
 }
 
 export interface EffectiveToolPolicy {

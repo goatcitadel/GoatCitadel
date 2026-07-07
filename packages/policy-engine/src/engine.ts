@@ -457,6 +457,7 @@ export class ToolPolicyEngine {
         policyReason: `${evaluation.policyReason}; dry-run`,
         auditEventId,
         result,
+        wardEffect: evaluation.wardEffect,
         internalCall,
         internalResult: buildInternalToolResult({
           toolName: request.toolName,
@@ -1473,6 +1474,7 @@ export class ToolPolicyEngine {
         policyReason,
         auditEventId,
         result,
+        wardEffect: evaluation?.wardEffect,
         internalCall,
         internalResult: buildInternalToolResult({
           toolName: request.toolName,
@@ -1505,6 +1507,7 @@ export class ToolPolicyEngine {
         policyReason,
         auditEventId,
         result,
+        wardEffect: evaluation?.wardEffect,
         internalCall,
         internalResult: buildInternalToolResult({
           toolName: request.toolName,

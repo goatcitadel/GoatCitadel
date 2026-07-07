@@ -507,6 +507,67 @@ describe("ToolPolicyEngine citadel scope", () => {
     expect(evaluation.reasonCodes).toContain("citadel_ward_requires_approval");
   });
 
+  it("surfaces the matched redact Ward effect on the ToolInvokeResult so downstream execution can scrub output", async () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "company"
+            ? [
+                {
+                  wardId: "ward-redact-session",
+                  citadelId: "company",
+                  name: "Redact session output",
+                  actionPattern: "session.*",
+                  effect: "redact",
+                  createdAt: "t",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "bypass" } },
+      storage,
+    );
+
+    // dryRun keeps this off the real executor while still exercising the post-ward
+    // "executed" return path, which is where the surfaced wardEffect must appear.
+    const result = await engine.invoke({
+      toolName: "session.status",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "company",
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("executed");
+    expect(result.wardEffect).toBe("redact");
+  });
+
+  it("leaves wardEffect undefined on the ToolInvokeResult when no Ward matches (regression)", async () => {
+    const storage = createStorageStub();
+    Object.assign(storage, { citadels: { listWards: vi.fn(() => []) } });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "bypass" } },
+      storage,
+    );
+
+    const result = await engine.invoke({
+      toolName: "session.status",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+      citadelId: "company",
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("executed");
+    expect(result.wardEffect).toBeUndefined();
+  });
+
   it("keeps Citadel Ward approval requirements stronger than Code Mode preapproval", () => {
     const storage = createStorageStub();
     Object.assign(storage, {

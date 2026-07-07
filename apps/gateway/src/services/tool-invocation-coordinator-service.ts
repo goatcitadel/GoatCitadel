@@ -15,6 +15,7 @@ import {
   type RealtimeEvent,
   type ToolInvokeRequest,
   type ToolInvokeResult,
+  type WardEffect,
 } from "@goatcitadel/contracts";
 import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import type { HooksService } from "./hooks-service.js";
@@ -532,6 +533,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       });
       throw error;
     }
+    // Citadel Ward "redact" effect: when the resolved policy decision flagged this
+    // invocation for redaction, scrub the tool's output before it flows into the
+    // model context, the approval-replay record, after-hooks, or evidence. This is
+    // the seam where BOTH the produced output (result.result) and the ward decision
+    // (result.wardEffect, surfaced by the policy engine in slice 3.1a) are in scope.
+    // Non-redact invocations are untouched, so behavior is byte-identical to before.
+    result = applyRedactWardEffect(result);
+
     if (overrideHandler && approvedExternalRuntimeReplayId && result.outcome !== "approval_required") {
       this.host.recordApprovedExternalRuntimeToolResult?.({
         approvalId: approvedExternalRuntimeReplayId,
@@ -800,7 +809,18 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return grantUseFailure;
     }
 
-    return this.executeMcpRuntime(input, server, runtimeStartedAt, autonomyGate.evidence);
+    // The runtime policy decision (slice 3.1a) surfaces the matched Citadel Ward
+    // effect; pass it so a `redact` Ward scrubs the MCP output below. Note: the
+    // model-approval-replay entry point (invokeApprovedMcpRuntime) does no policy
+    // evaluation and therefore has no ward decision to honor — that gap is flagged
+    // in the slice report; it still gets the server-policy redactionMode scrub.
+    return this.executeMcpRuntime(
+      input,
+      server,
+      runtimeStartedAt,
+      autonomyGate.evidence,
+      runtimeEvaluation.decision.wardEffect,
+    );
   }
 
   private evaluateMcpAutonomousActivation(
@@ -927,6 +947,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     server: McpServerRecord,
     runtimeStartedAt: number,
     autonomousActivation?: AutonomousActivationRuntimeEvidence,
+    wardEffect?: WardEffect,
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
@@ -980,12 +1001,28 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           ...runtime.output,
         }
       : undefined;
-    const redactedOutput = output ? this.host.applyMcpRedaction(output, server.policy.redactionMode) : undefined;
-    const redactedContentItems = redactMcpContentItems(
+    // Layer the Citadel Ward "redact" effect on top of the server's own
+    // redactionMode: a matched `redact` Ward scrubs known secret patterns from the
+    // MCP output even when the server policy is "off". Same known-secret-pattern
+    // scope caveat as the tool path (see applyRedactWardEffect); not full PII removal.
+    const applyWardRedaction = wardEffect === "redact";
+    const redactedOutput = output
+      ? applyWardRedaction
+        ? (redactSecretsDeep(this.host.applyMcpRedaction(output, server.policy.redactionMode)) as Record<
+            string,
+            unknown
+          >)
+        : this.host.applyMcpRedaction(output, server.policy.redactionMode)
+      : undefined;
+    const policyRedactedContentItems = redactMcpContentItems(
       runtime.contentItems,
       server.policy.redactionMode,
       this.host.applyMcpRedaction,
     );
+    const redactedContentItems =
+      applyWardRedaction && policyRedactedContentItems
+        ? (redactSecretsDeep(policyRedactedContentItems) as McpNormalizedContentItem[])
+        : policyRedactedContentItems;
     const sanitizedRuntimeError = redactMcpRuntimeError(runtime.error, server.policy.redactionMode);
 
     this.host.publishRealtime(
@@ -1165,4 +1202,48 @@ function redactMcpRuntimeError(
     return error;
   }
   return redactSecretText(error).value;
+}
+
+/**
+ * Enforce the Citadel Ward "redact" effect on a completed tool invocation.
+ *
+ * SCOPE (be honest): this scrubs KNOWN SECRET PATTERNS from the tool's output —
+ * API keys, bearer/basic auth headers, `*_token`/`*_secret`/`password` assignments,
+ * provider key shapes (sk-/gh*_/AKIA…/xox…), credential-in-URL, etc. — via the same
+ * `redactSecretText` matcher the rest of the gateway uses. It is NOT full semantic
+ * PII removal (names, addresses, free-text identifiers); that would be a separate
+ * NLP feature. It reduces the blast radius of a Ward-flagged tool feeding secrets
+ * back into the model, but is not a guarantee against every sensitive value.
+ *
+ * Shape is preserved: we walk the output and rewrite string leaf values in place,
+ * never dropping fields or altering non-string values. When the decision carries no
+ * `redact` ward (or there is no output) the result is returned untouched, so a
+ * non-redact invocation is byte-identical to before this effect existed.
+ */
+function applyRedactWardEffect(result: ToolInvokeResult): ToolInvokeResult {
+  if (result.wardEffect !== "redact" || !result.result) {
+    return result;
+  }
+  return {
+    ...result,
+    result: redactSecretsDeep(result.result) as Record<string, unknown>,
+  };
+}
+
+/** Recursively rewrite string leaves through `redactSecretText`, preserving structure. */
+function redactSecretsDeep(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactSecretText(value).value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecretsDeep(item));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = redactSecretsDeep(item);
+    }
+    return out;
+  }
+  return value;
 }
