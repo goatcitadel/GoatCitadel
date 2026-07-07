@@ -149,7 +149,13 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         title="Approvals"
         description="Pending decisions, history, replay, and durable recovery in one operator view."
         loading={approvals.loading && !approvals.error}
-        error={approvals.error}
+        // The queue error deliberately does NOT go through the frame's error prop (which
+        // replaces children, Finding 10): approvals is the one surface where hiding the
+        // body on a fetch error would hide that pending approvals exist at all. The queue
+        // renders with the shell pending-count floor and explicit degraded copy ("Pending
+        // approvals exist, but the queue details could not be loaded."), and the error
+        // shows as an inline banner above it instead.
+        error={null}
         metrics={[
           { label: "Pending", value: String(displayedPendingCount), flash: isCountFlashing },
           { label: "History", value: String(queueCounts.history) },
@@ -169,6 +175,11 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
           ) : null
         }
       >
+        {approvals.error ? (
+          <div data-testid="approvals-queue-error">
+            <NoticeBanner tone="error" message={approvals.error} />
+          </div>
+        ) : null}
         <NativeGrid>
           <NativeCard
             title="Approval queue"

@@ -566,7 +566,10 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(defaultProps());
 
     expect(renderedText(renderer)).toContain("project catalog down");
-    expect(renderedText(renderer)).toContain("No active projects found in this workspace.");
+    // Error and children are mutually exclusive (review Finding 10): a fetch failure must
+    // not also render "No active projects found in this workspace." — that empty-state copy
+    // reads as a legitimate empty workspace and silently contradicts the error above it.
+    expect(renderedText(renderer)).not.toContain("No active projects found in this workspace.");
   });
 
   it("keeps project pins best-effort when localStorage access is blocked", async () => {
