@@ -146,8 +146,9 @@ export class CronJobRepository {
 
   /**
    * List cron jobs visible to a Citadel: jobs scoped to that Citadel plus global
-   * (unscoped) jobs. The Watchtower enforcement point once a real citadel scope
-   * is threaded through scheduling.
+   * (unscoped) jobs.
+   * TODO: Enforce Watchtower access control once a real citadel scope is threaded
+   * through scheduling.
    */
   public listByCitadel(citadelId: string): CronJobRecord[] {
     const rows = this.listByCitadelStmt.all({ citadelId });
