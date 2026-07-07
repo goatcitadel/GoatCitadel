@@ -810,6 +810,12 @@ export async function runAgenticWorkbenchLoopLane(context) {
   });
 }
 
+// Scope caveat (Phase 6 doc-truth): this lane proves the channel-AGNOSTIC durable
+// delivery runtime — idempotency dedup, retry backoff, overdue→stale, delivery-attempt
+// persistence, and the comms HTTP route — via channel-delivery-runtime-service.test.ts,
+// routes/comms.test.ts, and comms-delivery-repo.test.ts. It intentionally does NOT
+// exercise concrete channel adapters (Telegram/Discord/Slack) end-to-end; per-adapter
+// send/inbound/voice behavior is covered by each adapter's own service tests, not here.
 export async function runAgenticChannelsRuntimeLane(context) {
   await runAgenticProofScenario(context, {
     profile: "channels",
