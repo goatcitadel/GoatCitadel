@@ -43,28 +43,3 @@ export function resolveOutboundSurfaceMode(input: {
  * Kept exported for compatibility with callers/tests that import the constant.
  */
 export const CODE_SEND_CONFIDENCE_THRESHOLD = 0.7;
-
-/**
- * Pre-send gate decision for a predicted-code auto-route turn.
- * The classifier is now advisory for the unified chat surface: a code-leaning
- * first turn still sends from the same composer, and Gateway/runtime policy
- * decides whether any governed capability action or project binding is needed.
- */
-export type CodeSendGate = { reason: "unbound" | "low_confidence" } | null;
-
-/**
- * Decide whether a send should be gated before a predicted-code auto-route turn.
- *
- * Fail-open by design: first-turn classification should inform routing and
- * visible previews, but it should not ask the operator to switch modes before
- * the message can be handled.
- */
-export function resolveCodeSendGate(_input: {
-  autoRouteActive: boolean;
-  predictedMode: ChatMode | undefined;
-  predictedConfidence: number | undefined;
-  hasBoundProject: boolean;
-  threshold?: number;
-}): CodeSendGate {
-  return null;
-}

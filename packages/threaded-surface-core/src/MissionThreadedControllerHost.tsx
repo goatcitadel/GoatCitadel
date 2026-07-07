@@ -102,7 +102,7 @@ import {
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
 } from "./chat/chat-page-pure-helpers";
-import { resolveCodeSendGate, resolveOutboundSurfaceMode, type CodeSendGate } from "./pure-helpers";
+import { resolveOutboundSurfaceMode } from "./pure-helpers";
 import { useChatApprovalController } from "./chat/useChatApprovalController";
 import { useChatContextActions } from "./chat/useChatContextActions";
 import { useChatComposerInteractions } from "./chat/useChatComposerInteractions";
@@ -3226,45 +3226,6 @@ export function MissionThreadedControllerHost({
     hasBoundProject: !codeModeNeedsProjectBinding,
   });
 
-  // Pre-send gate for predicted-code auto-route turns (umbrella spec D4/D5).
-  // The bound-project signal is the thread's actual project binding
-  // (selectedSession.projectId) — NOT selectedProjectId, which is the rail
-  // filter (defaults to "all" and is always truthy). This mirrors how
-  // useMissionControlSurfaceState derives codeModeNeedsProjectBinding.
-  const [pendingCodeGate, setPendingCodeGate] = useState<CodeSendGate>(null);
-  const forcedSendModeRef = useRef<ChatMode | null>(null);
-
-  const guardedSend = useCallback(() => {
-    const gate = resolveCodeSendGate({
-      autoRouteActive,
-      predictedMode: surfacePreview?.mode,
-      predictedConfidence: surfacePreview?.confidence,
-      hasBoundProject: Boolean(selectedSession?.projectId),
-    });
-    if (gate) {
-      setPendingCodeGate(gate);
-      return;
-    }
-    void handleSendWithKnowledge();
-  }, [autoRouteActive, surfacePreview, selectedSession, handleSendWithKnowledge]);
-
-  // Deferred forced send: set the override, wait for it to apply on the next
-  // render, THEN send. Sending synchronously after setModeOverride would read
-  // the stale override (outboundSurfaceMode is derived from modeOverride at
-  // render time), so the turn would route with the pre-override mode.
-  useEffect(() => {
-    if (forcedSendModeRef.current !== null && modeOverride === forcedSendModeRef.current) {
-      forcedSendModeRef.current = null;
-      void handleSendWithKnowledge();
-    }
-  }, [modeOverride, handleSendWithKnowledge]);
-
-  const resolveCodeGateWith = useCallback((mode: ChatMode) => {
-    setPendingCodeGate(null);
-    forcedSendModeRef.current = mode;
-    setModeOverride(mode); // re-render → the effect above fires the send with the override applied
-  }, []);
-
   const activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null = selectedSession
     ? {
         mode: messageMode,
@@ -3462,10 +3423,7 @@ export function MissionThreadedControllerHost({
         activeGeneratedArtifact,
         onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
         onStopActiveTurn: () => void handleStopActiveTurn(),
-        onSend: guardedSend,
-        pendingCodeGate,
-        onConfirmCodeTurn: () => resolveCodeGateWith("code"),
-        onSendAsChatInstead: () => resolveCodeGateWith("chat"),
+        onSend: () => void handleSendWithKnowledge(),
         coworkStopRunControl: resolveCoworkComposerStopControl({
           mode: messageMode,
           delegationRunStatus: visibleDelegationRun?.status,

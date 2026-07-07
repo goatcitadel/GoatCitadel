@@ -3261,13 +3261,6 @@ describe("MissionThreadedControllerHost", () => {
       });
     }
 
-    function lastOutboundSurfaceMode(): string | undefined {
-      const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
-        sessionConfig: { surfaceMode?: string };
-      };
-      return lastInput.sessionConfig.surfaceMode;
-    }
-
     it("sends an unbound predicted-code first turn without asking for a mode switch", async () => {
       setupEmptyThread({ hasBoundProject: false });
       mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
@@ -3279,7 +3272,6 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
       expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3293,7 +3285,6 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
       expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3307,7 +3298,6 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
       expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
 
@@ -3321,19 +3311,7 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
       expect(handleSendMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("keeps legacy forced send callbacks available without changing normal auto-route behavior", async () => {
-      setupEmptyThread({ hasBoundProject: true });
-      mockSurfacePreview = { mode: "code", confidence: 0.5, source: "classifier" };
-      await renderHost();
-
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.onConfirmCodeTurn).toBeTypeOf("function");
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendAsChatInstead).toBeTypeOf("function");
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.pendingCodeGate).toBeNull();
-      expect(lastOutboundSurfaceMode()).toBeUndefined();
     });
   });
 });
