@@ -320,7 +320,10 @@ describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {
   });
 });
 
-describe("gateway request diagnostics", () => {
+// 120s for every test here: each boots the full Fastify app (import-heavy);
+// under a loaded machine (verify lanes building concurrently) the global 15s
+// testTimeout is routinely exceeded. Generous by design — real hangs still fail.
+describe("gateway request diagnostics", { timeout: 120_000 }, () => {
   const envKeys = [
     "GATEWAY_HOST",
     "GOATCITADEL_ALLOWED_ORIGINS",
@@ -360,57 +363,50 @@ describe("gateway request diagnostics", () => {
     }
   });
 
-  // 120s: boots the full Fastify app; under a loaded machine (verify lanes
-  // building concurrently) the global 15s testTimeout is routinely exceeded.
-  it(
-    "records request finish diagnostics with duration and correlation evidence",
-    { timeout: 120_000 },
-    async () => {
-      configureDiagnosticsGateway(tempRoots);
-      const app = await buildApp();
-      try {
-        const correlationId = "diag-corr-1";
-        const health = await app.inject({
-          method: "GET",
-          url: "/health",
-          headers: {
-            "x-goatcitadel-correlation-id": correlationId,
-          },
-        });
-        expect(health.statusCode).toBe(200);
+  it("records request finish diagnostics with duration and correlation evidence", async () => {
+    configureDiagnosticsGateway(tempRoots);
+    const app = await buildApp();
+    try {
+      const correlationId = "diag-corr-1";
+      const health = await app.inject({
+        method: "GET",
+        url: "/health",
+        headers: {
+          "x-goatcitadel-correlation-id": correlationId,
+        },
+      });
+      expect(health.statusCode).toBe(200);
 
-        const diagnostics = await app.inject({
-          method: "GET",
-          url: "/api/v1/dev/diagnostics?category=api&limit=20",
-        });
-        expect(diagnostics.statusCode).toBe(200);
-        const body = diagnostics.json() as {
-          items: Array<{
-            event: string;
-            route?: string;
-            correlationId?: string;
-            durationMs?: number;
-            context?: Record<string, unknown>;
-          }>;
-        };
-        const finish = body.items.find(
-          (item) => item.event === "request.finish" && item.route === "/health" && item.correlationId === correlationId,
-        );
+      const diagnostics = await app.inject({
+        method: "GET",
+        url: "/api/v1/dev/diagnostics?category=api&limit=20",
+      });
+      expect(diagnostics.statusCode).toBe(200);
+      const body = diagnostics.json() as {
+        items: Array<{
+          event: string;
+          route?: string;
+          correlationId?: string;
+          durationMs?: number;
+          context?: Record<string, unknown>;
+        }>;
+      };
+      const finish = body.items.find(
+        (item) => item.event === "request.finish" && item.route === "/health" && item.correlationId === correlationId,
+      );
 
-        expect(finish).toBeDefined();
-        expect(finish?.durationMs).toEqual(expect.any(Number));
-        expect(finish?.durationMs).toBeGreaterThanOrEqual(0);
-        expect(finish?.context).toMatchObject({
-          method: "GET",
-          statusCode: 200,
-          durationMs: finish?.durationMs,
-        });
-      } finally {
-        await app.close();
-      }
-    },
-    45_000,
-  );
+      expect(finish).toBeDefined();
+      expect(finish?.durationMs).toEqual(expect.any(Number));
+      expect(finish?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(finish?.context).toMatchObject({
+        method: "GET",
+        statusCode: 200,
+        durationMs: finish?.durationMs,
+      });
+    } finally {
+      await app.close();
+    }
+  }, 45_000);
 
   it("strips query strings from recorded request diagnostics", async () => {
     configureDiagnosticsGateway(tempRoots);
