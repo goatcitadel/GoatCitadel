@@ -6,6 +6,7 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import { McpServerStore } from "./mcp-server-store.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
@@ -138,13 +139,15 @@ describe("GatewayService loop44 facade behavior", () => {
     settings.set("mcp_tool_first_approval_v1", {
       "server-2": ["alpha.read"],
     });
+    const systemSettings = {
+      get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),
+      set: vi.fn((key: string, value: unknown) => settings.set(key, value)),
+    };
     const gateway = createGatewayHarness({
-      storage: {
-        systemSettings: {
-          get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),
-          set: vi.fn((key: string, value: unknown) => settings.set(key, value)),
-        },
-      },
+      storage: { systemSettings },
+      // Real store over the map-backed settings (B5a): the normalization
+      // behavior assertions below execute the moved code unchanged.
+      mcpServerStore: new McpServerStore({ systemSettings }),
     });
 
     expect(GatewayService.prototype.listMcpServers.call(gateway)).toEqual(
