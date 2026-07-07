@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { createDefaultToolRegistry, listReadOnlyBuiltinToolNames } from "./tool-registry.js";
 
 describe("tool registry", () => {
+  it("gates outbound channel tools behind approval (review Finding 2)", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    for (const name of ["channel.send", "channel.react", "channel.unsend"]) {
+      const tool = catalog.find((item) => item.toolName === name);
+      expect(tool, `${name} should be registered`).toBeDefined();
+      expect(tool?.requiresApproval, `${name} must require approval by default`).toBe(true);
+    }
+  });
+
   it("registers agent.fanout as a governed, non-read-only spawn tool (R3-8)", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "agent.fanout");

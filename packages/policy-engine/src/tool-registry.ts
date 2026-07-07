@@ -1178,7 +1178,10 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     name: "channel.send",
     category: "comms",
     riskLevel: "caution",
-    requiresApproval: false,
+    // Review Finding 2 (governance): outbound channel sends are external side
+    // effects and must stay human-in-the-loop by default. An operator can grant
+    // channel.send to a specific agent/workspace to opt out of per-send approval.
+    requiresApproval: true,
     description: "Send channel message via configured integration connection.",
     pack: "comms",
   },
@@ -1186,7 +1189,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     name: "channel.react",
     category: "comms",
     riskLevel: "caution",
-    requiresApproval: false,
+    requiresApproval: true,
     description: "Send a reaction via a configured integration connection when the provider supports it.",
     pack: "comms",
   },
@@ -1194,7 +1197,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     name: "channel.unsend",
     category: "comms",
     riskLevel: "caution",
-    requiresApproval: false,
+    requiresApproval: true,
     description:
       "Unsend a previously sent message via a configured integration connection when the provider supports it.",
     pack: "comms",
