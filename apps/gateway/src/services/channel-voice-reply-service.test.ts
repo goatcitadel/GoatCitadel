@@ -36,8 +36,8 @@ describe("shouldSynthesizeVoiceReply", () => {
   it("covers the mode matrix", () => {
     expect(shouldSynthesizeVoiceReply({ mode: "off" })).toBe(false);
     expect(shouldSynthesizeVoiceReply({ mode: "always" })).toBe(true);
-    // voice_on_voice: treated as always until PR #175 threads the inbound marker,
-    // except when the caller explicitly reports a non-voice inbound message.
+    // voice_on_voice: synthesizes only for a voice inbound; an unreported marker
+    // (undefined) still defaults to synthesize for callers that omit modality.
     expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice" })).toBe(true);
     expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice", wasVoiceInbound: true })).toBe(true);
     expect(shouldSynthesizeVoiceReply({ mode: "voice_on_voice", wasVoiceInbound: false })).toBe(false);
@@ -77,6 +77,35 @@ describe("buildChannelVoiceReplyAttachment", () => {
       mimeType: "audio/ogg",
       dataBase64: Buffer.from("OggSvoice").toString("base64"),
     });
+  });
+
+  it("honors voice_on_voice: no audio for a text inbound, audio for a voice inbound (3.6)", async () => {
+    const textInbound = createDeps();
+    expect(
+      await buildChannelVoiceReplyAttachment(
+        {
+          text: "hello",
+          channelKey: "telegram",
+          connectionConfig: { voiceReplyMode: "voice_on_voice" },
+          wasVoiceInbound: false,
+        },
+        textInbound.deps,
+      ),
+    ).toBeUndefined();
+    expect(textInbound.synthesizeSpeech).not.toHaveBeenCalled();
+
+    const voiceInbound = createDeps();
+    const attachment = await buildChannelVoiceReplyAttachment(
+      {
+        text: "hello",
+        channelKey: "telegram",
+        connectionConfig: { voiceReplyMode: "voice_on_voice" },
+        wasVoiceInbound: true,
+      },
+      voiceInbound.deps,
+    );
+    expect(voiceInbound.synthesizeSpeech).toHaveBeenCalledWith({ text: "hello" });
+    expect(attachment).toMatchObject({ mimeType: "audio/ogg" });
   });
 
   it("skips unsupported channels without synthesizing and records a diagnostic", async () => {

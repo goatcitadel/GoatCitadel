@@ -620,6 +620,7 @@ import {
   type CommsHost,
 } from "./comms-service.js";
 import { buildChannelVoiceReplyAttachment } from "./channel-voice-reply-service.js";
+import { VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
 import {
   MCP_APPROVAL_INBOX_URL,
@@ -2568,9 +2569,14 @@ export class GatewayService {
         // service), then send text+audio together on the existing attachment
         // lane. The helper never throws, so a synthesis failure or timeout
         // degrades to the unchanged text-only send.
+        // 3.6: an inbound voice message is framed with VOICE_TRANSCRIPT_CONTENT_PREFIX,
+        // so the reply path can honor the connection's voice_on_voice mode instead of
+        // treating it as "always".
+        const wasVoiceInbound = userMessage.content.startsWith(VOICE_TRANSCRIPT_CONTENT_PREFIX);
         const voiceReplyAttachment = await this.maybeBuildChannelVoiceReplyAttachment(
           binding.connectionId,
           assistantContent,
+          wasVoiceInbound,
         );
         this.requireExecutedToolResult(
           "channel.send",
@@ -2602,6 +2608,7 @@ export class GatewayService {
   private async maybeBuildChannelVoiceReplyAttachment(
     connectionId: string,
     text: string,
+    wasVoiceInbound: boolean,
   ): Promise<ChannelAttachmentInput | undefined> {
     try {
       if (!this.isFeatureEnabled("channelVoiceReplyV1Enabled")) {
@@ -2614,6 +2621,9 @@ export class GatewayService {
           channelKey: connection.key,
           connectionConfig: (connection.config ?? {}) as Record<string, unknown>,
           connectionId,
+          // 3.6: honor voice_on_voice — synthesize a voice reply only when the
+          // inbound message that triggered this turn was itself voice.
+          wasVoiceInbound,
         },
         {
           isChannelVoiceReplyEnabled: () => this.isFeatureEnabled("channelVoiceReplyV1Enabled"),

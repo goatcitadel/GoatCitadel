@@ -89,14 +89,12 @@ export function shouldSynthesizeVoiceReply(input: { mode: ChannelVoiceReplyMode;
   if (input.mode === "always") {
     return true;
   }
-  // mode === "voice_on_voice":
-  // TODO(PR #175): once inbound voice transcription lands and threads a
-  // voice-inbound marker (the `[voice transcript — untrusted, auto-transcribed]`
-  // content framing or an explicit `wasVoiceInbound` boolean) through the reply
-  // path, an undefined marker here should mean "not a voice message" and skip.
-  // Until then the marker is never populated, so "voice_on_voice" is accepted
-  // but treated as "always" unless the caller explicitly reports a non-voice
-  // inbound message.
+  // mode === "voice_on_voice": synthesize only when the inbound message that
+  // triggered this reply was itself voice. The reply path (gateway-service
+  // `maybeBuildChannelVoiceReplyAttachment`) now threads `wasVoiceInbound`, derived
+  // from the `[voice transcript — untrusted, auto-transcribed]` content framing.
+  // An `undefined` marker (a caller that does not report inbound modality) still
+  // defaults to synthesize, preserving behavior for any path that omits it.
   return input.wasVoiceInbound !== false;
 }
 
