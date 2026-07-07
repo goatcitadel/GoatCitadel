@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Save, Trash2, Undo2, Workflow } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  LayoutDashboard,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  Undo2,
+  Workflow,
+} from "lucide-react";
 import {
   addTaskDeliverable,
   createTask,
@@ -519,6 +529,13 @@ export function CoworkNativePage({
             >
               <CheckCircle2 className="h-4 w-4" />
               Approval queue
+            </NativeButton>
+            <NativeButton
+              variant="secondary"
+              onClick={() => navigate({ area: "ops", section: "kanban", theme: route.theme })}
+            >
+              <LayoutDashboard className="h-4 w-4" />
+              Run kanban
             </NativeButton>
           </LibraryButtonRow>
         </NativeCard>
