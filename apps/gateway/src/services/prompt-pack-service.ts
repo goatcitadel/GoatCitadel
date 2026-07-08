@@ -4276,13 +4276,17 @@ export function renderPromptPackMarkdownReport(
 
   // Determinism tripwire index (one pass): byte-identical long responses
   // across different runs of the same test indicate non-model content.
+  // Key separator is the \u0000 ESCAPE on purpose: a raw NUL byte in source
+  // flips text tooling (ripgrep) into binary mode for the whole file; both the
+  // population and lookup sites must build keys through this helper.
+  const longResponseOccurrenceKey = (testId: string, responseText: string): string => `${testId}\u0000${responseText}`;
   const longResponseOccurrences = new Map<string, number>();
   for (const candidate of report.runs) {
     const text = candidate.responseText?.trim() ?? "";
     if (text.length <= 200) {
       continue;
     }
-    const key = `${candidate.testId}\u0000${text}`;
+    const key = longResponseOccurrenceKey(candidate.testId, text);
     longResponseOccurrences.set(key, (longResponseOccurrences.get(key) ?? 0) + 1);
   }
 
@@ -4443,7 +4447,8 @@ export function renderPromptPackMarkdownReport(
       // (Advisory: deterministic providers at temperature 0 can also trigger it.)
       const latestResponseText = run.responseText?.trim() ?? "";
       if (latestResponseText.length > 200) {
-        const occurrenceCount = longResponseOccurrences.get(`${test.testId} ${latestResponseText}`) ?? 0;
+        const occurrenceCount =
+          longResponseOccurrences.get(longResponseOccurrenceKey(test.testId, latestResponseText)) ?? 0;
         if (occurrenceCount > 1) {
           lines.push(
             `- Determinism alarm: response text is byte-identical to ${occurrenceCount - 1} other run(s) of this test (suspected non-model content).`,

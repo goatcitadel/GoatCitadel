@@ -2300,7 +2300,7 @@ interface BucketState {
 
 function canonicalKey(key: BotLoopGuardKey): string {
   const [a, b] = [key.participantA, key.participantB].sort();
-  return `${key.scope} ${key.conversation} ${a} ${b}`;
+  return `${key.scope}\u0000${key.conversation}\u0000${a}\u0000${b}`;
 }
 
 export class ChannelBotLoopGuard {
