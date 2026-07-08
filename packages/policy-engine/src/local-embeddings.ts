@@ -1,4 +1,5 @@
 import type { MemoryEmbeddingProfile, MemoryEmbeddingProfileRequest } from "@goatcitadel/contracts";
+import { readBoundedResponseJson } from "./sandbox/network-guard.js";
 
 /**
  * Embedding providers supported behind the single `generateEmbedding` seam.
@@ -54,6 +55,10 @@ const REMOTE_DEFAULT_MODEL_ID = "text-embedding-3-small";
 const DEFAULT_EMBEDDINGS_TIMEOUT_MS = 10_000;
 const MIN_EMBEDDINGS_TIMEOUT_MS = 250;
 const MAX_EMBEDDINGS_TIMEOUT_MS = 120_000;
+
+// A single-input embedding response is one vector (even 8192 dims ≈ ~200 KB of
+// JSON floats). 2 MiB matches DEFAULT_FETCH_MAX_RESPONSE_BYTES with >10x headroom.
+const MAX_EMBEDDINGS_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Generate an embedding for `text` using the configured provider, stamping the
@@ -281,7 +286,10 @@ async function fetchEmbeddingJson(
     if (!response.ok) {
       throw new Error(`embedding-http-${response.status}`);
     }
-    return (await response.json()) as unknown;
+    return await readBoundedResponseJson(response, {
+      maxBytes: MAX_EMBEDDINGS_RESPONSE_BYTES,
+      timeoutMs: config.timeoutMs,
+    });
   } finally {
     clearTimeout(timer);
   }
