@@ -2,9 +2,10 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuditLog, createDatabase, Storage, TranscriptLog, type DatabaseClient } from "@goatcitadel/storage";
+import { AuditLog, Storage, TranscriptLog } from "@goatcitadel/storage";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
 import type { ServiceContext } from "./service-context.js";
+import { createPostgresDialectStrictDb } from "./testing/postgres-dialect-strict-db.js";
 
 interface Harness {
   rootDir: string;
@@ -21,51 +22,6 @@ afterEach(() => {
     fsSync.rmSync(harness.rootDir, { recursive: true, force: true });
   }
 });
-
-/**
- * Wraps a fully migrated sqlite client in a postgres-dialect facade whose
- * `exec` rejects transaction-control and PRAGMA statements the way the real
- * Postgres driver does (`BEGIN IMMEDIATE` fails with `syntax error at or near
- * "IMMEDIATE"`; raw BEGIN/COMMIT on the pooled sync client would bypass its
- * transaction bookkeeping). Data statements still execute against sqlite, so
- * the full service path runs; only dialect-unsafe raw exec calls blow up.
- */
-function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
-  const inner = createDatabase({ dbPath: path.join(rootDir, "backing.sqlite") });
-  return {
-    dialect: "postgres",
-    // Lazy prepare: some repositories eagerly prepare postgres-flavored SQL in
-    // their constructors (e.g. tsquery message search); the sqlite backing can
-    // only host those statements if they are never executed, and the replay
-    // path never runs them.
-    prepare: (sql) => {
-      let stmt: ReturnType<DatabaseClient["prepare"]> | undefined;
-      const resolve = () => (stmt ??= inner.prepare(sql));
-      return {
-        run: (...params: unknown[]) => resolve().run(...params),
-        get: (...params: unknown[]) => resolve().get(...params),
-        all: (...params: unknown[]) => resolve().all(...params),
-      };
-    },
-    exec: (sql) => {
-      const leadingKeyword =
-        sql
-          .trim()
-          .split(/[\s;(]+/, 1)[0]
-          ?.toUpperCase() ?? "";
-      if (["BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "PRAGMA", "END"].includes(leadingKeyword)) {
-        throw new Error(
-          `syntax error at or near "${sql.trim().split(/\s+/)[1] ?? leadingKeyword}" — ` +
-            `sqlite-dialect exec reached the postgres driver; use the driver-aware transaction helper ` +
-            `(runImmediateTransaction / db.transaction) instead of raw "${sql.trim().slice(0, 40)}"`,
-        );
-      }
-      inner.exec(sql);
-    },
-    close: () => inner.close(),
-    transaction: (mode, callback) => inner.transaction(mode, callback),
-  };
-}
 
 function createHarness(): Harness {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-pg-dialect-"));

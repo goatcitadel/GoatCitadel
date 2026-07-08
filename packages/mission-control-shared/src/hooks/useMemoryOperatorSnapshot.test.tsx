@@ -5,6 +5,7 @@ import { useMemoryOperatorSnapshot } from "./useMemoryOperatorSnapshot";
 const apiMocks = vi.hoisted(() => ({
   acceptMemoryMaintenanceRecommendation: vi.fn(),
   addMemoryDecisionRetrospective: vi.fn(),
+  batchMutateMemoryItems: vi.fn(),
   fetchDurableRun: vi.fn(),
   fetchDurableRunTimeline: vi.fn(),
   fetchMemoryDecisions: vi.fn(),
@@ -35,6 +36,7 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("../api/client", () => ({
   acceptMemoryMaintenanceRecommendation: apiMocks.acceptMemoryMaintenanceRecommendation,
   addMemoryDecisionRetrospective: apiMocks.addMemoryDecisionRetrospective,
+  batchMutateMemoryItems: apiMocks.batchMutateMemoryItems,
   fetchDurableRun: apiMocks.fetchDurableRun,
   fetchDurableRunTimeline: apiMocks.fetchDurableRunTimeline,
   fetchMemoryDecisions: apiMocks.fetchMemoryDecisions,
@@ -585,6 +587,307 @@ describe("useMemoryOperatorSnapshot", () => {
       expect.objectContaining({ minHoursSinceLastSuccess: 48, minChangedSessions: 2 }),
     );
     expect(latest?.notice).toEqual({ tone: "success", message: "Memory maintenance policy saved." });
+  });
+
+  it("submits an atomic batch forget and applies returned items", async () => {
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce({
+      items: [
+        {
+          itemId: "mem-1",
+          namespace: "workspace.alpha",
+          title: "Deployment note",
+          content: "Ship after verification.",
+          pinned: false,
+          status: "active",
+          lifecycleState: "active",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+        {
+          itemId: "mem-2",
+          namespace: "workspace.alpha",
+          title: "Rollback plan",
+          content: "Roll back if errors spike.",
+          pinned: false,
+          status: "active",
+          lifecycleState: "active",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+    apiMocks.batchMutateMemoryItems.mockResolvedValueOnce({
+      actionId: "action-1",
+      status: "applied",
+      appliedCount: 2,
+      targetItemIds: ["mem-1", "mem-2"],
+      results: [
+        {
+          operationIndex: 0,
+          kind: "forget_item",
+          itemId: "mem-1",
+          status: "applied",
+          item: {
+            itemId: "mem-1",
+            namespace: "workspace.alpha",
+            title: "Deployment note",
+            content: "Ship after verification.",
+            pinned: false,
+            status: "forgotten",
+            lifecycleState: "forgotten",
+            updatedAt: "2026-04-22T00:05:00.000Z",
+            forgottenAt: "2026-04-22T00:05:00.000Z",
+          },
+        },
+        {
+          operationIndex: 1,
+          kind: "forget_item",
+          itemId: "mem-2",
+          status: "applied",
+          item: {
+            itemId: "mem-2",
+            namespace: "workspace.alpha",
+            title: "Rollback plan",
+            content: "Roll back if errors spike.",
+            pinned: false,
+            status: "forgotten",
+            lifecycleState: "forgotten",
+            updatedAt: "2026-04-22T00:05:00.000Z",
+            forgottenAt: "2026-04-22T00:05:00.000Z",
+          },
+        },
+      ],
+      ledger: {
+        actionId: "action-1",
+        ownerId: "operator",
+        source: "mission-control:library",
+        timestamp: "2026-04-22T00:05:00.000Z",
+        status: "applied",
+        targetItemIds: ["mem-1", "mem-2"],
+        operationKind: "forget_item",
+        operationCount: 2,
+        reversal: { feasible: true, note: "Items can be restored from lifecycle history." },
+        reapply: { feasible: true, note: "Forget can be reapplied." },
+        evidence: { storesRawContent: false, redactionNote: "No raw content stored in ledger." },
+      },
+    });
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    let response: Awaited<ReturnType<HookValue["batchForgetItems"]>> | undefined;
+    await act(async () => {
+      response = await latest?.batchForgetItems(["mem-1", "mem-2"]);
+    });
+    await flush();
+
+    expect(apiMocks.batchMutateMemoryItems).toHaveBeenCalledTimes(1);
+    expect(apiMocks.batchMutateMemoryItems).toHaveBeenCalledWith({
+      source: "mission-control:library",
+      operations: [
+        { kind: "forget_item", itemId: "mem-1" },
+        { kind: "forget_item", itemId: "mem-2" },
+      ],
+    });
+    expect(response?.appliedCount).toBe(2);
+    expect(latest?.data?.memoryItems.find((item) => item.itemId === "mem-1")?.lifecycleState).toBe("forgotten");
+    expect(latest?.data?.memoryItems.find((item) => item.itemId === "mem-2")?.lifecycleState).toBe("forgotten");
+    expect(latest?.notice).toEqual({ tone: "success", message: "Forgot 2 memory item(s)." });
+  });
+
+  it("reports rollback truthfully when the batch fails", async () => {
+    apiMocks.batchMutateMemoryItems.mockRejectedValueOnce(new Error("network blip"));
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    const beforeItems = latest?.data?.memoryItems;
+
+    let response: Awaited<ReturnType<HookValue["batchForgetItems"]>> | undefined;
+    await act(async () => {
+      response = await latest?.batchForgetItems(["mem-1"]);
+    });
+    await flush();
+
+    expect(response).toBeUndefined();
+    expect(latest?.notice).toEqual({
+      tone: "error",
+      message: "Batch failed — no changes were applied. network blip",
+    });
+    expect(latest?.data?.memoryItems).toEqual(beforeItems);
+  });
+
+  it("surfaces the transactional-storage conflict message", async () => {
+    const conflictMessage = "Batch mutation conflicts with a concurrent write on mem-1; no changes were committed.";
+    apiMocks.batchMutateMemoryItems.mockRejectedValueOnce(new Error(conflictMessage));
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    await act(async () => {
+      await latest?.batchForgetItems(["mem-1"]);
+    });
+    await flush();
+
+    expect(latest?.notice).toEqual({
+      tone: "error",
+      message: `Batch failed — no changes were applied. ${conflictMessage}`,
+    });
+  });
+
+  it("locks batch mutations when memory admin is not enabled", async () => {
+    apiMocks.fetchSettings.mockResolvedValue({
+      features: {
+        memoryLifecycleAdminV1Enabled: false,
+        memoryLifecycleAutoForgetEnabled: false,
+        memoryMaintenanceV1Enabled: false,
+        durableKernelV1Enabled: false,
+      },
+    });
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    await act(async () => {
+      await latest?.batchForgetItems(["mem-1"]);
+    });
+    expect(apiMocks.batchMutateMemoryItems).not.toHaveBeenCalled();
+    expect(latest?.notice).toEqual({
+      tone: "warning",
+      message: "Memory admin settings are not confirmed, so item changes are locked.",
+    });
+
+    await act(async () => {
+      await latest?.batchSetItemsPinned(["mem-1"], true);
+    });
+    expect(apiMocks.batchMutateMemoryItems).not.toHaveBeenCalled();
+    expect(latest?.notice).toEqual({
+      tone: "warning",
+      message: "Memory admin settings are not confirmed, so item changes are locked.",
+    });
+  });
+
+  it("refuses batches over 100 operations client-side", async () => {
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    const itemIds = Array.from({ length: 101 }, (_, index) => `mem-${index}`);
+
+    let response: Awaited<ReturnType<HookValue["batchForgetItems"]>> | undefined;
+    await act(async () => {
+      response = await latest?.batchForgetItems(itemIds);
+    });
+
+    expect(response).toBeUndefined();
+    expect(apiMocks.batchMutateMemoryItems).not.toHaveBeenCalled();
+    expect(latest?.notice).toEqual({
+      tone: "error",
+      message: "Batch actions are limited to 100 items at a time.",
+    });
+  });
+
+  it("submits patch_item pin operations", async () => {
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce({
+      items: [
+        {
+          itemId: "mem-1",
+          namespace: "workspace.alpha",
+          title: "Deployment note",
+          content: "Ship after verification.",
+          pinned: false,
+          status: "active",
+          lifecycleState: "active",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+        {
+          itemId: "mem-2",
+          namespace: "workspace.alpha",
+          title: "Rollback plan",
+          content: "Roll back if errors spike.",
+          pinned: false,
+          status: "active",
+          lifecycleState: "active",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+    apiMocks.batchMutateMemoryItems.mockResolvedValueOnce({
+      actionId: "action-2",
+      status: "applied",
+      appliedCount: 2,
+      targetItemIds: ["mem-1", "mem-2"],
+      results: [
+        {
+          operationIndex: 0,
+          kind: "patch_item",
+          itemId: "mem-1",
+          status: "applied",
+          item: {
+            itemId: "mem-1",
+            namespace: "workspace.alpha",
+            title: "Deployment note",
+            content: "Ship after verification.",
+            pinned: true,
+            status: "active",
+            lifecycleState: "active",
+            updatedAt: "2026-04-22T00:05:00.000Z",
+          },
+        },
+        {
+          operationIndex: 1,
+          kind: "patch_item",
+          itemId: "mem-2",
+          status: "applied",
+          item: {
+            itemId: "mem-2",
+            namespace: "workspace.alpha",
+            title: "Rollback plan",
+            content: "Roll back if errors spike.",
+            pinned: true,
+            status: "active",
+            lifecycleState: "active",
+            updatedAt: "2026-04-22T00:05:00.000Z",
+          },
+        },
+      ],
+      ledger: {
+        actionId: "action-2",
+        ownerId: "operator",
+        source: "mission-control:library",
+        timestamp: "2026-04-22T00:05:00.000Z",
+        status: "applied",
+        targetItemIds: ["mem-1", "mem-2"],
+        operationKind: "patch_item",
+        operationCount: 2,
+        reversal: { feasible: true, note: "Pin state can be reverted." },
+        reapply: { feasible: true, note: "Pin can be reapplied." },
+        evidence: { storesRawContent: false, redactionNote: "No raw content stored in ledger." },
+      },
+    });
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    let response: Awaited<ReturnType<HookValue["batchSetItemsPinned"]>> | undefined;
+    await act(async () => {
+      response = await latest?.batchSetItemsPinned(["mem-1", "mem-2"], true);
+    });
+    await flush();
+
+    expect(apiMocks.batchMutateMemoryItems).toHaveBeenCalledWith({
+      source: "mission-control:library",
+      operations: [
+        { kind: "patch_item", itemId: "mem-1", patch: { pinned: true } },
+        { kind: "patch_item", itemId: "mem-2", patch: { pinned: true } },
+      ],
+    });
+    expect(response?.appliedCount).toBe(2);
+    expect(latest?.data?.memoryItems.every((item) => item.pinned)).toBe(true);
+    expect(latest?.notice).toEqual({ tone: "success", message: "Pinned 2 memory item(s)." });
   });
 
   it("records decision retrospectives through the memory lifecycle API", async () => {

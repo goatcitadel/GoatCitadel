@@ -677,6 +677,7 @@ export type {
 export {
   acceptMemoryMaintenanceRecommendation,
   addMemoryDecisionRetrospective,
+  batchMutateMemoryItems,
   composeMemoryContext,
   createMemoryDecision,
   createMemoryEntity,

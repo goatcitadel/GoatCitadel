@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   acceptMemoryMaintenanceRecommendation,
   addMemoryDecisionRetrospective,
+  batchMutateMemoryItems,
   fetchDurableRun,
   fetchDurableRunTimeline,
   fetchMemoryDecisions,
@@ -28,6 +29,7 @@ import {
   runMemoryMaintenanceNow,
   runMemoryQualityScan,
 } from "../api/client";
+import { MEMORY_BATCH_MAX_OPERATIONS } from "@goatcitadel/contracts";
 import {
   buildMemoryMaintenancePolicyPatch,
   type MemoryMaintenancePolicyDraft,
@@ -40,6 +42,9 @@ type Notice = {
 };
 
 type MemoryAdminState = "enabled" | "disabled" | "unknown";
+
+type MemoryBatchMutationOperations = Parameters<typeof batchMutateMemoryItems>[0]["operations"];
+type MemoryBatchMutationResponse = Awaited<ReturnType<typeof batchMutateMemoryItems>>;
 
 type MemoryOperatorSectionErrors = {
   settings: string | null;
@@ -480,6 +485,81 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     }
   }, [data?.memoryAdminState, selectedItem]);
 
+  // Shared workhorse for atomic multi-item mutations (forget / pin). Mirrors saveItemPatch's
+  // admin-gate + busyKey + notice conventions, but never chunks oversized batches -- the
+  // >100 guard mirrors the server's 1..100 schema so an oversized batch fails fast client-side
+  // instead of silently splitting into multiple non-atomic requests.
+  const runBatchMutation = useCallback(
+    async (
+      busyKey: string,
+      operations: MemoryBatchMutationOperations,
+      successMessage: (appliedCount: number) => string,
+    ): Promise<MemoryBatchMutationResponse | undefined> => {
+      if (data?.memoryAdminState !== "enabled") {
+        setNotice({
+          tone: "warning",
+          message: "Memory admin settings are not confirmed, so item changes are locked.",
+        });
+        return undefined;
+      }
+      if (operations.length === 0) {
+        return undefined;
+      }
+      if (operations.length > MEMORY_BATCH_MAX_OPERATIONS) {
+        setNotice({
+          tone: "error",
+          message: `Batch actions are limited to ${MEMORY_BATCH_MAX_OPERATIONS} items at a time.`,
+        });
+        return undefined;
+      }
+      setBusyKey(busyKey);
+      setNotice(null);
+      try {
+        const response = await batchMutateMemoryItems({ source: "mission-control:library", operations });
+        const updatedById = new Map(response.results.map((result) => [result.itemId, result.item]));
+        setData((current) =>
+          current
+            ? {
+                ...current,
+                memoryItems: current.memoryItems.map((item) => updatedById.get(item.itemId) ?? item),
+              }
+            : current,
+        );
+        setNotice({ tone: "success", message: successMessage(response.appliedCount) });
+        return response;
+      } catch (batchError) {
+        setNotice({
+          tone: "error",
+          message: `Batch failed — no changes were applied. ${getErrorMessage(batchError)}`,
+        });
+        return undefined;
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [data?.memoryAdminState],
+  );
+
+  const batchForgetItems = useCallback(
+    (itemIds: string[]) =>
+      runBatchMutation(
+        "memory-batch:forget",
+        itemIds.map((itemId) => ({ kind: "forget_item" as const, itemId })),
+        (appliedCount) => `Forgot ${appliedCount} memory item(s).`,
+      ),
+    [runBatchMutation],
+  );
+
+  const batchSetItemsPinned = useCallback(
+    (itemIds: string[], pinned: boolean) =>
+      runBatchMutation(
+        `memory-batch:pin:${pinned}`,
+        itemIds.map((itemId) => ({ kind: "patch_item" as const, itemId, patch: { pinned } })),
+        (appliedCount) => `${pinned ? "Pinned" : "Unpinned"} ${appliedCount} memory item(s).`,
+      ),
+    [runBatchMutation],
+  );
+
   const runMaintenance = useCallback(async () => {
     if (!data?.maintenanceEnabled || !data.maintenanceDurableReady) {
       setNotice({
@@ -671,6 +751,8 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     reload,
     saveItemPatch,
     forgetSelectedItem,
+    batchForgetItems,
+    batchSetItemsPinned,
     scanMemoryQuality,
     patchQualityIssue,
     runMaintenance,
