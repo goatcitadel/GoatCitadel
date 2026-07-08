@@ -397,19 +397,19 @@ describe("MediaVoiceService", () => {
     const service = new MediaVoiceService(createDeps({ systemSettings, publishRealtime }));
     const env = {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      GOATCITADEL_MEET_BROWSER_TRANSPORT: process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT,
-      GOATCITADEL_MEET_AUDIO_TRANSPORT: process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT,
     };
     process.env.OPENAI_API_KEY = "test-key";
-    process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT = "ready";
-    process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT = "ready";
     try {
       const session = service.startGoogleMeetSession({
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         accountRef: "google:operator",
         userStartConfirmed: true,
+        browserTransportReady: true,
+        audioTransportReady: true,
       });
       expect(session.state).toBe("running");
+      expect(session.prerequisites.find((item) => item.id === "browser_transport")?.message).toMatch(/WebRTC/i);
+      expect(session.prerequisites.find((item) => item.id === "audio_transport")?.message).toMatch(/available/i);
 
       const withTranscript = service.appendGoogleMeetTranscriptChunk(session.sessionId, {
         text: "We should review the dashboard plugin states.",
@@ -438,8 +438,120 @@ describe("MediaVoiceService", () => {
       );
     } finally {
       process.env.OPENAI_API_KEY = env.OPENAI_API_KEY;
-      process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT = env.GOATCITADEL_MEET_BROWSER_TRANSPORT;
-      process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT = env.GOATCITADEL_MEET_AUDIO_TRANSPORT;
+    }
+  });
+
+  it("creates OpenAI Realtime client secrets without exposing the standard API key", async () => {
+    const systemSettings = createSystemSettings();
+    const publishRealtime = vi.fn();
+    const recordDevDiagnostic = vi.fn();
+    const service = new MediaVoiceService(createDeps({ systemSettings, publishRealtime, recordDevDiagnostic }));
+    const env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      GOATCITADEL_OPENAI_REALTIME_MODEL: process.env.GOATCITADEL_OPENAI_REALTIME_MODEL,
+      GOATCITADEL_OPENAI_REALTIME_VOICE: process.env.GOATCITADEL_OPENAI_REALTIME_VOICE,
+    };
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ value: "ek_test", expires_at: 1_783_468_800 })));
+    process.env.OPENAI_API_KEY = "sk-test-secret";
+    delete process.env.GOATCITADEL_OPENAI_REALTIME_MODEL;
+    delete process.env.GOATCITADEL_OPENAI_REALTIME_VOICE;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const response = await service.createRealtimeVoiceClientSecret({
+        surface: "chat",
+        sessionId: "session-1",
+      });
+
+      expect(response).toMatchObject({
+        provider: "openai-realtime",
+        surface: "chat",
+        sessionId: "session-1",
+        model: "gpt-realtime-2.1",
+        voice: "marin",
+        status: "ready",
+        clientSecret: {
+          value: "ek_test",
+          expiresAt: "2026-07-08T00:00:00.000Z",
+        },
+      });
+      expect(JSON.stringify(response)).not.toContain("sk-test-secret");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/realtime/client_secrets",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer sk-test-secret",
+            "OpenAI-Safety-Identifier": expect.stringMatching(/^gc_[a-f0-9]{64}$/),
+          }),
+        }),
+      );
+      const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+      expect(requestBody.session).toMatchObject({
+        type: "realtime",
+        model: "gpt-realtime-2.1",
+        audio: {
+          output: {
+            voice: "marin",
+          },
+        },
+      });
+      expect(systemSettings.set).toHaveBeenCalledWith(
+        "voice_realtime_status_v1",
+        expect.objectContaining({
+          state: "ready",
+          apiKeyReady: true,
+          activeVoiceSessionId: response.voiceSessionId,
+        }),
+      );
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "system",
+        "voice",
+        expect.objectContaining({
+          type: "openai_realtime_client_secret_created",
+          voiceSessionId: response.voiceSessionId,
+        }),
+      );
+      expect(recordDevDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: "voice",
+          event: "voice.realtime.client_secret.created",
+        }),
+      );
+    } finally {
+      restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
+      restoreEnvValue("GOATCITADEL_OPENAI_REALTIME_MODEL", env.GOATCITADEL_OPENAI_REALTIME_MODEL);
+      restoreEnvValue("GOATCITADEL_OPENAI_REALTIME_VOICE", env.GOATCITADEL_OPENAI_REALTIME_VOICE);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("blocks OpenAI Realtime client-secret minting when OPENAI_API_KEY is missing", async () => {
+    const systemSettings = createSystemSettings();
+    const service = new MediaVoiceService(createDeps({ systemSettings }));
+    const env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    delete process.env.OPENAI_API_KEY;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await expect(service.createRealtimeVoiceClientSecret({ surface: "chat" })).rejects.toThrow(
+        "OpenAI Realtime voice requires OPENAI_API_KEY.",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(systemSettings.set).toHaveBeenCalledWith(
+        "voice_realtime_status_v1",
+        expect.objectContaining({
+          state: "missing_api_key",
+          apiKeyReady: false,
+        }),
+      );
+    } finally {
+      restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -447,12 +559,8 @@ describe("MediaVoiceService", () => {
     const service = new MediaVoiceService(createDeps());
     const env = {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      GOATCITADEL_MEET_BROWSER_TRANSPORT: process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT,
-      GOATCITADEL_MEET_AUDIO_TRANSPORT: process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT,
     };
     process.env.OPENAI_API_KEY = "test-key";
-    process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT = "ready";
-    process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT = "ready";
     try {
       const blocked = service.getGoogleMeetPrerequisiteStatus({
         provider: "openai-realtime",
@@ -466,6 +574,8 @@ describe("MediaVoiceService", () => {
         accountRef: "google:operator",
         provider: "openai-realtime",
         userStartConfirmed: true,
+        browserTransportReady: true,
+        audioTransportReady: true,
       });
       expect(ready.ready).toBe(true);
       expect(ready.authProfile).toMatchObject({
@@ -474,8 +584,6 @@ describe("MediaVoiceService", () => {
       });
     } finally {
       process.env.OPENAI_API_KEY = env.OPENAI_API_KEY;
-      process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT = env.GOATCITADEL_MEET_BROWSER_TRANSPORT;
-      process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT = env.GOATCITADEL_MEET_AUDIO_TRANSPORT;
     }
   });
 });
@@ -525,4 +633,12 @@ function createSystemSettings() {
       values.set(key, value);
     }),
   };
+}
+
+function restoreEnvValue(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
 }

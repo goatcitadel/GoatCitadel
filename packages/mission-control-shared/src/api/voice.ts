@@ -1,7 +1,12 @@
 import type {
+  GoogleMeetConsultHandoff,
   GoogleMeetPrerequisiteStatusRequest,
   GoogleMeetPrerequisiteStatusResponse,
   GoogleMeetSessionRecord,
+  GoogleMeetSessionStartRequest,
+  GoogleMeetTranscriptChunk,
+  OpenAIRealtimeClientSecretRequest,
+  OpenAIRealtimeClientSecretResponse,
   VoiceRuntimeInstallRequest,
   VoiceRuntimeStatus,
   VoiceStatus,
@@ -37,6 +42,15 @@ export async function fetchVoiceTalkSessions(limit = 10): Promise<VoiceTalkSessi
   return response.items;
 }
 
+export async function createRealtimeVoiceClientSecret(
+  input: OpenAIRealtimeClientSecretRequest,
+): Promise<OpenAIRealtimeClientSecretResponse> {
+  return request<OpenAIRealtimeClientSecretResponse>("/api/v1/voice/realtime/client-secret", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function fetchGoogleMeetPrerequisiteStatus(
   input: GoogleMeetPrerequisiteStatusRequest = {},
 ): Promise<GoogleMeetPrerequisiteStatusResponse> {
@@ -49,6 +63,46 @@ export async function fetchGoogleMeetPrerequisiteStatus(
 export async function fetchGoogleMeetSessions(limit = 10): Promise<GoogleMeetSessionRecord[]> {
   const response = await request<{ items: GoogleMeetSessionRecord[] }>("/api/v1/voice/google-meet/sessions");
   return response.items.slice(0, Math.max(1, Math.min(100, Math.trunc(limit) || 10)));
+}
+
+export async function startGoogleMeetSession(input: GoogleMeetSessionStartRequest): Promise<GoogleMeetSessionRecord> {
+  return request<GoogleMeetSessionRecord>("/api/v1/voice/google-meet/sessions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function appendGoogleMeetTranscriptChunk(
+  sessionId: string,
+  input: Pick<GoogleMeetTranscriptChunk, "text" | "speaker" | "final" | "provider">,
+): Promise<GoogleMeetSessionRecord> {
+  return request<GoogleMeetSessionRecord>(
+    `/api/v1/voice/google-meet/sessions/${encodeURIComponent(sessionId)}/transcript`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function createGoogleMeetConsultHandoff(
+  sessionId: string,
+  input: { target?: GoogleMeetConsultHandoff["target"]; prompt?: string } = {},
+): Promise<GoogleMeetSessionRecord> {
+  return request<GoogleMeetSessionRecord>(
+    `/api/v1/voice/google-meet/sessions/${encodeURIComponent(sessionId)}/consult`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function stopGoogleMeetSession(sessionId: string): Promise<GoogleMeetSessionRecord> {
+  return request<GoogleMeetSessionRecord>(`/api/v1/voice/google-meet/sessions/${encodeURIComponent(sessionId)}/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function installVoiceRuntime(input: VoiceRuntimeInstallRequest = {}): Promise<VoiceRuntimeStatus> {

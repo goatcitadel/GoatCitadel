@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildVoiceOperatorGuidance,
   buildVoiceRecoveryActions,
+  type OpenAIRealtimeClientSecretResponse,
+  type OpenAIRealtimeVoiceStatus,
   type VoiceRuntimeStatus,
   type VoiceStatus,
 } from "./voice.js";
@@ -260,5 +262,56 @@ describe("voice operator helpers", () => {
 
     expect(guidance.postureSummary).toContain("model not selected");
     expect(guidance.postureSummary).toContain("wake disabled");
+  });
+
+  it("keeps OpenAI Realtime voice readiness separate from local STT runtime readiness", () => {
+    const realtime: OpenAIRealtimeVoiceStatus = {
+      provider: "openai-realtime",
+      state: "ready",
+      apiKeyReady: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      updatedAt: "2026-07-08T00:00:00.000Z",
+    };
+    const status = createVoiceStatus({
+      stt: {
+        runtimeReady: false,
+        modelId: undefined,
+      },
+    });
+
+    expect({
+      ...status,
+      realtime,
+    } satisfies VoiceStatus).toMatchObject({
+      stt: {
+        runtimeReady: false,
+      },
+      realtime: {
+        apiKeyReady: true,
+        state: "ready",
+      },
+    });
+  });
+
+  it("models the browser-safe OpenAI Realtime client-secret response", () => {
+    const response: OpenAIRealtimeClientSecretResponse = {
+      provider: "openai-realtime",
+      surface: "chat",
+      voiceSessionId: "voice-session-1",
+      sessionId: "chat-session-1",
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      status: "ready",
+      createdAt: "2026-07-08T00:00:00.000Z",
+      clientSecret: {
+        value: "ek_test",
+        expiresAt: "2026-07-08T00:05:00.000Z",
+      },
+      expiresAt: "2026-07-08T00:05:00.000Z",
+    };
+
+    expect(response.clientSecret.value).toBe("ek_test");
+    expect(response).not.toHaveProperty("apiKey");
   });
 });

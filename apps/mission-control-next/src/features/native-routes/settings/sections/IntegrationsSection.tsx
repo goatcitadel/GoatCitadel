@@ -7,12 +7,15 @@ import type {
   ExternalConnectorActionSummary,
   ExternalConnectorServiceSummary,
   ExternalSideEffectRunRecord,
+  GoogleMeetSessionRecord,
   IntegrationActionInvokeResult,
   IntegrationFormSchema,
   IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
 import {
   createExternalSideEffectReplayAuditRun,
+  createGoogleMeetConsultHandoff,
+  createRealtimeVoiceClientSecret,
   createIntegrationConnection,
   deleteIntegrationConnection,
   fetchExternalConnectorServices,
@@ -27,6 +30,8 @@ import {
   type IntegrationConnection,
   invokeIntegrationConnectionAction,
   stageExternalConnectorAction,
+  startGoogleMeetSession,
+  stopGoogleMeetSession,
   updateExternalConnectorActionReviewState,
   updateExternalConnectorServiceReviewState,
   updateIntegrationConnection,
@@ -127,6 +132,12 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const [replayAuditBusy, setReplayAuditBusy] = useState(false);
   const [lastReplayAuditRunId, setLastReplayAuditRunId] = useState<string | null>(null);
   const [externalConnectorBusyId, setExternalConnectorBusyId] = useState<string | null>(null);
+  const [meetBusySessionId, setMeetBusySessionId] = useState<string | null>(null);
+  const [meetForm, setMeetForm] = useState({
+    meetingUrl: "",
+    displayName: "",
+    accountRef: "",
+  });
   const [lastOperatorActionResult, setLastOperatorActionResult] = useState<
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
@@ -413,6 +424,85 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     }
   };
 
+  const handleStartGoogleMeetRealtime = async () => {
+    const meetingUrl = meetForm.meetingUrl.trim();
+    if (!meetingUrl) {
+      setNotice({ tone: "warning", message: "Enter a Google Meet URL before starting OpenAI Realtime voice." });
+      return;
+    }
+    setMeetBusySessionId("new");
+    let audioProbe: MediaStream | null = null;
+    try {
+      const browserTransportReady = isGoogleMeetBrowserTransportReady();
+      if (!browserTransportReady) {
+        throw new Error("Browser WebRTC and microphone APIs are required before meeting voice can start.");
+      }
+      audioProbe = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioTransportReady = audioProbe.getAudioTracks().length > 0;
+      const session = await startGoogleMeetSession({
+        meetingUrl,
+        displayName: meetForm.displayName.trim() || undefined,
+        accountRef: meetForm.accountRef.trim() || undefined,
+        provider: "openai-realtime",
+        userStartConfirmed: true,
+        browserTransportReady,
+        audioTransportReady,
+      });
+      if (session.state === "blocked") {
+        setNotice({
+          tone: "warning",
+          message: session.failureReason ?? "Google Meet voice prerequisites are still blocked.",
+        });
+        await reload();
+        return;
+      }
+      const token = await createRealtimeVoiceClientSecret({
+        surface: "google-meet",
+        meetingSessionId: session.sessionId,
+        instructionsProfile: "google-meet",
+      });
+      setNotice({
+        tone: "success",
+        message: `OpenAI Realtime voice prepared for ${session.displayName ?? session.meetingUrl} with ${token.model} / ${token.voice}.`,
+      });
+      await reload();
+    } catch (meetError) {
+      setNotice({ tone: "error", message: getErrorMessage(meetError) });
+    } finally {
+      audioProbe?.getTracks().forEach((track) => track.stop());
+      setMeetBusySessionId(null);
+    }
+  };
+
+  const handleStopGoogleMeetSession = async (session: GoogleMeetSessionRecord) => {
+    setMeetBusySessionId(session.sessionId);
+    try {
+      const stopped = await stopGoogleMeetSession(session.sessionId);
+      setNotice({ tone: "success", message: `Google Meet voice session ${stopped.sessionId} stopped.` });
+      await reload();
+    } catch (stopError) {
+      setNotice({ tone: "error", message: getErrorMessage(stopError) });
+    } finally {
+      setMeetBusySessionId(null);
+    }
+  };
+
+  const handleConsultGoogleMeetSession = async (session: GoogleMeetSessionRecord) => {
+    setMeetBusySessionId(session.sessionId);
+    try {
+      const updated = await createGoogleMeetConsultHandoff(session.sessionId, { target: "cowork" });
+      setNotice({
+        tone: "success",
+        message: `Consult handoff ${updated.consultHandoff?.handoffId ?? "created"} is ready for Cowork.`,
+      });
+      await reload();
+    } catch (consultError) {
+      setNotice({ tone: "error", message: getErrorMessage(consultError) });
+    } finally {
+      setMeetBusySessionId(null);
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
@@ -540,7 +630,16 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
               lastReplayAuditRunId={lastReplayAuditRunId}
               onOpenReplayAudit={(runId) => navigate({ area: "ops", section: "sessions", view: "run-detail", runId })}
             />
-            <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
+            <GoogleMeetStatusPanel
+              status={data.meetStatus}
+              sessions={data.meetSessions}
+              form={meetForm}
+              busySessionId={meetBusySessionId}
+              onFormChange={setMeetForm}
+              onStartOpenAIRealtime={() => void handleStartGoogleMeetRealtime()}
+              onStopSession={(session) => void handleStopGoogleMeetSession(session)}
+              onConsultSession={(session) => void handleConsultGoogleMeetSession(session)}
+            />
           </SettingsStack>
           <NativeCard
             density="compact"
@@ -716,5 +815,14 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
+  );
+}
+
+function isGoogleMeetBrowserTransportReady(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.RTCPeerConnection === "function" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.mediaDevices?.getUserMedia === "function"
   );
 }

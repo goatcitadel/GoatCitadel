@@ -7,6 +7,7 @@ import type {
   VoiceStatus,
 } from "@goatcitadel/contracts";
 import {
+  createRealtimeVoiceClientSecret,
   downloadChatAttachment,
   fetchVoiceRuntimeStatus,
   fetchVoiceStatus,
@@ -43,6 +44,26 @@ interface ImageGenerationOptions {
   clearDraftOnSuccess?: boolean;
   trigger?: "button" | "auto_send";
 }
+
+type LiveVoiceUiState =
+  | "idle"
+  | "requesting_mic"
+  | "connecting"
+  | "listening"
+  | "speaking"
+  | "thinking"
+  | "stopping"
+  | "error";
+
+interface LiveVoiceConnection {
+  peerConnection: RTCPeerConnection;
+  dataChannel: RTCDataChannel;
+  mediaStream: MediaStream;
+  audioElement: HTMLAudioElement;
+  voiceSessionId: string;
+}
+
+const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
 function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
   return attachment.mediaType === "image" || attachment.mimeType.startsWith("image/");
@@ -169,6 +190,99 @@ function shouldRetryImageGenerationWithGoogleFallback(error: string): boolean {
   );
 }
 
+function supportsBrowserRealtimeVoice(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+  return (
+    typeof window.RTCPeerConnection === "function" &&
+    typeof navigator.mediaDevices?.getUserMedia === "function" &&
+    typeof document !== "undefined" &&
+    typeof document.createElement === "function"
+  );
+}
+
+function getLiveVoiceStatusLabel(state: LiveVoiceUiState, status?: VoiceStatus["realtime"] | null): string {
+  if (state === "requesting_mic") {
+    return "Requesting microphone";
+  }
+  if (state === "connecting") {
+    return "OpenAI Realtime connecting";
+  }
+  if (state === "listening") {
+    return "OpenAI Realtime listening";
+  }
+  if (state === "speaking") {
+    return "OpenAI Realtime speaking";
+  }
+  if (state === "thinking") {
+    return "OpenAI Realtime thinking";
+  }
+  if (state === "stopping") {
+    return "Stopping OpenAI Realtime voice";
+  }
+  if (state === "error") {
+    return "OpenAI Realtime voice needs attention";
+  }
+  if (status?.apiKeyReady) {
+    return `OpenAI Realtime ready · ${status.model}`;
+  }
+  return "OpenAI Realtime unavailable";
+}
+
+function mapRealtimeEventToLiveVoiceState(eventType: string): LiveVoiceUiState | null {
+  if (
+    eventType === "response.audio.delta" ||
+    eventType === "response.output_audio.delta" ||
+    eventType === "output_audio_buffer.started"
+  ) {
+    return "speaking";
+  }
+  if (
+    eventType === "input_audio_buffer.speech_stopped" ||
+    eventType === "response.created" ||
+    eventType === "response.output_item.added"
+  ) {
+    return "thinking";
+  }
+  if (
+    eventType === "input_audio_buffer.speech_started" ||
+    eventType === "response.done" ||
+    eventType === "output_audio_buffer.stopped"
+  ) {
+    return "listening";
+  }
+  if (eventType === "error") {
+    return "error";
+  }
+  return null;
+}
+
+function parseRealtimeEventType(raw: MessageEvent["data"]): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { type?: unknown };
+    return typeof parsed.type === "string" ? parsed.type : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanupLiveVoiceConnection(connection: LiveVoiceConnection | null): void {
+  if (!connection) {
+    return;
+  }
+  connection.dataChannel.close();
+  connection.peerConnection.close();
+  for (const track of connection.mediaStream.getTracks()) {
+    track.stop();
+  }
+  connection.audioElement.srcObject = null;
+  connection.audioElement.remove();
+}
+
 export function useChatMultimodalControls(input: {
   providerOptions: ChatModelProviderOption[];
   selectedProviderId?: string;
@@ -208,10 +322,13 @@ export function useChatMultimodalControls(input: {
 
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const lastSpokenMessageIdRef = useRef<string | null>(null);
+  const liveVoiceConnectionRef = useRef<LiveVoiceConnection | null>(null);
   const primedSessionIdRef = useRef<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [liveVoiceState, setLiveVoiceState] = useState<LiveVoiceUiState>("idle");
+  const [liveVoiceMuted, setLiveVoiceMuted] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const [speakResponsesEnabled, setSpeakResponsesEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") {
@@ -271,6 +388,28 @@ export function useChatMultimodalControls(input: {
   const voiceReady = voiceRuntime?.readiness === "ready";
   const voiceInputAvailable = voiceReady && activeProvider?.capabilities?.voiceInput !== false;
   const voiceOutputAvailable = supportsSpeechSynthesis && activeProvider?.capabilities?.voiceOutput !== false;
+  const realtimeVoiceStatus = voiceStatus?.realtime ?? null;
+  const liveVoiceBrowserAvailable = supportsBrowserRealtimeVoice();
+  const liveVoiceAvailable =
+    liveVoiceBrowserAvailable &&
+    activeProvider?.capabilities?.voiceInput !== false &&
+    realtimeVoiceStatus?.apiKeyReady === true;
+  const liveVoiceActive =
+    liveVoiceConnectionRef.current !== null ||
+    liveVoiceState === "requesting_mic" ||
+    liveVoiceState === "connecting" ||
+    liveVoiceState === "listening" ||
+    liveVoiceState === "speaking" ||
+    liveVoiceState === "thinking" ||
+    liveVoiceState === "stopping";
+  const liveVoiceStatusLabel = getLiveVoiceStatusLabel(liveVoiceState, realtimeVoiceStatus);
+  const liveVoiceUnavailableReason = liveVoiceAvailable
+    ? null
+    : !liveVoiceBrowserAvailable
+      ? "OpenAI Realtime voice needs browser microphone and WebRTC support."
+      : realtimeVoiceStatus?.apiKeyReady === false
+        ? "OpenAI Realtime voice requires OPENAI_API_KEY on the Gateway."
+        : "OpenAI Realtime voice readiness has not been confirmed yet.";
   const imageGenerationAvailable = Boolean(primaryImageRoute);
   const imageEditAvailable = Boolean(primaryImageRoute?.supportsEdit && latestImageAttachment);
   const imageRouteLabel = primaryImageRoute
@@ -310,6 +449,14 @@ export function useChatMultimodalControls(input: {
   useEffect(() => {
     void refreshVoiceState();
   }, [refreshVoiceState]);
+
+  useEffect(
+    () => () => {
+      cleanupLiveVoiceConnection(liveVoiceConnectionRef.current);
+      liveVoiceConnectionRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -386,6 +533,131 @@ export function useChatMultimodalControls(input: {
       setVoiceBusy(false);
     }
   }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, voiceStatus?.talk?.activeSessionId]);
+
+  const stopLiveVoice = useCallback(
+    (announce = true) => {
+      if (!liveVoiceConnectionRef.current) {
+        setLiveVoiceState("idle");
+        setLiveVoiceMuted(false);
+        return;
+      }
+      setLiveVoiceState("stopping");
+      cleanupLiveVoiceConnection(liveVoiceConnectionRef.current);
+      liveVoiceConnectionRef.current = null;
+      setLiveVoiceMuted(false);
+      setLiveVoiceState("idle");
+      if (announce) {
+        pushLocalNotice("OpenAI Realtime voice stopped.", "neutral");
+      }
+    },
+    [pushLocalNotice],
+  );
+
+  const handleToggleLiveVoice = useCallback(async () => {
+    if (liveVoiceConnectionRef.current) {
+      stopLiveVoice();
+      return;
+    }
+    if (!supportsBrowserRealtimeVoice()) {
+      setError("OpenAI Realtime voice needs browser microphone and WebRTC support.");
+      setLiveVoiceState("error");
+      return;
+    }
+
+    setVoiceBusy(true);
+    setError(null);
+    setLiveVoiceState("connecting");
+    let pendingConnection: LiveVoiceConnection | null = null;
+    try {
+      const token = await createRealtimeVoiceClientSecret({
+        surface: "chat",
+        sessionId: selectedSessionId ?? undefined,
+      });
+      setLiveVoiceState("requesting_mic");
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setLiveVoiceState("connecting");
+
+      const peerConnection = new window.RTCPeerConnection();
+      const audioElement = document.createElement("audio");
+      audioElement.autoplay = true;
+      audioElement.setAttribute("data-goatcitadel-live-voice", "true");
+      document.body?.appendChild(audioElement);
+
+      peerConnection.ontrack = (event) => {
+        audioElement.srcObject = event.streams[0] ?? null;
+      };
+      for (const track of mediaStream.getAudioTracks()) {
+        peerConnection.addTrack(track, mediaStream);
+      }
+      const dataChannel = peerConnection.createDataChannel("oai-events");
+      dataChannel.onopen = () => setLiveVoiceState("listening");
+      dataChannel.onmessage = (event) => {
+        const eventType = parseRealtimeEventType(event.data);
+        const nextState = eventType ? mapRealtimeEventToLiveVoiceState(eventType) : null;
+        if (nextState) {
+          setLiveVoiceState(nextState);
+        }
+      };
+      dataChannel.onerror = () => setLiveVoiceState("error");
+
+      pendingConnection = {
+        peerConnection,
+        dataChannel,
+        mediaStream,
+        audioElement,
+        voiceSessionId: token.voiceSessionId,
+      };
+      liveVoiceConnectionRef.current = pendingConnection;
+
+      const offer = await peerConnection.createOffer();
+      if (!offer.sdp) {
+        throw new Error("Unable to create a WebRTC offer for OpenAI Realtime voice.");
+      }
+      await peerConnection.setLocalDescription(offer);
+      const sdpResponse = await fetch(OPENAI_REALTIME_CALLS_URL, {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          Authorization: `Bearer ${token.clientSecret.value}`,
+          "Content-Type": "application/sdp",
+        },
+      });
+      if (!sdpResponse.ok) {
+        const message = (await sdpResponse.text()).trim() || sdpResponse.statusText || "Realtime connection failed.";
+        throw new Error(`OpenAI Realtime WebRTC connection failed (${sdpResponse.status}): ${message}`);
+      }
+      await peerConnection.setRemoteDescription({
+        type: "answer",
+        sdp: await sdpResponse.text(),
+      });
+      setLiveVoiceState("listening");
+      pushLocalNotice("OpenAI Realtime voice is live.", "success");
+      await refreshVoiceState();
+    } catch (error) {
+      cleanupLiveVoiceConnection(pendingConnection);
+      if (liveVoiceConnectionRef.current === pendingConnection) {
+        liveVoiceConnectionRef.current = null;
+      }
+      setLiveVoiceState("error");
+      setError((error as Error).message);
+      await refreshVoiceState();
+    } finally {
+      setVoiceBusy(false);
+    }
+  }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, stopLiveVoice]);
+
+  const handleToggleLiveVoiceMute = useCallback(() => {
+    const connection = liveVoiceConnectionRef.current;
+    if (!connection) {
+      return;
+    }
+    const nextMuted = !liveVoiceMuted;
+    for (const track of connection.mediaStream.getAudioTracks()) {
+      track.enabled = !nextMuted;
+    }
+    setLiveVoiceMuted(nextMuted);
+    pushLocalNotice(nextMuted ? "OpenAI Realtime microphone muted." : "OpenAI Realtime microphone unmuted.", "neutral");
+  }, [liveVoiceMuted, pushLocalNotice]);
 
   const handleOpenAudioTranscribe = useCallback(() => {
     audioInputRef.current?.click();
@@ -527,6 +799,12 @@ export function useChatMultimodalControls(input: {
   return {
     audioInputRef,
     voiceBusy,
+    liveVoiceActive,
+    liveVoiceAvailable,
+    liveVoiceMuted,
+    liveVoiceState,
+    liveVoiceStatusLabel,
+    liveVoiceUnavailableReason,
     voiceInputAvailable,
     voiceOutputAvailable,
     voiceTalkActive: Boolean(voiceStatus?.talk?.activeSessionId),
@@ -542,6 +820,8 @@ export function useChatMultimodalControls(input: {
     selectedImageModel: primaryImageRoute?.model,
     imageRouteLabel,
     handleToggleVoiceTalk,
+    handleToggleLiveVoice,
+    handleToggleLiveVoiceMute,
     handleOpenAudioTranscribe,
     handleAudioFileSelected,
     handleGenerateImage: (options?: ImageGenerationOptions) => runImageGeneration("generate", options),

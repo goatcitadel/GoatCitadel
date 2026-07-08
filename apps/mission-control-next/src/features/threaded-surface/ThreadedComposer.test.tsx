@@ -906,6 +906,7 @@ describe("ThreadedComposer", () => {
     const callbacks = {
       onDismissPresetWarning: vi.fn(),
       onAcknowledgeRouteBoundary: vi.fn(),
+      onToggleLiveVoice: vi.fn(),
       onToggleVoiceTalk: vi.fn(),
       onOpenAudioTranscribe: vi.fn(),
       onToggleSpeakResponses: vi.fn(),
@@ -937,6 +938,7 @@ describe("ThreadedComposer", () => {
       presetApplyWarning: "Preset changed the composer.",
       presetOptions: [{ value: "review", label: "Review preset" }],
       selectedPresetId: "review",
+      liveVoiceAvailable: true,
       voiceInputAvailable: true,
       voiceOutputAvailable: true,
       speakResponsesEnabled: true,
@@ -955,7 +957,8 @@ describe("ThreadedComposer", () => {
     await click(findButton(renderer.root, "Dismiss"));
     await click(findButton(renderer.root, "Acknowledge fallback"));
     await click(renderer.root.findByProps({ "aria-label": "Open chat actions" }));
-    await click(findButton(renderer.root, "Start voice talk"));
+    await click(findButton(renderer.root, "Live voice"));
+    await click(findButton(renderer.root, "Push-to-talk"));
     await click(findButton(renderer.root, "Transcribe audio"));
     await click(findButton(renderer.root, "Stop speaking replies"));
     await click(findButton(renderer.root, "Create image"));
@@ -979,6 +982,7 @@ describe("ThreadedComposer", () => {
 
     expect(callbacks.onDismissPresetWarning).toHaveBeenCalledTimes(1);
     expect(callbacks.onAcknowledgeRouteBoundary).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleLiveVoice).toHaveBeenCalledTimes(1);
     expect(callbacks.onToggleVoiceTalk).toHaveBeenCalledTimes(1);
     expect(callbacks.onOpenAudioTranscribe).toHaveBeenCalledTimes(1);
     expect(callbacks.onToggleSpeakResponses).toHaveBeenCalledTimes(1);

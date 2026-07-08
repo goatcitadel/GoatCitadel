@@ -920,6 +920,33 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   border-color: color-mix(in oklab, var(--gc-risk-caution) 22%, var(--border));
 }
 
+.mc-next-composer-live-voice {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0.72rem 0.78rem;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-surface-1));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 12%, transparent);
+}
+
+.mc-next-composer-live-voice[data-state="error"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 34%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger) 8%, var(--mc-surface-1));
+}
+
+.mc-next-composer-live-voice p {
+  flex: 1;
+  min-width: 9rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
 .mc-next-composer-delegation-approval {
   display: grid;
   gap: 0.48rem;

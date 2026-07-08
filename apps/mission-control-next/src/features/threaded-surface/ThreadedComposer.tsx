@@ -494,7 +494,22 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       onSelect: props.onSetDeepMode,
     },
     {
-      label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",
+      label: props.liveVoiceActive
+        ? "Stop live voice"
+        : props.voiceBusy && props.liveVoiceState === "connecting"
+          ? "Live voice connecting..."
+          : "Live voice",
+      disabled:
+        !props.liveVoiceAvailable || (Boolean(props.voiceBusy) && !props.liveVoiceActive) || composerActionDisabled,
+      active: Boolean(props.liveVoiceActive),
+      onSelect: () => props.onToggleLiveVoice?.(),
+    },
+    {
+      label: props.voiceBusy
+        ? "Push-to-talk listening..."
+        : props.voiceTalkActive
+          ? "Stop push-to-talk"
+          : "Push-to-talk",
       disabled: !props.voiceInputAvailable || props.voiceBusy || composerActionDisabled,
       active: Boolean(props.voiceTalkActive),
       onSelect: () => props.onToggleVoiceTalk?.(),
@@ -763,6 +778,34 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       <ComposerDelegationApproval props={props} />
 
       <ComposerCoworkStop props={props} />
+
+      {props.liveVoiceActive || props.liveVoiceState === "error" ? (
+        <section
+          className="mc-next-composer-live-voice"
+          data-state={props.liveVoiceState ?? "idle"}
+          role="status"
+          aria-live="polite"
+        >
+          <StatusChip tone={props.liveVoiceState === "error" ? "critical" : "success"}>OpenAI Realtime</StatusChip>
+          <p>{props.liveVoiceStatusLabel ?? "OpenAI Realtime voice"}</p>
+          <div className="mc-next-composer-action-row">
+            {props.liveVoiceActive ? (
+              <button type="button" className="mc-next-composer-inline-button" onClick={props.onToggleLiveVoiceMute}>
+                {props.liveVoiceMuted ? "Unmute mic" : "Mute mic"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="mc-next-composer-inline-button primary"
+              disabled={!props.liveVoiceActive && !props.liveVoiceAvailable}
+              title={!props.liveVoiceActive ? (props.liveVoiceUnavailableReason ?? undefined) : undefined}
+              onClick={props.onToggleLiveVoice}
+            >
+              {props.liveVoiceActive ? "Stop live voice" : "Start live voice"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <div className="mc-next-composer-input-shell">
         <textarea

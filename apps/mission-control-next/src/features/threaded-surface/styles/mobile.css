@@ -483,6 +483,7 @@
   }
 
   .mc-next-composer-banner,
+  .mc-next-composer-live-voice,
   .mc-next-composer-head,
   .mc-next-panel-list-head,
   .mc-next-composer-blocking-prompt .chat-approval-header,
@@ -490,7 +491,8 @@
     align-items: stretch;
   }
 
-  .mc-next-composer-banner {
+  .mc-next-composer-banner,
+  .mc-next-composer-live-voice {
     flex-direction: column;
   }
 

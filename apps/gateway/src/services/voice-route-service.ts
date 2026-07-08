@@ -5,6 +5,7 @@ export const voiceRouteMethods = [
   "getVoiceStatus",
   "installVoiceRuntime",
   "appendGoogleMeetTranscriptChunk",
+  "createRealtimeVoiceClientSecret",
   "createGoogleMeetConsultHandoff",
   "getGoogleMeetPrerequisiteStatus",
   "listGoogleMeetSessions",

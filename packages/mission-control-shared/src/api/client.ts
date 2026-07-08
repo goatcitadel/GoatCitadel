@@ -959,6 +959,9 @@ export {
 export { runResearchSearch } from "./research-search.js";
 export { runUpdateScout } from "./update-scout.js";
 export {
+  createRealtimeVoiceClientSecret,
+  appendGoogleMeetTranscriptChunk,
+  createGoogleMeetConsultHandoff,
   fetchVoiceRuntimeStatus,
   fetchVoiceStatus,
   fetchVoiceTalkSessions,
@@ -967,8 +970,10 @@ export {
   installVoiceRuntime,
   removeVoiceRuntimeModel,
   selectVoiceRuntimeModel,
+  startGoogleMeetSession,
   startVoiceTalkSession,
   startVoiceWake,
+  stopGoogleMeetSession,
   stopVoiceTalkSession,
   stopVoiceWake,
   transcribeVoice,

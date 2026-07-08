@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { voiceRoutes } from "./voice.js";
+import { OpenAIRealtimeVoiceError } from "../services/openai-realtime-voice-service.js";
 
 describe("voice routes", () => {
   let app: FastifyInstance | null = null;
@@ -122,6 +123,85 @@ describe("voice routes", () => {
     expect(invalidList.statusCode).toBe(400);
     expect(startTalkSession).not.toHaveBeenCalled();
     expect(listVoiceTalkSessions).not.toHaveBeenCalled();
+  });
+
+  it("mints OpenAI Realtime voice client secrets through the voice service", async () => {
+    const createRealtimeVoiceClientSecret = vi.fn(async (input: Record<string, unknown>) => ({
+      provider: "openai-realtime",
+      surface: input.surface,
+      voiceSessionId: "voice-session-1",
+      sessionId: input.sessionId,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      status: "ready",
+      createdAt: "2026-07-08T00:00:00.000Z",
+      clientSecret: {
+        value: "ek_test",
+        expiresAt: "2026-07-08T00:05:00.000Z",
+      },
+      expiresAt: "2026-07-08T00:05:00.000Z",
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      voice: { createRealtimeVoiceClientSecret },
+    } as never);
+    await app.register(voiceRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/voice/realtime/client-secret",
+      payload: {
+        surface: "chat",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      provider: "openai-realtime",
+      surface: "chat",
+      clientSecret: {
+        value: "ek_test",
+      },
+    });
+    expect(createRealtimeVoiceClientSecret).toHaveBeenCalledWith({
+      surface: "chat",
+      sessionId: "session-1",
+    });
+  });
+
+  it("validates Realtime voice client-secret requests and maps missing API keys", async () => {
+    const createRealtimeVoiceClientSecret = vi.fn(async () => {
+      throw new OpenAIRealtimeVoiceError("OpenAI Realtime voice requires OPENAI_API_KEY.", 400);
+    });
+    app = Fastify();
+    app.decorate("services", {
+      voice: { createRealtimeVoiceClientSecret },
+    } as never);
+    await app.register(voiceRoutes);
+
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/voice/realtime/client-secret",
+        payload: {
+          surface: "unsupported",
+        },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/voice/realtime/client-secret",
+      payload: {
+        surface: "chat",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: "OpenAI Realtime voice requires OPENAI_API_KEY.",
+    });
   });
 
   it("stops the wake listener without changing the response contract", async () => {
@@ -416,6 +496,8 @@ describe("voice routes", () => {
         displayName: "GoatCitadel",
         provider: "openai-realtime",
         userStartConfirmed: true,
+        browserTransportReady: true,
+        audioTransportReady: true,
       },
     });
     expect(started.statusCode).toBe(201);
@@ -423,6 +505,8 @@ describe("voice routes", () => {
       expect.objectContaining({
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         provider: "openai-realtime",
+        browserTransportReady: true,
+        audioTransportReady: true,
       }),
     );
     expect(

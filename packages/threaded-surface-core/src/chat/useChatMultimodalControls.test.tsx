@@ -6,6 +6,7 @@ import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const apiMocks = vi.hoisted(() => ({
+  createRealtimeVoiceClientSecret: vi.fn(),
   downloadChatAttachment: vi.fn(),
   fetchVoiceRuntimeStatus: vi.fn(),
   fetchVoiceStatus: vi.fn(),
@@ -20,6 +21,7 @@ const helperMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  createRealtimeVoiceClientSecret: apiMocks.createRealtimeVoiceClientSecret,
   downloadChatAttachment: apiMocks.downloadChatAttachment,
   fetchVoiceRuntimeStatus: apiMocks.fetchVoiceRuntimeStatus,
   fetchVoiceStatus: apiMocks.fetchVoiceStatus,
@@ -76,6 +78,79 @@ class FakeFileReader {
     this.result = "data:image/png;base64,aW1hZ2U=";
     this.onload?.();
   }
+}
+
+class FakeDataChannel {
+  onopen: (() => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: (() => void) | null = null;
+  close = vi.fn();
+}
+
+class FakePeerConnection {
+  ontrack: ((event: { streams: MediaStream[] }) => void) | null = null;
+  addTrack = vi.fn();
+  close = vi.fn();
+  dataChannel = new FakeDataChannel();
+  createDataChannel = vi.fn(() => this.dataChannel);
+  createOffer = vi.fn(async () => ({ type: "offer", sdp: "offer-sdp" }));
+  setLocalDescription = vi.fn(async () => undefined);
+  setRemoteDescription = vi.fn(async () => undefined);
+}
+
+function installRealtimeBrowserMocks() {
+  const audioTrack = {
+    enabled: true,
+    stop: vi.fn(),
+  };
+  const mediaStream = {
+    getAudioTracks: vi.fn(() => [audioTrack]),
+    getTracks: vi.fn(() => [audioTrack]),
+  };
+  const audioElement = {
+    autoplay: false,
+    remove: vi.fn(),
+    setAttribute: vi.fn(),
+    srcObject: null as MediaStream | null,
+  };
+  const peerConnection = new FakePeerConnection();
+  const getUserMedia = vi.fn(async () => mediaStream);
+  const fetchMock = vi.fn(async () => new Response("answer-sdp", { status: 200 }));
+  Object.defineProperty(window, "RTCPeerConnection", {
+    configurable: true,
+    value: vi.fn(function RTCPeerConnection() {
+      return peerConnection;
+    }),
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia,
+      },
+    },
+  });
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      body: {
+        appendChild: vi.fn(),
+      },
+      createElement: vi.fn(() => audioElement),
+    },
+  });
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: fetchMock,
+  });
+  return {
+    audioElement,
+    audioTrack,
+    fetchMock,
+    getUserMedia,
+    mediaStream,
+    peerConnection,
+  };
 }
 
 function installWindow() {
@@ -179,6 +254,19 @@ describe("useChatMultimodalControls", () => {
     installWindow();
     apiMocks.fetchVoiceStatus.mockResolvedValue({ talk: { activeSessionId: null } });
     apiMocks.fetchVoiceRuntimeStatus.mockResolvedValue({ readiness: "ready", selectedModelId: "whisper-local" });
+    apiMocks.createRealtimeVoiceClientSecret.mockResolvedValue({
+      provider: "openai-realtime",
+      surface: "chat",
+      voiceSessionId: "voice-session-1",
+      sessionId: "session-1",
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      status: "ready",
+      createdAt: "2026-07-08T00:00:00.000Z",
+      clientSecret: {
+        value: "ek_test",
+      },
+    });
     apiMocks.startVoiceTalkSession.mockResolvedValue({});
     apiMocks.stopVoiceTalkSession.mockResolvedValue({});
     helperMocks.fileToBase64.mockResolvedValue("audio-bytes");
@@ -254,6 +342,74 @@ describe("useChatMultimodalControls", () => {
       await flushAsyncEffects();
     });
     expect(apiMocks.stopVoiceTalkSession).toHaveBeenCalledWith("talk-1");
+  });
+
+  it("starts, mutes, and stops OpenAI Realtime live voice with an ephemeral key", async () => {
+    apiMocks.fetchVoiceStatus.mockResolvedValue({
+      talk: { activeSessionId: null },
+      realtime: {
+        provider: "openai-realtime",
+        state: "ready",
+        apiKeyReady: true,
+        model: "gpt-realtime-2.1",
+        voice: "marin",
+        updatedAt: "2026-07-08T00:00:00.000Z",
+      },
+    });
+    const browser = installRealtimeBrowserMocks();
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    expect(latest!.controls.liveVoiceAvailable).toBe(true);
+    expect(latest!.controls.liveVoiceStatusLabel).toBe("OpenAI Realtime ready · gpt-realtime-2.1");
+
+    await act(async () => {
+      await latest!.controls.handleToggleLiveVoice();
+      browser.peerConnection.dataChannel.onopen?.();
+      browser.peerConnection.dataChannel.onmessage?.({
+        data: JSON.stringify({ type: "response.audio.delta" }),
+      } as MessageEvent);
+      await flushAsyncEffects();
+    });
+
+    expect(apiMocks.createRealtimeVoiceClientSecret).toHaveBeenCalledWith({
+      surface: "chat",
+      sessionId: "session-1",
+    });
+    expect(browser.getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(browser.fetchMock).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/realtime/calls",
+      expect.objectContaining({
+        method: "POST",
+        body: "offer-sdp",
+        headers: expect.objectContaining({
+          Authorization: "Bearer ek_test",
+          "Content-Type": "application/sdp",
+        }),
+      }),
+    );
+    expect(browser.peerConnection.setRemoteDescription).toHaveBeenCalledWith({
+      type: "answer",
+      sdp: "answer-sdp",
+    });
+    expect(latest!.controls.liveVoiceActive).toBe(true);
+    expect(latest!.controls.liveVoiceState).toBe("speaking");
+
+    act(() => {
+      latest!.controls.handleToggleLiveVoiceMute();
+    });
+    expect(browser.audioTrack.enabled).toBe(false);
+    expect(latest!.controls.liveVoiceMuted).toBe(true);
+
+    await act(async () => {
+      await latest!.controls.handleToggleLiveVoice();
+    });
+    expect(browser.peerConnection.close).toHaveBeenCalled();
+    expect(browser.audioTrack.stop).toHaveBeenCalled();
+    expect(browser.audioElement.remove).toHaveBeenCalled();
+    expect(latest!.controls.liveVoiceActive).toBe(false);
   });
 
   it("treats a partial voice status without talk as inactive instead of crashing", async () => {

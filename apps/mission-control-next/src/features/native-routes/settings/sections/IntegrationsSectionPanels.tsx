@@ -11,7 +11,14 @@ import type {
   IntegrationActionInvokeResult,
   IntegrationPluginRecord,
 } from "@goatcitadel/contracts";
-import { SettingsActionList, SettingsButtonRow, SettingsEmptyState, SettingsNotice } from "../SettingsShared";
+import {
+  SettingsActionList,
+  SettingsButtonRow,
+  SettingsEmptyState,
+  SettingsField,
+  SettingsFieldGrid,
+  SettingsNotice,
+} from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid } from "../../primitives";
 import { formatDateTime } from "../../SettingsNativePage";
@@ -577,21 +584,87 @@ function readOutputText(output: Record<string, unknown>, key: string): string | 
 export function GoogleMeetStatusPanel({
   status,
   sessions,
+  form,
+  busySessionId,
+  onFormChange,
+  onStartOpenAIRealtime,
+  onStopSession,
+  onConsultSession,
 }: {
   status: GoogleMeetPrerequisiteStatusResponse | null;
   sessions: GoogleMeetSessionRecord[];
+  form: { meetingUrl: string; displayName: string; accountRef: string };
+  busySessionId?: string | null;
+  onFormChange: (next: { meetingUrl: string; displayName: string; accountRef: string }) => void;
+  onStartOpenAIRealtime: () => void;
+  onStopSession: (session: GoogleMeetSessionRecord) => void;
+  onConsultSession: (session: GoogleMeetSessionRecord) => void;
 }) {
+  const actionableSession =
+    sessions.find((session) => session.state === "running" || session.state === "consulting") ?? sessions[0] ?? null;
   return (
     <NativeCard
       density="compact"
       className="mc-next-settings-panel"
       title="Google Meet voice"
-      subtitle="Realtime meeting voice remains blocked until OAuth, provider, browser, audio, and user-start prerequisites pass."
+      subtitle="OpenAI Realtime meeting voice stays gated by OAuth, provider, browser, audio, and explicit user start."
       stats={[
         { label: "State", value: status?.state ?? "unknown" },
         { label: "Sessions", value: String(sessions.length) },
       ]}
     >
+      <SettingsFieldGrid>
+        <SettingsField label="Meet URL" span={2}>
+          <input
+            className="mc-next-settings-input"
+            value={form.meetingUrl}
+            onChange={(event) => onFormChange({ ...form, meetingUrl: event.target.value })}
+            placeholder="https://meet.google.com/abc-defg-hij"
+          />
+        </SettingsField>
+        <SettingsField label="Display name">
+          <input
+            className="mc-next-settings-input"
+            value={form.displayName}
+            onChange={(event) => onFormChange({ ...form, displayName: event.target.value })}
+            placeholder="Optional"
+          />
+        </SettingsField>
+        <SettingsField label="Account ref">
+          <input
+            className="mc-next-settings-input"
+            value={form.accountRef}
+            onChange={(event) => onFormChange({ ...form, accountRef: event.target.value })}
+            placeholder="OAuth account reference"
+          />
+        </SettingsField>
+      </SettingsFieldGrid>
+      <SettingsButtonRow>
+        <NativeButton variant="default" disabled={Boolean(busySessionId)} onClick={onStartOpenAIRealtime}>
+          <Plus size={16} />
+          Start OpenAI Realtime
+        </NativeButton>
+        {actionableSession ? (
+          <>
+            <NativeButton
+              variant="secondary"
+              disabled={Boolean(busySessionId)}
+              onClick={() => onConsultSession(actionableSession)}
+            >
+              <ExternalLink size={16} />
+              Consult Cowork
+            </NativeButton>
+            <NativeButton
+              variant="secondary"
+              disabled={Boolean(busySessionId)}
+              onClick={() => onStopSession(actionableSession)}
+            >
+              <Square size={16} />
+              Stop session
+            </NativeButton>
+          </>
+        ) : null}
+      </SettingsButtonRow>
       {status ? (
         <>
           <NativeMetricGrid

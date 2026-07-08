@@ -5,6 +5,15 @@ export type VoiceModelLanguageScope = "english" | "multilingual";
 export type VoiceRuntimeInstallSource = "managed" | "env_override" | "manual";
 export type VoiceRuntimeReadiness = "ready" | "missing" | "broken";
 export type RealtimeVoiceProvider = "openai-realtime" | "local-transcription";
+export type OpenAIRealtimeVoiceSurface = "chat" | "google-meet";
+export type OpenAIRealtimeVoiceState =
+  | "disabled"
+  | "missing_api_key"
+  | "ready"
+  | "connecting"
+  | "connected"
+  | "stopped"
+  | "error";
 export type GoogleMeetSessionState =
   | "blocked"
   | "ready"
@@ -78,6 +87,8 @@ export interface GoogleMeetSessionStartRequest {
   accountRef?: string;
   provider?: RealtimeVoiceProvider;
   userStartConfirmed?: boolean;
+  browserTransportReady?: boolean;
+  audioTransportReady?: boolean;
 }
 
 export interface GoogleMeetAuthProfilePrerequisite {
@@ -92,6 +103,8 @@ export interface GoogleMeetPrerequisiteStatusRequest {
   accountRef?: string;
   provider?: RealtimeVoiceProvider;
   userStartConfirmed?: boolean;
+  browserTransportReady?: boolean;
+  audioTransportReady?: boolean;
 }
 
 export interface GoogleMeetPrerequisiteStatusResponse {
@@ -129,6 +142,53 @@ export interface VoiceTalkSessionRecord {
   sessionId?: string;
 }
 
+export interface OpenAIRealtimeVoiceStatus {
+  provider: Extract<RealtimeVoiceProvider, "openai-realtime">;
+  state: OpenAIRealtimeVoiceState;
+  apiKeyReady: boolean;
+  model: string;
+  voice: string;
+  updatedAt: string;
+  activeVoiceSessionId?: string;
+  lastError?: string;
+}
+
+export interface OpenAIRealtimeClientSecretRequest {
+  surface: OpenAIRealtimeVoiceSurface;
+  sessionId?: string;
+  meetingSessionId?: string;
+  model?: string;
+  voice?: string;
+  instructionsProfile?: string;
+}
+
+export interface OpenAIRealtimeClientSecretValue {
+  value: string;
+  expiresAt?: string;
+}
+
+export interface OpenAIRealtimeClientSecretResponse {
+  provider: Extract<RealtimeVoiceProvider, "openai-realtime">;
+  surface: OpenAIRealtimeVoiceSurface;
+  voiceSessionId: string;
+  sessionId?: string;
+  meetingSessionId?: string;
+  model: string;
+  voice: string;
+  status: OpenAIRealtimeVoiceState;
+  createdAt: string;
+  clientSecret: OpenAIRealtimeClientSecretValue;
+  expiresAt?: string;
+}
+
+export interface OpenAIRealtimeVoiceEvent {
+  voiceSessionId: string;
+  surface: OpenAIRealtimeVoiceSurface;
+  type: string;
+  receivedAt: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface VoiceWakeStatus {
   enabled: boolean;
   state: VoiceRuntimeState;
@@ -151,6 +211,7 @@ export interface VoiceStatus {
     mode?: VoiceTalkMode;
     updatedAt: string;
   };
+  realtime?: OpenAIRealtimeVoiceStatus;
   wake: VoiceWakeStatus;
 }
 

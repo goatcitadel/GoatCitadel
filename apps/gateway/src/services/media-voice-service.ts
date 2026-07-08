@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import type {
   ChatAttachmentMediaType,
@@ -18,6 +18,9 @@ import type {
   GoogleMeetTranscriptChunk,
   MediaCreateJobRequest,
   MediaJobRecord,
+  OpenAIRealtimeClientSecretRequest,
+  OpenAIRealtimeClientSecretResponse,
+  OpenAIRealtimeVoiceStatus,
   VoiceRuntimeInstallRequest,
   VoiceRuntimeStatus,
   VoiceStatus,
@@ -31,6 +34,12 @@ import {
 } from "../voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "../voice-runtime/status.js";
 import { synthesizeSpeech as synthesizeSpeechImpl } from "./media-voice-tts.js";
+import {
+  OpenAIRealtimeVoiceError,
+  OpenAIRealtimeVoiceService,
+  normalizeRealtimeModel,
+  normalizeRealtimeVoice,
+} from "./openai-realtime-voice-service.js";
 import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
 import type { GatewaySqlRepository, SystemSettingsRepository } from "@goatcitadel/storage";
 
@@ -40,6 +49,7 @@ import type { GatewaySqlRepository, SystemSettingsRepository } from "@goatcitade
 
 const VOICE_STATUS_SETTING_KEY = "voice_status_v1";
 const VOICE_WAKE_STATUS_SETTING_KEY = "voice_wake_status_v1";
+const VOICE_REALTIME_STATUS_SETTING_KEY = "voice_realtime_status_v1";
 const GOOGLE_MEET_SESSIONS_SETTING_KEY = "google_meet_voice_sessions_v1";
 const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp";
 
@@ -510,6 +520,8 @@ async function normalizeAudioForWhisper(input: {
 // ---------------------------------------------------------------------------
 
 export class MediaVoiceService {
+  private readonly realtimeVoice = new OpenAIRealtimeVoiceService();
+
   public constructor(private readonly deps: MediaVoiceDeps) {}
 
   // ── Media jobs ──────────────────────────────────────────────────────────
@@ -684,6 +696,7 @@ export class MediaVoiceService {
         modelId: runtime.selectedModelId,
       },
       talk: talkRecord,
+      realtime: this.resolveOpenAIRealtimeStatus(now),
       wake,
     };
   }
@@ -911,6 +924,128 @@ export class MediaVoiceService {
     return stopped;
   }
 
+  // ── OpenAI Realtime live voice ─────────────────────────────────────────
+
+  public async createRealtimeVoiceClientSecret(
+    input: OpenAIRealtimeClientSecretRequest,
+  ): Promise<OpenAIRealtimeClientSecretResponse> {
+    const now = new Date().toISOString();
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    const model = normalizeRealtimeModel(input.model);
+    const voice = normalizeRealtimeVoice(input.voice);
+    const voiceSessionId = randomUUID();
+
+    if (!apiKey) {
+      const status: OpenAIRealtimeVoiceStatus = {
+        provider: "openai-realtime",
+        state: "missing_api_key",
+        apiKeyReady: false,
+        model,
+        voice,
+        updatedAt: now,
+        lastError: "OPENAI_API_KEY is not configured.",
+      };
+      this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      throw new OpenAIRealtimeVoiceError("OpenAI Realtime voice requires OPENAI_API_KEY.", 400);
+    }
+
+    if (input.surface === "google-meet" && input.meetingSessionId) {
+      const meetSession = this.requireGoogleMeetSession(input.meetingSessionId);
+      if (meetSession.state === "blocked") {
+        throw new OpenAIRealtimeVoiceError(
+          `Google Meet voice session ${input.meetingSessionId} is blocked: ${meetSession.failureReason ?? "prerequisites are not ready"}.`,
+          400,
+        );
+      }
+    }
+
+    this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+      provider: "openai-realtime",
+      state: "connecting",
+      apiKeyReady: true,
+      model,
+      voice,
+      updatedAt: now,
+      activeVoiceSessionId: voiceSessionId,
+    } satisfies OpenAIRealtimeVoiceStatus);
+
+    try {
+      const token = await this.realtimeVoice.createClientSecret({
+        apiKey,
+        safetyIdentifier: this.buildOpenAIRealtimeSafetyIdentifier(),
+        surface: input.surface,
+        model,
+        voice,
+        instructionsProfile: input.instructionsProfile,
+      });
+      const createdAt = new Date().toISOString();
+      const status: OpenAIRealtimeVoiceStatus = {
+        provider: "openai-realtime",
+        state: "ready",
+        apiKeyReady: true,
+        model: token.model,
+        voice: token.voice,
+        updatedAt: createdAt,
+        activeVoiceSessionId: voiceSessionId,
+      };
+      this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      this.markGoogleMeetRealtimeSessionStarted(input, createdAt);
+      this.deps.publishRealtime("system", "voice", {
+        type: "openai_realtime_client_secret_created",
+        voiceSessionId,
+        surface: input.surface,
+        sessionId: input.sessionId,
+        meetingSessionId: input.meetingSessionId,
+        model: token.model,
+        voice: token.voice,
+        expiresAt: token.expiresAt,
+      });
+      this.deps.recordDevDiagnostic({
+        level: "info",
+        category: "voice",
+        event: "voice.realtime.client_secret.created",
+        message: "Created OpenAI Realtime ephemeral client secret",
+        context: {
+          surface: input.surface,
+          sessionId: input.sessionId,
+          meetingSessionId: input.meetingSessionId,
+          model: token.model,
+          voice: token.voice,
+          expiresAt: token.expiresAt,
+        },
+      });
+      return {
+        provider: "openai-realtime",
+        surface: input.surface,
+        voiceSessionId,
+        sessionId: input.sessionId,
+        meetingSessionId: input.meetingSessionId,
+        model: token.model,
+        voice: token.voice,
+        status: "ready",
+        createdAt,
+        clientSecret: {
+          value: token.value,
+          expiresAt: token.expiresAt,
+        },
+        expiresAt: token.expiresAt,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "OpenAI Realtime voice failed.";
+      this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+        provider: "openai-realtime",
+        state: "error",
+        apiKeyReady: true,
+        model,
+        voice,
+        updatedAt: new Date().toISOString(),
+        activeVoiceSessionId: voiceSessionId,
+        lastError: message,
+      } satisfies OpenAIRealtimeVoiceStatus);
+      throw error;
+    }
+  }
+
   // ── Wake word ───────────────────────────────────────────────────────────
 
   public async startVoiceWake(): Promise<VoiceStatus["wake"]> {
@@ -986,6 +1121,8 @@ export class MediaVoiceService {
       accountRef: input.accountRef,
       provider,
       userStartConfirmed: input.userStartConfirmed,
+      browserTransportReady: input.browserTransportReady,
+      audioTransportReady: input.audioTransportReady,
     });
     const blocked = prerequisites.find((item) => !item.ready);
     return {
@@ -1119,10 +1256,80 @@ export class MediaVoiceService {
 
   // ── Private helpers ─────────────────────────────────────────────────────
 
+  private resolveOpenAIRealtimeStatus(now: string): OpenAIRealtimeVoiceStatus {
+    const existing = this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(
+      VOICE_REALTIME_STATUS_SETTING_KEY,
+    )?.value;
+    const apiKeyReady = Boolean(process.env.OPENAI_API_KEY?.trim());
+    const model = normalizeRealtimeModel(existing?.model);
+    const voice = normalizeRealtimeVoice(existing?.voice);
+    if (!apiKeyReady) {
+      return {
+        provider: "openai-realtime",
+        state: "missing_api_key",
+        apiKeyReady: false,
+        model,
+        voice,
+        updatedAt: existing?.updatedAt ?? now,
+        lastError: "OPENAI_API_KEY is not configured.",
+      };
+    }
+    return {
+      provider: "openai-realtime",
+      state:
+        existing?.state === "connecting" ||
+        existing?.state === "connected" ||
+        existing?.state === "stopped" ||
+        existing?.state === "error"
+          ? existing.state
+          : "ready",
+      apiKeyReady: true,
+      model,
+      voice,
+      updatedAt: existing?.updatedAt ?? now,
+      activeVoiceSessionId: existing?.activeVoiceSessionId,
+      lastError: existing?.lastError,
+    };
+  }
+
+  private buildOpenAIRealtimeSafetyIdentifier(): string {
+    let userName = "unknown";
+    try {
+      userName = os.userInfo().username || userName;
+    } catch {
+      userName = "unknown";
+    }
+    return `gc_${createHash("sha256")
+      .update(["goatcitadel-openai-realtime", os.hostname(), userName].join(":"))
+      .digest("hex")}`;
+  }
+
+  private markGoogleMeetRealtimeSessionStarted(input: OpenAIRealtimeClientSecretRequest, now: string): void {
+    if (input.surface !== "google-meet" || !input.meetingSessionId) {
+      return;
+    }
+    const record = this.requireGoogleMeetSession(input.meetingSessionId);
+    if (record.state === "stopped" || record.state === "failed") {
+      return;
+    }
+    this.writeGoogleMeetSession({
+      ...record,
+      provider: "openai-realtime",
+      state: record.state === "consulting" ? "consulting" : "running",
+      startedAt: record.startedAt ?? now,
+      updatedAt: now,
+      failureReason: undefined,
+    });
+  }
+
   private resolveGoogleMeetPrerequisites(
     input: GoogleMeetSessionStartRequest,
   ): GoogleMeetSessionRecord["prerequisites"] {
     const provider = input.provider ?? "openai-realtime";
+    const browserTransportReady =
+      input.browserTransportReady === true || process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT === "ready";
+    const audioTransportReady =
+      input.audioTransportReady === true || process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT === "ready";
     return [
       {
         id: "oauth_profile",
@@ -1141,13 +1348,17 @@ export class MediaVoiceService {
       },
       {
         id: "browser_transport",
-        ready: process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT === "ready",
-        message: "Browser transport must report ready before Google Meet join is enabled.",
+        ready: browserTransportReady,
+        message: browserTransportReady
+          ? "Browser WebRTC transport is available."
+          : "Browser transport must report ready before Google Meet join is enabled.",
       },
       {
         id: "audio_transport",
-        ready: process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT === "ready",
-        message: "Audio capture transport must report ready before Google Meet join is enabled.",
+        ready: audioTransportReady,
+        message: audioTransportReady
+          ? "Audio capture transport is available."
+          : "Audio capture transport must report ready before Google Meet join is enabled.",
       },
       {
         id: "user_start",

@@ -197,6 +197,12 @@ export interface MissionControlActiveSessionSurfaceProps {
   onUploadFiles: (files: FileList | null) => void;
   onRunQuickResearch: () => void;
   voiceBusy?: boolean;
+  liveVoiceActive?: boolean;
+  liveVoiceAvailable?: boolean;
+  liveVoiceMuted?: boolean;
+  liveVoiceState?: string;
+  liveVoiceStatusLabel?: string;
+  liveVoiceUnavailableReason?: string | null;
   voiceInputAvailable?: boolean;
   voiceOutputAvailable?: boolean;
   voiceTalkActive?: boolean;
@@ -213,6 +219,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   imageRouteLabel?: string | null;
   onRequestImageProviderChange?: (providerId: string) => void;
   onRequestImageModelChange?: (model: string) => void;
+  onToggleLiveVoice?: () => void;
+  onToggleLiveVoiceMute?: () => void;
   onToggleVoiceTalk?: () => void;
   onOpenAudioTranscribe?: () => void;
   onAudioFileSelected?: (files: FileList | null) => void;

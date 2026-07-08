@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { OpenAIRealtimeVoiceError } from "../services/openai-realtime-voice-service.js";
 
 const transcribeSchema = z.object({
   bytesBase64: z.string().min(1),
@@ -18,6 +19,15 @@ const talkCreateSchema = z.object({
   sessionId: z.string().optional(),
 });
 
+const realtimeClientSecretSchema = z.object({
+  surface: z.enum(["chat", "google-meet"]),
+  sessionId: z.string().min(1).optional(),
+  meetingSessionId: z.string().min(1).optional(),
+  model: z.string().trim().min(1).max(128).optional(),
+  voice: z.string().trim().min(1).max(64).optional(),
+  instructionsProfile: z.string().trim().min(1).max(128).optional(),
+});
+
 const talkParamsSchema = z.object({
   id: z.string().min(1),
 });
@@ -32,6 +42,8 @@ const meetStartSchema = z.object({
   accountRef: z.string().optional(),
   provider: z.enum(["openai-realtime", "local-transcription"]).optional(),
   userStartConfirmed: z.boolean().optional(),
+  browserTransportReady: z.boolean().optional(),
+  audioTransportReady: z.boolean().optional(),
 });
 
 const meetPrerequisitesSchema = z.object({
@@ -40,6 +52,8 @@ const meetPrerequisitesSchema = z.object({
   accountRef: z.string().optional(),
   provider: z.enum(["openai-realtime", "local-transcription"]).optional(),
   userStartConfirmed: z.boolean().optional(),
+  browserTransportReady: z.boolean().optional(),
+  audioTransportReady: z.boolean().optional(),
 });
 
 const meetParamsSchema = z.object({
@@ -84,6 +98,19 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(201).send(await fastify.services.voice.startTalkSession(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/voice/realtime/client-secret", async (request, reply) => {
+    const parsed = realtimeClientSecretSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(await fastify.services.voice.createRealtimeVoiceClientSecret(parsed.data));
+    } catch (error) {
+      const statusCode = error instanceof OpenAIRealtimeVoiceError ? error.statusCode : 502;
+      return reply.code(statusCode).send({ error: (error as Error).message });
     }
   });
 

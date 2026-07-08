@@ -372,6 +372,34 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(voice.fetchGoogleMeetPrerequisiteStatus(), "/api/v1/voice/google-meet/prerequisites", {
       method: "POST",
     });
+    await expectCall(
+      voice.startGoogleMeetSession({
+        meetingUrl: "https://meet.google.com/abc-defg-hij",
+        provider: "openai-realtime",
+        userStartConfirmed: true,
+        browserTransportReady: true,
+        audioTransportReady: true,
+      }),
+      "/api/v1/voice/google-meet/sessions",
+      { method: "POST" },
+    );
+    await expectCall(
+      voice.appendGoogleMeetTranscriptChunk("meet/1", {
+        text: "decision path",
+        final: true,
+        provider: "openai-realtime",
+      }),
+      "/api/v1/voice/google-meet/sessions/meet%2F1/transcript",
+      { method: "POST" },
+    );
+    await expectCall(
+      voice.createGoogleMeetConsultHandoff("meet/1", { target: "cowork" }),
+      "/api/v1/voice/google-meet/sessions/meet%2F1/consult",
+      { method: "POST" },
+    );
+    await expectCall(voice.stopGoogleMeetSession("meet/1"), "/api/v1/voice/google-meet/sessions/meet%2F1/stop", {
+      method: "POST",
+    });
     await expectCall(voice.installVoiceRuntime(), "/api/v1/voice/runtime/install", { method: "POST" });
     await expectCall(voice.selectVoiceRuntimeModel("model/1"), "/api/v1/voice/runtime/models/model%2F1/select", {
       method: "POST",
