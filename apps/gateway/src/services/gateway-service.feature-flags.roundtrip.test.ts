@@ -37,6 +37,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   cronEvidenceV1Enabled: true,
   utilityModelRoutingV1Enabled: true,
   chatTurnInterruptionRecoveryV1Disabled: true,
+  externalSideEffectReplayJobsV1Disabled: true,
 };
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {

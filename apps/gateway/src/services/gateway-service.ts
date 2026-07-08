@@ -497,6 +497,7 @@ import {
 } from "./gateway-route-service-composition.js";
 import { approveDryRun } from "./dry-run-commit-service.js";
 import { invokeIntegrationConnectionAction } from "./integration-action-service.js";
+import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-replay-job-service.js";
 import { RealtimeEventService } from "./realtime-event-service.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
@@ -1870,6 +1871,17 @@ export class GatewayService {
             this.recordDurableTimelineEvent(runId, eventType, payload),
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
+          // Kill switch: externalSideEffectReplayJobsV1Disabled (`*Disabled` ⇒
+          // feature ON by default). Disabled ⇒ the hook returns undefined,
+          // byte-identical to before this hook existed (job_unavailable).
+          buildExternalSideEffectReplayJob: (run, payload) =>
+            this.isFeatureEnabled("externalSideEffectReplayJobsV1Disabled")
+              ? undefined
+              : buildGatewayExternalSideEffectReplayJob(
+                  buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
+                  run,
+                  payload,
+                ),
         },
         orchestration: {
           storage: this.storage,
@@ -7491,6 +7503,8 @@ export class GatewayService {
       utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
       chatTurnInterruptionRecoveryV1Disabled:
         patch.chatTurnInterruptionRecoveryV1Disabled ?? current.chatTurnInterruptionRecoveryV1Disabled,
+      externalSideEffectReplayJobsV1Disabled:
+        patch.externalSideEffectReplayJobsV1Disabled ?? current.externalSideEffectReplayJobsV1Disabled,
     };
     const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
@@ -7563,6 +7577,8 @@ export class GatewayService {
       utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
       chatTurnInterruptionRecoveryV1Disabled:
         stored?.chatTurnInterruptionRecoveryV1Disabled ?? fromConfig.chatTurnInterruptionRecoveryV1Disabled,
+      externalSideEffectReplayJobsV1Disabled:
+        stored?.externalSideEffectReplayJobsV1Disabled ?? fromConfig.externalSideEffectReplayJobsV1Disabled,
     };
     this.featureFlagsCache = resolved;
     this.featureFlagsCacheAtMs = nowMs;

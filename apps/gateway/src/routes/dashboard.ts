@@ -255,6 +255,7 @@ export const updateSettingsSchema = z.object({
       signalInboundV1Enabled: z.boolean().optional(),
       channelVoiceInboundV1Enabled: z.boolean().optional(),
       channelVoiceReplyV1Enabled: z.boolean().optional(),
+      externalSideEffectReplayJobsV1Disabled: z.boolean().optional(),
     })
     .optional(),
 });
