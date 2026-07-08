@@ -542,8 +542,15 @@ function wrapBoundedFetchResponse(response: Response, limits: FetchBodyReadLimit
 // operator-configured trusted infra like a loopback embeddings server) but
 // still must not buffer an unbounded body into memory.
 export async function readBoundedResponseJson(response: Response, limits: FetchBodyReadLimits): Promise<unknown> {
-  const buffer = await readBoundedResponseArrayBuffer(response, limits);
-  return JSON.parse(new TextDecoder().decode(buffer)) as unknown;
+  try {
+    const buffer = await readBoundedResponseArrayBuffer(response, limits);
+    return JSON.parse(new TextDecoder().decode(buffer)) as unknown;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("fetchAllowlisted blocked: ")) {
+      throw new Error(error.message.slice("fetchAllowlisted blocked: ".length), { cause: error });
+    }
+    throw error;
+  }
 }
 
 async function readBoundedResponseArrayBuffer(response: Response, limits: FetchBodyReadLimits): Promise<ArrayBuffer> {

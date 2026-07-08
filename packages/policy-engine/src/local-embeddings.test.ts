@@ -217,6 +217,7 @@ describe("local embeddings real provider", () => {
 
     expect(generated.metadata.provider).toBe("pseudo");
     expect(generated.metadata.fallbackReason).toContain("response body exceeded");
+    expect(generated.metadata.fallbackReason).not.toContain("fetchAllowlisted");
   });
 
   it("falls back to pseudo when the provider returns the wrong dimensionality", async () => {
