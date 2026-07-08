@@ -2,6 +2,8 @@ import type {
   DocsIngestInput,
   EmbeddingIndexInput,
   EmbeddingQueryInput,
+  MemoryBatchMutationRequest,
+  MemoryBatchMutationResponse,
   MemoryChangeEvent,
   MemoryContextPack,
   MemoryDecisionInput,
@@ -264,6 +266,13 @@ export async function forgetMemoryItem(itemId: string, actorId?: string): Promis
   return request<MemoryItemRecord>(`/api/v1/memory/items/${encodeURIComponent(itemId)}/forget`, {
     method: "POST",
     body: JSON.stringify({ actorId }),
+  });
+}
+
+export async function batchMutateMemoryItems(input: MemoryBatchMutationRequest): Promise<MemoryBatchMutationResponse> {
+  return request<MemoryBatchMutationResponse>("/api/v1/memory/items/batch-mutate", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
