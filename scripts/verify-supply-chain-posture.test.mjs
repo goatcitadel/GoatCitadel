@@ -28,9 +28,9 @@ importers:
         specifier: ^4.17.21
         version: 4.18.1
     devDependencies:
-      '@typescript/native-preview':
-        specifier: beta
-        version: 7.0.0-dev.20260421.2
+      typescript-7:
+        specifier: npm:typescript@beta
+        version: typescript@7.0.2
 `,
     readTextFile: (filePath) => {
       if (filePath === "package.json") {
@@ -38,7 +38,7 @@ importers:
           packageManager: "pnpm@latest",
           pnpm: { overrides: { lodash: "^4.18.0" } },
           dependencies: { lodash: "^4.17.21" },
-          devDependencies: { "@typescript/native-preview": "beta" },
+          devDependencies: { "typescript-7": "npm:typescript@beta" },
         });
       }
       if (filePath === "install.ps1") return frozenInstallPs1;
@@ -111,9 +111,12 @@ importers:
         specifier: 1.8.4
         version: 1.8.4
     devDependencies:
-      '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260421.2
-        version: 7.0.0-dev.20260421.2
+      typescript:
+        specifier: npm:@typescript/typescript6@6.0.2
+        version: '@typescript/typescript6@6.0.2'
+      typescript-7:
+        specifier: npm:typescript@7.0.2
+        version: typescript@7.0.2
   packages/contracts:
     dependencies:
       '@goatcitadel/storage':
@@ -129,7 +132,10 @@ importers:
           packageManager: "pnpm@10.31.0",
           pnpm: { overrides: { "@webgpu/types": "link:vendor/webgpu-types-stub", lodash: "4.18.1" } },
           dependencies: { "shell-quote": "1.8.4" },
-          devDependencies: { "@typescript/native-preview": "7.0.0-dev.20260421.2" },
+          devDependencies: {
+            typescript: "npm:@typescript/typescript6@6.0.2",
+            "typescript-7": "npm:typescript@7.0.2",
+          },
         });
       }
       if (filePath === "packages/contracts/package.json") {
@@ -203,9 +209,12 @@ importers:
 test("dependency specifier predicate allows only exact versions or local protocols", () => {
   assert.equal(isPinnedDependencySpecifier("1.2.3"), true);
   assert.equal(isPinnedDependencySpecifier("1.2.3-beta.4"), true);
+  assert.equal(isPinnedDependencySpecifier("npm:typescript@7.0.2"), true);
+  assert.equal(isPinnedDependencySpecifier("npm:@typescript/typescript6@6.0.2"), true);
   assert.equal(isPinnedDependencySpecifier("workspace:*"), true);
   assert.equal(isPinnedDependencySpecifier("link:vendor/example"), true);
   assert.equal(isPinnedDependencySpecifier("^1.2.3"), false);
+  assert.equal(isPinnedDependencySpecifier("npm:typescript@beta"), false);
   assert.equal(isPinnedDependencySpecifier("latest"), false);
   assert.equal(isPinnedDependencySpecifier("beta"), false);
 });

@@ -20,13 +20,14 @@ This document defines the minimum dependency hygiene expected for GoatCitadel `1
 
 - Node `22.x` in CI
 - pnpm `10.31.0`
-- TypeScript as pinned in the workspace lockfile
+- TypeScript 7 as the workspace compiler, pinned in the workspace lockfile
 
-## Experimental Compiler Pilots
+## TypeScript Compiler Policy
 
-- Preview compiler trials must run side-by-side with the workspace default compiler until the repo explicitly promotes them.
-- Preview compiler pilots must not replace required release or verification lanes by default.
-- The current TS7 beta pilot, including commands and benchmark artifacts, is documented in [docs/typescript-7-beta-pilot.md](./typescript-7-beta-pilot.md).
+- The default `tsc` compiler is TypeScript 7.
+- The `typescript` package name remains pinned to the official TypeScript 6 compatibility package until TypeScript-aware tooling and direct API consumers declare TS7 API support.
+- The current TS7 compiler layout, commands, and benchmark artifacts are documented in [docs/typescript-7-compiler.md](./typescript-7-compiler.md).
+- TypeScript benchmark lanes do not replace required release or verification lanes by default.
 
 ## Supported Runtime Surfaces
 

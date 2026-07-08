@@ -26,14 +26,15 @@ const rawArgs = process.argv.slice(2);
 const { verbose, bootstrapMode, passthrough } = extractLauncherOptions(rawArgs);
 const bootstrapPlan = resolveBootstrapPlan(repoRoot, bootstrapPackages, bootstrapMode);
 
-const useTs7 = isTruthyEnv(process.env.GOATCITADEL_DEV_TS7);
+const useWorkspaceTypeScriptGraph =
+  isTruthyEnv(process.env.GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH) || isTruthyEnv(process.env.GOATCITADEL_DEV_TS7);
 
 if (bootstrapPlan.shouldBuild) {
   console.log(`[dev] syncing runtime workspace packages: ${bootstrapPlan.packages.join(", ")}`);
   if (bootstrapPlan.reason) {
     console.log(`[dev] bootstrap reason: ${bootstrapPlan.reason}`);
   }
-  const bootstrapResult = useTs7
+  const bootstrapResult = useWorkspaceTypeScriptGraph
     ? spawnSync(
         process.execPath,
         [path.join(repoRoot, "scripts", "typescript", "run-ts7-workspace.mjs"), "--mode", "build", "--group", "gateway"],
@@ -48,8 +49,8 @@ if (bootstrapPlan.shouldBuild) {
     console.error("[dev] workspace bootstrap build failed");
     process.exit(1);
   }
-  if (useTs7) {
-    console.log("[dev] bootstrap completed via TS7 (tsgo)");
+  if (useWorkspaceTypeScriptGraph) {
+    console.log("[dev] bootstrap completed via TypeScript workspace graph");
   }
 } else {
   console.log(`[dev] runtime workspace packages already fresh; skipped bootstrap (${bootstrapPlan.reason})`);

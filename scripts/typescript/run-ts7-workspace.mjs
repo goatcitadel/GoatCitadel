@@ -22,8 +22,6 @@ const PROJECT_GROUPS = {
     "packages/skills/tsconfig.json",
     "apps/gateway/tsconfig.json",
   ],
-  // W5 Phase 1: legacy "mission-control" group retired — only "mission-control-next"
-  // remains as the Mission Control workspace target for typecheck/build.
   "mission-control-next": [
     "packages/contracts/tsconfig.json",
     "packages/mission-control-shared/tsconfig.json",
@@ -34,6 +32,7 @@ const PROJECT_GROUPS = {
 };
 
 const VALID_MODES = new Set(["typecheck", "build"]);
+const VALID_COMPILERS = new Set(["tsc", "tsc6"]);
 const ALL_GROUP_NAMES = Object.keys(PROJECT_GROUPS);
 
 async function main() {
@@ -43,58 +42,45 @@ async function main() {
     throw new Error(`Unsupported mode "${mode}". Expected one of: ${[...VALID_MODES].join(", ")}.`);
   }
 
+  const compiler = options.compiler ?? "tsc";
+  if (!VALID_COMPILERS.has(compiler)) {
+    throw new Error(`Unsupported compiler "${compiler}". Expected one of: ${[...VALID_COMPILERS].join(", ")}.`);
+  }
+
   const groups = resolveGroups(options.groups);
   const projects = dedupeProjects(groups.flatMap((groupName) => PROJECT_GROUPS[groupName]));
 
   if (projects.length === 0) {
-    throw new Error("No TS7 project groups were selected.");
+    throw new Error("No TypeScript project groups were selected.");
   }
 
-  console.log(`Running TS7 ${mode} for groups: ${groups.join(", ")}`);
+  const compilerLabel = compiler === "tsc" ? "TypeScript 7" : "TypeScript 6 compatibility";
+  console.log(`Running ${compilerLabel} ${mode} for groups: ${groups.join(", ")}`);
 
-  if (mode === "build") {
-    // tsgo (like tsc) rejects --skipLibCheck with -b. Iterate -p in
-    // dependency order instead; PROJECT_GROUPS are already ordered so each
-    // subsequent project's references resolve from the prior emit.
-    for (const project of projects) {
-      console.log(`\n[ts7:build] ${project}`);
-      await runTsgoCommand([
-        "exec",
-        "tsgo",
-        "-p",
-        project,
-        "--skipLibCheck",
-      ]);
-    }
-    return;
-  }
-
-  for (const project of projects) {
-    console.log(`\n[ts7:typecheck] ${project}`);
-    await runTsgoCommand([
-      "exec",
-      "tsgo",
-      "-p",
-      project,
-      "--noEmit",
-      "--skipLibCheck",
-    ]);
-  }
+  // Composite project references reject `--noEmit`; use build mode for both
+  // validation commands. Outputs land in ignored dist/tsbuildinfo locations.
+  await runTypeScriptCommand(["exec", compiler, "-b", ...projects, "--pretty", "false", "--force"]);
 }
 
 function parseCliArgs(args) {
   const groups = [];
+  let compiler;
   let mode;
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === "--mode") {
-      mode = args[index + 1];
+      mode = readOptionValue(args, index, token);
+      index += 1;
+      continue;
+    }
+    if (token === "--compiler") {
+      compiler = readOptionValue(args, index, token);
       index += 1;
       continue;
     }
     if (token === "--group") {
-      const rawGroup = args[index + 1] ?? "";
+      const rawGroup = readOptionValue(args, index, token);
       groups.push(...rawGroup.split(",").map((value) => value.trim()).filter(Boolean));
       index += 1;
       continue;
@@ -102,7 +88,15 @@ function parseCliArgs(args) {
     throw new Error(`Unknown argument: ${token}`);
   }
 
-  return { groups, mode };
+  return { compiler, groups, mode };
+}
+
+function readOptionValue(args, index, optionName) {
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`Missing value for ${optionName}.`);
+  }
+  return value;
 }
 
 function resolveGroups(requestedGroups) {
@@ -117,7 +111,7 @@ function resolveGroups(requestedGroups) {
       continue;
     }
     if (!Object.hasOwn(PROJECT_GROUPS, groupName)) {
-      throw new Error(`Unknown TS7 project group "${groupName}". Expected one of: ${["all", ...ALL_GROUP_NAMES].join(", ")}.`);
+      throw new Error(`Unknown TypeScript project group "${groupName}". Expected one of: ${["all", ...ALL_GROUP_NAMES].join(", ")}.`);
     }
     selected.push(groupName);
   }
@@ -138,7 +132,7 @@ function dedupeProjects(values) {
   return deduped;
 }
 
-async function runTsgoCommand(args) {
+async function runTypeScriptCommand(args) {
   const exitCode = await new Promise((resolve, reject) => {
     const child = spawnCommand(pnpmExecutable, args, {
       cwd: repoRoot,
@@ -149,7 +143,7 @@ async function runTsgoCommand(args) {
   });
 
   if (exitCode !== 0) {
-    throw new Error(`TS7 command failed with exit code ${exitCode}.`);
+    throw new Error(`TypeScript command failed with exit code ${exitCode}.`);
   }
 }
 

@@ -9,24 +9,29 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..", "..");
-const artifactRoot = path.join(repoRoot, "artifacts", "typescript", "ts7-beta");
+const artifactRoot = path.join(repoRoot, "artifacts", "typescript", "ts7");
 const logsRoot = path.join(artifactRoot, "logs");
 const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const workspaceRunnerPath = path.join(repoRoot, "scripts", "typescript", "run-ts7-workspace.mjs");
+const benchmarkConfig = {
+  warmupRunCount: readIntegerEnv("TS7_BENCHMARK_WARMUP_RUNS", 1, { min: 0 }),
+  measuredRunCount: readIntegerEnv("TS7_BENCHMARK_MEASURED_RUNS", 1, { min: 1 }),
+};
 
 const benchmarkCases = [
   {
-    id: "repo-typecheck",
-    title: "Repo-wide typecheck",
+    id: "workspace-graph",
+    title: "Workspace compiler graph",
     baseline: {
       id: "ts6",
-      title: "TypeScript 6",
-      command: pnpmExecutable,
-      args: ["typecheck"],
-      displayCommand: "pnpm typecheck",
+      title: "TypeScript 6 compatibility",
+      command: process.execPath,
+      args: [workspaceRunnerPath, "--mode", "typecheck", "--compiler", "tsc6"],
+      displayCommand: "node scripts/typescript/run-ts7-workspace.mjs --mode typecheck --compiler tsc6",
     },
     candidate: {
       id: "ts7",
-      title: "TypeScript 7 beta",
+      title: "TypeScript 7",
       command: pnpmExecutable,
       args: ["ts7:typecheck"],
       displayCommand: "pnpm ts7:typecheck",
@@ -37,16 +42,16 @@ const benchmarkCases = [
     title: "Gateway build",
     baseline: {
       id: "ts6",
-      title: "TypeScript 6",
-      command: pnpmExecutable,
-      args: ["--filter", "@goatcitadel/gateway", "build"],
-      displayCommand: "pnpm --filter @goatcitadel/gateway build",
+      title: "TypeScript 6 compatibility",
+      command: process.execPath,
+      args: [workspaceRunnerPath, "--mode", "build", "--group", "gateway", "--compiler", "tsc6"],
+      displayCommand: "node scripts/typescript/run-ts7-workspace.mjs --mode build --group gateway --compiler tsc6",
     },
     candidate: {
       id: "ts7",
-      title: "TypeScript 7 beta",
+      title: "TypeScript 7",
       command: process.execPath,
-      args: [path.join(repoRoot, "scripts", "typescript", "run-ts7-workspace.mjs"), "--mode", "build", "--group", "gateway"],
+      args: [workspaceRunnerPath, "--mode", "build", "--group", "gateway"],
       displayCommand: "node scripts/typescript/run-ts7-workspace.mjs --mode build --group gateway",
     },
   },
@@ -55,27 +60,29 @@ const benchmarkCases = [
     title: "Mission Control typecheck",
     baseline: {
       id: "ts6",
-      title: "TypeScript 6",
-      command: pnpmExecutable,
-      args: ["--filter", "@goatcitadel/mission-control-next", "typecheck"],
-      displayCommand: "pnpm --filter @goatcitadel/mission-control-next typecheck",
+      title: "TypeScript 6 compatibility",
+      command: process.execPath,
+      args: [workspaceRunnerPath, "--mode", "typecheck", "--group", "mission-control-next", "--compiler", "tsc6"],
+      displayCommand: "node scripts/typescript/run-ts7-workspace.mjs --mode typecheck --group mission-control-next --compiler tsc6",
     },
     candidate: {
       id: "ts7",
-      title: "TypeScript 7 beta",
+      title: "TypeScript 7",
       command: process.execPath,
-      args: [path.join(repoRoot, "scripts", "typescript", "run-ts7-workspace.mjs"), "--mode", "typecheck", "--group", "mission-control-next"],
+      args: [workspaceRunnerPath, "--mode", "typecheck", "--group", "mission-control-next"],
       displayCommand: "node scripts/typescript/run-ts7-workspace.mjs --mode typecheck --group mission-control-next",
     },
   },
 ];
 
 async function main() {
+  await fs.rm(artifactRoot, { recursive: true, force: true });
   await fs.mkdir(logsRoot, { recursive: true });
 
   const summary = {
     generatedAt: new Date().toISOString(),
-    experimental: true,
+    compilerPromotion: true,
+    benchmarkConfig,
     cases: [],
   };
 
@@ -88,7 +95,7 @@ async function main() {
 
     const output = finalizeSummary(summary);
     await writeSummary(output);
-    console.log(`\nTS7 benchmark report written to ${path.relative(repoRoot, artifactRoot)}`);
+    console.log(`\nTypeScript 7 benchmark report written to ${path.relative(repoRoot, artifactRoot)}`);
   } catch (error) {
     const failedSummary = finalizeSummary({
       ...summary,
@@ -125,17 +132,20 @@ async function runBenchmarkCase(benchmarkCase) {
 }
 
 async function runVariantSeries(benchmarkCase, variant) {
-  console.log(`  warm-up: ${variant.displayCommand}`);
-  const warmup = await runCommand({
-    caseId: benchmarkCase.id,
-    variant,
-    phase: "warmup",
-    iteration: 1,
-  });
+  const warmupRuns = [];
+  for (let iteration = 1; iteration <= benchmarkConfig.warmupRunCount; iteration += 1) {
+    console.log(`  warm-up ${iteration}/${benchmarkConfig.warmupRunCount}: ${variant.displayCommand}`);
+    warmupRuns.push(await runCommand({
+      caseId: benchmarkCase.id,
+      variant,
+      phase: "warmup",
+      iteration,
+    }));
+  }
 
   const measuredRuns = [];
-  for (let iteration = 1; iteration <= 3; iteration += 1) {
-    console.log(`  run ${iteration}/3: ${variant.displayCommand}`);
+  for (let iteration = 1; iteration <= benchmarkConfig.measuredRunCount; iteration += 1) {
+    console.log(`  run ${iteration}/${benchmarkConfig.measuredRunCount}: ${variant.displayCommand}`);
     measuredRuns.push(await runCommand({
       caseId: benchmarkCase.id,
       variant,
@@ -148,7 +158,8 @@ async function runVariantSeries(benchmarkCase, variant) {
     id: variant.id,
     title: variant.title,
     displayCommand: variant.displayCommand,
-    warmup,
+    warmup: warmupRuns[0] ?? null,
+    warmupRuns,
     measuredRuns,
   };
 }
@@ -295,6 +306,20 @@ function median(values) {
   return Number((sorted[middle] ?? 0).toFixed(2));
 }
 
+function readIntegerEnv(name, defaultValue, { min }) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return defaultValue;
+  }
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`${name} must be an integer greater than or equal to ${min}.`);
+  }
+
+  return value;
+}
+
 function finalizeSummary(summary) {
   const status = summary.status ?? "success";
   return {
@@ -311,12 +336,14 @@ async function writeSummary(summary) {
 
 function buildMarkdown(summary) {
   const lines = [
-    "# TypeScript 7 Beta Benchmark",
+    "# TypeScript 7 Compiler Benchmark",
     "",
-    "> Experimental side-by-side benchmark. TS6 remains the default workspace compiler and tooling API target.",
+    "> Side-by-side benchmark. TS7 is the workspace compiler; TS6 remains the tooling API target through @typescript/typescript6.",
     "",
     `- Generated: ${summary.generatedAt}`,
     `- Status: ${summary.status}`,
+    `- Warm-up runs per variant: ${summary.benchmarkConfig?.warmupRunCount ?? 1}`,
+    `- Measured runs per variant: ${summary.benchmarkConfig?.measuredRunCount ?? 1}`,
   ];
 
   if (summary.error) {

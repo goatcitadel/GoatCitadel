@@ -184,9 +184,8 @@ describe("dev supervisor coverage", () => {
     process.emit("SIGINT");
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // The reference build invocation may be either the legacy `pnpm exec tsc -b ...` form
-    // or the faster direct `node + typescript/bin/tsc -b ...` form; both include the
-    // `-b tsconfig.json` flag in argv.
+    // The reference build invocation may use the workspace runner, direct Node entrypoint,
+    // or shell-free Corepack/pnpm fallback; all include the `-b tsconfig.json` flag in argv.
     const referenceBuildCalls = spawnSyncMock.mock.calls.filter((call) => {
       const args = Array.isArray(call[1]) ? call[1] : [];
       const joined = args.map(String).join(" ");

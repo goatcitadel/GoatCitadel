@@ -19,7 +19,7 @@ import {
   sanitizeSpawnOutput,
   shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
-  shouldUseTs7,
+  shouldUseWorkspaceTypeScriptGraph,
   writeReferenceSignatureCache,
 } from "./dev-supervisor-helpers.js";
 
@@ -95,43 +95,48 @@ describe("dev supervisor helper decisions", () => {
     });
   });
 
-  it("recognizes truthy GOATCITADEL_DEV_TS7 values and ignores everything else", () => {
-    expect(shouldUseTs7({})).toBe(false);
-    expect(shouldUseTs7({ GOATCITADEL_DEV_TS7: "" })).toBe(false);
-    expect(shouldUseTs7({ GOATCITADEL_DEV_TS7: "no" })).toBe(false);
-    expect(shouldUseTs7({ GOATCITADEL_DEV_TS7: "0" })).toBe(false);
-    expect(shouldUseTs7({ GOATCITADEL_DEV_TS7: "1" })).toBe(true);
-    expect(shouldUseTs7({ GOATCITADEL_DEV_TS7: "true" })).toBe(true);
-    expect(shouldUseTs7({ GOATCITADEL_DEV_TS7: "On" })).toBe(true);
+  it("recognizes workspace TypeScript graph env values and the legacy TS7 alias", () => {
+    expect(shouldUseWorkspaceTypeScriptGraph({})).toBe(false);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH: "" })).toBe(false);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH: "no" })).toBe(false);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH: "0" })).toBe(false);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH: "1" })).toBe(true);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH: "true" })).toBe(true);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH: "On" })).toBe(true);
+    expect(shouldUseWorkspaceTypeScriptGraph({ GOATCITADEL_DEV_TS7: "1" })).toBe(true);
   });
 
-  it("routes the reference build through TS7 when opted in and through direct node otherwise", () => {
+  it("routes the reference build through the workspace TS7 runner when opted in and shell-free tsc otherwise", () => {
     const gatewayDir = path.resolve(testFileDir, "..");
     const repoRoot = path.resolve(gatewayDir, "..", "..");
     const ts7Plan = resolveReferenceBuildSpawn({
       gatewayDir,
       repoRoot,
-      useTs7: true,
+      useWorkspaceGraph: true,
       platform: "win32",
     });
     expect(ts7Plan.command).toBe(process.execPath);
     expect(ts7Plan.args[0]).toMatch(/run-ts7-workspace\.mjs$/u);
     expect(ts7Plan.args).toContain("--group");
     expect(ts7Plan.args).toContain("gateway");
-    expect(ts7Plan.description).toContain("TS7");
+    expect(ts7Plan.description).toContain("workspace graph");
     expect(ts7Plan.shell).toBe(false);
 
     const directPlan = resolveReferenceBuildSpawn({
       gatewayDir,
       repoRoot,
-      useTs7: false,
+      useWorkspaceGraph: false,
       platform: "win32",
     });
     expect(directPlan.command).toBe(process.execPath);
-    expect(directPlan.args[0]).toMatch(/typescript[\\/]bin[\\/]tsc$/u);
+    if (directPlan.description === "tsc -b (direct TypeScript 7)") {
+      expect(directPlan.args[0]).toMatch(/typescript[\\/]bin[\\/]tsc$/u);
+    } else {
+      expect(directPlan.description).toBe("tsc -b (corepack pnpm exec)");
+      expect(directPlan.args).toEqual(expect.arrayContaining(["pnpm", "exec", "tsc"]));
+    }
     expect(directPlan.args).toEqual(expect.arrayContaining(["-b", "tsconfig.json", "--pretty", "false"]));
     expect(directPlan.cwd).toBe(gatewayDir);
-    expect(directPlan.description).toBe("tsc -b (direct)");
     expect(directPlan.shell).toBe(false);
   });
 
@@ -143,7 +148,7 @@ describe("dev supervisor helper decisions", () => {
       const plan = resolveReferenceBuildSpawn({
         gatewayDir: isolatedDir,
         repoRoot: isolatedDir,
-        useTs7: false,
+        useWorkspaceGraph: false,
         platform: "win32",
         nodeExecutable,
         fileExists: (targetPath) => targetPath === corepackEntrypoint,
@@ -166,7 +171,7 @@ describe("dev supervisor helper decisions", () => {
         resolveReferenceBuildSpawn({
           gatewayDir: isolatedDir,
           repoRoot: isolatedDir,
-          useTs7: false,
+          useWorkspaceGraph: false,
           platform: "win32",
           nodeExecutable,
           fileExists: () => false,
@@ -176,7 +181,7 @@ describe("dev supervisor helper decisions", () => {
       const linuxFallback = resolveReferenceBuildSpawn({
         gatewayDir: isolatedDir,
         repoRoot: isolatedDir,
-        useTs7: false,
+        useWorkspaceGraph: false,
         platform: "linux",
       });
       expect(linuxFallback.command).toBe("pnpm");

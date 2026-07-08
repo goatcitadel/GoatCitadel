@@ -98,33 +98,32 @@ export function buildGatewayStartCommandForPlatform(
   };
 }
 
-export function shouldUseTs7(env: NodeJS.ProcessEnv = process.env): boolean {
-  const value = env.GOATCITADEL_DEV_TS7?.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes" || value === "on";
+export function shouldUseWorkspaceTypeScriptGraph(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnv(env.GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH) || isTruthyEnv(env.GOATCITADEL_DEV_TS7);
 }
 
 /**
  * Resolve the spawn shape for the supervisor's reference build.
  *
  * Two paths:
- * - **TS7 (`@typescript/native-preview` via `scripts/typescript/run-ts7-workspace.mjs`)**:
- *   the native compiler is ~3-10× faster than `tsc` on cold builds. Opt-in via
- *   `GOATCITADEL_DEV_TS7=1`.
- * - **Direct `node + tsc.js`**: skips both the `cmd.exe /d /s /c` wrapper and the
- *   `pnpm exec` boot, saving ~300ms per supervised restart on Windows. The fallback
- *   to `pnpm exec` stays shell-free so workspace paths are never parsed as command
- *   text by `cmd.exe` or a POSIX shell.
+ * - **Workspace TS7 graph runner** (`scripts/typescript/run-ts7-workspace.mjs`):
+ *   validates the gateway project group through the shared compiler lane. Opt in via
+ *   `GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH=1`; the older `GOATCITADEL_DEV_TS7=1`
+ *   remains a compatibility alias.
+ * - **Package `tsc -b`**: prefers a direct Node entrypoint when available; otherwise
+ *   falls back to `pnpm exec tsc` through a shell-free Corepack entrypoint so workspace
+ *   paths are never parsed as command text by `cmd.exe` or a POSIX shell.
  */
 export function resolveReferenceBuildSpawn(opts: {
   gatewayDir: string;
   repoRoot: string;
-  useTs7: boolean;
+  useWorkspaceGraph: boolean;
   platform: NodeJS.Platform;
   nodeExecutable?: string;
   fileExists?: (targetPath: string) => boolean;
 }): { command: string; args: string[]; cwd: string; description: string; shell: false } {
   const nodeExecutable = opts.nodeExecutable ?? process.execPath;
-  if (opts.useTs7) {
+  if (opts.useWorkspaceGraph) {
     return {
       command: nodeExecutable,
       args: [
@@ -135,18 +134,18 @@ export function resolveReferenceBuildSpawn(opts: {
         "gateway",
       ],
       cwd: opts.repoRoot,
-      description: "TS7 (tsgo) reference build",
+      description: "TS7 workspace graph reference build",
       shell: false,
     };
   }
 
-  const directTsc = resolveTscEntry(opts.gatewayDir);
+  const directTsc = resolvePackageBinEntry(opts.repoRoot, "typescript-7", "tsc", opts.fileExists ?? fs.existsSync);
   if (directTsc) {
     return {
       command: nodeExecutable,
       args: [directTsc, "-b", "tsconfig.json", "--pretty", "false"],
       cwd: opts.gatewayDir,
-      description: "tsc -b (direct)",
+      description: "tsc -b (direct TypeScript 7)",
       shell: false,
     };
   }
@@ -161,13 +160,47 @@ export function resolveReferenceBuildSpawn(opts: {
   };
 }
 
-function resolveTscEntry(gatewayDir: string): string | undefined {
+function isTruthyEnv(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function resolvePackageBinEntry(
+  repoRoot: string,
+  packageName: string,
+  binName: string,
+  fileExists: (targetPath: string) => boolean,
+): string | undefined {
   try {
-    const req = createRequire(`${gatewayDir}/`);
-    return req.resolve("typescript/bin/tsc");
+    const req = createRequire(`${repoRoot}/`);
+    const packageJsonPath = req.resolve(`${packageName}/package.json`);
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { bin?: unknown };
+    const binPath = resolvePackageBinPath(path.dirname(packageJsonPath), packageJson.bin, binName);
+    if (!binPath || !fileExists(binPath)) {
+      return undefined;
+    }
+    return binPath;
   } catch {
     return undefined;
   }
+}
+
+function resolvePackageBinPath(packageRoot: string, binField: unknown, binName: string): string | undefined {
+  let relativeBinPath: unknown;
+  if (typeof binField === "string") {
+    relativeBinPath = binField;
+  } else if (binField && typeof binField === "object") {
+    relativeBinPath = (binField as Record<string, unknown>)[binName];
+  }
+  if (typeof relativeBinPath !== "string" || path.isAbsolute(relativeBinPath)) {
+    return undefined;
+  }
+  const resolved = path.resolve(packageRoot, relativeBinPath);
+  const relativeToPackage = path.relative(packageRoot, resolved);
+  if (relativeToPackage.startsWith("..") || path.isAbsolute(relativeToPackage)) {
+    return undefined;
+  }
+  return resolved;
 }
 
 function resolvePnpmExecSpawn(
@@ -196,7 +229,7 @@ function resolvePnpmExecSpawn(
 
   throw new Error(
     "Unable to resolve a shell-free pnpm entrypoint for the Windows reference build. " +
-      "Install Node with Corepack enabled or install workspace dependencies so typescript/bin/tsc can be resolved.",
+      "Install Node with Corepack enabled or install workspace dependencies so tsc can be resolved.",
   );
 }
 

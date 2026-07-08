@@ -248,13 +248,27 @@ function listTrackedPackageManifests(rootDir) {
 }
 
 function listTrackedWorkflowFiles(rootDir) {
-  return execFileSync("git", ["ls-files", ".github/workflows/*.yml", ".github/workflows/*.yaml"], {
+  const trackedFiles = execFileSync("git", ["ls-files", ".github/workflows/*.yml", ".github/workflows/*.yaml"], {
     cwd: rootDir,
     encoding: "utf8",
   })
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  const workflowDir = path.join(rootDir, ".github", "workflows");
+  let workingTreeFiles = [];
+  try {
+    workingTreeFiles = fs
+      .readdirSync(workflowDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
+      .map((entry) => `.github/workflows/${entry.name}`);
+  } catch {
+    workingTreeFiles = [];
+  }
+
+  return [...new Set([...trackedFiles, ...workingTreeFiles])].filter((relativePath) =>
+    fs.existsSync(path.join(rootDir, normalizeRepoPath(relativePath))),
+  );
 }
 
 function main() {

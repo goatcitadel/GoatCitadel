@@ -1,4 +1,4 @@
-name: TypeScript 7 Beta Pilot
+name: TypeScript 7 Compiler
 
 on:
   workflow_dispatch:
@@ -7,9 +7,9 @@ on:
       - "package.json"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
-      - ".github/workflows/typescript-7-beta-pilot.yml"
+      - ".github/workflows/typescript-7-compiler.yml"
       - "docs/dependency-policy.md"
-      - "docs/typescript-7-beta-pilot.md"
+      - "docs/typescript-7-compiler.md"
       - "scripts/typescript/**"
       - "apps/**/package.json"
       - "apps/**/tsconfig*.json"
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   benchmark:
-    name: Experimental TS7 Benchmark
+    name: TS7 Compiler Benchmark
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -42,13 +42,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run experimental TS7 benchmark
+      - name: Assert TypeScript toolchain
+        run: pnpm ts7:toolchain
+
+      - name: Run TS7 benchmark
+        env:
+          TS7_BENCHMARK_WARMUP_RUNS: "1"
+          TS7_BENCHMARK_MEASURED_RUNS: "1"
         run: pnpm ts7:benchmark
 
       - name: Upload TS7 benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ts7-beta-benchmark-artifacts
-          path: artifacts/typescript/ts7-beta
+          name: ts7-compiler-benchmark-artifacts
+          path: artifacts/typescript/ts7
           if-no-files-found: ignore

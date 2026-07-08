@@ -23,7 +23,7 @@ import {
   resolveGatewayHealthHost,
   shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
-  shouldUseTs7,
+  shouldUseWorkspaceTypeScriptGraph,
   writeReferenceSignatureCache,
 } from "./dev-supervisor-helpers.js";
 import {
@@ -65,7 +65,7 @@ const restartBaseBackoffMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RES
 const restartMaxBackoffMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_BACKOFF_MS, 30_000);
 const restartCircuitOpenMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_CIRCUIT_MS, 60_000);
 const referenceBuildMode = resolveReferenceBuildMode(process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD);
-const useTs7 = shouldUseTs7();
+const useWorkspaceTypeScriptGraph = shouldUseWorkspaceTypeScriptGraph();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const configuredRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
 const runtimeRoot = configuredRoot ? path.resolve(configuredRoot) : repoRoot;
@@ -346,7 +346,7 @@ function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean 
   const spawnPlan = resolveReferenceBuildSpawn({
     gatewayDir,
     repoRoot,
-    useTs7,
+    useWorkspaceGraph: useWorkspaceTypeScriptGraph,
     platform: process.platform,
   });
   log.info(`building gateway project references via ${spawnPlan.description}`, {
@@ -356,7 +356,7 @@ function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean 
     ...process.env,
     NODE_NO_WARNINGS: "1",
   };
-  // stdio: inherit so the user sees tsc/tsgo progress directly. Previously
+  // stdio: inherit so the user sees tsc progress directly. Previously
   // the supervisor swallowed output via "pipe", which produced a long silent
   // gap during the project reference build and made boot feel hung.
   const result = spawnSync(spawnPlan.command, spawnPlan.args, {
