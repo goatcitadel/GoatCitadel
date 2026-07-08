@@ -816,6 +816,9 @@ async function withStdioMcpClient<T>(
             clearTimeout(timer);
             wrappedReject(createMcpAbortError());
             if (!closed) {
+              // Mark closed before the child's 'close' event fires so the
+              // outer finally's close() does not terminate the same pid again.
+              closed = true;
               terminateChild(child, server);
             }
           }
@@ -872,8 +875,11 @@ async function withStdioMcpClient<T>(
     client.notify("notifications/initialized", {});
     return await run(client);
   } catch (error) {
+    const baseMessage = (error as Error).message;
     const suffix = client.readStderr().slice(0, 500);
-    const message = suffix ? `${(error as Error).message} [stderr: ${suffix}]`.trim() : (error as Error).message;
+    // Exit- and timeout-triggered errors already embed the stderr tail inline;
+    // only append it for errors that do not carry it yet.
+    const message = suffix && !baseMessage.includes(suffix) ? `${baseMessage} [stderr: ${suffix}]`.trim() : baseMessage;
     throw new Error(message, { cause: error });
   } finally {
     client.close();
@@ -1187,8 +1193,11 @@ async function readBodyChunkWithDeadline(
       reader.read(),
       new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
         timer = setTimeout(() => {
-          void cancelBodyReader(reader);
+          // Reject before cancelling: reader.cancel() synchronously resolves the
+          // in-flight read() with { done: true }, which would otherwise win the
+          // race and surface a misleading missing-response error.
           reject(createMcpHttpBodyTimeoutError());
+          void cancelBodyReader(reader);
         }, remainingMs);
       }),
     ]);
@@ -1508,5 +1517,6 @@ export const __internal = {
   resolveSpawnCommand,
   resolveSpawnSpec,
   terminateChild,
+  withStdioMcpClient,
   writeToChildStdin,
 };

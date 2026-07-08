@@ -22,6 +22,7 @@ const {
   createMcpChildStreamError,
   isChildStdinWritable,
   terminateChild,
+  withStdioMcpClient,
   writeToChildStdin,
   MCP_TERMINATE_GRACE_MS,
 } = __internal;
@@ -424,5 +425,42 @@ describe("mcp runtime invoke crash and cancellation handling", () => {
     // Settle the fake killer's lifecycle so the test doesn't leave its
     // close/error listeners dangling.
     fakeKiller.emitClose(0);
+  });
+});
+
+describe("mcp runtime stdio client abort and close paths", () => {
+  it("terminates the child exactly once when an in-flight request aborts", async () => {
+    setPlatform("linux");
+    vi.useFakeTimers();
+    const { child, kill } = createFakeChild({ pid: 6161 });
+    spawnMock.mockReturnValue(child);
+    const controller = new AbortController();
+
+    const clientRun = withStdioMcpClient(TEST_SERVER, 1000, async () => "unreachable", controller.signal);
+    controller.abort();
+
+    await expect(clientRun).rejects.toThrow("The operation was aborted.");
+    // Both the abort handler and the outer close() run for the same pid; only
+    // one of them may actually signal the child.
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("reports captured stderr only once when the child exits before responding", async () => {
+    setPlatform("linux");
+    const { child, stderr, kill, emitClose } = createFakeChild({ pid: 6161 });
+    spawnMock.mockReturnValue(child);
+
+    const clientRun = withStdioMcpClient(TEST_SERVER, 1000, async () => "unreachable");
+    stderr.emit("data", "boom: config missing");
+    emitClose(1);
+
+    const error = (await clientRun.then(
+      () => undefined,
+      (reason: unknown) => reason,
+    )) as Error;
+    expect(error.message).toContain("exited before responding");
+    expect(error.message.split("boom: config missing")).toHaveLength(2);
+    expect(kill).not.toHaveBeenCalled();
   });
 });
