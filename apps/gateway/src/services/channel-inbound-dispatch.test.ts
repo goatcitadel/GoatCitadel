@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { dispatchInboundWebhookMessage, type IntegrationWebhookRouteLike } from "./channel-inbound-dispatch.js";
+import {
+  dispatchInboundWebhookMessage,
+  DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG,
+  type IntegrationWebhookRouteLike,
+} from "./channel-inbound-dispatch.js";
+import { ChannelBotLoopGuard } from "./channel-bot-loop-guard.js";
 
 /**
  * Direct tests for the shared default-deny sender-allowlist gate in
@@ -271,5 +276,123 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
     expect(gateway.recordDevDiagnostic).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
     );
+  });
+});
+
+/**
+ * Pins the reply-target resolution at channel-inbound-dispatch.ts:520
+ * (`emitInboundWebhookActivity`): `options.bindingTarget ?? message.room ??
+ * message.peer ?? message.account`. This is the address every channel
+ * activity signal (seen/thinking/clear/waiting_approval/failed) is emitted
+ * to, so a regression here would silently retarget replies at the wrong
+ * peer/room.
+ *
+ * A third scenario from the original brief — "keeps the reply target stable
+ * when session rotation occurs mid-dispatch" — is intentionally not present.
+ * dispatchInboundWebhookMessage never touches telegram-channel-sessions.ts;
+ * the target above is recomputed from the same immutable dispatch `options`
+ * on every phase of a single dispatch call, so there is no rotation seam in
+ * this harness for it to exercise. Session-rotation stability for that
+ * mechanism is covered directly in telegram-channel-sessions.test.ts.
+ */
+describe("channel-inbound-dispatch reply-target resolution", () => {
+  it("routes replies to the explicit binding target when provided", async () => {
+    const gateway = createGateway();
+
+    await dispatchInboundWebhookMessage(
+      gateway,
+      {
+        channel: "slack",
+        connectionId: CONNECTION_ID,
+        idempotencyKey: "slack:event-target-explicit",
+        eventType: "message",
+        bindingTarget: "explicit-target",
+        allowedSenders: ["u-owner"],
+        message: {
+          eventId: "event-target-explicit",
+          account: CONNECTION_ID,
+          room: "room-should-be-ignored",
+          peer: "peer-should-be-ignored",
+          actorId: "u-owner",
+          content: "hello",
+        },
+      },
+      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
+    );
+
+    expect(gateway.emitChannelActivity).toHaveBeenCalled();
+    // The explicit binding target must win over room/peer/account on every
+    // phase emitted for this dispatch, not just the first.
+    for (const call of gateway.emitChannelActivity.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ target: "explicit-target" }));
+    }
+  });
+
+  it("falls back to room, then peer, then account for the reply target", async () => {
+    // Case 1: no bindingTarget, room present -> room wins over peer.
+    const gatewayRoom = createGateway();
+    await dispatchInboundWebhookMessage(
+      gatewayRoom,
+      {
+        channel: "slack",
+        connectionId: CONNECTION_ID,
+        idempotencyKey: "slack:event-target-room",
+        eventType: "message",
+        allowedSenders: ["u-owner"],
+        message: {
+          eventId: "event-target-room",
+          account: CONNECTION_ID,
+          room: "room-fallback",
+          peer: "peer-fallback",
+          actorId: "u-owner",
+          content: "hello",
+        },
+      },
+      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
+    );
+    expect(gatewayRoom.emitChannelActivity).toHaveBeenCalledWith(expect.objectContaining({ target: "room-fallback" }));
+
+    // Case 2: no bindingTarget, no room, peer present -> peer wins over account.
+    const gatewayPeer = createGateway();
+    await dispatchInboundWebhookMessage(
+      gatewayPeer,
+      {
+        channel: "slack",
+        connectionId: CONNECTION_ID,
+        idempotencyKey: "slack:event-target-peer",
+        eventType: "message",
+        allowedSenders: ["u-owner"],
+        message: {
+          eventId: "event-target-peer",
+          account: CONNECTION_ID,
+          peer: "peer-fallback",
+          actorId: "u-owner",
+          content: "hello",
+        },
+      },
+      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
+    );
+    expect(gatewayPeer.emitChannelActivity).toHaveBeenCalledWith(expect.objectContaining({ target: "peer-fallback" }));
+
+    // Case 3: no bindingTarget, no room, no peer -> falls all the way back to account.
+    const gatewayAccount = createGateway();
+    await dispatchInboundWebhookMessage(
+      gatewayAccount,
+      {
+        channel: "slack",
+        connectionId: CONNECTION_ID,
+        idempotencyKey: "slack:event-target-account",
+        eventType: "message",
+        allowedSenders: ["u-owner"],
+        message: {
+          eventId: "event-target-account",
+          account: CONNECTION_ID,
+          actorId: "u-owner",
+          content: "hello",
+        },
+      },
+      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
+    );
+    expect(gatewayAccount.emitChannelActivity).toHaveBeenCalledWith(expect.objectContaining({ target: CONNECTION_ID }));
   });
 });
