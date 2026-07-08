@@ -1,13 +1,14 @@
 /* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in local decomposition notes). */
 import { useEffect, useId, useMemo, useState } from "react";
 import { MessageSquareText, RefreshCw, SearchCheck, Settings, ShieldCheck, Waypoints } from "lucide-react";
-import type {
-  EvidenceEnvelope,
-  MemoryDecisionRecord,
-  MemoryItemRecord,
-  MemoryQualityIssueRecord,
-  MemoryRetrievalBenchmarkResponse,
-  MemoryRetrievalStatusResponse,
+import {
+  MEMORY_BATCH_MAX_OPERATIONS,
+  type EvidenceEnvelope,
+  type MemoryDecisionRecord,
+  type MemoryItemRecord,
+  type MemoryQualityIssueRecord,
+  type MemoryRetrievalBenchmarkResponse,
+  type MemoryRetrievalStatusResponse,
 } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes, runMemoryRetrievalBenchmark } from "@goatcitadel/mission-control-shared/api/client";
 import {
@@ -128,8 +129,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   // 5.2: gate the destructive "Forget item" action behind a confirm step (the button's
   // own aria-label calls it permanent), matching how Curator/Approvals confirm.
   const [pendingForget, setPendingForget] = useState(false);
-  // 13: multi-select for atomic batch forget/pin (pruned against the live snapshot
-  // below via batchIds, since a stale id 404s server-side and rejects the whole batch).
+  // 13: multi-select for atomic batch forget/pin (pruned against the visible
+  // list below via batchIds, so hidden or stale rows never enter a batch).
   const [batchSelected, setBatchSelected] = useState<ReadonlySet<string>>(new Set());
   const [draft, setDraft] = useState({
     title: "",
@@ -175,11 +176,6 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const recallPromptId = useId();
 
   const memoryItems = useMemo(() => memory.data?.memoryItems ?? [], [memory.data?.memoryItems]);
-  // Prune ids that left the snapshot — a stale id 404s server-side and rejects the whole atomic batch.
-  const batchIds = useMemo(
-    () => Array.from(batchSelected).filter((id) => memoryItems.some((item) => item.itemId === id)),
-    [batchSelected, memoryItems],
-  );
   const memoryFeedback = memory.data?.memoryFeedback ?? [];
   const memoryQualityIssues = memory.data?.memoryQualityIssues ?? [];
   const traceMemoryCandidates = useMemo(
@@ -250,6 +246,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const selectedVisibleItem = useMemo(
     () => visibleItems.find((item) => item.itemId === memory.selectedItemId) ?? null,
     [memory.selectedItemId, visibleItems],
+  );
+  // Prune batch ids against the *visible* list, not the full snapshot: the
+  // destructive atomic batch must only count and touch rows the operator can
+  // currently see (checked rows hidden by search/namespace filters drop out of
+  // the toolbar until the filter shows them again). Visibility pruning also
+  // covers snapshot staleness — an id that left the snapshot 404s server-side
+  // and would reject the whole batch.
+  const batchIds = useMemo(
+    () => Array.from(batchSelected).filter((id) => visibleItems.some((item) => item.itemId === id)),
+    [batchSelected, visibleItems],
   );
 
   useEffect(() => {
@@ -620,6 +626,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           {batchIds.length > 0 ? (
             <MemoryBatchToolbar
               count={batchIds.length}
+              maxCount={MEMORY_BATCH_MAX_OPERATIONS}
               canMutate={memoryCanMutate}
               busy={batchBusy}
               forgetBusy={memory.busyKey === "memory-batch:forget"}

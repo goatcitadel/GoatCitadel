@@ -29,6 +29,7 @@ import {
   runMemoryMaintenanceNow,
   runMemoryQualityScan,
 } from "../api/client";
+import { MEMORY_BATCH_MAX_OPERATIONS } from "@goatcitadel/contracts";
 import {
   buildMemoryMaintenancePolicyPatch,
   type MemoryMaintenancePolicyDraft,
@@ -44,8 +45,6 @@ type MemoryAdminState = "enabled" | "disabled" | "unknown";
 
 type MemoryBatchMutationOperations = Parameters<typeof batchMutateMemoryItems>[0]["operations"];
 type MemoryBatchMutationResponse = Awaited<ReturnType<typeof batchMutateMemoryItems>>;
-
-const MEMORY_BATCH_MAX_OPERATIONS = 100;
 
 type MemoryOperatorSectionErrors = {
   settings: string | null;

@@ -4,6 +4,7 @@ import { NativeButton } from "../primitives";
 
 interface MemoryBatchToolbarProps {
   count: number;
+  maxCount: number;
   canMutate: boolean;
   busy: boolean;
   forgetBusy: boolean;
@@ -23,6 +24,7 @@ interface MemoryBatchToolbarProps {
  */
 export function MemoryBatchToolbar({
   count,
+  maxCount,
   canMutate,
   busy,
   forgetBusy,
@@ -31,12 +33,19 @@ export function MemoryBatchToolbar({
   onClear,
 }: MemoryBatchToolbarProps) {
   const [pendingForget, setPendingForget] = useState(false);
-  const disabled = !canMutate || busy;
+  // Over-limit selections disable the batch verbs up front so the operator
+  // learns about the cap here, not from a post-confirm hook rejection. The
+  // hook keeps its own >max guard as the backstop.
+  const overLimit = count > maxCount;
+  const disabled = !canMutate || busy || overLimit;
 
   return (
     <>
       <div className="mc-next-runtime-actions" role="toolbar" aria-label="Memory batch actions">
-        <span aria-live="polite">{`${count} selected`}</span>
+        <span aria-live="polite">
+          {`${count} selected`}
+          {overLimit ? ` — batch actions are limited to ${maxCount} items at a time` : null}
+        </span>
         <NativeButton variant="destructive" disabled={disabled} onClick={() => setPendingForget(true)}>
           Forget selected
         </NativeButton>

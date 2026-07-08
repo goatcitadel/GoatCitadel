@@ -634,6 +634,13 @@ export interface MemoryLifecyclePatch {
   ttlOverrideSeconds?: number | null;
 }
 
+/**
+ * Upper bound on operations in one atomic batch mutation request. Mirrors the
+ * gateway's request schema (routes/memory.ts) and MemoryLifecycleService guard
+ * so clients can fail fast — or disable batch verbs — before submitting.
+ */
+export const MEMORY_BATCH_MAX_OPERATIONS = 100;
+
 export type MemoryBatchMutationOperationKind = "patch_item" | "forget_item";
 export type MemoryActionLedgerOperationKind = MemoryBatchMutationOperationKind | "mixed";
 export type MemoryActionLedgerStatus = "applied" | "failed" | "rejected";
