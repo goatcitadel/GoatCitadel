@@ -22,6 +22,7 @@ const {
   createMcpChildStreamError,
   isChildStdinWritable,
   terminateChild,
+  withStdioMcpClient,
   writeToChildStdin,
   MCP_TERMINATE_GRACE_MS,
 } = __internal;
@@ -70,6 +71,13 @@ class FakeStdin extends EventEmitter {
   }
 }
 
+/** Readable-stream stand-in for a child's stdout/stderr. */
+class FakeReadable extends EventEmitter {
+  setEncoding(): this {
+    return this;
+  }
+}
+
 interface FakeChildOptions {
   pid?: number | undefined;
   exitCode?: number | null;
@@ -80,13 +88,15 @@ interface FakeChildOptions {
 function createFakeChild(options: FakeChildOptions = {}): {
   child: ChildProcess;
   stdin: FakeStdin;
+  stderr: FakeReadable;
   kill: ReturnType<typeof vi.fn>;
   emitExit: () => void;
+  emitClose: (code: number | null, signal?: NodeJS.Signals | null) => void;
 } {
   const emitter = new EventEmitter();
   const stdin = new FakeStdin();
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = new FakeReadable();
+  const stderr = new FakeReadable();
   const kill = vi.fn(() => true);
   const child = {
     pid: "pid" in options ? options.pid : 4242,
@@ -102,8 +112,10 @@ function createFakeChild(options: FakeChildOptions = {}): {
   return {
     child,
     stdin,
+    stderr,
     kill,
     emitExit: () => emitter.emit("exit", 0, null),
+    emitClose: (code: number | null, signal: NodeJS.Signals | null = null) => emitter.emit("close", code, signal),
   };
 }
 
@@ -310,5 +322,42 @@ describe("mcp runtime child termination (INFRA-001)", () => {
 
     expect(kill).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("mcp runtime stdio client abort and close paths", () => {
+  it("terminates the child exactly once when an in-flight request aborts", async () => {
+    setPlatform("linux");
+    vi.useFakeTimers();
+    const { child, kill } = createFakeChild({ pid: 6161 });
+    spawnMock.mockReturnValue(child);
+    const controller = new AbortController();
+
+    const clientRun = withStdioMcpClient(TEST_SERVER, 1000, async () => "unreachable", controller.signal);
+    controller.abort();
+
+    await expect(clientRun).rejects.toThrow("The operation was aborted.");
+    // Both the abort handler and the outer close() run for the same pid; only
+    // one of them may actually signal the child.
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("reports captured stderr only once when the child exits before responding", async () => {
+    setPlatform("linux");
+    const { child, stderr, kill, emitClose } = createFakeChild({ pid: 6161 });
+    spawnMock.mockReturnValue(child);
+
+    const clientRun = withStdioMcpClient(TEST_SERVER, 1000, async () => "unreachable");
+    stderr.emit("data", "boom: config missing");
+    emitClose(1);
+
+    const error = (await clientRun.then(
+      () => undefined,
+      (reason: unknown) => reason,
+    )) as Error;
+    expect(error.message).toContain("exited before responding");
+    expect(error.message.split("boom: config missing")).toHaveLength(2);
+    expect(kill).not.toHaveBeenCalled();
   });
 });
