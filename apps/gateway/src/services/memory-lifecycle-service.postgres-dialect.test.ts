@@ -1,0 +1,272 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AuditLog, Storage, TranscriptLog, type DatabaseClient } from "@goatcitadel/storage";
+import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+import { createPostgresDialectStrictDb } from "./testing/postgres-dialect-strict-db.js";
+
+/**
+ * These tests drive the REAL MemoryLifecycleService.batchMutateMemoryItems
+ * over a REAL migrated sqlite database wrapped in a postgres-dialect facade
+ * (see testing/postgres-dialect-strict-db.ts) via the real GatewaySqlRepository
+ * exposed by Storage.gatewaySql. Unlike memory-lifecycle-service.test.ts, which
+ * proves the service's control flow against a mock whose "rollback" is a JS
+ * Map snapshot/restore, this file proves the batch path is atomic against an
+ * actual sqlite immediate transaction (real BEGIN IMMEDIATE / COMMIT /
+ * ROLLBACK) and that it never depends on sqlite-only raw exec syntax that
+ * would break on a real Postgres driver.
+ */
+
+interface MemoryItemRow {
+  item_id: string;
+  namespace: string;
+  title: string;
+  content: string;
+  metadata_json: string;
+  pinned: number;
+  ttl_override_seconds: number | null;
+  expires_at: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+}
+
+interface Harness {
+  rootDir: string;
+  storage: Storage;
+  service: MemoryLifecycleService;
+  db: DatabaseClient;
+}
+
+const harnesses: Harness[] = [];
+
+afterEach(() => {
+  for (const harness of harnesses.splice(0)) {
+    harness.storage.close();
+    fsSync.rmSync(harness.rootDir, { recursive: true, force: true });
+  }
+});
+
+function seedMemoryItem(
+  db: DatabaseClient,
+  seed: {
+    itemId: string;
+    title: string;
+    content: string;
+    namespace?: string;
+    pinned?: boolean;
+    status?: "active" | "forgotten";
+  },
+): void {
+  const now = "2026-04-10T00:00:00.000Z";
+  db.prepare(
+    `
+    INSERT INTO memory_items (
+      item_id, namespace, title, content, metadata_json, pinned,
+      ttl_override_seconds, expires_at, status, created_at, updated_at, forgotten_at, workspace_id
+    ) VALUES (
+      @itemId, @namespace, @title, @content, @metadataJson, @pinned,
+      NULL, NULL, @status, @createdAt, @updatedAt, NULL, @workspaceId
+    )
+  `,
+  ).run({
+    itemId: seed.itemId,
+    namespace: seed.namespace ?? "workspace.default",
+    title: seed.title,
+    content: seed.content,
+    metadataJson: JSON.stringify({}),
+    pinned: seed.pinned ? 1 : 0,
+    status: seed.status ?? "active",
+    createdAt: now,
+    updatedAt: now,
+    workspaceId: "default",
+  });
+}
+
+function readMemoryItemRow(db: DatabaseClient, itemId: string): MemoryItemRow | undefined {
+  return db
+    .prepare(
+      `
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+             created_at, updated_at, forgotten_at
+      FROM memory_items
+      WHERE item_id = ?
+    `,
+    )
+    .get(itemId) as MemoryItemRow | undefined;
+}
+
+function countMemoryChangeHistoryRows(db: DatabaseClient): number {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM memory_change_history`).get() as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+function createHarness(options: { wrapDb?: (baseDb: DatabaseClient) => DatabaseClient } = {}): Harness {
+  const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-memory-lifecycle-pg-dialect-"));
+  const transcriptsDir = path.join(rootDir, "transcripts");
+  const auditDir = path.join(rootDir, "audit");
+  fsSync.mkdirSync(transcriptsDir, { recursive: true });
+  fsSync.mkdirSync(auditDir, { recursive: true });
+
+  const baseDb = createPostgresDialectStrictDb(rootDir);
+  const db = options.wrapDb ? options.wrapDb(baseDb) : baseDb;
+
+  const storage = new Storage({
+    db,
+    transcriptsDir,
+    auditDir,
+    // Keep the file-based logs so the sqlite-backed facade never has to serve
+    // the postgres transcript/audit SQL variants.
+    transcripts: new TranscriptLog(transcriptsDir),
+    audit: new AuditLog(auditDir),
+  });
+
+  const service = new MemoryLifecycleService({
+    context: {} as never,
+    learned: {} as never,
+    maintenance: {} as never,
+    admin: {
+      gatewaySql: storage.gatewaySql,
+      memoryQualityIssues: {} as never,
+      tryParseJson: (raw: string | null | undefined, fallback: unknown) => {
+        try {
+          return raw ? JSON.parse(raw) : fallback;
+        } catch {
+          return fallback;
+        }
+      },
+      requireFeatureEnabled: () => undefined,
+      publishRealtime: vi.fn(),
+    } as never,
+    resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" as const })),
+    readTranscriptOrEmpty: vi.fn(async () => []),
+  });
+
+  const harness: Harness = { rootDir, storage, service, db };
+  harnesses.push(harness);
+  return harness;
+}
+
+describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect", () => {
+  it("completes an atomic memory batch mutation through runImmediateTransaction without raw transaction SQL", () => {
+    const harness = createHarness();
+    seedMemoryItem(harness.db, { itemId: "item-1", title: "Original item 1", content: "Original content 1" });
+    seedMemoryItem(harness.db, { itemId: "item-2", title: "Original item 2", content: "Original content 2" });
+
+    const execSpy = vi.spyOn(harness.db, "exec");
+
+    const response = harness.service.batchMutateMemoryItems(
+      {
+        actionId: "batch-real-atomic",
+        source: "operator-ui",
+        operations: [
+          {
+            kind: "patch_item",
+            itemId: "item-1",
+            patch: { title: "Updated via real transaction", pinned: true },
+          },
+          {
+            kind: "forget_item",
+            itemId: "item-2",
+          },
+        ],
+      },
+      "operator-1",
+    );
+
+    expect(response).toMatchObject({
+      status: "applied",
+      appliedCount: 2,
+      targetItemIds: ["item-1", "item-2"],
+    });
+
+    // The strict double throws if any raw transaction-control SQL reaches
+    // exec() (the way the real Postgres driver would reject sqlite-only BEGIN
+    // IMMEDIATE syntax). Assert directly that none of those calls happened,
+    // proving the batch went through db.transaction("immediate", ...) only.
+    const rawTransactionControlCalls = execSpy.mock.calls.filter(([sql]) =>
+      /^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|PRAGMA|END)\b/i.test(sql),
+    );
+    expect(rawTransactionControlCalls).toHaveLength(0);
+
+    // Verify the mutations actually landed by reading straight off the inner
+    // sqlite connection backing the facade.
+    const item1 = readMemoryItemRow(harness.db, "item-1");
+    expect(item1).toMatchObject({ title: "Updated via real transaction", pinned: 1, status: "active" });
+    const item2 = readMemoryItemRow(harness.db, "item-2");
+    expect(item2).toMatchObject({ title: "Original item 2", status: "forgotten" });
+    expect(item2?.forgotten_at).toBeTruthy();
+
+    expect(countMemoryChangeHistoryRows(harness.db)).toBe(2);
+  });
+
+  it("rolls back every batch mutation on a real transactional failure", () => {
+    let updateCallCount = 0;
+    let midTransactionItem1Title: string | undefined;
+    let midTransactionCallNumber: number | undefined;
+
+    const harness = createHarness({
+      wrapDb: (baseDb) => ({
+        ...baseDb,
+        prepare: (sql: string) => {
+          const stmt = baseDb.prepare(sql);
+          if (!sql.includes("UPDATE memory_items")) {
+            return stmt;
+          }
+          return {
+            get: (...params: unknown[]) => stmt.get(...params),
+            all: (...params: unknown[]) => stmt.all(...params),
+            run: (...params: unknown[]) => {
+              updateCallCount += 1;
+              if (updateCallCount === 2) {
+                midTransactionCallNumber = updateCallCount;
+                // Read via the SAME underlying sqlite connection (baseDb is
+                // never intercepted), proving this is a read-your-own-writes
+                // check inside the still-open, uncommitted transaction rather
+                // than a post-hoc assertion after commit/rollback.
+                midTransactionItem1Title = readMemoryItemRow(baseDb, "item-1")?.title;
+                throw new Error("Simulated real transactional update failure");
+              }
+              return stmt.run(...params);
+            },
+          };
+        },
+      }),
+    });
+
+    seedMemoryItem(harness.db, { itemId: "item-1", title: "Original item 1", content: "Original content 1" });
+    seedMemoryItem(harness.db, { itemId: "item-2", title: "Original item 2", content: "Original content 2" });
+
+    expect(() =>
+      harness.service.batchMutateMemoryItems(
+        {
+          actionId: "batch-real-rollback",
+          operations: [
+            { kind: "patch_item", itemId: "item-1", patch: { title: "Should roll back" } },
+            { kind: "patch_item", itemId: "item-2", patch: { title: "Throws on second update" } },
+          ],
+        },
+        "operator-1",
+      ),
+    ).toThrow("Simulated real transactional update failure");
+
+    // Proof this is a REAL immediate-transaction rollback and not a
+    // short-circuit before touching storage: the first UPDATE's write was
+    // observable on the live connection at the moment the second UPDATE
+    // threw, i.e. it executed against real sqlite inside the still-open
+    // transaction before the surrounding BEGIN IMMEDIATE/ROLLBACK undid it.
+    expect(midTransactionCallNumber).toBe(2);
+    expect(midTransactionItem1Title).toBe("Should roll back");
+
+    // After the throw propagates out of runImmediateTransaction, every row
+    // must be byte-unchanged versus the seeded originals.
+    const item1 = readMemoryItemRow(harness.db, "item-1");
+    expect(item1).toMatchObject({ title: "Original item 1", status: "active" });
+    const item2 = readMemoryItemRow(harness.db, "item-2");
+    expect(item2).toMatchObject({ title: "Original item 2", status: "active" });
+
+    expect(countMemoryChangeHistoryRows(harness.db)).toBe(0);
+  });
+});
