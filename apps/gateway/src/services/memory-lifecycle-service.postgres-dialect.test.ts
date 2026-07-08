@@ -239,6 +239,10 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     seedMemoryItem(harness.db, { itemId: "item-1", title: "Original item 1", content: "Original content 1" });
     seedMemoryItem(harness.db, { itemId: "item-2", title: "Original item 2", content: "Original content 2" });
 
+    // Capture full row snapshots BEFORE the batch operation
+    const item1Snapshot = readMemoryItemRow(harness.db, "item-1");
+    const item2Snapshot = readMemoryItemRow(harness.db, "item-2");
+
     expect(() =>
       harness.service.batchMutateMemoryItems(
         {
@@ -261,11 +265,14 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     expect(midTransactionItem1Title).toBe("Should roll back");
 
     // After the throw propagates out of runImmediateTransaction, every row
-    // must be byte-unchanged versus the seeded originals.
+    // must be byte-unchanged versus the seeded originals: assert full equality
+    // across all 12 columns (item_id, namespace, title, content, metadata_json,
+    // pinned, ttl_override_seconds, expires_at, status, created_at, updated_at,
+    // forgotten_at).
     const item1 = readMemoryItemRow(harness.db, "item-1");
-    expect(item1).toMatchObject({ title: "Original item 1", status: "active" });
+    expect(item1).toStrictEqual(item1Snapshot);
     const item2 = readMemoryItemRow(harness.db, "item-2");
-    expect(item2).toMatchObject({ title: "Original item 2", status: "active" });
+    expect(item2).toStrictEqual(item2Snapshot);
 
     expect(countMemoryChangeHistoryRows(harness.db)).toBe(0);
   });
