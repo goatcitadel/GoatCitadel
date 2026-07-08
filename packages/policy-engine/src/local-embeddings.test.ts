@@ -126,11 +126,7 @@ describe("local embeddings real provider", () => {
   const vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
 
   function jsonResponse(body: unknown): Response {
-    return {
-      ok: true,
-      status: 200,
-      json: async () => body,
-    } as unknown as Response;
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }
 
   beforeEach(() => {
@@ -201,13 +197,26 @@ describe("local embeddings real provider", () => {
     vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "remote");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }) as unknown as Response),
+      vi.fn(async () => new Response("{}", { status: 503 })),
     );
 
     const generated = await generateEmbedding("server error");
 
     expect(generated.metadata.provider).toBe("pseudo");
     expect(generated.metadata.fallbackReason).toContain("embedding-http-503");
+  });
+
+  it("falls back to pseudo when the embeddings response exceeds the byte cap", async () => {
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"padding":"' + "x".repeat(3 * 1024 * 1024) + '"}', { status: 200 })),
+    );
+
+    const generated = await generateEmbedding("hello");
+
+    expect(generated.metadata.provider).toBe("pseudo");
+    expect(generated.metadata.fallbackReason).toContain("response body exceeded");
   });
 
   it("falls back to pseudo when the provider returns the wrong dimensionality", async () => {
