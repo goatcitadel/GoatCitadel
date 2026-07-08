@@ -26,9 +26,13 @@ interface BucketState {
   lastTouched: number;
 }
 
+// U+0000 separators keep the bucket-key field boundaries unambiguous:
+// channel adapters pass ids through unvalidated and some (e.g. Nextcloud
+// Talk actor ids) can contain spaces. The separator must stay written as
+// an escape sequence - a raw NUL byte makes ripgrep treat the file as binary.
 function canonicalKey(key: BotLoopGuardKey): string {
   const [a, b] = [key.participantA, key.participantB].sort();
-  return `${key.scope} ${key.conversation} ${a} ${b}`;
+  return `${key.scope}\u0000${key.conversation}\u0000${a}\u0000${b}`;
 }
 
 export class ChannelBotLoopGuard {

@@ -71,6 +71,40 @@ describe("ChannelBotLoopGuard", () => {
     expect(guard.decide(pairB).action).toBe("allow");
   });
 
+  it("keeps pairs distinct when participant ids contain spaces", () => {
+    // Ids with spaces are reachable: Nextcloud Talk forwards actor.id
+    // unvalidated and Nextcloud user ids may contain spaces; Signal actor ids
+    // are unvalidated bridge pass-throughs. With a plain-space separator both
+    // pairs below canonicalize to "s c a b x", so capping pair one would
+    // wrongly suppress pair two.
+    let now = 1_000_000;
+    const guard = new ChannelBotLoopGuard(CONFIG, () => now);
+    const pairOne: BotLoopGuardKey = { scope: "s", conversation: "c", participantA: "a", participantB: "b x" };
+    const pairTwo: BotLoopGuardKey = { scope: "s", conversation: "c", participantA: "a b", participantB: "x" };
+    for (let i = 0; i < 20; i++) {
+      now += 100;
+      guard.decide(pairOne);
+    }
+    now += 100;
+    expect(guard.decide(pairOne).action).toBe("suppress");
+    expect(guard.decide(pairTwo).action).toBe("allow");
+  });
+
+  it("keeps a space-bearing conversation id from bleeding into the participant fields", () => {
+    // Space-joined, both keys read "s c a b x"; the conversation/participant
+    // boundary must survive ids that contain spaces.
+    let now = 1_000_000;
+    const guard = new ChannelBotLoopGuard(CONFIG, () => now);
+    const roomKey: BotLoopGuardKey = { scope: "s", conversation: "c a", participantA: "b", participantB: "x" };
+    const otherRoomKey: BotLoopGuardKey = { scope: "s", conversation: "c", participantA: "a b", participantB: "x" };
+    for (let i = 0; i < 20; i++) {
+      now += 100;
+      guard.decide(roomKey);
+    }
+    now += 100;
+    expect(guard.decide(otherRoomKey).action).toBe("allow");
+  });
+
   it("canonicalizes pair order (A,B) === (B,A)", () => {
     const guard = new ChannelBotLoopGuard(CONFIG, () => 1_000_000);
     const reversed: BotLoopGuardKey = {
