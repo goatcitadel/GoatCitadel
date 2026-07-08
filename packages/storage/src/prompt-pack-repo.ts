@@ -19,6 +19,7 @@ interface PromptPackRow {
   policy_v2_json: string | null;
   policy_v2_hash: string | null;
   policy_v2_source: string | null;
+  content_sha256?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,11 +57,13 @@ export class PromptPackRepository {
       INSERT INTO prompt_packs (
         pack_id, name, source_label, test_count,
         policy_v2_json, policy_v2_hash, policy_v2_source,
+        content_sha256,
         created_at, updated_at
       )
       VALUES (
         @packId, @name, @sourceLabel, @testCount,
         @policyV2Json, @policyV2Hash, @policyV2Source,
+        @contentSha256,
         @createdAt, @updatedAt
       )
       ON CONFLICT(pack_id) DO UPDATE SET
@@ -70,6 +73,7 @@ export class PromptPackRepository {
         policy_v2_json = excluded.policy_v2_json,
         policy_v2_hash = excluded.policy_v2_hash,
         policy_v2_source = excluded.policy_v2_source,
+        content_sha256 = COALESCE(excluded.content_sha256, prompt_packs.content_sha256),
         updated_at = excluded.updated_at
     `);
     this.deleteTestsByPackStmt = db.prepare("DELETE FROM prompt_pack_tests WHERE pack_id = ?");
@@ -129,6 +133,7 @@ export class PromptPackRepository {
     packId?: string;
     name: string;
     sourceLabel?: string;
+    contentSha256?: string;
     tests: Array<{
       code: string;
       title: string;
@@ -163,6 +168,7 @@ export class PromptPackRepository {
         policyV2Json: stringifyPromptPackPolicyV2(resolvedPolicy),
         policyV2Hash: hashPromptPackPolicyV2(resolvedPolicy),
         policyV2Source: resolvedSource,
+        contentSha256: input.contentSha256 ?? null,
         createdAt: existing?.created_at ?? now,
         updatedAt: now,
       });
@@ -210,6 +216,7 @@ function mapPackRow(row: PromptPackRow): PromptPackRecord {
     policyV2: policy,
     policyHash,
     policySource,
+    contentSha256: row.content_sha256 ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -258,6 +265,8 @@ function isPromptPackRow(value: unknown): value is PromptPackRow {
     (typeof value.policy_v2_json === "string" || value.policy_v2_json === null) &&
     (typeof value.policy_v2_hash === "string" || value.policy_v2_hash === null) &&
     (typeof value.policy_v2_source === "string" || value.policy_v2_source === null) &&
+    // Tolerate a missing column (pre-migration DB) but reject wrong types.
+    (typeof value.content_sha256 === "string" || value.content_sha256 === null || value.content_sha256 === undefined) &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );

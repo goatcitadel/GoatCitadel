@@ -2253,4 +2253,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON dry_run_commits(state, created_at DESC);
     `,
   },
+  {
+    version: 78,
+    name: "prompt_packs_content_sha256",
+    sql: `
+      ALTER TABLE prompt_packs
+        ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+    `,
+  },
 ];

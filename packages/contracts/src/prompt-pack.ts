@@ -9,6 +9,8 @@ export interface PromptPackDiagnosticMetadata {
   capabilityTargets: string[];
   expectedRuntimeSignals: string[];
   likelyFailureClasses: string[];
+  /** Authored tool-family expectation; absent on packs imported before the key existed. */
+  expectedToolFamilies?: string[];
 }
 
 export type PromptPackScoreDimensionV2 = "taskSuccess" | "honesty" | "executionQuality" | "robustness" | "usability";
@@ -65,6 +67,7 @@ export type PromptPackFailureAttributionCode =
   | "wrong_model_routed"
   | "missing_tool"
   | "tool_call_wrong_args"
+  | "tool_budget_exhausted"
   | "retrieval_or_context_gap"
   | "orchestration_synthesis_failure"
   | "ui_operator_truth_gap"
@@ -121,6 +124,8 @@ export interface PromptPackRecord {
   policyV2?: PromptPackPolicyV2;
   policyHash?: string;
   policySource?: PromptPackPolicySource;
+  /** sha256 of the imported markdown; detects file-vs-DB drift. Absent on packs imported before it existed. */
+  contentSha256?: string;
   createdAt: string;
   updatedAt: string;
 }

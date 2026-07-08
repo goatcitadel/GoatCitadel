@@ -1455,3 +1455,27 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
     expect(requiresPromptPackCitationEvidence("Include line numbers for each claim.")).toBe(true);
   });
 });
+
+describe("prompt-pack artifact-tool contract override", () => {
+  it("relaxes the code-row artifact suppression when the contract names an artifact tool", () => {
+    const prompt =
+      "Use `documents.create` to produce a one-page summary document of the audit finding, then cite the files you inspected.";
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-artifact-override",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-05",
+        title: "Artifact override",
+        prompt,
+        orderIndex: 5,
+        mode: "code",
+        toolTier: "explicit-tools",
+        createdAt: "2026-07-08T00:00:00.000Z",
+      },
+    });
+    const input = buildPromptPackPromptInput(prompt, profile);
+    expect(input.directives.namedTools).toContain("documents.create");
+    expect(input.prompt).toContain("creating that artifact is part of the deliverable");
+    expect(input.prompt).not.toContain("Do not create document, presentation, or artifact files");
+  });
+});

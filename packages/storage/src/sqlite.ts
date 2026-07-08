@@ -3580,6 +3580,7 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       policy_v2_json TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_JSON.replace(/'/g, "''")}',
       policy_v2_hash TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}',
       policy_v2_source TEXT NOT NULL DEFAULT 'inherited_default',
+      content_sha256 TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -4366,6 +4367,7 @@ function createPromptPackScoringV2Schema(db: DatabaseSync): void {
     `TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}'`,
   );
   addColumnIfMissingIfTableExists(db, "prompt_packs", "policy_v2_source", "TEXT NOT NULL DEFAULT 'inherited_default'");
+  addColumnIfMissingIfTableExists(db, "prompt_packs", "content_sha256", "TEXT");
 
   if (tableExists(db, "prompt_packs")) {
     db.exec(`

@@ -1289,3 +1289,183 @@ describe("ChatTurnAgentRunner Prompt Lab repo and evidence behavior", () => {
     expect(result.turnTrace.completion?.status).toBe("complete");
   });
 });
+
+describe("ChatTurnAgentRunner Prompt Lab cowork web caps", () => {
+  function searchToolCallResponse(callId: string, query: string): ChatCompletionResponse {
+    return {
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: callId,
+                type: "function",
+                function: { name: "browser_search", arguments: JSON.stringify({ query }) },
+              },
+            ],
+          },
+        },
+      ],
+    };
+  }
+
+  function navigateToolCallResponse(callId: string, url: string): ChatCompletionResponse {
+    return {
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: callId,
+                type: "function",
+                function: { name: "browser_navigate", arguments: JSON.stringify({ url }) },
+              },
+            ],
+          },
+        },
+      ],
+    };
+  }
+
+  function finalTextResponse(content: string): ChatCompletionResponse {
+    return {
+      model: "gpt-5.4",
+      choices: [{ index: 0, message: { role: "assistant", content } }],
+    };
+  }
+
+  const COWORK_WRAPPED_PROMPT = [
+    "## Prompt Lab Run Contract",
+    "- Mode: cowork",
+    "- Tool tier: explicit-tools",
+    "",
+    "## User Task",
+    "Research current advice for reducing household food waste using web sources and synthesize practical steps.",
+  ].join("\n");
+
+  it("allows a second cowork Prompt Lab web search and blocks the third", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(searchToolCallResponse("call-cowork-search-1", "reduce household food waste official"))
+      .mockResolvedValueOnce(searchToolCallResponse("call-cowork-search-2", "food waste reduction guidance EPA"))
+      .mockResolvedValueOnce(searchToolCallResponse("call-cowork-search-3", "food storage best practices"))
+      .mockResolvedValueOnce(
+        finalTextResponse("Synthesis: store produce correctly, plan portions, and compost the remainder."),
+      );
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cowork-search",
+      result: {
+        // Non-empty (avoids the no-results alternate-engine retries) but without
+        // result URLs, so repeat searches cannot be promoted to browser.navigate.
+        results: [{ title: "Food waste guidance", snippet: "Plan portions and store produce correctly." }],
+      },
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-cap-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-cap-1",
+      content: COWORK_WRAPPED_PROMPT,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: COWORK_WRAPPED_PROMPT }],
+    });
+
+    const searchInvocations = invokeTool.mock.calls.filter((call) => call[0].toolName === "browser.search");
+    expect(searchInvocations).toHaveLength(2);
+    const searchRuns = (result.turnTrace.toolRuns ?? []).filter((toolRun) => toolRun.toolName === "browser.search");
+    expect(searchRuns).toHaveLength(3);
+    expect(searchRuns[0]).toMatchObject({ status: "executed" });
+    expect(searchRuns[1]).toMatchObject({ status: "executed" });
+    expect(searchRuns[2]).toMatchObject({
+      status: "blocked",
+      error: expect.stringContaining("capped at two web searches"),
+    });
+  });
+
+  it("allows four cowork Prompt Lab opened sources and blocks the fifth", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        navigateToolCallResponse("call-cowork-open-1", "https://guidance-one.example.gov/food-waste"),
+      )
+      .mockResolvedValueOnce(
+        navigateToolCallResponse("call-cowork-open-2", "https://guidance-two.example.gov/food-waste"),
+      )
+      .mockResolvedValueOnce(
+        navigateToolCallResponse("call-cowork-open-3", "https://guidance-three.example.gov/food-waste"),
+      )
+      .mockResolvedValueOnce(
+        navigateToolCallResponse("call-cowork-open-4", "https://guidance-four.example.gov/food-waste"),
+      )
+      .mockResolvedValueOnce(
+        navigateToolCallResponse("call-cowork-open-5", "https://guidance-five.example.gov/food-waste"),
+      )
+      .mockResolvedValueOnce(finalTextResponse("Synthesis from the four opened sources."));
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockImplementation(async (request) => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-open",
+        result: {
+          url: String(request.args?.url ?? "https://guidance.example.gov/food-waste"),
+          finalUrl: String(request.args?.url ?? "https://guidance.example.gov/food-waste"),
+          text: "Practical steps for reducing household food waste: plan portions, store produce correctly, and compost the remainder of scraps.",
+        },
+      }));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-cap-2",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-cap-2",
+      content: COWORK_WRAPPED_PROMPT,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: COWORK_WRAPPED_PROMPT }],
+    });
+
+    const navigateInvocations = invokeTool.mock.calls.filter((call) => call[0].toolName === "browser.navigate");
+    expect(navigateInvocations).toHaveLength(4);
+    const navigateRuns = (result.turnTrace.toolRuns ?? []).filter((toolRun) => toolRun.toolName === "browser.navigate");
+    expect(navigateRuns).toHaveLength(5);
+    expect(navigateRuns[4]).toMatchObject({
+      status: "blocked",
+      error: expect.stringContaining("capped at four opened/read sources"),
+    });
+  });
+});
