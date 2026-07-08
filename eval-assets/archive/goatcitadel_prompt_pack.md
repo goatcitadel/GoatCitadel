@@ -173,12 +173,12 @@ Tracked canonical prompt pack. 108 tests across the three executable GoatCitadel
 "Roles in order: `Researcher`, `Architect`, `QA`.
 
 Using file/code tools, inspect these local files only:
-- `F:/code/goatcitadel-arena/README.md`
-- `F:/code/personal-ai-mobile-app/README.md`
-- `F:/code/sql-teacher/package.json`
-- `F:/code/card-identifier/README.md`
-- `F:/code/secret-project/README.md`
-- `F:/code/Starpit/ARCHITECTURE.md`
+- `../goatcitadel-arena/README.md`
+- `../personal-ai-mobile-app/README.md`
+- `../sql-teacher/package.json`
+- `../card-identifier/README.md`
+- `../secret-project/README.md`
+- `../Starpit/ARCHITECTURE.md`
 
 Decide which three sibling repos should be added next as prompt-pack targets and what prompt families each should contribute.
 
@@ -199,10 +199,10 @@ Rules:
 "Roles in order: `Researcher`, `Architect`, `QA`.
 
 Using file/code tools, inspect these local files only:
-- `F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts`
-- `F:/code/personal-ai-mobile-app/src/api/streaming.ts`
-- `F:/code/sql-teacher/lib/db/sandbox.ts`
-- `F:/code/card-identifier/backend/internal/identify/engine.go`
+- `../goatcitadel-arena/packages/engine/src/judge/rules-judge.ts`
+- `../personal-ai-mobile-app/src/api/streaming.ts`
+- `../sql-teacher/lib/db/sandbox.ts`
+- `../card-identifier/backend/internal/identify/engine.go`
 
 Design one high-signal Prompt Lab test for each repo. Each proposed test must be grounded in the inspected code and must include anti-hallucination constraints.
 
@@ -223,10 +223,10 @@ Rules:
 "Roles in order: `Researcher`, `Architect`, `QA`.
 
 Using file/code tools, inspect these local files only:
-- `F:/code/personal-ai/goatcitadel_prompt_pack.md`
-- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
-- `F:/code/personal-ai/apps/mission-control/src/pages/PromptLabPage.tsx`
-- `F:/code/personal-ai/docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`
+- `../personal-ai/goatcitadel_prompt_pack.md`
+- `../personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
+- `../personal-ai/apps/mission-control/src/pages/PromptLabPage.tsx`
+- `../personal-ai/docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`
 
 Recommend the single highest-value Prompt Lab improvement to ship next.
 
@@ -356,10 +356,10 @@ Rules:
 
 [TEST-D24] GoatCitadel Arena deterministic judge audit
 "Read these files using file/code tools:
-- `F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts`
-- `F:/code/goatcitadel-arena/packages/engine/src/damage.ts`
-- `F:/code/goatcitadel-arena/packages/engine/src/effects.ts`
-- `F:/code/goatcitadel-arena/packages/engine/__tests__/rules-judge.test.ts`
+- `../goatcitadel-arena/packages/engine/src/judge/rules-judge.ts`
+- `../goatcitadel-arena/packages/engine/src/damage.ts`
+- `../goatcitadel-arena/packages/engine/src/effects.ts`
+- `../goatcitadel-arena/packages/engine/__tests__/rules-judge.test.ts`
 
 Review whether the deterministic round evaluator has any logic bugs, brittle branches, or important regression gaps.
 
@@ -377,7 +377,7 @@ Rules:
 - Do not propose broad rewrites."
 
 [TEST-D25] GoatCitadel Mobile streaming failure-mode review
-"Read `F:/code/personal-ai-mobile-app/src/api/streaming.ts`, `F:/code/personal-ai-mobile-app/src/api/client.ts`, and `F:/code/personal-ai-mobile-app/src/features/chat/chatRuntimeStore.ts` using file/code tools. Audit the chat streaming path for abort-handling bugs, duplicate-event risks, Android-vs-fetch behavior drift, and state-sync issues.
+"Read `../personal-ai-mobile-app/src/api/streaming.ts`, `../personal-ai-mobile-app/src/api/client.ts`, and `../personal-ai-mobile-app/src/features/chat/chatRuntimeStore.ts` using file/code tools. Audit the chat streaming path for abort-handling bugs, duplicate-event risks, Android-vs-fetch behavior drift, and state-sync issues.
 
 Output exactly these sections:
 - Findings
@@ -394,11 +394,11 @@ Rules:
 
 [TEST-D26] SQL Teacher sandbox security audit
 "Read these files using file/code tools:
-- `F:/code/sql-teacher/lib/db/sandbox.ts`
-- `F:/code/sql-teacher/lib/db/security.ts`
-- `F:/code/sql-teacher/lib/db/pool.ts`
-- `F:/code/sql-teacher/content/themes/index.ts`
-- `F:/code/sql-teacher/db/init/16-security-fixes.sql`
+- `../sql-teacher/lib/db/sandbox.ts`
+- `../sql-teacher/lib/db/security.ts`
+- `../sql-teacher/lib/db/pool.ts`
+- `../sql-teacher/content/themes/index.ts`
+- `../sql-teacher/db/init/16-security-fixes.sql`
 
 Review whether the SQL execution sandbox is actually safe against schema escape, unsafe session state reuse, runaway queries, or privilege mistakes.
 
@@ -418,10 +418,10 @@ Rules:
 
 [TEST-D27] GoatCitadel prompt-lab source-of-truth review
 "Read these files using file/code tools:
-- `F:/code/personal-ai/goatcitadel_prompt_pack.md`
-- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
-- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`
-- `F:/code/personal-ai/.gitignore`
+- `../personal-ai/goatcitadel_prompt_pack.md`
+- `../personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
+- `../personal-ai/apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`
+- `../personal-ai/.gitignore`
 
 Review whether Prompt Lab currently has a clear source of truth for prompt packs, or whether source files, SQLite imports, and ignored artifacts can drift.
 
@@ -687,10 +687,10 @@ Rules:
 "Roles in order: `Researcher`, `Architect`, `QA`.
 
 Using file/code tools, inspect these local files only:
-- `F:/code/goatcitadel-arena/README.md`
-- `F:/code/personal-ai-mobile-app/README.md`
-- `F:/code/sql-teacher/package.json`
-- `F:/code/card-identifier/README.md`
+- `../goatcitadel-arena/README.md`
+- `../personal-ai-mobile-app/README.md`
+- `../sql-teacher/package.json`
+- `../card-identifier/README.md`
 
 Rank which two repos should contribute the next high-signal prompt-pack tests.
 
@@ -711,9 +711,9 @@ Rules:
 "Roles in order: `Researcher`, `Architect`, `QA`.
 
 Using file/code tools, inspect these local files only:
-- `F:/code/personal-ai/goatcitadel_prompt_pack.md`
-- `F:/code/personal-ai/docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`
-- `F:/code/personal-ai/AGENTS.md`
+- `../personal-ai/goatcitadel_prompt_pack.md`
+- `../personal-ai/docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`
+- `../personal-ai/AGENTS.md`
 
 Recommend the next highest-value improvement to GoatCitadel's evaluation strategy.
 
@@ -890,9 +890,9 @@ Rules:
 
 [TEST-T26] Source-of-truth drift evidence pass
 "Use file/code tools to inspect these files:
-- `F:/code/personal-ai/goatcitadel_prompt_pack.md`
-- `F:/code/personal-ai/.gitignore`
-- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
+- `../personal-ai/goatcitadel_prompt_pack.md`
+- `../personal-ai/.gitignore`
+- `../personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
 
 Return exactly these sections:
 - Source file evidence
