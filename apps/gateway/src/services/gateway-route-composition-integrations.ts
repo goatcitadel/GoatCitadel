@@ -332,6 +332,8 @@ export function createCommsHostForGateway(
     emitTelegramTyping: (connection, input) => integrationChannel.emitTelegramTyping(connection, input),
     emitChannelActivity: (connection, input, options) =>
       integrationChannel.emitChannelActivity(connection, input, options),
+    mutationStore: gateway.mutationIdempotencyStore,
+    sideEffectRunStore: gateway.storage.externalSideEffectRuns,
   };
 }
 

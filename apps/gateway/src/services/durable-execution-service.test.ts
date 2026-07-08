@@ -4,6 +4,8 @@ import type {
   ConnectorRecord,
   CuratorTickWorkflowPayload,
   DurableRunRecord,
+  ExternalSideEffectReplayWorkflowPayload,
+  ExternalSideEffectRunRecord,
 } from "@goatcitadel/contracts";
 vi.mock("@goatcitadel/storage", () => ({}));
 vi.mock("sqlite", () => ({}));
@@ -41,6 +43,7 @@ import {
   type DurableWorkflowExecutorHosts,
 } from "./durable-execution-service.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-replay-job-service.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -465,6 +468,212 @@ describe("durable-execution-service orchestration workflow", () => {
               runId: "extfx-started",
               status: "skipped",
               reason: "external_boundary_already_crossed",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("wires the production Activepieces replay job builder end-to-end when the kill switch is off", async () => {
+    const run = buildRunWithPayload("external_side_effect.replay", {
+      version: "external_side_effect.replay.v1",
+      workspaceId: "default",
+      requestedBy: "operator",
+      requestedAt: "2026-06-01T00:00:00.000Z",
+      runIds: ["extfx-activepieces"],
+    });
+    let storedRun = { ...run, status: "running" as const };
+    const externalRun = {
+      runId: "extfx-activepieces",
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external_side_effect:integration_operator_action:automation.activepieces:conn-1:trigger_webhook",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      actorScope: "actor-1",
+      idempotencyKey: "key-activepieces-1",
+      payloadHash: "hash-1",
+      status: "failed_before_boundary",
+      replayPolicy: "idempotent_external",
+      replayOutcome: "claimed",
+      replayAttempt: "new",
+      resumeState: "manual_retry_after_recorded_failure",
+      attemptCount: 1,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const updateRun = vi.fn((patch: Record<string, unknown>) => {
+      storedRun = { ...storedRun, status: patch.status as DurableRunRecord["status"], version: storedRun.version + 1 };
+      return storedRun;
+    });
+    const createCheckpoint = vi.fn();
+    const connection = {
+      connectionId: "conn-1",
+      catalogId: "automation.activepieces",
+      kind: "automation",
+      key: "activepieces",
+      label: "Activepieces",
+      enabled: true,
+      status: "connected",
+      config: { webhookUrl: "https://activepieces.example.test/hooks/flow-1", defaultFlowId: "flow-1" },
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: "run-prod-1", message: "flow accepted" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const integrationActionHost = {
+      storage: { integrationConnections: { get: vi.fn(() => connection) } },
+      fetchWithDiagnosticsTimeout: fetchMock,
+      readConnectionConfigValue: (config: Record<string, unknown>, key: string) => {
+        const value = config[key];
+        return typeof value === "string" ? value : undefined;
+      },
+      resolveConnectionSecret: () => undefined,
+      publishRealtime: vi.fn(),
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          record: {
+            method: "POST",
+            routePath: externalRun.routePath,
+            idempotencyKey: externalRun.idempotencyKey,
+            actorScope: externalRun.actorScope,
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    };
+    const host = {
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => storedRun),
+          updateRun,
+          createCheckpoint,
+        },
+        externalSideEffectRuns: {
+          get: vi.fn((runId: string) => {
+            if (runId === "extfx-activepieces") {
+              return externalRun;
+            }
+            throw new Error(`missing run ${runId}`);
+          }),
+          listByConnection: vi.fn(),
+          listByWorkspace: vi.fn(),
+        },
+      },
+      publishRealtime: vi.fn(),
+      recordDurableTimelineEvent: vi.fn(),
+      // Mirrors the EXACT gateway-service.ts host-block wiring (kill switch
+      // off ⇒ delegate to the real production builder against a
+      // production-shaped IntegrationActionHost).
+      buildExternalSideEffectReplayJob: (
+        candidate: ExternalSideEffectRunRecord,
+        payload: ExternalSideEffectReplayWorkflowPayload,
+      ) => buildGatewayExternalSideEffectReplayJob(integrationActionHost as never, candidate, payload),
+    };
+
+    await executeDurableExternalSideEffectReplayRun(host as never, run);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId, status: "completed" }));
+    expect(createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          workflow: "external_side_effect.replay",
+          executed: 1,
+          replayed: 1,
+          skipped: 0,
+        }),
+      }),
+    );
+  });
+
+  it("returns job_unavailable for every candidate when the replay job kill switch is on", async () => {
+    const run = buildRunWithPayload("external_side_effect.replay", {
+      version: "external_side_effect.replay.v1",
+      workspaceId: "default",
+      requestedBy: "operator",
+      requestedAt: "2026-06-01T00:00:00.000Z",
+      runIds: ["extfx-activepieces"],
+    });
+    let storedRun = { ...run, status: "running" as const };
+    const externalRun = {
+      runId: "extfx-activepieces",
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external_side_effect:integration_operator_action:automation.activepieces:conn-1:trigger_webhook",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      actorScope: "actor-1",
+      idempotencyKey: "key-activepieces-1",
+      payloadHash: "hash-1",
+      status: "failed_before_boundary",
+      replayPolicy: "idempotent_external",
+      replayOutcome: "claimed",
+      replayAttempt: "new",
+      resumeState: "manual_retry_after_recorded_failure",
+      attemptCount: 1,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const updateRun = vi.fn((patch: Record<string, unknown>) => {
+      storedRun = { ...storedRun, status: patch.status as DurableRunRecord["status"], version: storedRun.version + 1 };
+      return storedRun;
+    });
+    const createCheckpoint = vi.fn();
+    const host = {
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => storedRun),
+          updateRun,
+          createCheckpoint,
+        },
+        externalSideEffectRuns: {
+          get: vi.fn((runId: string) => {
+            if (runId === "extfx-activepieces") {
+              return externalRun;
+            }
+            throw new Error(`missing run ${runId}`);
+          }),
+          listByConnection: vi.fn(),
+          listByWorkspace: vi.fn(),
+        },
+      },
+      publishRealtime: vi.fn(),
+      recordDurableTimelineEvent: vi.fn(),
+      // Mirrors the EXACT gateway-service.ts host-block wiring with the kill
+      // switch on: the hook is called but never reaches the production
+      // builder, and always returns undefined.
+      buildExternalSideEffectReplayJob: vi.fn(() => undefined),
+    };
+
+    await executeDurableExternalSideEffectReplayRun(host as never, run);
+
+    expect(host.buildExternalSideEffectReplayJob).toHaveBeenCalledTimes(1);
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId, status: "completed" }));
+    expect(createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          executed: 0,
+          skipped: 1,
+          results: [
+            expect.objectContaining({
+              runId: "extfx-activepieces",
+              status: "skipped",
+              reason: "job_unavailable",
             }),
           ],
         }),

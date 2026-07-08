@@ -133,5 +133,7 @@ export interface RuntimeSettings {
     utilityModelRoutingV1Enabled?: boolean;
     /** Kill switch: disables the boot-time chat-turn interruption reconciler. Absent/false ⇒ reconciler runs on every boot. */
     chatTurnInterruptionRecoveryV1Disabled?: boolean;
+    /** Kill switch: disables the production Activepieces `trigger_webhook` external-side-effect replay job. Absent/false ⇒ hook wired (ON by default). */
+    externalSideEffectReplayJobsV1Disabled?: boolean;
   };
 }

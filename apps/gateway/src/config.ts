@@ -144,6 +144,16 @@ export interface FeatureFlagsConfig {
    * failure traces). Absent/false (default) ⇒ reconciler runs on every boot.
    */
   chatTurnInterruptionRecoveryV1Disabled?: boolean;
+  /**
+   * Kill switch for the production `external_side_effect.replay` durable
+   * workflow's Activepieces `trigger_webhook` replay job (the ONLY
+   * allowlisted integration — see external-side-effect-replay-job-service.ts).
+   * Absent/false (default) ⇒ the hook is wired and replay-eligible runs get
+   * reconstructed from live connection config; `true` makes the hook return
+   * `undefined` again, so replay stays `job_unavailable` exactly as before
+   * this hook existed.
+   */
+  externalSideEffectReplayJobsV1Disabled?: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -757,6 +767,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       "chatTurnInterruptionRecoveryV1Disabled",
       process.env.GOATCITADEL_FEATURE_CHAT_TURN_INTERRUPTION_RECOVERY_V1_DISABLED,
     ],
+    [
+      "externalSideEffectReplayJobsV1Disabled",
+      process.env.GOATCITADEL_FEATURE_EXTERNAL_SIDE_EFFECT_REPLAY_JOBS_V1_DISABLED,
+    ],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -1322,6 +1336,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // Kill switch for the boot-time chat-turn interruption reconciler.
       // `?? false` keeps the reconciler active unless an operator disables it.
       chatTurnInterruptionRecoveryV1Disabled: featuresInput.chatTurnInterruptionRecoveryV1Disabled ?? false,
+      // Kill switch for the production Activepieces `trigger_webhook` replay
+      // job. `?? false` keeps the replay hook wired (ON by default) unless an
+      // operator disables it; disabled ⇒ byte-identical to before this hook
+      // existed (replay stays `job_unavailable`).
+      externalSideEffectReplayJobsV1Disabled: featuresInput.externalSideEffectReplayJobsV1Disabled ?? false,
     },
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {

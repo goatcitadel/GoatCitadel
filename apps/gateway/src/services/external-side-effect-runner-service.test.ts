@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   claimIdempotentExternalSideEffect,
   deriveExternalSideEffectReversibility,
+  type ExternalSideEffectExecutionContext,
   type ExternalSideEffectRunStore,
   markIdempotentExternalSideEffectCompleted,
   recordAuditOnlyExternalSideEffectIntent,
@@ -115,6 +116,85 @@ function sideEffectRun(overrides: Partial<ReturnType<ExternalSideEffectRunStore[
     createdAt: "2026-05-31T00:00:00.000Z",
     updatedAt: "2026-05-31T00:01:00.000Z",
     ...overrides,
+  };
+}
+
+type FakeMutationClaimStatus = "pending" | "completed" | "failed";
+
+interface FakeMutationClaimInput {
+  method: string;
+  routePath: string;
+  idempotencyKey: string;
+  actorScope?: string;
+  payloadHash: string;
+  now?: string;
+}
+
+/**
+ * Mirrors packages/storage/src/mutation-idempotency-repo.ts claim() exactly: the
+ * payload-hash mismatch check runs BEFORE the failed-record revive, and a still-
+ * "pending" existing row yields "in_progress" rather than "duplicate". Using this
+ * stateful fake (instead of a one-shot vi.fn() outcome) lets the payload_mismatch
+ * and in_progress tests prove the runner's blocking behavior against genuine
+ * claim() state transitions across two real invocations, not a canned mock.
+ */
+function createStatefulMutationIdempotencyStore(): {
+  claim: ReturnType<typeof vi.fn>;
+  markCompleted: ReturnType<typeof vi.fn>;
+  markFailed: ReturnType<typeof vi.fn>;
+} {
+  const rows = new Map<string, { payloadHash: string; status: FakeMutationClaimStatus }>();
+
+  const toKey = (input: FakeMutationClaimInput) =>
+    [input.method, input.routePath, input.idempotencyKey, input.actorScope ?? ""].join("|");
+
+  const toRecord = (input: FakeMutationClaimInput, row: { payloadHash: string; status: FakeMutationClaimStatus }) => ({
+    method: input.method,
+    routePath: input.routePath,
+    idempotencyKey: input.idempotencyKey,
+    actorScope: input.actorScope ?? "",
+    payloadHash: row.payloadHash,
+    status: row.status,
+    createdAt: input.now ?? "",
+    updatedAt: input.now ?? "",
+  });
+
+  return {
+    claim: vi.fn((input: FakeMutationClaimInput) => {
+      const key = toKey(input);
+      const existing = rows.get(key);
+      if (!existing) {
+        const row = { payloadHash: input.payloadHash, status: "pending" as const };
+        rows.set(key, row);
+        return { outcome: "claimed" as const, claimKind: "new" as const, record: toRecord(input, row) };
+      }
+      if (existing.payloadHash !== input.payloadHash) {
+        return { outcome: "payload_mismatch" as const, record: toRecord(input, existing) };
+      }
+      if (existing.status === "failed") {
+        const row = { payloadHash: input.payloadHash, status: "pending" as const };
+        rows.set(key, row);
+        return { outcome: "claimed" as const, claimKind: "retry_after_failure" as const, record: toRecord(input, row) };
+      }
+      return {
+        outcome: existing.status === "pending" ? ("in_progress" as const) : ("duplicate" as const),
+        record: toRecord(input, existing),
+      };
+    }),
+    markCompleted: vi.fn((input: FakeMutationClaimInput) => {
+      const key = toKey(input);
+      const existing = rows.get(key);
+      if (existing) {
+        rows.set(key, { ...existing, status: "completed" });
+      }
+    }),
+    markFailed: vi.fn((input: FakeMutationClaimInput) => {
+      const key = toKey(input);
+      const existing = rows.get(key);
+      if (existing) {
+        rows.set(key, { ...existing, status: "failed" });
+      }
+    }),
   };
 }
 
@@ -416,6 +496,114 @@ describe("external-side-effect-runner-service", () => {
       },
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("blocks execution and records payload_mismatch when the same identity is claimed with a different payload hash", async () => {
+    const mutationStore = createStatefulMutationIdempotencyStore();
+    const sideEffectRunStore = createSideEffectRunStore();
+    const firstExecute = vi.fn(async (claim: ExternalSideEffectExecutionContext) => {
+      claim.markExternalCallStarted();
+      return { output: { id: "card-1" } };
+    });
+
+    const first = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { name: "Payload A" },
+      label: "Trello card create",
+      execute: firstExecute,
+    });
+    expect(first.status).toBe("executed");
+
+    const secondExecute = vi.fn();
+    const second = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:01.000Z",
+      payload: { name: "Payload B" },
+      label: "Trello card create",
+      execute: secondExecute,
+    });
+
+    expect(second).toMatchObject({
+      status: "blocked",
+      blockedReason: "external_side_effect_payload_mismatch",
+      claim: expect.objectContaining({ replayOutcome: "payload_mismatch", resumeState: "payload_mismatch" }),
+    });
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.createOrGet).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "payload_mismatch" }),
+      "2026-05-31T00:00:01.000Z",
+    );
+  });
+
+  it("blocks without sending when an idempotent claim is already in progress", async () => {
+    const mutationStore = createStatefulMutationIdempotencyStore();
+    const sideEffectRunStore = createSideEffectRunStore();
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstExecute = vi.fn(async (claim: ExternalSideEffectExecutionContext) => {
+      claim.markExternalCallStarted();
+      await firstCanFinish;
+      return { output: { id: "card-1" } };
+    });
+    const secondExecute = vi.fn();
+
+    const firstPromise = runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { name: "Durable card" },
+      label: "Trello card create",
+      execute: firstExecute,
+    });
+
+    // The first invocation runs synchronously up to `await firstCanFinish` before
+    // control returns here, so the mutation-store row is already "pending" (claimed,
+    // not yet completed) by the time this second, identical invocation claims again.
+    const second = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:01.000Z",
+      payload: { name: "Durable card" },
+      label: "Trello card create",
+      execute: secondExecute,
+    });
+
+    expect(second).toMatchObject({
+      status: "blocked",
+      blockedReason: "external_side_effect_in_progress",
+      claim: expect.objectContaining({ replayOutcome: "in_progress", resumeState: "in_progress" }),
+    });
+    expect(secondExecute).not.toHaveBeenCalled();
+
+    releaseFirst();
+    const first = await firstPromise;
+    expect(first.status).toBe("executed");
+    expect(firstExecute).toHaveBeenCalledOnce();
   });
 
   it("marks claimed idempotent side effects failed when execution throws", async () => {

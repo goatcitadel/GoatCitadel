@@ -137,6 +137,7 @@ const gmailSendSchema = z.object({
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).optional(),
 });
 
 const calendarListSchema = z.object({

@@ -12,6 +12,7 @@ import { readBoundedResponseText } from "./bounded-response-reader.js";
 import {
   buildExternalSideEffectReplayOutput,
   type ExternalSideEffectRunStore,
+  type IdempotentExternalSideEffectRunInput,
   recordAuditOnlyExternalSideEffectIntent,
 } from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
@@ -317,54 +318,56 @@ async function sendLocalBridgeAction(
   };
 }
 
-async function invokeActivepiecesAction(
+/** The runner input + externalDestination target for an Activepieces `trigger_webhook` call. */
+export interface ActivepiecesTriggerWebhookJobParts {
+  input: IdempotentExternalSideEffectRunInput<{
+    message?: string;
+    output?: Record<string, unknown> | unknown[] | string;
+  }>;
+  /** Resolved webhook URL — feeds `WardGateRunOptions.externalDestination`. */
+  target: string;
+}
+
+/**
+ * Builds the ward-gated runner input for triggering an Activepieces webhook flow, without
+ * running it. Resolves the webhook URL + bearer auth from the connection and constructs the
+ * `execute` closure that performs the fetch. Extracted so replay callers (e.g. dry-run commit
+ * replay) can reuse the exact same runner input the live invocation path builds.
+ */
+export function buildActivepiecesTriggerWebhookRunInput(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
-  actionId: string,
-  request: IntegrationActionInvokeInput,
-  checkedAt: string,
-  ward?: IntegrationWardContext,
-): Promise<IntegrationActionInvokeResult> {
-  if (actionId === "check_run_status") {
-    return invokeActivepiecesRunStatusAction(host, connection, request, checkedAt);
-  }
-  if (actionId !== "trigger_webhook") {
-    return blocked(
-      connection,
-      actionId,
-      checkedAt,
-      `Unsupported Activepieces operator action: ${actionId}.`,
-      "action_unsupported",
-    );
-  }
+  options: {
+    checkedAt: string;
+    flowId?: string;
+    payload: Record<string, unknown>;
+    idempotencyKey?: string;
+    actorScope?: string;
+  },
+): ActivepiecesTriggerWebhookJobParts | { blockedReason: "activepieces_webhook_missing"; message: string } {
   const webhookUrl = host.readConnectionConfigValue(connection.config, "webhookUrl");
   if (!webhookUrl) {
-    return blocked(
-      connection,
-      actionId,
-      checkedAt,
-      "Configure an Activepieces webhook URL before triggering a flow.",
-      "activepieces_webhook_missing",
-    );
+    return {
+      blockedReason: "activepieces_webhook_missing",
+      message: "Configure an Activepieces webhook URL before triggering a flow.",
+    };
   }
   const target = parseHttpUrl(webhookUrl, "Activepieces webhook URL");
   const authHeader = resolveBearerAuth(host, connection.config);
-  const flowId =
-    readStringInput(request.input, "flowId") ?? host.readConnectionConfigValue(connection.config, "defaultFlowId");
-  const payload = readActivepiecesPayload(request.input);
-  const replayRun = await runWardGatedExternalSideEffect(
-    host,
-    ward,
-    {
+  const { checkedAt, flowId, payload, idempotencyKey, actorScope } = options;
+  return {
+    target,
+    input: {
       mutationStore: host.mutationStore,
       sideEffectRunStore: host.sideEffectRunStore,
       boundary: "integration_operator_action",
       catalogId: connection.catalogId,
       connectionId: connection.connectionId,
-      actionId,
+      actionId: "trigger_webhook",
       checkedAt,
       workspaceId: connection.workspaceId,
-      idempotencyKey: request.idempotencyKey,
+      idempotencyKey,
+      ...(actorScope ? { actorScope } : {}),
       payload: {
         provider: "activepieces",
         flowId,
@@ -397,8 +400,44 @@ async function invokeActivepiecesAction(
         return parsed;
       },
     },
-    { externalDestination: target },
-  );
+  };
+}
+
+async function invokeActivepiecesAction(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  actionId: string,
+  request: IntegrationActionInvokeInput,
+  checkedAt: string,
+  ward?: IntegrationWardContext,
+): Promise<IntegrationActionInvokeResult> {
+  if (actionId === "check_run_status") {
+    return invokeActivepiecesRunStatusAction(host, connection, request, checkedAt);
+  }
+  if (actionId !== "trigger_webhook") {
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      `Unsupported Activepieces operator action: ${actionId}.`,
+      "action_unsupported",
+    );
+  }
+  const flowId =
+    readStringInput(request.input, "flowId") ?? host.readConnectionConfigValue(connection.config, "defaultFlowId");
+  const payload = readActivepiecesPayload(request.input);
+  const parts = buildActivepiecesTriggerWebhookRunInput(host, connection, {
+    checkedAt,
+    flowId,
+    payload,
+    idempotencyKey: request.idempotencyKey,
+  });
+  if ("blockedReason" in parts) {
+    return blocked(connection, actionId, checkedAt, parts.message, parts.blockedReason);
+  }
+  const replayRun = await runWardGatedExternalSideEffect(host, ward, parts.input, {
+    externalDestination: parts.target,
+  });
   if (replayRun.status === "blocked") {
     return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
   }
