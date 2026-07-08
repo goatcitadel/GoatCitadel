@@ -383,3 +383,70 @@ describe("PromptPackRepository", () => {
     assert.deepEqual(repo.listTests(generated.pack.packId, 0), []);
   });
 });
+
+describe("PromptPackRepository content provenance", () => {
+  it("persists content_sha256 and keeps the stored hash when a later upsert omits it", () => {
+    const repo = createRepo();
+    const firstHash = "a".repeat(64);
+
+    const first = repo.replacePackTests({
+      packId: "pack-hash",
+      name: "Hash Pack",
+      contentSha256: firstHash,
+      tests: [
+        {
+          code: "TEST-01",
+          title: "Hash test",
+          prompt: "Prompt body",
+          orderIndex: 0,
+          mode: "chat",
+          toolTier: "no-tools",
+        },
+      ],
+    });
+    assert.equal(first.pack.contentSha256, firstHash);
+
+    const second = repo.replacePackTests({
+      packId: "pack-hash",
+      name: "Hash Pack Updated",
+      tests: [],
+    });
+    assert.equal(second.pack.contentSha256, firstHash);
+
+    const thirdHash = "b".repeat(64);
+    const third = repo.replacePackTests({
+      packId: "pack-hash",
+      name: "Hash Pack Reimported",
+      contentSha256: thirdHash,
+      tests: [],
+    });
+    assert.equal(third.pack.contentSha256, thirdHash);
+  });
+
+  it("round-trips expectedToolFamilies through diagnostic metadata json", () => {
+    const repo = createRepo();
+    const imported = repo.replacePackTests({
+      packId: "pack-families",
+      name: "Families Pack",
+      tests: [
+        {
+          code: "TEST-01",
+          title: "Families test",
+          prompt: "Prompt body",
+          orderIndex: 0,
+          mode: "cowork",
+          toolTier: "implicit-tools",
+          diagnosticMetadata: {
+            capabilityTargets: ["research"],
+            expectedRuntimeSignals: ["uses web if available"],
+            likelyFailureClasses: ["tool-budget-exhausted"],
+            expectedToolFamilies: ["web"],
+          },
+        },
+      ],
+    });
+    assert.deepEqual(imported.tests[0]?.diagnosticMetadata?.expectedToolFamilies, ["web"]);
+    const listed = repo.listTests("pack-families");
+    assert.deepEqual(listed[0]?.diagnosticMetadata?.expectedToolFamilies, ["web"]);
+  });
+});

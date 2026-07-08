@@ -380,11 +380,17 @@ export class PromptPackService {
     if (tests.length === 0) {
       throw new Error("No tests found in prompt-pack markdown.");
     }
-    const name = input.name?.trim() || inferPromptPackName(input.sourceLabel);
+    const structureIssues = validatePromptPackStructure(input.content, tests);
+    if (structureIssues.length > 0) {
+      throw new Error(`Prompt pack structure validation failed: ${structureIssues.join("; ")}`);
+    }
+    const packVersionLabel = extractPromptPackVersionLabel(input.content);
+    const name = input.name?.trim() || packVersionLabel || inferPromptPackName(input.sourceLabel);
     const imported = this.ctx.storage.promptPacks.replacePackTests({
       packId: input.packId,
       name,
-      sourceLabel: input.sourceLabel,
+      sourceLabel: input.sourceLabel?.trim() || packVersionLabel,
+      contentSha256: createHash("sha256").update(input.content, "utf8").digest("hex"),
       tests,
     });
     this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
@@ -3906,6 +3912,13 @@ function collectPromptPackObservedToolFamilies(run?: PromptPackRunRecord): strin
 function collectPromptPackExpectedToolFamilies(test: PromptPackTestRecord, run?: PromptPackRunRecord): string[] {
   const prompt = test.prompt.toLowerCase();
   const metadata = run?.diagnosticMetadata ?? test.diagnosticMetadata;
+  // Authored expectation wins over regex inference: packs that declare
+  // `Expected Tool Families:` in the diagnostics block are exempt from
+  // phrasing-sensitive keyword classification.
+  const authoredFamilies = (metadata?.expectedToolFamilies ?? []).map((family) => family.trim()).filter(Boolean);
+  if (authoredFamilies.length > 0) {
+    return [...new Set(authoredFamilies)].sort();
+  }
   const signals = [...(metadata?.capabilityTargets ?? []), ...(metadata?.expectedRuntimeSignals ?? []), prompt]
     .join(" ")
     .toLowerCase();
@@ -4036,9 +4049,10 @@ export function collectPromptPackPlatformSignals(
  * runtime (protocol breakage, trace failure) to a failure attribution so those
  * non-pass verdicts are not blamed on model reasoning by default. Signals that
  * can equally be caused by the model's own behavior (off-surface tool calls,
- * tool-budget overruns from retry storms) deliberately do NOT shift blame:
- * since the harness no longer forces or filters tool use, those are the
- * model's choices and stay under model attribution.
+ * tool-budget overruns from retry storms) do NOT shift blame here; the one
+ * exception lives in derivePromptPackFailureAttributionV3, which attributes
+ * runs starved by harness guardrail caps (isPromptPackGuardrailBlockedToolRun)
+ * to tool_budget_exhausted instead of model reasoning.
  */
 function derivePromptPackPlatformSignalAttributionV3(
   test: PromptPackTestRecord,
@@ -4163,6 +4177,12 @@ export function renderPromptPackMarkdownReport(
   lines.push(`# Prompt Pack Report: ${report.pack.name}`);
   lines.push("");
   lines.push(`- Pack ID: \`${report.pack.packId}\``);
+  if (report.pack.sourceLabel) {
+    lines.push(`- Pack source: \`${report.pack.sourceLabel}\``);
+  }
+  if (report.pack.contentSha256) {
+    lines.push(`- Pack content sha256: \`${report.pack.contentSha256.slice(0, 12)}\``);
+  }
   lines.push(`- Generated: ${generatedAt}`);
   lines.push(`- Export model lane: \`${formatPromptPackReportProviderModelLabel(report)}\``);
   lines.push(`- Export execution style: \`${formatPromptPackReportExecutionStyleLabel(report)}\``);
@@ -4335,7 +4355,10 @@ export function renderPromptPackMarkdownReport(
     }
     const expectedToolFamilies = collectPromptPackExpectedToolFamilies(test, run);
     const observedToolFamilies = collectPromptPackObservedToolFamilies(run);
-    lines.push(`- Expected tool families: ${expectedToolFamilies.join(", ")}`);
+    const expectedFamiliesAuthored = (diagnosticMetadata?.expectedToolFamilies?.length ?? 0) > 0;
+    lines.push(
+      `- Expected tool families: ${expectedToolFamilies.join(", ")} (${expectedFamiliesAuthored ? "authored" : "inferred"})`,
+    );
     lines.push(`- Actual tool families observed: ${observedToolFamilies.join(", ")}`);
     if (
       (run.mode ?? test.mode) !== "code" &&
@@ -5730,6 +5753,110 @@ export function parsePromptPackTests(content: string): Array<{
   return entries;
 }
 
+export function extractPromptPackVersionLabel(content: string): string | undefined {
+  // Only the pack preamble may declare a version; scanning stops at the first
+  // mode heading so prompt bodies can mention "Pack-Version:" freely.
+  for (const rawLine of extractPromptPackPreambleLines(content)) {
+    const match = rawLine.trim().match(/^Pack-Version:\s*(\S.*)$/i);
+    const label = match?.[1]?.trim();
+    if (label) {
+      return label.slice(0, 120);
+    }
+  }
+  return undefined;
+}
+
+const PROMPT_PACK_KNOWN_TOOL_FAMILIES = new Set([
+  "none",
+  "unspecified",
+  "web",
+  "memory",
+  "file/code",
+  "time",
+  "command/validation",
+  "other",
+]);
+
+export function validatePromptPackStructure(
+  content: string,
+  tests: Array<{
+    code: string;
+    mode?: string;
+    toolTier?: string;
+    diagnosticMetadata?: PromptPackDiagnosticMetadata;
+  }>,
+): string[] {
+  const issues: string[] = [];
+
+  const seenCodes = new Set<string>();
+  const duplicateCodes = new Set<string>();
+  for (const test of tests) {
+    if (seenCodes.has(test.code)) {
+      duplicateCodes.add(test.code);
+    }
+    seenCodes.add(test.code);
+  }
+  if (duplicateCodes.size > 0) {
+    issues.push(`duplicate test codes: ${[...duplicateCodes].sort().join(", ")}`);
+  }
+
+  for (const declared of parseDeclaredPromptPackCounts(content)) {
+    const parsedCount = tests.filter(
+      (test) =>
+        (test.mode ?? "") === declared.mode && (declared.toolTier === undefined || test.toolTier === declared.toolTier),
+    ).length;
+    if (parsedCount !== declared.count) {
+      const scope = declared.toolTier ? `${declared.mode}/${declared.toolTier}` : declared.mode;
+      issues.push(`declared ${declared.count} ${scope} tests but parsed ${parsedCount}`);
+    }
+  }
+
+  const unknownFamilies = new Set<string>();
+  for (const test of tests) {
+    for (const family of test.diagnosticMetadata?.expectedToolFamilies ?? []) {
+      if (!PROMPT_PACK_KNOWN_TOOL_FAMILIES.has(family)) {
+        unknownFamilies.add(`${test.code}:${family}`);
+      }
+    }
+  }
+  if (unknownFamilies.size > 0) {
+    issues.push(`unknown Expected Tool Families values: ${[...unknownFamilies].sort().join(", ")}`);
+  }
+
+  return issues;
+}
+
+function extractPromptPackPreambleLines(content: string): string[] {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const preamble: string[] = [];
+  for (const line of lines) {
+    if (/^#{1,3}\s+(chat|cowork|code)\b/i.test(line.trim())) {
+      break;
+    }
+    preamble.push(line);
+  }
+  return preamble;
+}
+
+function parseDeclaredPromptPackCounts(content: string): Array<{ count: number; mode: string; toolTier?: string }> {
+  const declared: Array<{ count: number; mode: string; toolTier?: string }> = [];
+  for (const line of extractPromptPackPreambleLines(content)) {
+    if (!/tests?|prompts?/i.test(line)) {
+      continue;
+    }
+    for (const match of line.matchAll(
+      /(\d{1,3})\s+(chat|cowork|code)(?:\s+(no-tools|implicit-tools|explicit-tools))?\b/gi,
+    )) {
+      declared.push({
+        count: Number(match[1]),
+        mode: match[2]!.toLowerCase(),
+        toolTier: match[3]?.toLowerCase(),
+      });
+    }
+  }
+  return declared;
+}
+
 export function extractPromptPackDiagnosticMetadata(prompt: string): {
   prompt: string;
   diagnosticMetadata?: PromptPackDiagnosticMetadata;
@@ -5753,7 +5880,9 @@ function parsePromptPackDiagnosticMetadataBlock(block: string): PromptPackDiagno
   };
   for (const rawLine of block.split(/\r?\n/g)) {
     const line = rawLine.trim().replace(/^[-*]\s*/, "");
-    const match = line.match(/^(Capability Targets|Expected Runtime Signals|Likely Failure Classes):\s*(.+)$/i);
+    const match = line.match(
+      /^(Capability Targets|Expected Runtime Signals|Likely Failure Classes|Expected Tool Families):\s*(.+)$/i,
+    );
     if (!match?.[1] || !match[2]) {
       continue;
     }
@@ -5762,6 +5891,13 @@ function parsePromptPackDiagnosticMetadataBlock(block: string): PromptPackDiagno
       metadata.capabilityTargets = values;
     } else if (/^Expected Runtime Signals$/i.test(match[1])) {
       metadata.expectedRuntimeSignals = values;
+    } else if (/^Expected Tool Families$/i.test(match[1])) {
+      // Only set when authored so packs without the key keep their exact
+      // pre-existing metadata shape (and stored JSON) byte-for-byte.
+      const families = values.map((value) => value.toLowerCase());
+      if (families.length > 0) {
+        metadata.expectedToolFamilies = families;
+      }
     } else {
       metadata.likelyFailureClasses = values;
     }
@@ -5787,7 +5923,8 @@ function hasPromptPackDiagnosticMetadata(metadata: PromptPackDiagnosticMetadata)
   return (
     metadata.capabilityTargets.length > 0 ||
     metadata.expectedRuntimeSignals.length > 0 ||
-    metadata.likelyFailureClasses.length > 0
+    metadata.likelyFailureClasses.length > 0 ||
+    (metadata.expectedToolFamilies?.length ?? 0) > 0
   );
 }
 
@@ -5941,6 +6078,8 @@ export function buildPromptPackSessionPrefsOverride(
   };
 }
 
+const PROMPT_PACK_ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
+
 export function buildPromptPackPromptInput(
   prompt: string,
   profile: PromptPackExecutionProfile,
@@ -6090,9 +6229,17 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- Avoid broad repository searches over `.` with generic terms when the prompt or harness names tighter paths, services, tests, or report surfaces.",
     );
-    harnessLines.push(
-      "- Do not create document, presentation, or artifact files for Prompt Lab Code rows unless the user explicitly asks for that tool; deliver the code answer in the final message.",
-    );
+    // A named artifact tool in the run contract overrides the default
+    // no-artifact posture for Code rows; the contract entry wins over prose.
+    if (directives.namedTools.some((toolName) => PROMPT_PACK_ARTIFACT_TOOL_NAMES.has(toolName))) {
+      harnessLines.push(
+        "- The Required named tools list includes an artifact tool; creating that artifact is part of the deliverable for this row.",
+      );
+    } else {
+      harnessLines.push(
+        "- Do not create document, presentation, or artifact files for Prompt Lab Code rows unless the user explicitly asks for that tool; deliver the code answer in the final message.",
+      );
+    }
     harnessLines.push(
       "- Stay anchored to the prompt's exact nouns and requested scope. Do not drift to a nearby repo task just because it sounds similar.",
     );
@@ -7099,7 +7246,20 @@ function derivePromptPackFailureAttributionV3(input: {
       reasons.has("missing_required_json") ? "missing_required_json" : "missing_required_table",
     );
   }
+  // Guardrail cap blocks (web search/open budgets, repo-search caps) are
+  // harness-imposed constraints; a row starved by them must not read as a
+  // model reasoning failure. Confidence stays "medium": a "low" non-applicable
+  // attribution flips otherwise-pass rows to review in evaluatePromptPackVerdictV3.
+  const guardrailBlockedRuns = (input.run.trace?.toolRuns ?? []).filter(isPromptPackGuardrailBlockedToolRun);
   if (reasons.has("self_reported_incomplete")) {
+    if (guardrailBlockedRuns.length > 0) {
+      return withEvidence(
+        "tool_budget_exhausted",
+        "medium",
+        "self_reported_incomplete",
+        ...guardrailBlockedRuns.slice(0, 3).map((toolRun) => `${toolRun.toolName}:guardrail_blocked`),
+      );
+    }
     return withEvidence("model_reasoning_failure", "medium", "self_reported_incomplete");
   }
   if (reasons.has("off_target_meta_analysis")) {
@@ -7121,6 +7281,13 @@ function derivePromptPackFailureAttributionV3(input: {
   }
   if (input.run.trace?.routing?.fallbackUsed) {
     return withEvidence("wrong_model_routed", "medium", input.run.trace.routing.fallbackReason ?? "routing_fallback");
+  }
+  if (guardrailBlockedRuns.length > 0) {
+    return withEvidence(
+      "tool_budget_exhausted",
+      "medium",
+      ...guardrailBlockedRuns.slice(0, 3).map((toolRun) => `${toolRun.toolName}:guardrail_blocked`),
+    );
   }
   return {
     primary: "not_applicable",

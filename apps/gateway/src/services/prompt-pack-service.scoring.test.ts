@@ -3976,3 +3976,250 @@ describe("platform signal calibration", () => {
     expect(signals).not.toContain("source-hygiene review needed");
   });
 });
+
+describe("prompt-pack v3 tool-budget attribution", () => {
+  const CHAT_SEARCH_CAP_MESSAGE =
+    "execution skipped: Prompt Lab web rows are capped at one web search before synthesis. Use the successful search/opened-source evidence already in the trace and answer now; do not retry search.";
+  const COWORK_SEARCH_CAP_MESSAGE =
+    "execution skipped: Prompt Lab web rows are capped at two web searches before synthesis. Use the successful search/opened-source evidence already in the trace and answer now; do not retry search.";
+
+  const V3_APPLICABILITY = {
+    taskSuccess: true,
+    truthfulness: true,
+    evidenceGrounding: true,
+    formatAdherence: true,
+    operatorUsefulness: true,
+    toolUseQuality: true,
+    orchestrationQuality: true,
+    efficiency: true,
+    recoveryQuality: true,
+  };
+
+  const V3_PROFILE = {
+    mode: "cowork",
+    toolTier: "implicit-tools",
+    toolAutonomy: "safe_auto",
+    webMode: "auto",
+    memoryMode: "auto",
+    thinkingLevel: "standard",
+  } as const;
+
+  function guardrailBlockedToolRun(sessionId: string, message: string, suffix = "blocked") {
+    return {
+      toolRunId: `tool-${sessionId}-${suffix}`,
+      turnId: `turn-${sessionId}`,
+      sessionId,
+      toolName: "browser.search",
+      status: "blocked" as const,
+      startedAt: "2026-07-08T00:00:00.500Z",
+      finishedAt: "2026-07-08T00:00:00.501Z",
+      args: { query: "official guidance" },
+      error: message,
+    };
+  }
+
+  function executedSearchToolRun(sessionId: string) {
+    return {
+      toolRunId: `tool-${sessionId}-executed`,
+      turnId: `turn-${sessionId}`,
+      sessionId,
+      toolName: "browser.search",
+      status: "executed" as const,
+      startedAt: "2026-07-08T00:00:00.000Z",
+      finishedAt: "2026-07-08T00:00:00.400Z",
+      args: { query: "official guidance" },
+      result: { results: [{ url: "https://example.gov/guidance" }] },
+    };
+  }
+
+  function scoresAt(value: 0 | 1 | 2 | 3 | 4) {
+    return {
+      taskSuccess: value,
+      truthfulness: value,
+      evidenceGrounding: value,
+      formatAdherence: value,
+      operatorUsefulness: value,
+      toolUseQuality: value,
+      orchestrationQuality: value,
+      efficiency: value,
+      recoveryQuality: value,
+    };
+  }
+
+  it("attributes a budget-starved self-reported-incomplete fail to tool_budget_exhausted", () => {
+    const sessionId = "sess-budget-starved";
+    const merged = mergePromptPackAutoScoresV3({
+      pack: createPack("pack-budget-starved"),
+      test: createTest("test-budget-starved", "TEST-W507"),
+      run: {
+        ...createRun("run-budget-starved", "completed", "2026-07-08T00:00:01.000Z"),
+        responseText: "## Synthesis Incomplete\nThe Cowork workflow did not produce a completed final synthesis.",
+        trace: createTrace(sessionId, {
+          mode: "cowork",
+          toolRuns: [
+            executedSearchToolRun(sessionId),
+            guardrailBlockedToolRun(sessionId, COWORK_SEARCH_CAP_MESSAGE, "blocked-1"),
+            guardrailBlockedToolRun(sessionId, COWORK_SEARCH_CAP_MESSAGE, "blocked-2"),
+          ],
+        }),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+      profile: V3_PROFILE,
+      ruleEvaluation: {
+        protocol: { protocolPass: true, reasonCodes: [] },
+        hardFailReasons: [],
+        reviewReasons: ["self_reported_incomplete"],
+        degradedReasons: [],
+        applicability: V3_APPLICABILITY,
+        ruleScores: scoresAt(1),
+        reasonCaps: {},
+        attribution: { primary: "not_applicable", confidence: "high", evidence: [] },
+        deterministicAttribution: false,
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: scoresAt(2),
+      },
+    });
+
+    expect(merged.autoVerdict).not.toBe("pass");
+    expect(merged.attribution.primary).toBe("tool_budget_exhausted");
+    expect(merged.attribution.confidence).toBe("medium");
+    expect(merged.attribution.evidence).toContain("self_reported_incomplete");
+    expect(merged.attribution.evidence).toContain("browser.search:guardrail_blocked");
+  });
+
+  it("keeps higher-priority attributions when a cap block is only incidental", () => {
+    const sessionId = "sess-table-fail";
+    const merged = mergePromptPackAutoScoresV3({
+      pack: createPack("pack-table-fail"),
+      test: createTest("test-table-fail", "TEST-W511"),
+      run: {
+        ...createRun("run-table-fail", "completed", "2026-07-08T00:00:01.000Z"),
+        responseText: "Here is the comparison in prose instead of the required table.",
+        trace: createTrace(sessionId, {
+          mode: "cowork",
+          toolRuns: [executedSearchToolRun(sessionId), guardrailBlockedToolRun(sessionId, CHAT_SEARCH_CAP_MESSAGE)],
+        }),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+      profile: V3_PROFILE,
+      ruleEvaluation: {
+        protocol: { protocolPass: false, reasonCodes: ["missing_required_table"] },
+        hardFailReasons: ["missing_required_table"],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: V3_APPLICABILITY,
+        ruleScores: scoresAt(2),
+        reasonCaps: {},
+        attribution: { primary: "not_applicable", confidence: "high", evidence: [] },
+        deterministicAttribution: false,
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: scoresAt(2),
+      },
+    });
+
+    expect(merged.attribution.primary).toBe("bad_prompt_or_rubric");
+  });
+
+  it("keeps residual tool-failure attribution when the failed tool is not guardrail-blocked", () => {
+    const sessionId = "sess-real-tool-failure";
+    const merged = mergePromptPackAutoScoresV3({
+      pack: createPack("pack-real-tool-failure"),
+      test: createTest("test-real-tool-failure", "TEST-W509"),
+      run: {
+        ...createRun("run-real-tool-failure", "completed", "2026-07-08T00:00:01.000Z"),
+        responseText: "Partial answer without the requested sourced checklist.",
+        trace: createTrace(sessionId, {
+          mode: "cowork",
+          toolRuns: [
+            executedSearchToolRun(sessionId),
+            {
+              toolRunId: `tool-${sessionId}-failed`,
+              turnId: `turn-${sessionId}`,
+              sessionId,
+              toolName: "browser.navigate",
+              status: "failed" as const,
+              startedAt: "2026-07-08T00:00:00.600Z",
+              finishedAt: "2026-07-08T00:00:00.900Z",
+              args: { url: "https://example.gov/guidance" },
+              error: "execution error: upstream returned 500",
+            },
+            guardrailBlockedToolRun(sessionId, CHAT_SEARCH_CAP_MESSAGE),
+          ],
+        }),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+      profile: V3_PROFILE,
+      ruleEvaluation: {
+        protocol: { protocolPass: true, reasonCodes: [] },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: V3_APPLICABILITY,
+        ruleScores: scoresAt(1),
+        reasonCaps: {},
+        attribution: { primary: "not_applicable", confidence: "high", evidence: [] },
+        deterministicAttribution: false,
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: scoresAt(1),
+      },
+    });
+
+    expect(merged.autoVerdict).not.toBe("pass");
+    expect(merged.attribution.primary).toBe("tool_call_wrong_args");
+    expect(merged.attribution.evidence).toContain("browser.navigate:failed");
+  });
+
+  it("leaves passing rows not_applicable even when a cap block occurred", () => {
+    const sessionId = "sess-pass-with-cap";
+    const merged = mergePromptPackAutoScoresV3({
+      pack: createPack("pack-pass-with-cap"),
+      test: createTest("test-pass-with-cap", "TEST-W512"),
+      run: {
+        ...createRun("run-pass-with-cap", "completed", "2026-07-08T00:00:01.000Z"),
+        responseText: "A complete, grounded synthesis with the requested sections and cited sources.",
+        trace: createTrace(sessionId, {
+          mode: "cowork",
+          toolRuns: [executedSearchToolRun(sessionId), guardrailBlockedToolRun(sessionId, COWORK_SEARCH_CAP_MESSAGE)],
+        }),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+      profile: V3_PROFILE,
+      ruleEvaluation: {
+        protocol: { protocolPass: true, reasonCodes: [] },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: V3_APPLICABILITY,
+        ruleScores: scoresAt(4),
+        reasonCaps: {},
+        attribution: { primary: "not_applicable", confidence: "high", evidence: [] },
+        deterministicAttribution: false,
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: scoresAt(4),
+      },
+    });
+
+    expect(merged.autoVerdict).toBe("pass");
+    expect(merged.attribution.primary).toBe("not_applicable");
+  });
+});

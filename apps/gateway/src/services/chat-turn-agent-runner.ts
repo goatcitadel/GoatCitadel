@@ -267,6 +267,25 @@ const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings
 const PROMPT_LAB_ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
 const PROMPT_LAB_WEB_SEARCH_TOOL_NAMES = new Set(["browser.search"]);
 const PROMPT_LAB_WEB_OPEN_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+
+// Cowork research rows legitimately need broader evidence than single-answer
+// chat/code rows; their contracts ask for multi-source synthesis.
+const PROMPT_LAB_WEB_CAPS = {
+  chat: { searches: 1, opens: 2, total: 4 },
+  cowork: { searches: 2, opens: 4, total: 6 },
+  code: { searches: 1, opens: 2, total: 4 },
+} as const satisfies Record<ChatMode, { searches: number; opens: number; total: number }>;
+
+const PROMPT_LAB_CAP_COUNT_WORDS: Record<number, string> = {
+  1: "one",
+  2: "two",
+  4: "four",
+  6: "six",
+};
+
+function promptLabCapCountWord(count: number): string {
+  return PROMPT_LAB_CAP_COUNT_WORDS[count] ?? String(count);
+}
 const PROMPT_LAB_GENERIC_REPO_SEARCH_QUERIES = new Set([
   "code",
   "file",
@@ -5229,6 +5248,7 @@ export class ChatTurnAgentRunner {
       toolName: input.toolName,
       args,
       userContent: input.userContent,
+      mode: input.mode,
       priorToolRuns: input.priorToolRuns,
     });
     if (promptLabWebToolCapBlock) {
@@ -8064,11 +8084,13 @@ function describePromptLabWebToolCapBlock(input: {
   toolName: string;
   args: Record<string, unknown>;
   userContent: string;
+  mode: ChatMode;
   priorToolRuns?: ChatToolRunRecord[];
 }): string | undefined {
   if (!isPromptLabHarnessContent(input.userContent) || !toolNameMatchesAnyKnownTool(input.toolName, WEB_TOOL_NAMES)) {
     return undefined;
   }
+  const caps = PROMPT_LAB_WEB_CAPS[input.mode] ?? PROMPT_LAB_WEB_CAPS.chat;
   // Caps count successful evidence only: a 403, a wrong-page fetch, or a
   // previously cap-blocked retry must not consume the budget the contract
   // promises ("two opened/read sources" means two sources actually read).
@@ -8081,21 +8103,32 @@ function describePromptLabWebToolCapBlock(input: {
   const priorOpenRuns = priorWebRuns.filter((run) =>
     toolNameMatchesAnyKnownTool(run.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES),
   );
-  if (toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_SEARCH_TOOL_NAMES) && priorSearchRuns.length >= 1) {
+  // The "Prompt Lab web rows are capped" / "Prompt Lab web tool budget is
+  // reserved" prefixes are load-bearing: isPromptPackGuardrailBlockedToolRun
+  // matches them to keep cap blocks out of tool-quality and attribution blame.
+  if (
+    toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_SEARCH_TOOL_NAMES) &&
+    priorSearchRuns.length >= caps.searches
+  ) {
     return [
-      "execution skipped: Prompt Lab web rows are capped at one web search before synthesis.",
+      `execution skipped: Prompt Lab web rows are capped at ${promptLabCapCountWord(caps.searches)} web ${
+        caps.searches === 1 ? "search" : "searches"
+      } before synthesis.`,
       "Use the successful search/opened-source evidence already in the trace and answer now; do not retry search.",
     ].join(" ");
   }
-  if (toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES) && priorOpenRuns.length >= 2) {
+  if (
+    toolNameMatchesAnyKnownTool(input.toolName, PROMPT_LAB_WEB_OPEN_TOOL_NAMES) &&
+    priorOpenRuns.length >= caps.opens
+  ) {
     return [
-      "execution skipped: Prompt Lab web rows are capped at two opened/read sources before synthesis.",
+      `execution skipped: Prompt Lab web rows are capped at ${promptLabCapCountWord(caps.opens)} opened/read sources before synthesis.`,
       "Use only the successful opened/read sources and clearly separate blocked or merely attempted sources from sources relied on.",
     ].join(" ");
   }
-  if (priorWebRuns.length >= 4) {
+  if (priorWebRuns.length >= caps.total) {
     return [
-      "execution skipped: Prompt Lab web tool budget is reserved for final synthesis after four web attempts.",
+      `execution skipped: Prompt Lab web tool budget is reserved for final synthesis after ${promptLabCapCountWord(caps.total)} web attempts.`,
       "Stop gathering sources and answer from the retained evidence now.",
     ].join(" ");
   }
