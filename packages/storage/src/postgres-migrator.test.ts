@@ -105,7 +105,7 @@ function createTempDatabasePath(prefix: string): string {
 
 describe("Postgres migrator", () => {
   it("runs only unapplied async migrations and marks them inside the transaction", async () => {
-    const pool = new FakePool([[], [], [{ server_encoding: "UTF8" }], [{ version: 1 }]]);
+    const pool = new FakePool([[], [], [{ server_encoding: "UTF8" }], [{ version: 1, name: "create_existing" }]]);
     const client = new PostgresDatabaseClient({ database: "goatcitadel" }, { pool: asPool(pool) });
 
     const result = await runPostgresMigrations(client, migrations());
@@ -125,6 +125,46 @@ describe("Postgres migrator", () => {
     );
     assert.deepEqual(pool.clients[0]?.calls[2]?.params, [2, "create_new"]);
     assert.equal(pool.clients[0]?.released, true);
+  });
+
+  it("rejects when an applied async migration version was recorded under a different name", async () => {
+    const pool = new FakePool([[], [], [{ server_encoding: "UTF8" }], [{ version: 1, name: "branch_only_migration" }]]);
+    const client = new PostgresDatabaseClient({ database: "goatcitadel" }, { pool: asPool(pool) });
+
+    await assert.rejects(
+      runPostgresMigrations(client, migrations()),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes("version 1") &&
+        error.message.includes("branch_only_migration") &&
+        error.message.includes("create_existing"),
+    );
+    assert.equal(pool.clients.length, 0);
+  });
+
+  it("refuses to skip a sync migration whose ledger row was written by a divergent lineage", () => {
+    const db = createDatabase({ dbPath: createTempDatabasePath("goatcitadel-postgres-migrator-drift") });
+    applyPostgresMigrationsSync(db, {
+      migrationsTable: "drift_schema_migrations",
+      migrations: [
+        { version: 1, name: "create_existing", sql: "CREATE TABLE existing_table(id INTEGER PRIMARY KEY)" },
+        { version: 2, name: "branch_only_migration", sql: "CREATE TABLE branch_table(id INTEGER PRIMARY KEY)" },
+      ],
+    });
+
+    assert.throws(
+      () => applyPostgresMigrationsSync(db, { migrationsTable: "drift_schema_migrations", migrations: migrations() }),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes("version 2") &&
+        error.message.includes("branch_only_migration") &&
+        error.message.includes("create_new"),
+    );
+
+    const tableRow = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get("new_table") as
+      | { name: string }
+      | undefined;
+    assert.equal(tableRow, undefined);
   });
 
   it("reports zero latest version for an empty async migration set", async () => {
@@ -178,9 +218,10 @@ describe("Postgres migrator", () => {
       }),
     );
 
-    const migrationRows = db
-      .prepare(`SELECT version, name FROM "order" ORDER BY version ASC`)
-      .all() as Array<{ version: number; name: string }>;
+    const migrationRows = db.prepare(`SELECT version, name FROM "order" ORDER BY version ASC`).all() as Array<{
+      version: number;
+      name: string;
+    }>;
     assert.deepEqual(
       migrationRows.map((row) => ({ version: row.version, name: row.name })),
       [

@@ -309,38 +309,65 @@ function assertCronJobRows(rows: unknown[]): asserts rows is CronJobRow[] {
   }
 }
 
+const CRON_JOB_ROW_COLUMNS: ReadonlyArray<
+  readonly [keyof CronJobRow & string, "string" | "string | null" | "number" | "number | null"]
+> = [
+  ["job_id", "string"],
+  ["name", "string"],
+  ["action", "string"],
+  ["action_config_json", "string | null"],
+  ["description", "string | null"],
+  ["schedule", "string"],
+  ["enabled", "number"],
+  ["end_at", "string | null"],
+  ["last_run_at", "string | null"],
+  ["next_run_at", "string | null"],
+  ["workdir", "string | null"],
+  ["context_from", "string | null"],
+  ["last_run_output", "string | null"],
+  ["last_run_id", "string | null"],
+  ["last_run_status", "string | null"],
+  ["last_run_evidence_envelope_id", "string | null"],
+  ["last_failure_at", "string | null"],
+  ["last_failure_json", "string | null"],
+  ["failure_count", "number | null"],
+  ["backoff_until", "string | null"],
+  ["updated_at", "string"],
+];
+
+function cronJobRowColumnIssue(
+  row: Record<string, unknown>,
+  column: string,
+  kind: "string" | "string | null" | "number" | "number | null",
+): string | undefined {
+  const value = row[column];
+  const primitive = kind.startsWith("string") ? "string" : "number";
+  const nullable = kind.endsWith("| null");
+  if (typeof value === primitive || (nullable && value === null)) {
+    return undefined;
+  }
+  return `${column}: expected ${kind}, got ${value === null ? "null" : typeof value}`;
+}
+
+function describeCronJobRowIssues(row: unknown): string {
+  if (!isRecord(row)) {
+    return `expected a row object, got ${row === null ? "null" : typeof row}`;
+  }
+  return CRON_JOB_ROW_COLUMNS.map(([column, kind]) => cronJobRowColumnIssue(row, column, kind))
+    .filter((issue): issue is string => issue !== undefined)
+    .join("; ");
+}
+
 function assertCronJobRow(row: unknown): asserts row is CronJobRow {
   if (!isCronJobRow(row)) {
-    throw new TypeError("cron_jobs query returned an unexpected row shape");
+    throw new TypeError(`cron_jobs query returned an unexpected row shape (${describeCronJobRowIssues(row)})`);
   }
 }
 
 function isCronJobRow(row: unknown): row is CronJobRow {
-  if (!isRecord(row)) {
-    return false;
-  }
   return (
-    typeof row.job_id === "string" &&
-    typeof row.name === "string" &&
-    typeof row.action === "string" &&
-    (typeof row.action_config_json === "string" || row.action_config_json === null) &&
-    (typeof row.description === "string" || row.description === null) &&
-    typeof row.schedule === "string" &&
-    typeof row.enabled === "number" &&
-    (typeof row.end_at === "string" || row.end_at === null) &&
-    (typeof row.last_run_at === "string" || row.last_run_at === null) &&
-    (typeof row.next_run_at === "string" || row.next_run_at === null) &&
-    (typeof row.workdir === "string" || row.workdir === null) &&
-    (typeof row.context_from === "string" || row.context_from === null) &&
-    (typeof row.last_run_output === "string" || row.last_run_output === null) &&
-    (typeof row.last_run_id === "string" || row.last_run_id === null) &&
-    (typeof row.last_run_status === "string" || row.last_run_status === null) &&
-    (typeof row.last_run_evidence_envelope_id === "string" || row.last_run_evidence_envelope_id === null) &&
-    (typeof row.last_failure_at === "string" || row.last_failure_at === null) &&
-    (typeof row.last_failure_json === "string" || row.last_failure_json === null) &&
-    (typeof row.failure_count === "number" || row.failure_count === null) &&
-    (typeof row.backoff_until === "string" || row.backoff_until === null) &&
-    typeof row.updated_at === "string"
+    isRecord(row) &&
+    CRON_JOB_ROW_COLUMNS.every(([column, kind]) => cronJobRowColumnIssue(row, column, kind) === undefined)
   );
 }
 

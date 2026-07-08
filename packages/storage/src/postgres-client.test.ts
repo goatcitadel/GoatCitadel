@@ -114,7 +114,16 @@ describe("PostgresDatabaseClient", () => {
   });
 
   it("manages migration bookkeeping through the configured table", async () => {
-    const pool = new FakePool([[], [], [{ server_encoding: "UTF8" }], [{ version: 1 }, { version: "2" }], []]);
+    const pool = new FakePool([
+      [],
+      [],
+      [{ server_encoding: "UTF8" }],
+      [
+        { version: 1, name: "one" },
+        { version: "2", name: "two" },
+      ],
+      [],
+    ]);
     const client = new PostgresDatabaseClient(
       { database: "goatcitadel" },
       { pool: asPool(pool), migrationsTable: "custom_migrations" },
@@ -125,7 +134,7 @@ describe("PostgresDatabaseClient", () => {
 
     const versions = await client.getAppliedMigrationVersions();
     assert.deepEqual([...versions], [1, 2]);
-    assert.match(pool.calls[3]!.sql, /SELECT version FROM custom_migrations/);
+    assert.match(pool.calls[3]!.sql, /SELECT version, name FROM custom_migrations/);
 
     await client.markMigrationApplied(3, "third");
     assert.match(pool.calls.at(-1)?.sql ?? "", /INSERT INTO custom_migrations/);

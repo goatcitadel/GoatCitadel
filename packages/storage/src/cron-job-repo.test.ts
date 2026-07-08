@@ -99,6 +99,49 @@ describe("CronJobRepository", () => {
   });
 });
 
+describe("CronJobRepository row-shape diagnostics", () => {
+  it("names the offending columns when a row fails shape validation", () => {
+    const repo = createRepo();
+    const validRow = {
+      job_id: "j",
+      name: "n",
+      action: "task",
+      action_config_json: null,
+      description: null,
+      schedule: "s",
+      enabled: 1,
+      end_at: null,
+      last_run_at: null,
+      next_run_at: null,
+      workdir: null,
+      context_from: null,
+      last_run_output: null,
+      last_run_id: null,
+      last_run_status: null,
+      last_run_evidence_envelope_id: null,
+      last_failure_at: null,
+      last_failure_json: null,
+      failure_count: null,
+      backoff_until: null,
+      updated_at: "u",
+    };
+    // Mirror the real failure mode: a column missing from the table entirely
+    // (undefined) plus a wrong-typed column.
+    const { last_run_status: _dropped, ...missingColumn } = validRow;
+    const internal = repo as unknown as { getStmt: { get: (...args: unknown[]) => unknown } };
+    internal.getStmt = { get: () => ({ ...missingColumn, enabled: "1" }) };
+
+    assert.throws(
+      () => repo.get("j"),
+      (error: unknown) =>
+        error instanceof TypeError &&
+        /cron_jobs query returned an unexpected row shape/.test(error.message) &&
+        /last_run_status: expected string \| null, got undefined/.test(error.message) &&
+        /enabled: expected number, got string/.test(error.message),
+    );
+  });
+});
+
 describe("CronJobRepository sanitization", () => {
   it("quarantines a cron job whose action_config_json is malformed and falls back to undefined", () => {
     const dbPath = path.join(os.tmpdir(), `gc-cron-sanitize-${randomUUID()}.db`);

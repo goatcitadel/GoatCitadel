@@ -13,11 +13,12 @@ export async function runPostgresMigrations(
   migrations: readonly PostgresMigration[] = POSTGRES_MIGRATIONS,
 ): Promise<PostgresMigrationRunResult> {
   await client.ensureMigrationsTable();
-  const applied = await client.getAppliedMigrationVersions();
+  const applied = await client.getAppliedMigrations();
   const newlyApplied: number[] = [];
 
   for (const migration of migrations) {
     if (applied.has(migration.version)) {
+      assertAppliedMigrationNameMatches(migration, applied.get(migration.version));
       continue;
     }
     await client.transaction(async (tx) => {
@@ -31,6 +32,24 @@ export async function runPostgresMigrations(
     appliedVersions: newlyApplied,
     latestVersion: migrations[migrations.length - 1]?.version ?? 0,
   };
+}
+
+// Migrations are immutable once authored, so a ledger row whose name differs
+// from the code's migration at the same version means the database was
+// migrated by a divergent branch lineage. "Version already applied" then no
+// longer implies "this migration ran": skipping would silently drop schema
+// changes (this is how cron_jobs lost its run-evidence columns), and running
+// blindly could conflict with whatever the other lineage applied. Fail closed
+// so the operator reconciles the ledger deliberately.
+function assertAppliedMigrationNameMatches(migration: PostgresMigration, appliedName: string | undefined): void {
+  if (appliedName === undefined || appliedName === migration.name) {
+    return;
+  }
+  throw new Error(
+    `Postgres migration ledger mismatch at version ${migration.version}: database recorded "${appliedName}" but this build defines "${migration.name}". ` +
+      `Refusing to treat "${migration.name}" as applied. Verify which schema changes actually ran, apply any missing ones, ` +
+      `then correct the schema_migrations row for version ${migration.version}.`,
+  );
 }
 
 async function markApplied(
@@ -61,10 +80,10 @@ export function applyPostgresMigrationsSync(
       applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  const appliedRows = db.prepare(`SELECT version FROM ${quotedMigrationsTable} ORDER BY version ASC`).all() as Array<{
-    version: number;
-  }>;
-  const applied = new Set(appliedRows.map((row) => row.version));
+  const appliedRows = db
+    .prepare(`SELECT version, name FROM ${quotedMigrationsTable} ORDER BY version ASC`)
+    .all() as Array<{ version: number; name: string }>;
+  const applied = new Map(appliedRows.map((row) => [Number(row.version), row.name]));
   const markAppliedStmt = db.prepare(`
     INSERT INTO ${quotedMigrationsTable} (version, name, applied_at)
     VALUES (@version, @name, CURRENT_TIMESTAMP)
@@ -73,6 +92,7 @@ export function applyPostgresMigrationsSync(
 
   for (const migration of migrations) {
     if (applied.has(migration.version)) {
+      assertAppliedMigrationNameMatches(migration, applied.get(migration.version));
       continue;
     }
     db.transaction("immediate", () => {

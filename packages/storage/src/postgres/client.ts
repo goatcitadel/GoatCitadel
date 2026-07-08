@@ -87,11 +87,15 @@ export class PostgresDatabaseClient {
   }
 
   public async getAppliedMigrationVersions(): Promise<Set<number>> {
+    return new Set((await this.getAppliedMigrations()).keys());
+  }
+
+  public async getAppliedMigrations(): Promise<Map<number, string>> {
     await this.ensureMigrationsTable();
-    const rows = await this.query<{ version: number }>(
-      `SELECT version FROM ${this.migrationsTable} ORDER BY version ASC`,
+    const rows = await this.query<{ version: number; name: string }>(
+      `SELECT version, name FROM ${this.migrationsTable} ORDER BY version ASC`,
     );
-    return new Set(rows.map((row) => Number(row.version)));
+    return new Map(rows.map((row) => [Number(row.version), row.name]));
   }
 
   public async markMigrationApplied(version: number, name: string, client?: PoolClient): Promise<void> {
