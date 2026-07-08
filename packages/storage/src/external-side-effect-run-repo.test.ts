@@ -185,4 +185,35 @@ describe("ExternalSideEffectRunRepository", () => {
       [second.runId, first.runId],
     );
   });
+
+  it("records payload_mismatch runs with non-resumable resume state", () => {
+    const repo = createRepo();
+    const run = repo.createOrGet(
+      {
+        boundary: "integration_operator_action",
+        routePath: "external_side_effect:integration_operator_action:productivity.trello:conn-3:write",
+        catalogId: "productivity.trello",
+        connectionId: "conn-3",
+        actionId: "write",
+        actorScope: "conn-3",
+        idempotencyKey: "trello-key-mismatch",
+        payloadHash: "payload-hash-b",
+        status: "payload_mismatch",
+      },
+      "2026-05-31T10:00:00.000Z",
+    );
+
+    assert.equal(run.status, "payload_mismatch");
+    // resumeStateForStatus(:374-391): payload_mismatch is its own terminal resume
+    // state, distinct from "not_resumable" — it flags that the key was reused with a
+    // different payload rather than a plain non-resumable claim outcome.
+    assert.equal(run.resumeState, "payload_mismatch");
+    // deriveExternalSideEffectRunReversibility(:336-372): payload_mismatch matches
+    // neither the manual_reconciliation branch (not unknown_external_outcome) nor the
+    // replay_audit_only branch (status isn't claimed_not_sent/failed_before_boundary
+    // and resumeState isn't manual_retry_after_recorded_failure), so it falls through
+    // to the irreversible default.
+    assert.equal(run.reversibility?.status, "irreversible");
+    assert.equal(run.reversibility?.label, "Cannot undo");
+  });
 });
