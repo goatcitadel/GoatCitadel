@@ -1278,4 +1278,140 @@ describe("prompt-pack parser, import, export, and reports", () => {
       title: "Streaming refresh check",
     });
   });
+
+  it("keeps fenced shell comments and YAML rules inside a single test body", () => {
+    const tests = parsePromptPackTests(
+      [
+        "# Chat",
+        "",
+        "## No Tools",
+        "",
+        "### TEST-F01: Fenced snippets survive import",
+        "",
+        "Set up the environment first.",
+        "",
+        "```bash",
+        "# install deps",
+        "pip install -r requirements.txt",
+        "```",
+        "",
+        "Then apply this manifest:",
+        "",
+        "```yaml",
+        "---",
+        "name: sample-config",
+        "---",
+        "```",
+        "",
+        "Confirm the deployment output.",
+      ].join("\n"),
+    );
+
+    expect(tests).toHaveLength(1);
+    expect(tests[0]).toMatchObject({ code: "TEST-F01", mode: "chat", toolTier: "no-tools" });
+    expect(tests[0]?.prompt).toContain("# install deps");
+    expect(tests[0]?.prompt).toContain("pip install -r requirements.txt");
+    expect(tests[0]?.prompt).toContain("---");
+    expect(tests[0]?.prompt).toContain("name: sample-config");
+    expect(tests[0]?.prompt).toContain("Confirm the deployment output.");
+  });
+
+  it("ignores fenced lines that look like mode, tier, or test headings", () => {
+    const tests = parsePromptPackTests(
+      [
+        "# Chat",
+        "",
+        "## Implicit Tools",
+        "",
+        "### TEST-F02: Fenced decoys stay in the body",
+        "",
+        "Review the transcript below.",
+        "",
+        "```text",
+        "# code review notes",
+        "## explicit tools",
+        "### TEST-99: decoy heading",
+        "TEST-98: decoy plain",
+        "---",
+        "```",
+        "",
+        "Summarize what the transcript says.",
+      ].join("\n"),
+    );
+
+    expect(tests.map((test) => test.code)).toEqual(["TEST-F02"]);
+    expect(tests[0]).toMatchObject({ code: "TEST-F02", mode: "chat", toolTier: "implicit-tools" });
+    expect(tests[0]?.prompt).toContain("# code review notes");
+    expect(tests[0]?.prompt).toContain("## explicit tools");
+    expect(tests[0]?.prompt).toContain("### TEST-99: decoy heading");
+    expect(tests[0]?.prompt).toContain("TEST-98: decoy plain");
+    expect(tests[0]?.prompt).toContain("Summarize what the transcript says.");
+  });
+
+  it("treats shorter backtick runs inside a longer fence as content", () => {
+    const tests = parsePromptPackTests(
+      [
+        "# Chat",
+        "",
+        "## No Tools",
+        "",
+        "### TEST-F05: Four-backtick fence quoting a fenced snippet",
+        "",
+        "Reproduce this exact markdown:",
+        "",
+        "````markdown",
+        "```bash",
+        "# run the linter",
+        "```",
+        "````",
+        "",
+        "# Cowork",
+        "",
+        "## Explicit Tools",
+        "",
+        "### TEST-F06: Sections after the quoted fence still split",
+        "",
+        "Coordinate the wrap-up.",
+      ].join("\n"),
+    );
+
+    expect(tests).toHaveLength(2);
+    expect(tests[0]).toMatchObject({ code: "TEST-F05", mode: "chat", toolTier: "no-tools" });
+    expect(tests[0]?.prompt).toContain("```bash");
+    expect(tests[0]?.prompt).toContain("# run the linter");
+    expect(tests[1]).toMatchObject({ code: "TEST-F06", mode: "cowork", toolTier: "explicit-tools" });
+    expect(tests[1]?.prompt).toBe("Coordinate the wrap-up.");
+  });
+
+  it("still splits on mode and tier headings once a fence has closed", () => {
+    const tests = parsePromptPackTests(
+      [
+        "# Chat",
+        "",
+        "## No Tools",
+        "",
+        "### TEST-F03: Fence before a real section",
+        "",
+        "```sh",
+        "# prepare workspace",
+        "make bootstrap",
+        "```",
+        "",
+        "# Cowork",
+        "",
+        "## Explicit Tools",
+        "",
+        "### TEST-F04: Real headings still split",
+        "",
+        "Coordinate the follow-up run.",
+      ].join("\n"),
+    );
+
+    expect(tests).toHaveLength(2);
+    expect(tests[0]).toMatchObject({ code: "TEST-F03", mode: "chat", toolTier: "no-tools" });
+    expect(tests[0]?.prompt).toContain("# prepare workspace");
+    expect(tests[0]?.prompt).toContain("make bootstrap");
+    expect(tests[1]).toMatchObject({ code: "TEST-F04", mode: "cowork", toolTier: "explicit-tools" });
+    expect(tests[1]?.prompt).toBe("Coordinate the follow-up run.");
+  });
 });
