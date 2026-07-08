@@ -1069,6 +1069,24 @@
   gap: 0.42rem;
 }
 
+/* Task 13: wraps a per-row batch-select checkbox alongside the existing
+   memory item button so a checkbox never nests inside role="option" content. */
+.mc-next-memory-batch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.mc-next-memory-batch-row > input[type="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 0.68rem;
+}
+
+.mc-next-memory-batch-row > .mc-next-approvals-list-item {
+  flex: 1;
+  min-width: 0;
+}
+
 .mc-next-approvals-list-footer {
   display: flex;
   justify-content: center;

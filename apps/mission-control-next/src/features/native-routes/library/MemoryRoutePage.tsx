@@ -29,6 +29,7 @@ import {
 } from "@goatcitadel/mission-control-shared/content/memory-helpers";
 import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { MemoryBatchToolbar } from "./MemoryBatchToolbar";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from "../shared/native-helpers";
@@ -127,6 +128,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   // 5.2: gate the destructive "Forget item" action behind a confirm step (the button's
   // own aria-label calls it permanent), matching how Curator/Approvals confirm.
   const [pendingForget, setPendingForget] = useState(false);
+  // 13: multi-select for atomic batch forget/pin (pruned against the live snapshot
+  // below via batchIds, since a stale id 404s server-side and rejects the whole batch).
+  const [batchSelected, setBatchSelected] = useState<ReadonlySet<string>>(new Set());
   const [draft, setDraft] = useState({
     title: "",
     content: "",
@@ -171,6 +175,11 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const recallPromptId = useId();
 
   const memoryItems = useMemo(() => memory.data?.memoryItems ?? [], [memory.data?.memoryItems]);
+  // Prune ids that left the snapshot — a stale id 404s server-side and rejects the whole atomic batch.
+  const batchIds = useMemo(
+    () => Array.from(batchSelected).filter((id) => memoryItems.some((item) => item.itemId === id)),
+    [batchSelected, memoryItems],
+  );
   const memoryFeedback = memory.data?.memoryFeedback ?? [];
   const memoryQualityIssues = memory.data?.memoryQualityIssues ?? [];
   const traceMemoryCandidates = useMemo(
@@ -267,6 +276,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryAdminState = memory.data?.memoryAdminState ?? "unknown";
   const memoryAdminTruthUnknown = memoryAdminState === "unknown";
   const memoryCanMutate = memoryAdminState === "enabled";
+  const batchBusy = memory.busyKey?.startsWith("memory-batch:") ?? false;
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
   const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
   const recentContextPacks = useMemo(() => memory.data?.qmdStats?.recent ?? [], [memory.data?.qmdStats?.recent]);
@@ -389,6 +399,30 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       });
   };
 
+  const toggleBatchSelect = (itemId: string) => {
+    setBatchSelected((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+
+  // Selection is cleared only when the hook verb resolves truthy (Task 12 contract) —
+  // a falsy/undefined return means admin-locked, over-limit, or a rejected batch, and
+  // the operator's selection must survive so they can retry.
+  const clearBatchSelectionOnSuccess = (result: unknown) => {
+    if (result) {
+      setBatchSelected(new Set());
+    }
+  };
+  const handleBatchForget = () => memory.batchForgetItems(batchIds).then(clearBatchSelectionOnSuccess);
+  const handleBatchPin = (pinned: boolean) =>
+    void memory.batchSetItemsPinned(batchIds, pinned).then(clearBatchSelectionOnSuccess);
+
   return (
     <NativePageFrame
       area="library"
@@ -497,12 +531,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               ? "No memory items match the current filter."
               : `${visibleItems.length} memory ${visibleItems.length === 1 ? "item" : "items"} visible.`}
           </div>
-          <div
-            className="mc-next-approvals-list"
-            role="listbox"
-            aria-label="Memory items"
-            aria-activedescendant={memory.selectedItemId ? `memory-list-item-${memory.selectedItemId}` : undefined}
-          >
+          <div className="mc-next-approvals-list" role="group" aria-label="Memory items">
             {visibleItems.length === 0 ? (
               <>
                 <EmptyState
@@ -541,47 +570,64 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               visibleItems.map((item) => {
                 const isSelected = memory.selectedItemId === item.itemId;
                 return (
-                  <button
-                    key={item.itemId}
-                    id={`memory-list-item-${item.itemId}`}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    aria-pressed={isSelected}
-                    aria-current={isSelected ? "true" : undefined}
-                    aria-label={`Memory item ${item.title} in namespace ${item.namespace}, lifecycle ${item.lifecycleState}, ${item.pinned ? "pinned" : "unpinned"}, updated ${formatShortDateTime(item.updatedAt)}`}
-                    className={`mc-next-approvals-list-item${isSelected ? " is-selected" : ""}`}
-                    onClick={() => memory.setSelectedItemId(item.itemId)}
-                  >
-                    <div className="mc-next-directory-list-head">
-                      <strong>{item.title}</strong>
-                      <span>{formatShortDateTime(item.updatedAt)}</span>
-                    </div>
-                    <div className="mc-next-approvals-chip-row">
-                      <StatusChip tone="default">
-                        {formatMemoryEngineeringKind(classifyMemoryItemKind(item))}
-                      </StatusChip>
-                      <StatusChip
-                        tone={
-                          item.lifecycleState === "active"
-                            ? "success"
-                            : item.lifecycleState === "expired"
-                              ? "warning"
-                              : "muted"
-                        }
-                      >
-                        {item.lifecycleState}
-                      </StatusChip>
-                      <StatusChip tone={item.pinned ? "default" : "muted"}>
-                        {item.pinned ? "pinned" : "unpinned"}
-                      </StatusChip>
-                    </div>
-                    <p>{item.namespace}</p>
-                  </button>
+                  <div key={item.itemId} className="mc-next-memory-batch-row">
+                    <input
+                      type="checkbox"
+                      checked={batchSelected.has(item.itemId)}
+                      disabled={!memoryCanMutate || batchBusy}
+                      onChange={() => toggleBatchSelect(item.itemId)}
+                      aria-label={`Select memory item ${item.title} for batch actions`}
+                    />
+                    <button
+                      id={`memory-list-item-${item.itemId}`}
+                      type="button"
+                      aria-pressed={isSelected}
+                      aria-current={isSelected ? "true" : undefined}
+                      aria-label={`Memory item ${item.title} in namespace ${item.namespace}, lifecycle ${item.lifecycleState}, ${item.pinned ? "pinned" : "unpinned"}, updated ${formatShortDateTime(item.updatedAt)}`}
+                      className={`mc-next-approvals-list-item${isSelected ? " is-selected" : ""}`}
+                      onClick={() => memory.setSelectedItemId(item.itemId)}
+                    >
+                      <div className="mc-next-directory-list-head">
+                        <strong>{item.title}</strong>
+                        <span>{formatShortDateTime(item.updatedAt)}</span>
+                      </div>
+                      <div className="mc-next-approvals-chip-row">
+                        <StatusChip tone="default">
+                          {formatMemoryEngineeringKind(classifyMemoryItemKind(item))}
+                        </StatusChip>
+                        <StatusChip
+                          tone={
+                            item.lifecycleState === "active"
+                              ? "success"
+                              : item.lifecycleState === "expired"
+                                ? "warning"
+                                : "muted"
+                          }
+                        >
+                          {item.lifecycleState}
+                        </StatusChip>
+                        <StatusChip tone={item.pinned ? "default" : "muted"}>
+                          {item.pinned ? "pinned" : "unpinned"}
+                        </StatusChip>
+                      </div>
+                      <p>{item.namespace}</p>
+                    </button>
+                  </div>
                 );
               })
             )}
           </div>
+          {batchIds.length > 0 ? (
+            <MemoryBatchToolbar
+              count={batchIds.length}
+              canMutate={memoryCanMutate}
+              busy={batchBusy}
+              forgetBusy={memory.busyKey === "memory-batch:forget"}
+              onForget={handleBatchForget}
+              onPin={handleBatchPin}
+              onClear={() => setBatchSelected(new Set())}
+            />
+          ) : null}
         </NativeCard>
         <NativeCard
           title={selectedVisibleItem?.title ?? "Memory detail"}
