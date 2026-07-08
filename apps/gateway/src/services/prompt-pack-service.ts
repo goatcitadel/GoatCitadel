@@ -5656,7 +5656,21 @@ export function parsePromptPackTests(content: string): Array<{
   const VALID_MODES = new Set(["chat", "cowork", "code"]);
   const VALID_TOOL_TIERS = new Set(["no-tools", "implicit-tools", "explicit-tools"]);
 
+  let insideCodeFence = false;
+
   for (const rawLine of lines) {
+    // Fenced code can contain lines that would otherwise read as mode/tier
+    // headings, test codes, or horizontal rules; keep them in the active body.
+    const isFenceDelimiter = rawLine.trim().startsWith("```");
+    if (isFenceDelimiter || insideCodeFence) {
+      if (isFenceDelimiter) {
+        insideCodeFence = !insideCodeFence;
+      }
+      if (active) {
+        active.lines.push(rawLine);
+      }
+      continue;
+    }
     const line = normalizeHeadingLine(rawLine);
 
     // Detect mode section headers before anything else
