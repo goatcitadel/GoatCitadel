@@ -325,6 +325,89 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_CRASH_MID_TOOL_CALL_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "test-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    // Crash without ever responding to the pending tools/call request.
+    process.exit(3);
+  }
+});
+`;
+
+// Emits one stdout line that exceeds MCP_STDOUT_LINE_MAX_BYTES (512 KiB) before the
+// real JSON-RPC reply, in a single write call so the test stays fast (no write loop).
+const MCP_OVERSIZED_STDOUT_LINE_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function replyPayload(id, result) {
+  return JSON.stringify({ jsonrpc: "2.0", id, result });
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    process.stdout.write(
+      replyPayload(message.id, {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "test-mcp", version: "1.0.0" },
+      }) + "\n",
+    );
+    return;
+  }
+  if (message.method === "tools/call") {
+    const oversizedLine = "y".repeat(600 * 1024);
+    const validReply = replyPayload(message.id, {
+      structuredContent: { ok: true, note: "reply after oversized line" },
+    });
+    process.stdout.write(oversizedLine + "\n" + validReply + "\n");
+  }
+});
+`;
+
+// Writes stderr content past MCP_STDERR_MAX_BYTES (4096) then exits without ever
+// responding to the pending tools/call, so the bounded stderr buffer is echoed into
+// the "exited before responding" failure message.
+const MCP_STDERR_OVERFLOW_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "test-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    const startMarker = "STDERR-BOUND-START-MARKER";
+    const padding = "x".repeat(4096);
+    const endMarker = "STDERR-BOUND-END-MARKER-SHOULD-BE-TRUNCATED";
+    process.stderr.write(startMarker + padding + endMarker, () => {
+      process.exit(1);
+    });
+  }
+});
+`;
+
 describe("mcp runtime", () => {
   it("infers browser and research tool records when discovery has not populated tools yet", () => {
     const now = new Date().toISOString();
@@ -763,6 +846,54 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("times out reading a stalled remote MCP HTTP response body instead of hanging", async () => {
+    // Plain JSON content-type (not text/event-stream) so this drives through
+    // readHttpResponseText -> readBoundedResponseText's body-read deadline.
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        // Send headers plus a partial, never-terminated JSON body, then stall
+        // forever: no further writes, no response.end().
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"jsonrpc":"2.0","id":1,"result":{"partial":true');
+      },
+      async (url) => {
+        const startedAt = Date.now();
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          {
+            toolName: "remote.search",
+            arguments: {},
+          },
+          300,
+          { networkAllowlist: [new URL(url).host] },
+        );
+        const elapsedMs = Date.now() - startedAt;
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("Timed out reading");
+        // Bounded by the deadline, not left hanging indefinitely.
+        expect(elapsedMs).toBeLessThan(5000);
+      },
+    );
+  });
+
   it("surfaces the typed timeout error when a remote MCP SSE response stalls mid-stream", async () => {
     await withRemoteMcpHttpServer(
       ({ message, response }) => {
@@ -1107,5 +1238,97 @@ describe("mcp runtime", () => {
         process.env.mcp_lowercase_token = previousLowercase;
       }
     }
+  });
+
+  it("rejects the pending tools/call and raises no unhandled rejections when the MCP child crashes mid-invoke", async () => {
+    // Guard against the shutdown-rejection class: a crash-triggered rejectAll
+    // must be caught by the normal await chain, never surface as a process-level
+    // unhandled rejection. Add our own listener (never remove vitest's own).
+    const unhandledReasons: unknown[] = [];
+    const trackUnhandledRejection = (reason: unknown) => {
+      unhandledReasons.push(reason);
+    };
+    process.on("unhandledRejection", trackUnhandledRejection);
+    try {
+      const server = createTestServer(MCP_CRASH_MID_TOOL_CALL_SCRIPT);
+
+      const result = await invokeMcpRuntimeTool(server, {
+        toolName: "browser.navigate",
+        arguments: {
+          url: "https://example.com/releases",
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("exited before responding");
+      expect(result.error).toContain("code=3");
+
+      // Give the event loop a turn so any straggling unhandled rejection would
+      // have surfaced before we assert the tracker stayed empty.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandledReasons).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", trackUnhandledRejection);
+    }
+  });
+
+  it("discards an oversized stdout line without corrupting the JSON-RPC stream", async () => {
+    const server = createTestServer(MCP_OVERSIZED_STDOUT_LINE_SCRIPT);
+
+    const result = await invokeMcpRuntimeTool(server, {
+      toolName: "browser.navigate",
+      arguments: {
+        url: "https://example.com/releases",
+      },
+    });
+
+    // The oversized line (> MCP_STDOUT_LINE_MAX_BYTES) is silently discarded;
+    // the well-formed reply line that follows it is still parsed and resolved.
+    expect(result.ok).toBe(true);
+    expect(result.output).toMatchObject({
+      structuredContent: { ok: true, note: "reply after oversized line" },
+    });
+  });
+
+  it("bounds stderr diagnostics echoed into the exit failure message to MCP_STDERR_MAX_BYTES", async () => {
+    const server = createTestServer(MCP_STDERR_OVERFLOW_SCRIPT);
+
+    const result = await invokeMcpRuntimeTool(server, {
+      toolName: "browser.navigate",
+      arguments: {
+        url: "https://example.com/releases",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("exited before responding");
+    // Marker written within the first 4 KiB survives the bounded stderr buffer.
+    expect(result.error).toContain("STDERR-BOUND-START-MARKER");
+    // Marker written past the 4 KiB cap must never appear in the echoed diagnostics.
+    expect(result.error).not.toContain("STDERR-BOUND-END-MARKER-SHOULD-BE-TRUNCATED");
+  });
+
+  it("returns a structured failure instead of hanging when the MCP stdio command cannot be spawned", async () => {
+    const server: McpServerRecord = {
+      ...createTestServer(""),
+      command: "definitely-not-a-real-binary-goatcitadel-test",
+      args: [],
+    };
+
+    const startedAt = Date.now();
+    const result = await invokeMcpRuntimeTool(server, { toolName: "browser.navigate", arguments: {} }, 1500);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("MCP stdio request failed");
+    // Structured, attributable failure: either the spawn ENOENT error event fires
+    // (the expected channel for a plain, extension-less command name) or -- on a
+    // host/path that routes the launch through a shell -- the child exits
+    // immediately and surfaces as a non-zero "exited before responding" close.
+    // Either channel is acceptable; a silent hang is not.
+    expect(result.error).toMatch(/enoent|exited before responding/i);
+    // Resolved well inside the timeout budget -- proves this failed structurally
+    // rather than waiting out the timeout.
+    expect(elapsedMs).toBeLessThan(1200);
   });
 });

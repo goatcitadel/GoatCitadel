@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
-import { __internal } from "./mcp-runtime.js";
+import { __internal, invokeMcpRuntimeTool } from "./mcp-runtime.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -71,9 +71,13 @@ class FakeStdin extends EventEmitter {
   }
 }
 
-/** Readable-stream stand-in for a child's stdout/stderr. */
+/**
+ * Readable-stream stand-in for a child's stdout/stderr. `withStdioMcpClient`
+ * calls `.setEncoding()` immediately after spawn (before any data flows), so
+ * the fake must support it even though it is a no-op for a plain EventEmitter.
+ */
 class FakeReadable extends EventEmitter {
-  setEncoding(): this {
+  setEncoding(_encoding: BufferEncoding): this {
     return this;
   }
 }
@@ -88,9 +92,11 @@ interface FakeChildOptions {
 function createFakeChild(options: FakeChildOptions = {}): {
   child: ChildProcess;
   stdin: FakeStdin;
+  stdout: FakeReadable;
   stderr: FakeReadable;
   kill: ReturnType<typeof vi.fn>;
   emitExit: () => void;
+  /** Emits the ChildProcess "close" event that `withStdioMcpClient` listens on. */
   emitClose: (code: number | null, signal?: NodeJS.Signals | null) => void;
 } {
   const emitter = new EventEmitter();
@@ -112,11 +118,21 @@ function createFakeChild(options: FakeChildOptions = {}): {
   return {
     child,
     stdin,
+    stdout,
     stderr,
     kill,
     emitExit: () => emitter.emit("exit", 0, null),
     emitClose: (code: number | null, signal: NodeJS.Signals | null = null) => emitter.emit("close", code, signal),
   };
+}
+
+/**
+ * Flush the microtask/macrotask queue so promise continuations chained inside
+ * `withStdioMcpClient` (e.g. resolving `initialize` then issuing `tools/call`)
+ * run before the test drives the next fake event.
+ */
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 /** A fake taskkill process so we can drive its error/exit lifecycle. */
@@ -322,6 +338,93 @@ describe("mcp runtime child termination (INFRA-001)", () => {
 
     expect(kill).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("mcp runtime invoke crash and cancellation handling", () => {
+  it("rejects a pending invoke with the exited-before-responding message and bounded stderr when the MCP child crashes mid-flight", async () => {
+    const fake = createFakeChild({ pid: 6001 });
+    spawnMock.mockReturnValue(fake.child);
+
+    const resultPromise = invokeMcpRuntimeTool(
+      TEST_SERVER,
+      { toolName: "browser.navigate", arguments: { url: "https://example.com" } },
+      2000,
+    );
+
+    // withStdioMcpClient writes the `initialize` request to stdin synchronously
+    // (before its first await), so it is already captured here.
+    const initializeRequest = JSON.parse(fake.stdin.writes[0]!) as { id: number };
+    fake.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: initializeRequest.id,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "fake-mcp", version: "1.0.0" },
+        },
+      })}\n`,
+    );
+    await flushAsync();
+
+    // tools/call is now pending. Feed bounded stderr, then crash the child
+    // before it ever responds.
+    fake.stderr.emit("data", "fatal: mcp worker crashed\n");
+    fake.emitClose(1, null);
+
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("exited before responding");
+    expect(result.error).toContain("code=1");
+    expect(result.error).toContain("fatal: mcp worker crashed");
+    // A child that has already exited needs no further termination attempt.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminates the child via the platform kill path when a pending invoke is cancelled", async () => {
+    setPlatform("win32");
+    const fake = createFakeChild({ pid: 6002 });
+    const fakeKiller = createFakeKiller();
+    spawnMock.mockReturnValueOnce(fake.child).mockReturnValue(fakeKiller.killer);
+
+    const controller = new AbortController();
+    const resultPromise = invokeMcpRuntimeTool(
+      TEST_SERVER,
+      { toolName: "browser.navigate", arguments: {}, signal: controller.signal },
+      2000,
+    );
+
+    const initializeRequest = JSON.parse(fake.stdin.writes[0]!) as { id: number };
+    fake.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: initializeRequest.id,
+        result: { protocolVersion: "2024-11-05", capabilities: { tools: {} } },
+      })}\n`,
+    );
+    await flushAsync();
+
+    // tools/call is now pending against an unresponsive (hung/crashing) child;
+    // the caller cancels it.
+    controller.abort();
+
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("MCP stdio request failed");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "taskkill",
+      ["/pid", "6002", "/T", "/F"],
+      expect.objectContaining({ windowsHide: true, stdio: "ignore" }),
+    );
+
+    // Settle the fake killer's lifecycle so the test doesn't leave its
+    // close/error listeners dangling.
+    fakeKiller.emitClose(0);
   });
 });
 
