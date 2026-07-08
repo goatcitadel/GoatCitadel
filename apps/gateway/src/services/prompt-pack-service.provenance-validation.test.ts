@@ -13,6 +13,7 @@ import {
   parsePromptPackTests,
   validatePromptPackStructure,
 } from "./prompt-pack-service.js";
+import { readRepoFixture } from "./prompt-pack-service-test-fixtures.js";
 
 const PACK_WITH_HEADER = [
   "# GoatCitadel Prompt Pack v7 Overall",
@@ -215,5 +216,82 @@ describe("prompt-pack import provenance", () => {
       /Prompt pack structure validation failed: declared 3 chat tests but parsed 1/,
     );
     expect(replacePackTests).not.toHaveBeenCalled();
+  });
+});
+
+describe("v7 overall gate pack fixture", () => {
+  it("parses the bundled v7 pack with the declared structure and authored diagnostics", () => {
+    const markdown = readRepoFixture("eval-assets/goatcitadel_prompt_pack_v7_overall.md");
+    const tests = parsePromptPackTests(markdown);
+    const codes = tests.map((test) => test.code);
+    const byMode = new Map<string, number>();
+    const byModeTier = new Map<string, number>();
+    for (const test of tests) {
+      if (test.mode) {
+        byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
+      }
+      if (test.mode && test.toolTier) {
+        const key = `${test.mode}/${test.toolTier}`;
+        byModeTier.set(key, (byModeTier.get(key) ?? 0) + 1);
+      }
+    }
+
+    expect(extractPromptPackVersionLabel(markdown)).toBe("GoatCitadel Overall v7.0 (2026-07-08)");
+    expect(tests).toHaveLength(42);
+    expect(new Set(codes).size).toBe(42);
+    expect(codes[0]).toBe("TEST-C701");
+    expect(codes[codes.length - 1]).toBe("TEST-D714");
+    expect(byMode.get("chat")).toBe(13);
+    expect(byMode.get("cowork")).toBe(15);
+    expect(byMode.get("code")).toBe(14);
+    expect(byModeTier.get("chat/explicit-tools")).toBe(5);
+    expect(byModeTier.get("cowork/explicit-tools")).toBe(6);
+    expect(byModeTier.get("code/explicit-tools")).toBe(5);
+    expect(validatePromptPackStructure(markdown, tests)).toEqual([]);
+
+    for (const test of tests) {
+      expect(test.prompt).not.toContain("Prompt Pack Diagnostics");
+      expect(test.diagnosticMetadata?.capabilityTargets.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.expectedRuntimeSignals.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.likelyFailureClasses.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.expectedToolFamilies?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it("parses the revised v6 pack with authored diagnostics on every row", () => {
+    const markdown = readRepoFixture("eval-assets/goatcitadel_prompt_pack_v6_security_red_team.md");
+    const tests = parsePromptPackTests(markdown);
+    expect(extractPromptPackVersionLabel(markdown)).toBe("GoatCitadel Security Red Team v6.1 (2026-07-08)");
+    expect(tests).toHaveLength(18);
+    expect(validatePromptPackStructure(markdown, tests)).toEqual([]);
+    for (const test of tests) {
+      expect(test.diagnosticMetadata?.expectedToolFamilies?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("builtin prompt pack import", () => {
+  it("imports the overall-v7 builtin with Pack-Version provenance and a fixed packId", () => {
+    const replacePackTests = createReplacePackTestsMock();
+    const service = createImportService(replacePackTests);
+
+    const imported = service.importBuiltinPromptPack("overall-v7");
+
+    expect(replacePackTests).toHaveBeenCalledWith(
+      expect.objectContaining({
+        packId: "overall-v7",
+        name: "GoatCitadel Overall v7.0 (2026-07-08)",
+        sourceLabel: "GoatCitadel Overall v7.0 (2026-07-08)",
+      }),
+    );
+    const call = replacePackTests.mock.calls[0]?.[0] as { tests: unknown[]; contentSha256?: string };
+    expect(call.tests).toHaveLength(42);
+    expect(call.contentSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(imported.pack.packId).toBe("overall-v7");
+  });
+
+  it("still rejects unknown builtin pack keys", () => {
+    const service = createImportService(createReplacePackTestsMock());
+    expect(() => service.importBuiltinPromptPack("nope")).toThrow(/Unknown built-in prompt pack/);
   });
 });

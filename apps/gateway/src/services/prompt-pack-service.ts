@@ -9,6 +9,19 @@ const log = logger.child("prompt-pack-service");
 const DEFAULT_WORKSPACE_ID = "default";
 const PROMPT_PACK_EVAL_ASSETS_DIR = "eval-assets";
 const SECURITY_RED_TEAM_PACK_FILE = "goatcitadel_prompt_pack_v6_security_red_team.md";
+const OVERALL_V7_PACK_FILE = "goatcitadel_prompt_pack_v7_overall.md";
+
+// Built-in packs import with a fixed packId so re-imports update in place
+// instead of accumulating duplicate packs. Entries without a name defer to
+// the pack file's Pack-Version label for name/sourceLabel provenance.
+const BUILTIN_PROMPT_PACKS: Record<string, { file: string; name?: string; sourceLabelFromBasename?: boolean }> = {
+  "security-red-team-v6": {
+    file: SECURITY_RED_TEAM_PACK_FILE,
+    name: "Defensive Security Evaluation",
+    sourceLabelFromBasename: true,
+  },
+  "overall-v7": { file: OVERALL_V7_PACK_FILE },
+};
 import type {
   CapabilityTrendSeries,
   ChatMemoryMode,
@@ -401,17 +414,18 @@ export class PromptPackService {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
   } {
-    if (packKey !== "security-red-team-v6") {
+    const builtin = BUILTIN_PROMPT_PACKS[packKey];
+    if (!builtin) {
       throw new Error(`Unknown built-in prompt pack: ${packKey}`);
     }
-    const filePath = resolveSecurityRedTeamPackPath(this.ctx.config.rootDir);
+    const filePath = resolveEvalAssetsPackPath(this.ctx.config.rootDir, builtin.file);
     if (!filePath) {
-      throw new Error(`${SECURITY_RED_TEAM_PACK_FILE} was not found in this checkout.`);
+      throw new Error(`${builtin.file} was not found in this checkout.`);
     }
     return this.importPromptPack({
       packId: packKey,
-      name: "Defensive Security Evaluation",
-      sourceLabel: path.basename(filePath),
+      name: builtin.name,
+      sourceLabel: builtin.sourceLabelFromBasename ? path.basename(filePath) : undefined,
       content: fsSync.readFileSync(filePath, "utf8"),
     });
   }
@@ -3842,15 +3856,19 @@ function buildSecurityEvalSafetyPosture(): PromptPackSecurityEvalPackRecord["saf
 }
 
 function resolveSecurityRedTeamPackPath(rootDir: string): string | undefined {
+  return resolveEvalAssetsPackPath(rootDir, SECURITY_RED_TEAM_PACK_FILE);
+}
+
+function resolveEvalAssetsPackPath(rootDir: string, fileName: string): string | undefined {
   const candidates = [
-    path.resolve(rootDir, PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(process.cwd(), PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(process.cwd(), "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(process.cwd(), "..", "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(rootDir, SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(process.cwd(), SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(process.cwd(), "..", "..", SECURITY_RED_TEAM_PACK_FILE),
-    path.resolve(process.cwd(), "..", "..", "..", SECURITY_RED_TEAM_PACK_FILE),
+    path.resolve(rootDir, PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
+    path.resolve(process.cwd(), PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
+    path.resolve(process.cwd(), "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
+    path.resolve(process.cwd(), "..", "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
+    path.resolve(rootDir, fileName),
+    path.resolve(process.cwd(), fileName),
+    path.resolve(process.cwd(), "..", "..", fileName),
+    path.resolve(process.cwd(), "..", "..", "..", fileName),
   ];
   return candidates.find((candidate) => fsSync.existsSync(candidate));
 }
