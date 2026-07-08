@@ -5656,15 +5656,19 @@ export function parsePromptPackTests(content: string): Array<{
   const VALID_MODES = new Set(["chat", "cowork", "code"]);
   const VALID_TOOL_TIERS = new Set(["no-tools", "implicit-tools", "explicit-tools"]);
 
-  let insideCodeFence = false;
+  let openFenceLength = 0;
 
   for (const rawLine of lines) {
     // Fenced code can contain lines that would otherwise read as mode/tier
     // headings, test codes, or horizontal rules; keep them in the active body.
-    const isFenceDelimiter = rawLine.trim().startsWith("```");
-    if (isFenceDelimiter || insideCodeFence) {
-      if (isFenceDelimiter) {
-        insideCodeFence = !insideCodeFence;
+    // A fence closes only on a backtick run at least as long as its opener, so
+    // a four-backtick fence can quote a literal ``` block without closing.
+    const fenceRunLength = rawLine.trim().match(/^(`{3,})/)?.[1]?.length ?? 0;
+    if (fenceRunLength > 0 || openFenceLength > 0) {
+      if (openFenceLength === 0) {
+        openFenceLength = fenceRunLength;
+      } else if (fenceRunLength >= openFenceLength) {
+        openFenceLength = 0;
       }
       if (active) {
         active.lines.push(rawLine);

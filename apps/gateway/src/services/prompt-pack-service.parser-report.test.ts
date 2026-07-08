@@ -1348,6 +1348,41 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(tests[0]?.prompt).toContain("Summarize what the transcript says.");
   });
 
+  it("treats shorter backtick runs inside a longer fence as content", () => {
+    const tests = parsePromptPackTests(
+      [
+        "# Chat",
+        "",
+        "## No Tools",
+        "",
+        "### TEST-F05: Four-backtick fence quoting a fenced snippet",
+        "",
+        "Reproduce this exact markdown:",
+        "",
+        "````markdown",
+        "```bash",
+        "# run the linter",
+        "```",
+        "````",
+        "",
+        "# Cowork",
+        "",
+        "## Explicit Tools",
+        "",
+        "### TEST-F06: Sections after the quoted fence still split",
+        "",
+        "Coordinate the wrap-up.",
+      ].join("\n"),
+    );
+
+    expect(tests).toHaveLength(2);
+    expect(tests[0]).toMatchObject({ code: "TEST-F05", mode: "chat", toolTier: "no-tools" });
+    expect(tests[0]?.prompt).toContain("```bash");
+    expect(tests[0]?.prompt).toContain("# run the linter");
+    expect(tests[1]).toMatchObject({ code: "TEST-F06", mode: "cowork", toolTier: "explicit-tools" });
+    expect(tests[1]?.prompt).toBe("Coordinate the wrap-up.");
+  });
+
   it("still splits on mode and tier headings once a fence has closed", () => {
     const tests = parsePromptPackTests(
       [
