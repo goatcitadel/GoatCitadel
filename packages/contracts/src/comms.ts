@@ -191,6 +191,8 @@ export interface GmailSendInput {
   sessionId?: string;
   agentId?: string;
   taskId?: string;
+  /** Caller-supplied idempotency key so retries of the same send are safely deduped. */
+  idempotencyKey?: string;
 }
 
 export interface GmailReadQuery {

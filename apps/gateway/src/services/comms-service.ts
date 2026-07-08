@@ -20,6 +20,12 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
+import {
+  buildExternalSideEffectReplayOutput,
+  runIdempotentExternalSideEffect,
+  type ExternalSideEffectRunStore,
+} from "./external-side-effect-runner-service.js";
+import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 export interface CommsHost {
   invokeAndUnwrap(
@@ -42,6 +48,13 @@ export interface CommsHost {
       typing: boolean;
     },
   ): Promise<ChannelActivityEffectResult[]>;
+  /**
+   * Optional external side-effect idempotency ledger members. A host that omits either
+   * one still works — `runIdempotentExternalSideEffect` fails closed with a blocking
+   * `idempotency_unavailable` outcome rather than sending the Gmail message unledgered.
+   */
+  mutationStore?: MutationIdempotencyStore;
+  sideEffectRunStore?: ExternalSideEffectRunStore;
 }
 
 const COMMS_SESSION = "session:operator:comms";
@@ -352,29 +365,133 @@ export async function commsGmailRead(
   );
 }
 
+/** Boundary key for the Gmail send external side-effect ledger (see comms-service test suite). */
+const COMMS_GMAIL_SEND_BOUNDARY = "comms_gmail_send";
+
+/**
+ * Carries a structured pre/post-boundary classification of a Gmail send result out of
+ * the runner's `execute` without losing its shape (same pattern as
+ * `DryRunCommitInnerResultError` in integration-dry-run-gate.ts:52). The runner only
+ * sees a thrown Error; commsGmailSend unwraps this back to the original result so
+ * refusals and failures are returned byte-compatible with pre-ledger behavior.
+ */
+class CommsGmailPreBoundaryResultError extends Error {
+  public constructor(public readonly result: ToolInvokeResult | Record<string, unknown>) {
+    super("comms_gmail_pre_boundary_result");
+  }
+}
+
+function isPreBoundaryToolInvokeRefusal(
+  result: ToolInvokeResult | Record<string, unknown>,
+): result is ToolInvokeResult {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "outcome" in result &&
+    (result as ToolInvokeResult).outcome !== "executed"
+  );
+}
+
 export async function commsGmailSend(
   host: CommsHost,
   input: GmailSendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return invokeCommsTool(
-    host,
-    {
-      toolName: "gmail.send",
-      args: {
-        connectionId: input.connectionId,
-        to: input.to,
-        cc: input.cc,
-        bcc: input.bcc,
-        subject: input.subject,
-        bodyText: input.bodyText,
-        bodyHtml: input.bodyHtml,
-      },
-      sessionId: input.sessionId ?? COMMS_SESSION,
-      agentId: input.agentId ?? KNOWLEDGE_AGENT,
-      taskId: input.taskId,
+  let connection: IntegrationConnection | undefined;
+  try {
+    connection = host.getIntegrationConnection(input.connectionId);
+  } catch {
+    // Preserve today's fail-inside-executor behavior for unknown connection ids: fall
+    // back to a generic catalog id and let invokeCommsTool surface the real error.
+    connection = undefined;
+  }
+
+  const checkedAt = new Date().toISOString();
+  const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
+    mutationStore: host.mutationStore,
+    sideEffectRunStore: host.sideEffectRunStore,
+    boundary: COMMS_GMAIL_SEND_BOUNDARY,
+    catalogId: connection?.catalogId ?? "automation.gmail",
+    connectionId: input.connectionId,
+    actionId: "gmail.send",
+    checkedAt,
+    idempotencyKey: input.idempotencyKey,
+    payload: {
+      provider: "gmail",
+      connectionId: input.connectionId,
+      to: input.to,
+      cc: input.cc,
+      bcc: input.bcc,
+      subject: input.subject,
+      bodyText: input.bodyText,
+      bodyHtml: input.bodyHtml,
     },
-    "comms_gmail_send",
-  );
+    label: "Gmail send (comms)",
+    execute: async (claim) => {
+      const result = await invokeCommsTool(
+        host,
+        {
+          toolName: "gmail.send",
+          args: {
+            connectionId: input.connectionId,
+            to: input.to,
+            cc: input.cc,
+            bcc: input.bcc,
+            subject: input.subject,
+            bodyText: input.bodyText,
+            bodyHtml: input.bodyHtml,
+          },
+          sessionId: input.sessionId ?? COMMS_SESSION,
+          agentId: input.agentId ?? KNOWLEDGE_AGENT,
+          taskId: input.taskId,
+        },
+        "comms_gmail_send",
+      );
+
+      // A ToolInvokeResult that never reached "executed" (policy refusal, approval
+      // required) never crossed the external boundary — the tool executor's commsInvoke
+      // was never entered.
+      if (isPreBoundaryToolInvokeRefusal(result)) {
+        throw new CommsGmailPreBoundaryResultError(result);
+      }
+
+      const record = result as Record<string, unknown>;
+      if (record.status === "failed") {
+        const deliveryStatus = record.deliveryStatus;
+        if (deliveryStatus === "blocked" || deliveryStatus === "not_available") {
+          // These failures are classified before commsInvoke's provider call ever
+          // fired (missing auth, disallowed host, unconfigured channel) — pre-boundary.
+          throw new CommsGmailPreBoundaryResultError(record);
+        }
+        // Any other failed deliveryStatus (degraded, retrying, manual_reconciliation_required,
+        // or unclassified) means the provider call may have fired — the boundary must be
+        // marked crossed before the ledger records this as an unknown external outcome.
+        claim.markExternalCallStarted();
+        throw new CommsGmailPreBoundaryResultError(record);
+      }
+
+      claim.markExternalCallStarted();
+      return record;
+    },
+  });
+
+  if (runResult.status === "executed") {
+    return {
+      ...runResult.value,
+      ...buildExternalSideEffectReplayOutput(runResult.claim),
+    };
+  }
+  if (runResult.status === "blocked") {
+    return {
+      status: "failed",
+      deliveryStatus: "blocked",
+      error: runResult.message,
+      ...buildExternalSideEffectReplayOutput(runResult.claim),
+    };
+  }
+  if (runResult.error instanceof CommsGmailPreBoundaryResultError) {
+    return runResult.error.result;
+  }
+  throw runResult.error;
 }
 
 export async function commsCalendarList(
