@@ -260,6 +260,26 @@ describe("client-core", () => {
     });
   });
 
+  it("omits Content-Type on body-less requests so Fastify never parses an empty JSON body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ success: true, data: { ok: true } })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Body-less POST (e.g. POST /api/v1/mason/sessions): claiming a JSON body
+    // that does not exist makes Fastify reject the request with 400
+    // FST_ERR_CTP_EMPTY_JSON_BODY before the route handler runs.
+    await request("/api/v1/mason/sessions", { method: "POST" });
+    const bodylessHeaders = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(bodylessHeaders["Content-Type"]).toBeUndefined();
+    expect(bodylessHeaders["Idempotency-Key"]).toBe("uuid-1");
+    expect(bodylessHeaders["x-goatcitadel-browser-intent"]).toBe("mutation");
+
+    await request("/api/v1/mason/draft", { method: "POST", body: "{}" });
+    const jsonHeaders = fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>;
+    expect(jsonHeaders["Content-Type"]).toBe("application/json");
+  });
+
   it("does not let generic request headers override gateway-controlled headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } }));
     vi.stubGlobal("fetch", fetchMock);

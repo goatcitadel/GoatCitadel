@@ -108,9 +108,14 @@ export function buildGatewayHeaders(
   method: string,
   correlationId: string,
   extraHeaders?: HeadersInit,
+  options?: { hasBody?: boolean },
 ): HeadersInit {
   return {
-    "Content-Type": "application/json",
+    // Only claim a JSON body when one is actually sent: Fastify rejects
+    // `Content-Type: application/json` with an empty body as 400
+    // FST_ERR_CTP_EMPTY_JSON_BODY before the route handler runs, which breaks
+    // body-less POSTs such as POST /api/v1/mason/sessions.
+    ...(options?.hasBody === false ? {} : { "Content-Type": "application/json" }),
     ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
     ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
     ...readGatewayAuthHeaders(path),
@@ -139,7 +144,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 async function requestUncoalesced<T>(path: string, init: RequestInit | undefined, method: string): Promise<T> {
   const correlationId = createCorrelationId();
-  const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers));
+  const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers), {
+    hasBody: init?.body != null,
+  });
   recordClientDiagnostic({
     level: "info",
     category: "api",

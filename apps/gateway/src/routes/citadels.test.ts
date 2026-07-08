@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { installEmptyBodyTolerantJsonParser } from "../empty-json-body-parser.js";
 import { citadelsRoutes } from "./citadels.js";
 
 function buildApp(citadels: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
@@ -706,6 +707,28 @@ describe("citadels routes", () => {
     const draft = await app.inject({ method: "POST", url: "/api/v1/mason/sessions/s1/draft" });
     expect(draft.statusCode).toBe(200);
     expect(draftFromSession).toHaveBeenCalledWith("s1");
+  });
+
+  // Regression: browser clients stamp `Content-Type: application/json` on every
+  // request, including body-less POSTs. Fastify's default parser 400s those
+  // (FST_ERR_CTP_EMPTY_JSON_BODY) before the handler runs, which broke the
+  // Mason "Start setup" button. The real app installs the tolerant parser in
+  // buildApp; this test exercises the same composition at the route level.
+  it("creates a mason session when a browser sends content-type with no body", async () => {
+    const createMasonSession = vi.fn(() => ({ sessionId: "s1", answers: {}, status: "collecting" }));
+    const built = buildApp({ createMasonSession });
+    app = built.app;
+    installEmptyBodyTolerantJsonParser(app);
+    await app.register(citadelsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mason/sessions",
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createMasonSession).toHaveBeenCalledTimes(1);
   });
 
   it("returns 400 drafting an incomplete mason session", async () => {

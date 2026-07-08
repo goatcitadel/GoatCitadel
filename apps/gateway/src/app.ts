@@ -81,6 +81,7 @@ import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowli
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 import { assertAuthTokenIsNotPlaceholder } from "./startup-guard.js";
 import { isSuspiciousEncodedPath } from "./path-guard.js";
+import { installEmptyBodyTolerantJsonParser } from "./empty-json-body-parser.js";
 import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
 import { installRouteAccessTracking } from "./routes/route-access.js";
 
@@ -122,6 +123,7 @@ export async function buildApp() {
     // aborting the storage plugin before recovery finishes.
     pluginTimeout: resolveFastifyPluginTimeoutMs(),
   });
+  installEmptyBodyTolerantJsonParser(app);
   const allowedOrigins = resolveAllowedOrigins();
   const allowTailnetDevOrigins = resolveAllowTailnetDevOrigins();
   const tailnetShortHostAllowlist = resolveTailnetShortHostAllowlist();
