@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 
 const repoRoot = process.cwd();
 const servicesRoot = path.join(repoRoot, "apps", "gateway", "src", "services");
+const policyEngineRoot = path.join(repoRoot, "packages", "policy-engine", "src");
+const scanRoots = [servicesRoot, policyEngineRoot];
 
 export const approvedRawResponseReads = new Map(
   Object.entries({
@@ -12,8 +14,28 @@ export const approvedRawResponseReads = new Map(
     "apps/gateway/src/services/llm-provider-anthropic.ts": new Set(["body.getReader"]),
     "apps/gateway/src/services/llm-service.ts": new Set(["body.getReader"]),
     "apps/gateway/src/services/mcp-runtime.ts": new Set(["body.getReader"]),
+    // policy-engine's own bounded reader (the analogue of bounded-response-reader.ts).
+    // The `body.getReader()` call there is split across statements
+    // (`const body = response.body;` then `body.getReader()`), which the two-dot
+    // `X.body.getReader(` pattern below does not match anyway — this entry is
+    // defensive/documentation in case that ever changes to a single expression.
+    "packages/policy-engine/src/sandbox/network-guard.ts": new Set(["body.getReader"]),
   }),
 );
+
+// Files whose every Response comes from fetchAllowlisted/fetchAllowlistedOnce, whose
+// Proxy/wrapper bounds .text()/.json()/.arrayBuffer(). Enforced invariant: these files
+// must not contain a bare `fetch(` call. The wrapper does NOT bound
+// .blob()/.formData()/.body.getReader() — those stay flagged even here.
+export const boundedByConstructionFiles = new Set([
+  "packages/policy-engine/src/tool-executor.ts",
+  "packages/policy-engine/src/browser-tools.ts",
+  "packages/policy-engine/src/ingestion-backends.ts",
+]);
+const BOUNDED_BY_CONSTRUCTION_METHODS = new Set(["text", "json", "arrayBuffer"]);
+// Matches `fetch(` / `globalThis.fetch(`; does NOT match `fetchAllowlisted(`
+// because the `(` is not immediately (modulo whitespace) after `fetch`.
+const bareFetchPattern = /\bfetch\s*\(/g;
 
 const bodyReadPatterns = [
   { method: "text", display: ".text()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*text\s*\(/g },
@@ -49,14 +71,40 @@ export function collectRawResponseReadViolations(
   relativePath,
   source,
   allowedReads = approvedRawResponseReads,
+  boundedFiles = boundedByConstructionFiles,
 ) {
-  const allowedMethods = allowedReads.get(normalizeRelPath(relativePath)) ?? new Set();
-  return collectRawResponseReadReferences(source)
-    .filter((reference) => !allowedMethods.has(reference.method))
-    .map((reference) => ({
-      file: normalizeRelPath(relativePath),
-      ...reference,
-    }));
+  const normalizedPath = normalizeRelPath(relativePath);
+  const isBoundedByConstruction = boundedFiles.has(normalizedPath);
+  const allowedMethods = allowedReads.get(normalizedPath) ?? new Set();
+
+  const bodyReadViolations = collectRawResponseReadReferences(source).filter((reference) => {
+    if (isBoundedByConstruction && BOUNDED_BY_CONSTRUCTION_METHODS.has(reference.method)) {
+      return false;
+    }
+    return !allowedMethods.has(reference.method);
+  });
+
+  const bareFetchViolations = isBoundedByConstruction ? collectBareFetchReferences(source) : [];
+
+  return [...bodyReadViolations, ...bareFetchViolations]
+    .map((reference) => ({ file: normalizedPath, ...reference }))
+    .sort((left, right) => left.line - right.line || left.display.localeCompare(right.display));
+}
+
+function collectBareFetchReferences(source) {
+  const searchable = maskCommentsAndStrings(source);
+  const references = [];
+  bareFetchPattern.lastIndex = 0;
+  for (const match of searchable.matchAll(bareFetchPattern)) {
+    const index = match.index ?? 0;
+    references.push({
+      method: "fetch",
+      display: "fetch(...)",
+      line: lineNumberAt(searchable, index),
+      snippet: lineAt(source, index).trim(),
+    });
+  }
+  return references;
 }
 
 export function collectRawResponseReadReferences(source) {
@@ -78,7 +126,8 @@ export function collectRawResponseReadReferences(source) {
 }
 
 async function main() {
-  const files = await collectProductionServiceFiles();
+  const fileLists = await Promise.all(scanRoots.map((root) => collectProductionServiceFiles(root)));
+  const files = fileLists.flat();
   const violations = [];
   let approvedReadCount = 0;
 
@@ -87,13 +136,23 @@ async function main() {
     const source = await fs.readFile(filePath, "utf8");
     const references = collectRawResponseReadReferences(source);
     const allowedMethods = approvedRawResponseReads.get(relativePath) ?? new Set();
-    approvedReadCount += references.filter((reference) => allowedMethods.has(reference.method)).length;
+    const isBoundedByConstruction = boundedByConstructionFiles.has(relativePath);
+    approvedReadCount += references.filter(
+      (reference) =>
+        allowedMethods.has(reference.method) ||
+        (isBoundedByConstruction && BOUNDED_BY_CONSTRUCTION_METHODS.has(reference.method)),
+    ).length;
     violations.push(...collectRawResponseReadViolations(relativePath, source));
   }
 
   if (violations.length > 0) {
-    console.error("[check:bounded-response-reads] raw Response body reads must use bounded-response-reader helpers.");
-    console.error("Approved streaming exceptions should be added deliberately to scripts/check-bounded-response-reads.mjs.");
+    console.error(
+      "[check:bounded-response-reads] raw Response body reads must use bounded-response-reader helpers (gateway) or fetchAllowlisted/readBoundedResponseJson (policy-engine).",
+    );
+    console.error(
+      "Approved streaming exceptions should be added deliberately to scripts/check-bounded-response-reads.mjs; " +
+        "if every response in a file comes from fetchAllowlisted, add the file to boundedByConstructionFiles instead.",
+    );
     for (const violation of violations) {
       console.error(`  - ${violation.file}:${violation.line} ${violation.display} ${violation.snippet}`);
     }
@@ -101,7 +160,7 @@ async function main() {
   }
 
   console.log(
-    `[check:bounded-response-reads] passed: ${approvedReadCount} approved helper/streaming reads across ${files.length} service files.`,
+    `[check:bounded-response-reads] passed: ${approvedReadCount} approved helper/streaming reads across ${files.length} source files.`,
   );
 }
 
