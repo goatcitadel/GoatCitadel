@@ -1187,8 +1187,11 @@ async function readBodyChunkWithDeadline(
       reader.read(),
       new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
         timer = setTimeout(() => {
-          void cancelBodyReader(reader);
+          // Reject before cancelling: reader.cancel() synchronously resolves the
+          // in-flight read() with { done: true }, which would otherwise win the
+          // race and surface a misleading missing-response error.
           reject(createMcpHttpBodyTimeoutError());
+          void cancelBodyReader(reader);
         }, remainingMs);
       }),
     ]);

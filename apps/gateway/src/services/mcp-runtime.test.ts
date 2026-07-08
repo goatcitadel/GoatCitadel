@@ -763,6 +763,49 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("surfaces the typed timeout error when a remote MCP SSE response stalls mid-stream", async () => {
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/progress" })}\n\n`);
+        // Stall: never deliver the matching JSON-RPC response and never end the stream.
+      },
+      async (url) => {
+        const startedAt = Date.now();
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          {
+            toolName: "remote.search",
+            arguments: {},
+          },
+          500,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("Timed out reading MCP HTTP response body");
+        expect(Date.now() - startedAt).toBeLessThan(3000);
+      },
+    );
+  });
+
   it("injects resolved OAuth bearer tokens into remote MCP HTTP calls without echoing secrets", async () => {
     const seenAuthorizations: Array<string | undefined> = [];
     await withRemoteMcpHttpServer(
