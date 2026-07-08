@@ -440,6 +440,14 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const capabilityUseChips = getComposerCapabilityUseChips(props);
   const runtimeBlockerActive = Boolean(props.pendingApproval || props.pendingUserInput);
   const composerActionDisabled = props.sending || runtimeBlockerActive;
+  const researchArmed = props.currentWebMode === "quick" || props.currentWebMode === "deep";
+  const reviewArmed = props.currentReviewDepth !== "off";
+  const contextArmed = Boolean(
+    props.contextSelection ||
+    props.outboundContext ||
+    props.pendingAttachments.length > 0 ||
+    threadKnowledgeAttachments.length > 0,
+  );
   const personality = getComposerPersonality(props);
   const plusActions = [
     {
@@ -525,11 +533,15 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       disabled: composerActionDisabled,
       onSelect: props.onRunQuickResearch,
     },
-    {
-      label: "Review run details",
-      disabled: composerActionDisabled,
-      onSelect: props.onReviewRunDetails,
-    },
+    ...(props.onReviewRunDetails
+      ? [
+          {
+            label: "Review run details",
+            disabled: composerActionDisabled,
+            onSelect: props.onReviewRunDetails,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -672,39 +684,44 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       {runtimeBlockerActive ? (
         <ComposerBlockedActionState props={props} />
       ) : (
-        <div className="mc-next-composer-suggestion-row" aria-label="Quick composer actions">
+        <div className="mc-next-composer-suggestion-row" aria-label="Composer send options">
           <button
             type="button"
             className="mc-next-composer-suggestion"
             aria-pressed={props.planningMode === "advisory"}
-            disabled={props.sending}
+            disabled={composerActionDisabled}
             onClick={props.onTogglePlanningMode}
+            title={props.planningMode === "advisory" ? "Planning is armed for Send" : "Plan before sending"}
           >
             Plan
           </button>
           <button
             type="button"
             className="mc-next-composer-suggestion"
-            disabled={props.sending}
-            onClick={props.onRunQuickResearch}
+            aria-pressed={researchArmed}
+            disabled={composerActionDisabled}
+            onClick={props.onToggleResearchMode}
+            title={researchArmed ? "Research is armed for Send" : "Use research with the next send"}
           >
             Research
           </button>
-          {props.onReviewRunDetails ? (
-            <button
-              type="button"
-              className="mc-next-composer-suggestion"
-              disabled={props.sending}
-              onClick={props.onReviewRunDetails}
-            >
-              Review
-            </button>
-          ) : null}
           <button
             type="button"
             className="mc-next-composer-suggestion"
-            disabled={props.sending}
+            aria-pressed={reviewArmed}
+            disabled={composerActionDisabled}
+            onClick={props.onToggleReviewMode}
+            title={reviewArmed ? "Review is armed for Send" : "Request review posture with the next send"}
+          >
+            Review
+          </button>
+          <button
+            type="button"
+            className="mc-next-composer-suggestion"
+            aria-pressed={contextArmed}
+            disabled={composerActionDisabled}
             onClick={props.onAttachFiles}
+            title={contextArmed ? "Context is attached for Send" : "Attach files or context before sending"}
           >
             Attach context
           </button>

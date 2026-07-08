@@ -3,8 +3,10 @@ import type {
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
   ChatMode,
+  ChatOrchestrationReviewDepth,
   ChatSessionRecord,
   ChatThreadResponse,
+  ChatWebMode,
   RoutingPreflightResult,
   SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
@@ -140,7 +142,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   } | null;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   selectedSessionId: string | null;
-  currentWebMode: "auto" | "off" | "quick" | "deep";
+  currentWebMode: ChatWebMode;
+  currentReviewDepth: ChatOrchestrationReviewDepth;
   fullWebAccess: boolean;
   currentThinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep";
   currentSpeedMode: "standard" | "fast";
@@ -167,6 +170,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onDismissError: () => void;
   onAcknowledgeRouteBoundary: () => void;
   onTogglePlanningMode: () => void;
+  onToggleResearchMode: () => void;
+  onToggleReviewMode: () => void;
   onSetDeepMode: () => void;
   onFullWebAccessChange: (value: boolean) => void;
   onSetThinkingLevel: (level: "off" | "minimal" | "standard" | "extended" | "deep") => void;

@@ -1933,14 +1933,18 @@
 
 .mc-next-chat-start-prompts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
   gap: 0.5rem;
 }
 
 .mc-next-chat-start-prompt {
   appearance: none;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  justify-items: start;
   gap: 0.3rem;
+  width: 100%;
   min-width: 0;
   min-height: 5.2rem;
   padding: 0.64rem;
@@ -1964,14 +1968,22 @@
 }
 
 .mc-next-chat-start-prompt strong {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   font-size: var(--text-sm);
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-chat-start-prompt span {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: 1.4;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1979,6 +1991,30 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.42rem;
+}
+
+.mc-next-chat-start-actions .mc-next-thread-inline-button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .mc-next-chat-start-readiness {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mc-next-chat-start-canvas {
+    align-content: start;
+  }
+}
+
+@media (max-width: 520px) {
+  .mc-next-chat-start-readiness,
+  .mc-next-chat-start-prompts {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ============================================================

@@ -2572,6 +2572,20 @@ export function MissionThreadedControllerHost({
   const handleTogglePlanningMode = useCallback(() => {
     void handlePrefPatch({ planningMode: planningMode === "advisory" ? "off" : "advisory" });
   }, [handlePrefPatch, planningMode]);
+  const handleToggleResearchMode = useCallback(() => {
+    const currentWebMode = prefs?.webMode ?? "auto";
+
+    void handlePrefPatch({
+      webMode: currentWebMode === "quick" || currentWebMode === "deep" ? "auto" : "quick",
+    });
+  }, [handlePrefPatch, prefs?.webMode]);
+  const handleToggleReviewMode = useCallback(() => {
+    const currentReviewDepth = prefs?.orchestrationReviewDepth ?? "off";
+
+    void handlePrefPatch({
+      orchestrationReviewDepth: currentReviewDepth === "off" ? "standard" : "off",
+    });
+  }, [handlePrefPatch, prefs?.orchestrationReviewDepth]);
   const applyThreadModelPatch = useCallback(
     async (patch: ChatSessionPrefsPatch) => {
       await runWithSelectedSession(selectedSession, async (session) => {
@@ -3336,6 +3350,7 @@ export function MissionThreadedControllerHost({
         selectedTurn,
         selectedSessionId,
         currentWebMode: prefs?.webMode ?? "auto",
+        currentReviewDepth: prefs?.orchestrationReviewDepth ?? "off",
         fullWebAccess,
         currentThinkingLevel: prefs?.thinkingLevel ?? "standard",
         currentSpeedMode: prefs?.speedMode ?? "standard",
@@ -3362,6 +3377,8 @@ export function MissionThreadedControllerHost({
         onDismissError: handleDismissError,
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
         onTogglePlanningMode: handleTogglePlanningMode,
+        onToggleResearchMode: handleToggleResearchMode,
+        onToggleReviewMode: handleToggleReviewMode,
         onSetDeepMode: () => handleSetDeepMode(),
         onFullWebAccessChange: setFullWebAccess,
         onSetThinkingLevel: (level) => void handlePrefPatch({ thinkingLevel: level }),

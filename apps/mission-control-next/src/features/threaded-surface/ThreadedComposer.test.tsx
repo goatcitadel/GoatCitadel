@@ -86,6 +86,7 @@ function buildProps(overrides: Partial<any> = {}) {
       runtimeSummary: "Runtime ready",
     },
     currentWebMode: "auto",
+    currentReviewDepth: "off",
     fullWebAccess: false,
     routePreflight: null,
     routePreflightLoading: false,
@@ -108,6 +109,8 @@ function buildProps(overrides: Partial<any> = {}) {
     onCancelEdit: vi.fn(),
     onDismissError: vi.fn(),
     onTogglePlanningMode: vi.fn(),
+    onToggleResearchMode: vi.fn(),
+    onToggleReviewMode: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
     onApprovePending: vi.fn(),
@@ -201,6 +204,19 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return button;
 }
 
+function findSuggestionButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll(
+    (node) =>
+      node.type === "button" &&
+      node.props.className === "mc-next-composer-suggestion" &&
+      collectText(node).trim() === label,
+  )[0];
+  if (!button) {
+    throw new Error(`Unable to find suggestion button: ${label}`);
+  }
+  return button;
+}
+
 function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
   return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
 }
@@ -290,6 +306,7 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain("Shift+Tab");
     expect(markup).toContain(">Plan<");
     expect(markup).toContain(">Research<");
+    expect(markup).toContain(">Review<");
     expect(markup).toContain(">Attach context<");
     expect(markup).not.toContain("Subagent policy");
     expect(markup).not.toContain("Thinking level");
@@ -301,6 +318,54 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain(">Implement<");
     expect(markup).not.toContain("Start talk");
     expect(markup).not.toContain("Planning mode is on");
+  });
+
+  it("arms quick send options without submitting until Send is clicked", async () => {
+    const callbacks = {
+      onTogglePlanningMode: vi.fn(),
+      onToggleResearchMode: vi.fn(),
+      onToggleReviewMode: vi.fn(),
+      onAttachFiles: vi.fn(),
+      onRunQuickResearch: vi.fn(),
+      onReviewRunDetails: vi.fn(),
+      onSend: vi.fn(),
+    };
+    const renderer = await renderComposer({
+      draft: "Summarize this with sources",
+      planningMode: "advisory",
+      currentWebMode: "quick",
+      currentReviewDepth: "standard",
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-brief",
+          fileName: "brief.md",
+          mimeType: "text/markdown",
+          sizeBytes: 42,
+        },
+      ],
+      ...callbacks,
+    });
+
+    expect(findSuggestionButton(renderer.root, "Plan").props["aria-pressed"]).toBe(true);
+    expect(findSuggestionButton(renderer.root, "Research").props["aria-pressed"]).toBe(true);
+    expect(findSuggestionButton(renderer.root, "Review").props["aria-pressed"]).toBe(true);
+    expect(findSuggestionButton(renderer.root, "Attach context").props["aria-pressed"]).toBe(true);
+
+    await click(findSuggestionButton(renderer.root, "Plan"));
+    await click(findSuggestionButton(renderer.root, "Research"));
+    await click(findSuggestionButton(renderer.root, "Review"));
+    await click(findSuggestionButton(renderer.root, "Attach context"));
+
+    expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleResearchMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleReviewMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(callbacks.onRunQuickResearch).not.toHaveBeenCalled();
+    expect(callbacks.onReviewRunDetails).not.toHaveBeenCalled();
+    expect(callbacks.onSend).not.toHaveBeenCalled();
+
+    await click(findButton(renderer.root, "Send"));
+    expect(callbacks.onSend).toHaveBeenCalledTimes(1);
   });
 
   it("renders the active personality presence when runtime truth is available", () => {
@@ -859,6 +924,8 @@ describe("ThreadedComposer", () => {
       onSetSpeedMode: vi.fn(),
       onSetSubagentPolicy: vi.fn(),
       onTogglePlanningMode: vi.fn(),
+      onToggleResearchMode: vi.fn(),
+      onToggleReviewMode: vi.fn(),
     };
     const renderer = await renderComposer({
       draft: "Draw the diagram",
@@ -894,6 +961,7 @@ describe("ThreadedComposer", () => {
     await click(findButton(renderer.root, "Create image"));
     await click(findButton(renderer.root, "Edit image"));
     await click(findButton(renderer.root, "Quick web research"));
+    await click(findButton(renderer.root, "Review run details"));
     await click(renderer.root.findByProps({ "aria-label": "Attach files" }));
     await click(findButton(renderer.root, "Apply"));
     await click(findButton(renderer.root, "Attach source"));
@@ -917,7 +985,9 @@ describe("ThreadedComposer", () => {
     expect(callbacks.onGenerateImage).toHaveBeenCalledTimes(1);
     expect(callbacks.onEditImage).toHaveBeenCalledTimes(1);
     expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
-    expect(callbacks.onRunQuickResearch).toHaveBeenCalledTimes(2);
+    expect(callbacks.onToggleResearchMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleReviewMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onRunQuickResearch).toHaveBeenCalledTimes(1);
     expect(callbacks.onReviewRunDetails).toHaveBeenCalledTimes(1);
     expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(2);
     expect(callbacks.onPresetChange).toHaveBeenCalledWith("daily");
