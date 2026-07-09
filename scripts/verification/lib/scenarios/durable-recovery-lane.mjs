@@ -1,4 +1,4 @@
-export async function runDurableRecoveryLane(context, options = {}, deps) {
+export async function runDurableRecoveryLane(context, _options = {}, deps) {
   const {
     clampString,
     emptyArtifacts,

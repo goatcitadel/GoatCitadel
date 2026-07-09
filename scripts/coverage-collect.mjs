@@ -3,6 +3,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import crypto from "node:crypto";
 import ts from "typescript";
+import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
 const repoRoot = process.cwd();
 const artifactsDir = path.join(repoRoot, "artifacts", "coverage");
@@ -35,25 +36,17 @@ const PRODUCTION_RISK_TIERS = [
   {
     id: "gateway-shared-contracts",
     label: "Gateway And Shared Contracts",
-    // RE-BASELINED 2026-06-02 (sign-off: coverage-truth-first).
-    // The prior 72.58% line floor (focused-test ratchet captured 2026-05-13) became
-    // untruthful after large gateway surfaces shipped without proportional unit-line
-    // coverage. The A2A route service (~881 lines, 9ed0ae64b), governed readiness
-    // slices (eaf023075), mesh, and cron controls together added tens of thousands of
-    // executable lines, dragging the tier's MEASURED line coverage down to 53.99%
-    // (106,311/196,905 lines on 2026-06-02). This is code growth outpacing tests, not
-    // a coverage-tooling artifact (vitest-4 V8/AST remap shifts only a few points).
-    // The floor is re-pinned to the honest current level (52% = measured 53.99% minus
-    // a ~2pt margin for remap jitter) with a climbing ratchet to earn back 72.58% →
-    // 80%. DO NOT lower further without the same explicit, documented drop rationale.
-    lineThreshold: 52,
+    // RATCHETED 2026-07-09 after fresh production collection measured 60.60% lines.
+    // Keep a stability margin for remap jitter while preventing a return to the stale
+    // 52% floor. The next ratchet remains 60%, followed by the prior 72.58% gate.
+    lineThreshold: 58,
     branchThreshold: 70,
     ratchet: {
       label: "gateway/shared coverage ratchet",
-      baselineLinePercent: 53.99,
-      baselineCapturedAt: "2026-06-02",
-      currentLinePercent: 53.99,
-      enforcedLineThreshold: 52,
+      baselineLinePercent: 60.6,
+      baselineCapturedAt: "2026-07-09",
+      currentLinePercent: 60.6,
+      enforcedLineThreshold: 58,
       nextLineThreshold: 60,
       targetLineThreshold: 80,
       regressedFrom: {
@@ -65,9 +58,9 @@ const PRODUCTION_RISK_TIERS = [
           + "mesh, and cron controls shipped without proportional unit-line coverage "
           + "between 2026-05-13 and 2026-06-02.",
       },
-      note: "Re-baselined 2026-06-02 after structural code growth outpaced tests. "
-        + "Enforced floor 52% reflects measured 53.99% minus a vitest-4 remap-jitter "
-        + "margin; next ratchet 60%, then climb back toward the prior 72.58% gate and "
+      note: "Ratchet raised 2026-07-09 after fresh production coverage measured 60.60%. "
+        + "Enforced floor 58% preserves a stability margin; next ratchet 60%, then climb "
+        + "back toward the prior 72.58% gate and "
         + "the 80% production target. Raise the floor as gateway backfill lands.",
     },
     sourcePrefixes: [
@@ -92,6 +85,7 @@ const PRODUCTION_RISK_TIERS = [
 ];
 const sourceRunId = crypto.randomUUID();
 const runStartedAt = new Date().toISOString();
+const sourceFingerprint = await buildCoverageSourceFingerprint(repoRoot);
 
 const warnings = [];
 
@@ -102,6 +96,7 @@ await writeSummary({
   generatedAt: runStartedAt,
   status: "running",
   sourceRunId,
+  sourceFingerprint,
   runStartedAt,
   warnings,
 });
@@ -130,6 +125,7 @@ try {
     generatedAt: failedAt,
     status: "failed",
     sourceRunId,
+    sourceFingerprint,
     runStartedAt,
     runFinishedAt: failedAt,
     warnings,
@@ -285,6 +281,7 @@ const summary = {
   generatedAt: new Date().toISOString(),
   status: "success",
   sourceRunId,
+  sourceFingerprint,
   runStartedAt,
   runFinishedAt: new Date().toISOString(),
   sourceFiles: includedSourceFiles.length,

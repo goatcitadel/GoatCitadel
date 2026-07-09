@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 
-export async function runCatalogParityLane(context, options = {}, deps) {
+export async function runCatalogParityLane(context, _options = {}, deps) {
   const {
     assertOk,
     ensureOnboardingComplete,

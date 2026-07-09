@@ -1,4 +1,4 @@
-export async function runApiCompatibilityLane(context, options = {}, deps) {
+export async function runApiCompatibilityLane(context, _options = {}, deps) {
   const {
     API_COMPAT_ALLOWLIST_PATH,
     API_COMPAT_BASELINE_PATH,

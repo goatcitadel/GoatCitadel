@@ -21,12 +21,15 @@ import {
   runCodeModeSandboxRequiredLane,
   runDeepCoreLane,
   runDeepEcosystemLane,
+  runDesktopLane,
   runDurableRecoveryLane,
   runFastLane,
+  runExtensionsPackageLane,
   runSkillsCatalogLane,
   runMemoryTruthLane,
   runMeshReadinessLane,
   runOperatorProofLane,
+  runOrchestrationPerformanceLane,
   runRealtimeTruthLane,
   runRuntimeTruthLane,
   runSecurityEvalsLane,
@@ -48,6 +51,9 @@ import {
 
 const VALID_LANES = new Set([
   "fast",
+  "desktop",
+  "extensions-package",
+  "orchestration-performance",
   "a2a-full",
   "deep-core",
   "deep-ecosystem",
@@ -87,6 +93,9 @@ const VALID_LANES = new Set([
 ]);
 
 const REVIEW_LANES = new Set([
+  "desktop",
+  "extensions-package",
+  "orchestration-performance",
   "deep-core",
   "deep-ecosystem",
   "catalog-parity",
@@ -167,6 +176,12 @@ async function main() {
   try {
     if (lane === "fast") {
       await runFastLane(context, fastOptions);
+    } else if (lane === "desktop") {
+      await runDesktopLane(context);
+    } else if (lane === "extensions-package") {
+      await runExtensionsPackageLane(context);
+    } else if (lane === "orchestration-performance") {
+      await runOrchestrationPerformanceLane(context);
     } else if (lane === "a2a-full") {
       await runA2AFullLane(context);
     } else if (lane === "deep-core") {
@@ -233,12 +248,14 @@ async function main() {
       await runAgenticSelfImprovementTrustLane(context);
     } else if (lane === "agentic-proof" || lane === "agentic-parity") {
       await runAgenticProofSuite(context);
+      await runOrchestrationPerformanceLane(context);
     } else if (lane === "all") {
       await runFastLane(context, fastOptions);
       await runCodeModeSandboxRequiredLane(context);
       await runCodeModeHostileSandboxLane(context);
       await runMeshReadinessLane(context, { profile });
       await runAgenticProofSuite(context);
+      await runOrchestrationPerformanceLane(context);
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });

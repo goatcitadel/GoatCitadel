@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
 const repoRoot = process.cwd();
 const summaryPath = path.join(repoRoot, "artifacts", "coverage", "coverage-summary.json");
@@ -33,6 +34,15 @@ if (summary.status !== "success") {
   console.error(
     `[coverage:gate] coverage summary status is ${JSON.stringify(summary.status)}. `
     + "Run pnpm coverage:collect and fix the failing collection before gating.",
+  );
+  process.exit(1);
+}
+
+const currentSourceFingerprint = await buildCoverageSourceFingerprint(repoRoot);
+if (typeof summary.sourceFingerprint !== "string" || summary.sourceFingerprint !== currentSourceFingerprint) {
+  console.error(
+    "[coverage:gate] coverage summary does not match current source content. "
+    + "Run pnpm coverage:collect before gating this revision.",
   );
   process.exit(1);
 }

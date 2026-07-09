@@ -7,7 +7,9 @@ describe("contracts module load smoke", () => {
     const mod = await import("./index.js");
     expect(mod).toBeTruthy();
     expect(typeof mod).toBe("object");
-  });
+  }, // A cold V8-coverage transform of the full contract barrel can exceed the
+  // global 5s unit timeout on CI/Windows even though the import itself is sound.
+  15_000);
 
   it("includes gateway.dispatch.before in HookTrigger", () => {
     const trigger: HookTrigger = "gateway.dispatch.before";

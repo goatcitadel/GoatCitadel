@@ -1,4 +1,4 @@
-export async function runAuthMatrixLane(context, options = {}, deps) {
+export async function runAuthMatrixLane(context, _options = {}, deps) {
   const {
     assertApprovalIngressMatrix,
     assertHighRiskRouteFamiliesAreOperatorGated,

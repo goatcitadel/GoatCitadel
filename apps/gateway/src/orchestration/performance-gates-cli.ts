@@ -1,64 +1,18 @@
-import {
-  buildOrchestrationPerformanceReport,
-  type OrchestrationPerformanceSample,
-  type OrchestrationQualityGateResult,
-} from "./performance-gates.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { parsePerformanceBenchmarkCliArgs, runOrchestrationPerformanceBenchmark } from "./performance-benchmark.js";
 
-const samples: OrchestrationPerformanceSample[] = [
-  {
-    sampleId: "fake-provider-routing",
-    startedAt: "2026-06-17T00:00:00.000Z",
-    finishedAt: "2026-06-17T00:00:00.180Z",
-    costUsd: 0.001,
-  },
-  {
-    sampleId: "fake-provider-recovery",
-    startedAt: "2026-06-17T00:00:01.000Z",
-    finishedAt: "2026-06-17T00:00:01.260Z",
-    retryCount: 0,
-    waitCount: 0,
-    duplicateDispatchCount: 0,
-    costUsd: 0.002,
-  },
-  {
-    sampleId: "fake-provider-synthesis",
-    startedAt: "2026-06-17T00:00:02.000Z",
-    finishedAt: "2026-06-17T00:00:02.430Z",
-    costUsd: 0.003,
-  },
-];
+const args = parsePerformanceBenchmarkCliArgs(process.argv.slice(2));
+const report = await runOrchestrationPerformanceBenchmark();
+const serializedReport = `${JSON.stringify(report, null, 2)}\n`;
 
-const qualityGates: OrchestrationQualityGateResult[] = [
-  {
-    gateId: "routing-quality",
-    category: "routing",
-    passed: true,
-    score: 1,
-    details: "Fake-provider scenario keeps required orchestration route evidence present.",
-  },
-  {
-    gateId: "recovery-quality",
-    category: "recovery",
-    passed: true,
-    score: 1,
-    details: "Scenario records zero duplicate dispatches, waits, and retries.",
-  },
-  {
-    gateId: "synthesis-quality",
-    category: "synthesis",
-    passed: true,
-    score: 1,
-    details: "Scenario produces a final synthesis quality signal without fallback failures.",
-  },
-];
+if (args.outputPath) {
+  const outputPath = path.resolve(process.cwd(), args.outputPath);
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, serializedReport, "utf8");
+}
 
-const report = buildOrchestrationPerformanceReport({
-  samples,
-  qualityGates,
-  generatedAt: "2026-06-17T00:00:03.000Z",
-});
-
-console.log(JSON.stringify(report, null, 2));
+process.stdout.write(serializedReport);
 
 if (!report.passed) {
   process.exitCode = 1;
