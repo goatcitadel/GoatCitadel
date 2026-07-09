@@ -12,7 +12,10 @@ const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-const commsRequestBoundaryContext = new AsyncLocalStorage<{ responseReceived: boolean }>();
+const commsRequestBoundaryContext = new AsyncLocalStorage<{
+  mutationRequestStarted: boolean;
+  mutationResponseReceived: boolean;
+}>();
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
@@ -20,7 +23,7 @@ export async function executeCommsTool(
   storage: Storage,
   grantAllowlist?: string[],
 ): Promise<Record<string, unknown>> {
-  return commsRequestBoundaryContext.run({ responseReceived: false }, () =>
+  return commsRequestBoundaryContext.run({ mutationRequestStarted: false, mutationResponseReceived: false }, () =>
     executeCommsToolWithBoundaryTracking(request, config, storage, grantAllowlist),
   );
 }
@@ -77,6 +80,8 @@ async function executeCommsToolWithBoundaryTracking(
     };
   } catch (error) {
     let errorMessage = (error as Error).message;
+    const boundaryState = commsRequestBoundaryContext.getStore();
+    const initialStatus = classifyChannelDeliveryFailure(errorMessage);
     const failureProviderMessageId = readChannelFailureProviderMessageId(error);
     providerMessageId = failureProviderMessageId ?? providerMessageId;
     if (providerMessageId && !failureProviderMessageId) {
@@ -85,15 +90,16 @@ async function executeCommsToolWithBoundaryTracking(
         `manual reconciliation required. ${errorMessage}`;
     } else if (
       !isReadOnlyCommsTool(toolName) &&
-      commsRequestBoundaryContext.getStore()?.responseReceived &&
-      classifyChannelDeliveryFailure(errorMessage) !== "manual_reconciliation_required"
+      boundaryState?.mutationRequestStarted &&
+      (boundaryState.mutationResponseReceived || (initialStatus !== "blocked" && initialStatus !== "not_available")) &&
+      initialStatus !== "manual_reconciliation_required"
     ) {
       errorMessage = channelUnknownAfterSendError(toolName, errorMessage).message;
     }
     const classifiedStatus = classifyChannelDeliveryFailure(errorMessage);
     const deliveryStatus =
-      classifiedStatus === "degraded" && !isReadOnlyCommsTool(toolName)
-        ? "manual_reconciliation_required"
+      !isReadOnlyCommsTool(toolName) && !boundaryState?.mutationRequestStarted && classifiedStatus === "degraded"
+        ? "not_available"
         : classifiedStatus;
     try {
       if (providerMessageId) {
@@ -4135,6 +4141,10 @@ async function fetchAllowlisted(
     }
     let response: Response;
     for (let attempt = 0; ; attempt += 1) {
+      const boundaryState = commsRequestBoundaryContext.getStore();
+      if (boundaryState && !isHttpRequestSafeToRetry(init)) {
+        boundaryState.mutationRequestStarted = true;
+      }
       response = await fetchAllowlistedOnce(current, {
         allowlist,
         init: {
@@ -4143,9 +4153,8 @@ async function fetchAllowlisted(
           signal: composeAbortSignal(20000, signal),
         },
       });
-      const boundaryState = commsRequestBoundaryContext.getStore();
-      if (boundaryState) {
-        boundaryState.responseReceived = true;
+      if (boundaryState && !isHttpRequestSafeToRetry(init)) {
+        boundaryState.mutationResponseReceived = true;
       }
       if (
         !isHttpRequestSafeToRetry(init) ||

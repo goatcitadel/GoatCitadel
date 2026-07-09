@@ -1520,13 +1520,13 @@ describe("executeTool", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("https://other.example/file.txt", expect.any(Object));
     expect(markFailed).toHaveBeenCalledWith(
       "delivery-attachment",
-      expect.stringMatching(/unknown_after_send|manual reconciliation/i),
+      expect.not.stringMatching(/unknown_after_send|manual reconciliation/i),
       expect.any(String),
-      "manual_reconciliation_required",
+      "blocked",
     );
     expect(result).toMatchObject({
       status: "failed",
-      deliveryStatus: "manual_reconciliation_required",
+      deliveryStatus: "blocked",
     });
   });
 
