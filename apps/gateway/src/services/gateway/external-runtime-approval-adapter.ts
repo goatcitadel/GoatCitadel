@@ -135,8 +135,20 @@ export function toolInvokeResultFromMcpApproval(
     contentItems: mcpResult.contentItems,
     diagnostics: mcpResult.diagnostics,
     error: mcpResult.ok ? undefined : mcpResult.error,
+    externalOutcome: mcpResult.externalOutcome,
+    manualReconciliationRequired: mcpResult.manualReconciliationRequired,
   };
   if (!mcpResult.ok) {
+    if (mcpResult.externalOutcome === "unknown_after_send" && mcpResult.manualReconciliationRequired) {
+      return {
+        ...policyResult,
+        outcome: "executed",
+        policyReason:
+          `MCP runtime outcome is unknown after approval; manual reconciliation is required: ` +
+          `${mcpResult.error ?? "unknown error"}`,
+        result,
+      };
+    }
     return {
       ...policyResult,
       outcome: "blocked",

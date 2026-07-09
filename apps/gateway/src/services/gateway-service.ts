@@ -507,12 +507,8 @@ import {
 import {
   buildChannelDeliveryIdempotencyKey,
   buildChannelDeliveryPayload,
-  channelDeliveryPayloadToSendInput,
-  extractCommsSendResult,
   mapPersistedChannelDeliveryRuntimeStatus,
-  readChannelDeliveryMessageParts,
-  readDeliveryDiagnostics,
-  readOptionalString,
+  sendQueuedChannelDelivery as sendQueuedChannelDeliveryImpl,
 } from "./gateway/channel-delivery-helpers.js";
 import {
   assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
@@ -6737,7 +6733,9 @@ export class GatewayService {
       status:
         queued.status === "sent"
           ? "sent"
-          : queued.status === "failed" || queued.status === "stale"
+          : queued.status === "failed" ||
+              queued.status === "stale" ||
+              queued.status === "manual_reconciliation_required"
             ? "failed"
             : "queued",
       deliveryStatus: queued.deliveryStatus ?? (queued.status === "sent" ? "sent" : "retrying"),
@@ -6846,51 +6844,7 @@ export class GatewayService {
   private async sendQueuedChannelDelivery(
     input: ChannelDeliveryRuntimeSendInput,
   ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
-    const baseInput = channelDeliveryPayloadToSendInput(input);
-    const messageParts = readChannelDeliveryMessageParts(input.payload);
-    if (messageParts.length <= 1) {
-      const result = await commsSendImpl(this.buildCommsHost(), baseInput);
-      const unwrapped = extractCommsSendResult(result);
-      if (unwrapped.status === "failed") {
-        throw new Error(
-          readOptionalString(unwrapped.error) ??
-            readOptionalString(unwrapped.fallbackReason) ??
-            "Channel delivery failed.",
-        );
-      }
-      return { providerMessageId: readOptionalString(unwrapped.providerMessageId) };
-    }
-
-    let providerMessageId: string | undefined;
-    for (let index = 0; index < messageParts.length; index += 1) {
-      const result = await commsSendImpl(this.buildCommsHost(), {
-        ...baseInput,
-        message: messageParts[index] ?? "",
-        attachments: index === 0 ? baseInput.attachments : undefined,
-        attachmentIds: index === 0 ? baseInput.attachmentIds : undefined,
-        interactiveActions: index === messageParts.length - 1 ? baseInput.interactiveActions : undefined,
-        replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
-        replyToPartIndex: index,
-      });
-      const unwrapped = extractCommsSendResult(result);
-      if (unwrapped.status === "failed") {
-        const reason =
-          readOptionalString(unwrapped.error) ??
-          readOptionalString(unwrapped.fallbackReason) ??
-          "Channel delivery chunk failed.";
-        throw new Error(
-          index > 0
-            ? `partial_channel_delivery_sent: ${index} of ${messageParts.length} chunks were sent before failure; manual retry required. ${reason}`
-            : reason,
-        );
-      }
-      providerMessageId = readOptionalString(unwrapped.providerMessageId) ?? providerMessageId;
-    }
-
-    return {
-      providerMessageId,
-      deliveryDiagnostics: readDeliveryDiagnostics(input.payload.deliveryDiagnostics),
-    };
+    return sendQueuedChannelDeliveryImpl((sendInput) => commsSendImpl(this.buildCommsHost(), sendInput), input);
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {

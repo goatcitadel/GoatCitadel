@@ -1,17 +1,31 @@
 /* eslint-disable max-lines -- Channel and outbound connector execution is split from the policy orchestrator, but the provider family is still broad. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { ChannelDeliveryStatus, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
+import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const commsRequestBoundaryContext = new AsyncLocalStorage<{ responseReceived: boolean }>();
 
 export async function executeCommsTool(
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: Storage,
+  grantAllowlist?: string[],
+): Promise<Record<string, unknown>> {
+  return commsRequestBoundaryContext.run({ responseReceived: false }, () =>
+    executeCommsToolWithBoundaryTracking(request, config, storage, grantAllowlist),
+  );
+}
+
+async function executeCommsToolWithBoundaryTracking(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
   storage: Storage,
@@ -31,6 +45,7 @@ export async function executeCommsTool(
     target,
     payload: { toolName, args },
   });
+  let providerMessageId: string | undefined;
   try {
     if (toolName === "gmail.read") {
       const records = await gmailRead(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
@@ -42,7 +57,7 @@ export async function executeCommsTool(
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
-    const providerMessageId = await executeCommsProviderTool(
+    providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,
       connectionConfig,
@@ -61,18 +76,56 @@ export async function executeCommsTool(
       updatedAt: new Date().toISOString(),
     };
   } catch (error) {
-    const errorMessage = (error as Error).message;
-    const deliveryStatus = classifyChannelDeliveryFailure(errorMessage);
-    storage.commsDeliveries.markFailed(queued.deliveryId, errorMessage, new Date().toISOString(), deliveryStatus);
+    let errorMessage = (error as Error).message;
+    const failureProviderMessageId = readChannelFailureProviderMessageId(error);
+    providerMessageId = failureProviderMessageId ?? providerMessageId;
+    if (providerMessageId && !failureProviderMessageId) {
+      errorMessage =
+        `post_send_bookkeeping_failed: provider dispatch completed as ${providerMessageId}, but delivery ledger finalization failed; ` +
+        `manual reconciliation required. ${errorMessage}`;
+    } else if (
+      !isReadOnlyCommsTool(toolName) &&
+      commsRequestBoundaryContext.getStore()?.responseReceived &&
+      classifyChannelDeliveryFailure(errorMessage) !== "manual_reconciliation_required"
+    ) {
+      errorMessage = channelUnknownAfterSendError(toolName, errorMessage).message;
+    }
+    const classifiedStatus = classifyChannelDeliveryFailure(errorMessage);
+    const deliveryStatus =
+      classifiedStatus === "degraded" && !isReadOnlyCommsTool(toolName)
+        ? "manual_reconciliation_required"
+        : classifiedStatus;
+    try {
+      if (providerMessageId) {
+        storage.commsDeliveries.markFailed(
+          queued.deliveryId,
+          errorMessage,
+          new Date().toISOString(),
+          deliveryStatus,
+          undefined,
+          providerMessageId,
+        );
+      } else {
+        storage.commsDeliveries.markFailed(queued.deliveryId, errorMessage, new Date().toISOString(), deliveryStatus);
+      }
+    } catch (persistenceError) {
+      const detail = persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+      errorMessage = `${errorMessage} Failed to persist the delivery failure state: ${detail}`;
+    }
     return {
       ...queued,
       status: "failed",
       deliveryStatus,
+      providerMessageId,
       error: errorMessage,
       fallbackReason: errorMessage,
       updatedAt: new Date().toISOString(),
     };
   }
+}
+
+function isReadOnlyCommsTool(toolName: string): boolean {
+  return toolName === "gmail.read" || toolName === "calendar.list";
 }
 
 function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {
@@ -106,21 +159,35 @@ function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus 
     (normalized.includes("missing") && normalized.includes("url")) ||
     (normalized.includes("missing") &&
       ["token", "target", "channel", "chat", "recipient", "phone number"].some((term) => normalized.includes(term))) ||
-    ["not supported", "does not support", "unavailable", "not configured"].some((term) => normalized.includes(term))
+    ["not supported", "does not support", "do not support", "only support", "unavailable", "not configured"].some(
+      (term) => normalized.includes(term),
+    )
   ) {
     return "not_available";
   }
   return "degraded";
 }
 
-function channelUnknownAfterSendError(operation: string, detail: string): Error {
-  return new Error(
+function channelUnknownAfterSendError(operation: string, detail: string, providerMessageId?: string): Error {
+  const error = new Error(
     `${operation} unknown_after_send: external boundary may have been crossed; manual reconciliation required. ${detail}`,
   );
+  if (providerMessageId?.trim()) {
+    Object.assign(error, { providerMessageId: providerMessageId.trim() });
+  }
+  return error;
 }
 
-function throwChannelUnknownAfterSend(operation: string, detail: string): never {
-  throw channelUnknownAfterSendError(operation, detail);
+function throwChannelUnknownAfterSend(operation: string, detail: string, providerMessageId?: string): never {
+  throw channelUnknownAfterSendError(operation, detail, providerMessageId);
+}
+
+function readChannelFailureProviderMessageId(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("providerMessageId" in error)) {
+    return undefined;
+  }
+  const providerMessageId = (error as { providerMessageId?: unknown }).providerMessageId;
+  return typeof providerMessageId === "string" && providerMessageId.trim() ? providerMessageId.trim() : undefined;
 }
 
 function throwChannelProviderFailure(operation: string, response: Response, detail?: string): never {
@@ -134,10 +201,20 @@ function throwChannelProviderFailure(operation: string, response: Response, deta
 
 function throwChannelBoundaryError(operation: string, error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof CommsResponseBoundaryError) {
+    throwChannelUnknownAfterSend(operation, message);
+  }
   if (isPreChannelBoundaryError(message)) {
     throw error instanceof Error ? error : new Error(message);
   }
   throwChannelUnknownAfterSend(operation, message);
+}
+
+class CommsResponseBoundaryError extends Error {
+  public constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = "CommsResponseBoundaryError";
+  }
 }
 
 function isPreChannelBoundaryError(message: string): boolean {
@@ -505,6 +582,7 @@ async function slackSend(
         throwChannelUnknownAfterSend(
           "slack.send",
           `partial_channel_delivery_sent: message ${parentTs} was sent before attachment ${index + 1} failed. ${detail}`,
+          parentTs,
         );
       }
       throw error;
@@ -1085,6 +1163,7 @@ async function telegramSend(
         throwChannelUnknownAfterSend(
           "telegram.send",
           `partial_channel_delivery_sent: message ${lastMessageId} was sent before attachment ${index + 1} failed. ${detail}`,
+          lastMessageId,
         );
       }
       throw error;
@@ -1523,6 +1602,7 @@ async function whatsappSend(
         throwChannelUnknownAfterSend(
           "whatsapp.send",
           `partial_channel_delivery_sent: message ${providerMessageId} was sent before attachment ${index + 1} failed. ${detail}`,
+          providerMessageId,
         );
       }
       throw error;
@@ -4063,7 +4143,15 @@ async function fetchAllowlisted(
           signal: composeAbortSignal(20000, signal),
         },
       });
-      if (!RETRYABLE_HTTP_STATUSES.has(response.status) || attempt >= MAX_HTTP_RETRIES) {
+      const boundaryState = commsRequestBoundaryContext.getStore();
+      if (boundaryState) {
+        boundaryState.responseReceived = true;
+      }
+      if (
+        !isHttpRequestSafeToRetry(init) ||
+        !RETRYABLE_HTTP_STATUSES.has(response.status) ||
+        attempt >= MAX_HTTP_RETRIES
+      ) {
         break;
       }
       await waitForHttpRetry(response, attempt, signal);
@@ -4071,13 +4159,23 @@ async function fetchAllowlisted(
     if (!(response.status >= 300 && response.status < 400)) {
       return { response, finalUrl: current };
     }
-    const location = response.headers.get("location");
-    if (!location) {
-      throw new Error(`Redirect missing location for ${redactUrlForError(current)}`);
+    try {
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new Error(`Redirect missing location for ${redactUrlForError(current)}`);
+      }
+      const next = new URL(location, current).toString();
+      assertSafeRedirectTransition(current, next, init);
+      assertHostAllowed(next, allowlist);
+      if (grantAllowlist && grantAllowlist.length > 0) {
+        assertHostAllowed(next, grantAllowlist);
+      }
+      current = next;
+    } catch (error) {
+      throw new CommsResponseBoundaryError(error);
     }
-    current = new URL(location, current).toString();
   }
-  throw new Error(`Too many redirects for ${redactUrlForError(url)}`);
+  throw new CommsResponseBoundaryError(`Too many redirects for ${redactUrlForError(url)}`);
 }
 
 async function waitForHttpRetry(response: Response, attempt: number, signal?: AbortSignal): Promise<void> {

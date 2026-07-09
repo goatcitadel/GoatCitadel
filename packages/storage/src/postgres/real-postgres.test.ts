@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { PostgresDatabaseClient } from "./client.js";
 import { runPostgresMigrations } from "./migrator.js";
 import { PostgresSyncDatabaseClient } from "./sync.js";
+import { CommsDeliveryRepository } from "../comms-delivery-repo.js";
 
 const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 
@@ -74,6 +75,89 @@ test(
       await pool.query(`DROP TABLE IF EXISTS ${syncTableName}`);
       await pool.query(`DROP TABLE IF EXISTS ${tableName}`);
       await pool.query(`DROP TABLE IF EXISTS ${migrationsTable}`);
+      await pool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres comms delivery CAS handles nullable leases without overwriting sent truth",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_comms_cas_${suffix}`;
+    const pool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    try {
+      await pool.query(`CREATE SCHEMA ${schemaName}`);
+      await pool.query(`
+        CREATE TABLE ${schemaName}.comms_deliveries (
+          delivery_id TEXT PRIMARY KEY,
+          connection_id TEXT NOT NULL,
+          channel_key TEXT NOT NULL,
+          target TEXT NOT NULL,
+          payload_hash TEXT NOT NULL,
+          payload_json TEXT,
+          status TEXT NOT NULL,
+          delivery_status TEXT,
+          idempotency_key TEXT,
+          attempts BIGINT NOT NULL DEFAULT 0,
+          max_attempts BIGINT NOT NULL DEFAULT 3,
+          next_attempt_at TEXT,
+          stale_after_ms BIGINT,
+          base_backoff_ms BIGINT,
+          max_backoff_ms BIGINT,
+          provider_msg_id TEXT,
+          error TEXT,
+          stale_reason TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+      const syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-comms-cas-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      try {
+        const repo = new CommsDeliveryRepository(syncClient);
+        const stale = repo.createQueued(
+          {
+            connectionId: "conn-real-pg-stale",
+            channelKey: "slack",
+            target: "C123",
+            payload: { message: "stale once" },
+          },
+          "2026-05-05T00:00:00.000Z",
+        );
+        assert.equal(
+          repo.markStaleIfUnchanged(stale.deliveryId, 0, undefined, "stale delivery", "2026-05-05T00:01:00.000Z"),
+          true,
+        );
+
+        const sent = repo.createQueued(
+          {
+            connectionId: "conn-real-pg-sent",
+            channelKey: "slack",
+            target: "C123",
+            payload: { message: "sent wins" },
+          },
+          "2026-05-05T00:00:00.000Z",
+        );
+        repo.markSent(sent.deliveryId, "provider-real-pg", "2026-05-05T00:00:01.000Z");
+        assert.equal(
+          repo.markStaleIfUnchanged(sent.deliveryId, 0, undefined, "stale snapshot", "2026-05-05T00:01:00.000Z"),
+          false,
+        );
+        assert.equal(repo.list("conn-real-pg-sent", 1)[0]?.providerMessageId, "provider-real-pg");
+      } finally {
+        syncClient.close();
+      }
+    } finally {
+      await pool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
       await pool.end();
     }
   },

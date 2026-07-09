@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   ChannelDeliveryDiagnostics,
+  ChannelDeliveryStatus,
   ChannelSendInput,
   ToolInvokeResult,
   ToolPolicyActorContext,
@@ -12,6 +13,12 @@ import type {
 } from "../channel-delivery-runtime-service.js";
 
 const CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT = 3_900;
+const CHANNEL_DELIVERY_FAILURE_STATUSES = new Set<ChannelDeliveryStatus>([
+  "degraded",
+  "blocked",
+  "not_available",
+  "manual_reconciliation_required",
+]);
 const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
   discord: 1_900,
   telegram: 3_900,
@@ -20,6 +27,12 @@ const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
   "nextcloud-talk": 3_900,
   slack: 32_000,
 };
+
+type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
+  outcome: ToolInvokeResult["outcome"] | "failed";
+};
+
+type ChannelDeliverySender = (input: ChannelSendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
 
 export function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string): Record<string, unknown> {
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "");
@@ -166,6 +179,81 @@ export function readDeliveryDiagnostics(value: unknown): ChannelDeliveryDiagnost
   return value as ChannelDeliveryDiagnostics;
 }
 
+export async function sendQueuedChannelDelivery(
+  send: ChannelDeliverySender,
+  input: ChannelDeliveryRuntimeSendInput,
+): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
+  const baseInput = channelDeliveryPayloadToSendInput(input);
+  const messageParts = readChannelDeliveryMessageParts(input.payload);
+  if (messageParts.length <= 1) {
+    let result: Awaited<ReturnType<ChannelDeliverySender>>;
+    try {
+      result = await send(baseInput);
+    } catch (error) {
+      throw coerceChannelDeliveryFailureError(error);
+    }
+    const unwrapped = extractCommsSendResult(result);
+    if (unwrapped.status === "failed") {
+      throw createChannelDeliveryFailureError(
+        readOptionalString(unwrapped.error) ??
+          readOptionalString(unwrapped.fallbackReason) ??
+          "Channel delivery failed.",
+        unwrapped.deliveryStatus,
+        readOptionalString(unwrapped.providerMessageId),
+      );
+    }
+    return { providerMessageId: readOptionalString(unwrapped.providerMessageId) };
+  }
+
+  let providerMessageId: string | undefined;
+  for (let index = 0; index < messageParts.length; index += 1) {
+    let unwrapped: Record<string, unknown>;
+    try {
+      const result = await send({
+        ...baseInput,
+        message: messageParts[index] ?? "",
+        attachments: index === 0 ? baseInput.attachments : undefined,
+        attachmentIds: index === 0 ? baseInput.attachmentIds : undefined,
+        interactiveActions: index === messageParts.length - 1 ? baseInput.interactiveActions : undefined,
+        replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
+        replyToPartIndex: index,
+      });
+      unwrapped = extractCommsSendResult(result);
+    } catch (error) {
+      const failure = coerceChannelDeliveryFailureError(error);
+      if (index > 0) {
+        throw createChannelDeliveryFailureError(
+          `partial_channel_delivery_sent: ${index} of ${messageParts.length} chunks were sent before failure; manual retry required. ${failure.message}`,
+          "manual_reconciliation_required",
+          providerMessageId,
+        );
+      }
+      throw failure;
+    }
+    if (unwrapped.status === "failed") {
+      const reason =
+        readOptionalString(unwrapped.error) ??
+        readOptionalString(unwrapped.fallbackReason) ??
+        "Channel delivery chunk failed.";
+      const failedProviderMessageId = readOptionalString(unwrapped.providerMessageId);
+      const sentChunkCount = index + (failedProviderMessageId ? 1 : 0);
+      throw createChannelDeliveryFailureError(
+        index > 0
+          ? `partial_channel_delivery_sent: ${sentChunkCount} of ${messageParts.length} chunks were sent before failure; manual retry required. ${reason}`
+          : reason,
+        index > 0 ? "manual_reconciliation_required" : unwrapped.deliveryStatus,
+        failedProviderMessageId ?? providerMessageId,
+      );
+    }
+    providerMessageId = readOptionalString(unwrapped.providerMessageId) ?? providerMessageId;
+  }
+
+  return {
+    providerMessageId,
+    deliveryDiagnostics: readDeliveryDiagnostics(input.payload.deliveryDiagnostics),
+  };
+}
+
 function readPermissionSurface(value: unknown): ChannelSendInput["surface"] | undefined {
   return value === "chat" ||
     value === "cowork" ||
@@ -235,19 +323,49 @@ export function mapPersistedChannelDeliveryRuntimeStatus(
 export function extractCommsSendResult(result: ToolInvokeResult | Record<string, unknown>): Record<string, unknown> {
   if (isToolInvokeResultLike(result)) {
     if (result.outcome !== "executed") {
-      throw new Error(result.policyReason || `channel.send returned ${result.outcome}`);
+      throw createChannelDeliveryFailureError(
+        result.policyReason || `channel.send returned ${result.outcome}`,
+        result.outcome === "failed" ? "manual_reconciliation_required" : "blocked",
+      );
     }
     return result.result ?? {};
   }
   return result;
 }
 
-function isToolInvokeResultLike(value: unknown): value is ToolInvokeResult {
+export function createChannelDeliveryFailureError(message: string, status: unknown, providerMessageId?: string): Error {
+  const error = new Error(message) as Error & {
+    deliveryStatus?: ChannelDeliveryStatus;
+    providerMessageId?: string;
+  };
+  if (typeof status === "string" && CHANNEL_DELIVERY_FAILURE_STATUSES.has(status as ChannelDeliveryStatus)) {
+    error.deliveryStatus = status as ChannelDeliveryStatus;
+  }
+  if (providerMessageId?.trim()) {
+    error.providerMessageId = providerMessageId.trim();
+  }
+  return error;
+}
+
+export function coerceChannelDeliveryFailureError(error: unknown): Error {
+  if (error instanceof Error) {
+    const status = (error as Error & { deliveryStatus?: unknown }).deliveryStatus;
+    if (typeof status === "string" && CHANNEL_DELIVERY_FAILURE_STATUSES.has(status as ChannelDeliveryStatus)) {
+      return error;
+    }
+  }
+  return createChannelDeliveryFailureError(
+    error instanceof Error ? error.message : String(error),
+    "manual_reconciliation_required",
+  );
+}
+
+function isToolInvokeResultLike(value: unknown): value is ToolInvokeResultLike {
   if (!value || typeof value !== "object") {
     return false;
   }
   const outcome = (value as { outcome?: unknown }).outcome;
-  return outcome === "executed" || outcome === "blocked" || outcome === "approval_required";
+  return outcome === "executed" || outcome === "blocked" || outcome === "approval_required" || outcome === "failed";
 }
 
 function readRequiredString(value: unknown, label: string): string {

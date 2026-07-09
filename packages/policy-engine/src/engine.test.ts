@@ -1139,6 +1139,53 @@ describe("ToolPolicyEngine invocation coverage", () => {
     });
   });
 
+  it("reports an ambiguous HTTP mutation as executed with manual-reconciliation truth", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://other.example/created" },
+          }),
+      ),
+    );
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: [EXAMPLE_HOST, "other.example"],
+        },
+      },
+      storage,
+    );
+
+    const result = await engine.invoke({
+      toolName: "http.post",
+      args: { url: "https://example.com/api", body: { action: "create" } },
+      agentId: "agent",
+      sessionId: "session-http-post-unknown",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      policyReason: expect.stringContaining("execution outcome unknown"),
+      result: {
+        status: "failed",
+        deliveryStatus: "manual_reconciliation_required",
+        externalOutcome: "unknown_after_send",
+        manualReconciliationRequired: true,
+      },
+      internalResult: {
+        outcome: "executed",
+        result: expect.objectContaining({ externalOutcome: "unknown_after_send" }),
+      },
+    });
+  });
+
   it("includes target and shell command details in approval previews", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(

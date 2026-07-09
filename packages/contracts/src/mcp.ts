@@ -170,6 +170,8 @@ export interface McpInvokeDiagnostics {
   degraded?: boolean;
   retryCount?: number;
   sanitizedError?: string;
+  externalOutcome?: "unknown_after_send";
+  manualReconciliationRequired?: boolean;
 }
 
 export interface McpInvokeResponse {
@@ -179,6 +181,8 @@ export interface McpInvokeResponse {
   diagnostics?: McpInvokeDiagnostics;
   autonomousActivation?: AutonomousActivationRuntimeEvidence;
   error?: string;
+  externalOutcome?: "unknown_after_send";
+  manualReconciliationRequired?: boolean;
   approvalRequired?: boolean;
   approvalId?: string;
   policyReason?: string;
@@ -267,7 +271,10 @@ export interface McpElicitationEvidence {
   statusHistory: McpElicitationStatusEvidence[];
   prompt: Pick<McpElicitationBoundedTextBody, "charLength" | "maxChars" | "truncated" | "redactedSecretCount">;
   requestedSchema: Pick<McpElicitationBoundedJsonBody, "byteLength" | "maxBytes" | "truncated" | "redactedSecretCount">;
-  responseContent?: Pick<McpElicitationBoundedJsonBody, "byteLength" | "maxBytes" | "truncated" | "redactedSecretCount">;
+  responseContent?: Pick<
+    McpElicitationBoundedJsonBody,
+    "byteLength" | "maxBytes" | "truncated" | "redactedSecretCount"
+  >;
 }
 
 export interface McpElicitationResponse {

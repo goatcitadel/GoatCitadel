@@ -973,6 +973,9 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           });
     const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;
     const runtimeDegraded = "degraded" in runtime ? runtime.degraded : undefined;
+    const runtimeExternalOutcome = "externalOutcome" in runtime ? runtime.externalOutcome : undefined;
+    const runtimeManualReconciliationRequired =
+      "manualReconciliationRequired" in runtime ? runtime.manualReconciliationRequired : undefined;
     if (runtimeRetryCount || runtime.output?.degradedReason) {
       this.host.recordDevDiagnostic?.({
         level: "warn",
@@ -1040,6 +1043,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         localOperatorOverrideId: input.policyContext?.localOperatorOverrideId ?? input.localOperatorOverrideId,
         trustTier: server.trustTier,
         autonomousActivation,
+        externalOutcome: runtimeExternalOutcome,
+        manualReconciliationRequired: runtimeManualReconciliationRequired,
       },
       buildMcpInvocationRealtimeOptions({
         sessionId: input.sessionId,
@@ -1066,6 +1071,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         autonomousActivation,
         ok: runtime.ok,
         error: runtime.ok ? undefined : sanitizedRuntimeError,
+        externalOutcome: runtimeExternalOutcome,
+        manualReconciliationRequired: runtimeManualReconciliationRequired,
       },
     });
 
@@ -1079,9 +1086,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           degraded: runtimeDegraded,
           retryCount: runtimeRetryCount,
           sanitizedError: sanitizedRuntimeError,
+          externalOutcome: runtimeExternalOutcome,
+          manualReconciliationRequired: runtimeManualReconciliationRequired,
         },
         autonomousActivation,
         error: sanitizedRuntimeError ?? `MCP tool ${input.toolName} failed.`,
+        externalOutcome: runtimeExternalOutcome,
+        manualReconciliationRequired: runtimeManualReconciliationRequired,
       };
     }
 
@@ -1093,8 +1104,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         transport: server.transport,
         degraded: runtimeDegraded,
         retryCount: runtimeRetryCount,
+        externalOutcome: runtimeExternalOutcome,
+        manualReconciliationRequired: runtimeManualReconciliationRequired,
       },
       autonomousActivation,
+      externalOutcome: runtimeExternalOutcome,
+      manualReconciliationRequired: runtimeManualReconciliationRequired,
     };
   }
 

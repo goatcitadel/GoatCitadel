@@ -14,6 +14,11 @@ import type { Storage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
+import {
+  assertSafeRedirectTransition,
+  HttpMutationOutcomeUnknownError,
+  isHttpRequestSafeToRetry,
+} from "./sandbox/http-request-policy.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { scanBrowserContentGuard } from "./browser-content-guard.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
@@ -293,22 +298,37 @@ async function httpPost(request: ToolInvokeRequest, config: ToolPolicyConfig, st
   const args = request.args;
   const url = required(args.url, "url");
   const body = JSON.stringify(args.body ?? {});
-  const res = await fetchAllowlisted(
-    url,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body },
-    config.sandbox.networkAllowlist,
-    request.signal,
-    resolveExecutionGrantAllowedHosts(request, storage),
-  );
-  const text = await res.response.text();
-  return {
-    url: res.finalUrl,
-    status: res.response.status,
-    contentType: res.response.headers.get("content-type") ?? undefined,
-    byteLength: Buffer.byteLength(text, "utf8"),
-    body: text,
-    bodySnippet: text.slice(0, 4000),
-  };
+  const allowlist = config.sandbox.networkAllowlist;
+  const grantAllowlist = resolveExecutionGrantAllowedHosts(request, storage);
+  assertHostAllowed(url, allowlist);
+  if (grantAllowlist && grantAllowlist.length > 0) {
+    assertHostAllowed(url, grantAllowlist);
+  }
+  try {
+    const res = await fetchAllowlisted(
+      url,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body },
+      allowlist,
+      request.signal,
+      grantAllowlist,
+    );
+    const text = await res.response.text();
+    const externalOutcomeUnknown = RETRYABLE_HTTP_STATUSES.has(res.response.status) || res.response.status >= 500;
+    return {
+      url: res.finalUrl,
+      status: res.response.status,
+      contentType: res.response.headers.get("content-type") ?? undefined,
+      byteLength: Buffer.byteLength(text, "utf8"),
+      body: text,
+      bodySnippet: text.slice(0, 4000),
+      ...(externalOutcomeUnknown ? { externalOutcome: "unknown_after_send", manualReconciliationRequired: true } : {}),
+    };
+  } catch (error) {
+    if (error instanceof HttpMutationOutcomeUnknownError) {
+      throw error;
+    }
+    throw new HttpMutationOutcomeUnknownError("http.post", error);
+  }
 }
 
 async function shellExec(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
@@ -703,7 +723,11 @@ async function fetchAllowlisted(
           signal: composeAbortSignal(20000, signal),
         },
       });
-      if (!RETRYABLE_HTTP_STATUSES.has(response.status) || attempt >= MAX_HTTP_RETRIES) {
+      if (
+        !isHttpRequestSafeToRetry(init) ||
+        !RETRYABLE_HTTP_STATUSES.has(response.status) ||
+        attempt >= MAX_HTTP_RETRIES
+      ) {
         break;
       }
       await waitForHttpRetry(response, attempt, signal);
@@ -715,7 +739,13 @@ async function fetchAllowlisted(
     if (!location) {
       throw new Error(`Redirect missing location for ${redactUrlForError(current)}`);
     }
-    current = new URL(location, current).toString();
+    const next = new URL(location, current).toString();
+    assertHostAllowed(next, allowlist);
+    if (grantAllowlist && grantAllowlist.length > 0) {
+      assertHostAllowed(next, grantAllowlist);
+    }
+    assertSafeRedirectTransition(current, next, init);
+    current = next;
   }
   throw new Error(`Too many redirects for ${redactUrlForError(url)}`);
 }
