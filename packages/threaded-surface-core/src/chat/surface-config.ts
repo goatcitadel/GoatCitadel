@@ -72,18 +72,18 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
     },
   },
   cowork: {
-    shellEyebrow: "Cowork",
-    stageTitle: "Workflow overview",
+    shellEyebrow: "Chat",
+    stageTitle: "Agentic workflow overview",
     stageSummary: "Keep the workflow legible: what is running, blocked, and next.",
     emptyTitle: "Frame the work and move it forward",
     emptyBody:
-      "Cowork is for multi-step runs, orchestration, research, and active collaboration with visible state instead of vague progress.",
+      "Chat can carry multi-step runs, orchestration, research, and active collaboration with visible state instead of vague progress.",
     emptyPrompts: [
       "Break this objective into a staged plan",
       "Research the space, then recommend a direction",
       "Coordinate next steps across roles",
     ],
-    dockTitle: "Cowork context",
+    dockTitle: "Agentic context",
     dockSummary: "Controls and suggestions stay here while the workflow board remains the primary source of truth.",
     layout: {
       dominantArtifact: "workflow",
@@ -108,18 +108,18 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
     },
   },
   code: {
-    shellEyebrow: "Code",
+    shellEyebrow: "Chat",
     stageTitle: "Keep execution precise",
     stageSummary: "Keep project context and execution controls close at hand.",
     emptyTitle: "Anchor the implementation before you execute",
     emptyBody:
-      "Code is for serious implementation help: long prompts, code-heavy output, planning, review, and project-aware execution.",
+      "Chat can carry serious implementation help: long prompts, code-heavy output, planning, review, and project-aware execution.",
     emptyPrompts: [
       "Review this area for bugs and missing tests",
       "Implement the smallest safe fix",
       "Plan the refactor before touching files",
     ],
-    dockTitle: "Code context",
+    dockTitle: "Code capability context",
     dockSummary:
       "Workbench state, project binding, and execution controls stay visible so implementation decisions are precise instead of conversational.",
     layout: {

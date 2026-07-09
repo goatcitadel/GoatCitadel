@@ -142,11 +142,11 @@ describe("PromptPacksWorkbenchPage helpers", () => {
       sessionId: "session-chat",
     });
     expect(buildPromptPackRunRoute({ mode: "cowork", sessionId: "session-cowork" } as any)).toEqual({
-      area: "cowork",
+      area: "chat",
       sessionId: "session-cowork",
     });
     expect(buildPromptPackRunRoute({ mode: "code", sessionId: "session-code" } as any)).toEqual({
-      area: "code",
+      area: "chat",
       sessionId: "session-code",
     });
     expect(buildPromptPackRunRoute({ mode: "unknown", sessionId: "session-unknown" } as any)).toEqual({

@@ -6,8 +6,6 @@ import type {
   ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
 import { CHAT_MODE_POLICY } from "./policies/chat-policy.js";
-import { CODE_MODE_POLICY } from "./policies/code-policy.js";
-import { COWORK_MODE_POLICY } from "./policies/cowork-policy.js";
 import { hasLiveDataKeywords, shouldPreferToolBackedChatPath } from "./live-data-detect.js";
 import { selectOrchestrationModel } from "./model-selector.js";
 import type {
@@ -20,22 +18,13 @@ import type {
 } from "./types.js";
 
 export function resolveModePolicy(mode: ChatMode): ModeOrchestrationPolicy {
-  switch (mode) {
-    case "cowork":
-      return COWORK_MODE_POLICY;
-    case "code":
-      return CODE_MODE_POLICY;
-    default:
-      return CHAT_MODE_POLICY;
-  }
+  void mode;
+  return CHAT_MODE_POLICY;
 }
 
 export function shouldUseModeOrchestration(input: OrchestrationRouterInput): boolean {
   if (!input.task.prefs.orchestrationEnabled) {
     return false;
-  }
-  if (input.task.mode === "cowork" || input.task.mode === "code") {
-    return true;
   }
   const text = input.task.objective.toLowerCase();
   if (shouldPreferToolBackedChatPath(text, input.task.prefs)) {
@@ -60,7 +49,7 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
   const policy = input.policy;
   const requestedVisibility = clampVisibility(task.prefs.orchestrationVisibility, policy.maxVisibleVisibility);
   const requestedParallelism = normalizeParallelism(task.prefs.orchestrationParallelism, policy.allowParallelWorkers);
-  const requestedWorkstreams = task.mode === "cowork" ? extractRequestedWorkstreams(task.objective) : [];
+  const requestedWorkstreams = task.prefs.subagentPolicy === "off" ? [] : extractRequestedWorkstreams(task.objective);
   const workflowTemplate =
     requestedWorkstreams.length > 0
       ? "cowork.workstreams.synthesize"
@@ -107,14 +96,23 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
 }
 
 function selectWorkflowTemplate(mode: ChatMode, objective: string): string {
+  void mode;
   const normalized = objective.toLowerCase();
-  if (mode === "code") {
+  if (
+    /\b(code|coding|repo|repository|implement|implementation|pytest|ruff|unit tests?|tests?|debug|bug|pull request|pr)\b/i.test(
+      normalized,
+    )
+  ) {
     return "code.plan.code.review.qa";
   }
-  if (mode === "cowork") {
-    if (/\b(research|compare|sources?|latest|market|competitor|analyze)\b/.test(normalized)) {
-      return "cowork.research.synthesize.critic";
-    }
+  if (/\b(research|compare|sources?|latest|market|competitor|analyze)\b/.test(normalized)) {
+    return "cowork.research.synthesize.critic";
+  }
+  if (
+    /\b(plan|strategy|roadmap|multi-step|trade-?offs?|rollout|migration|find|list|stores?|address|hours|email)\b/.test(
+      normalized,
+    )
+  ) {
     return "cowork.plan.work.synthesize";
   }
   return "chat.answer.review";
@@ -324,7 +322,7 @@ function buildStepPlans(
       expectedOutput,
       parallelizable: useStageDependencies && role === "researcher",
       dependsOnStepIds,
-      delegatedRole: input.prefs.mode === "chat" ? undefined : label,
+      delegatedRole: input.prefs.subagentPolicy === "off" ? undefined : label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
       modelSelection: selection.evidence,

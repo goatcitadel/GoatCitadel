@@ -213,16 +213,6 @@ function ChatFirstMessageCanvas({ props }: { props: MissionThreadedActiveSession
       </div>
 
       <div className="mc-next-chat-start-actions" aria-label="Chat handoff actions">
-        <button
-          type="button"
-          className="mc-next-thread-inline-button"
-          onClick={() => props.onNavigateSurface("cowork")}
-        >
-          Continue in Cowork
-        </button>
-        <button type="button" className="mc-next-thread-inline-button" onClick={() => props.onNavigateSurface("code")}>
-          Open in Code
-        </button>
         <button type="button" className="mc-next-thread-inline-button" onClick={props.onAttachFiles}>
           Attach files
         </button>
@@ -483,9 +473,9 @@ export function ThreadedTimeline({
             </p>
             <p>
               {props.mode === "cowork"
-                ? "Describe the objective, constraints, and desired output. Cowork will create a visible run plan here."
+                ? "Describe the objective, constraints, and desired output. Chat will create a visible run plan here."
                 : props.mode === "code"
-                  ? "Describe a focused implementation or review task. The workbench will show diffs, validation results, and Code Mode runs as evidence appears."
+                  ? "Describe a focused implementation or review task. Chat will show diffs, validation results, and governed code runs as evidence appears."
                   : "Start with a plain request, or type /help to see commands."}
             </p>
           </div>

@@ -1,20 +1,20 @@
-# Cowork / Code Boundary Truth
+# Chat Capability Boundary Truth
 
-Last updated: 2026-05-05
+Last updated: 2026-07-08
 
-This document defines the current GoatCitadel boundary between Cowork, Code, self-improvement, and external agentic harness parity work.
+This legacy-named document defines the current GoatCitadel boundary between Chat-hosted agentic work, governed code capabilities, self-improvement, and external agentic harness parity work.
 
 ## Current Contract
 
-GoatCitadel keeps one governed runtime spine for Chat, Cowork, and Code, but the operator surfaces have different jobs:
+GoatCitadel keeps one governed runtime spine behind a single primary Chat surface. Planning, delegation, approvals, checkpoints, code-capability execution, artifacts, and runtime truth should be visible inside or beside Chat rather than split across separate primary Cowork and Code panes.
 
-- Chat is for lightweight conversation and drafting.
-- Cowork is for visible multi-step orchestration, delegation, approvals, checkpoints, and operator steering.
-- Code is for implementation work that must be reviewable, bounded, and validated.
+- Chat is for conversation, drafting, planning, research, supervised agentic work, and implementation help.
+- Agentic work is a Chat capability for visible multi-step orchestration, delegation, approvals, checkpoints, and operator steering.
+- Code work is a governed Chat capability for implementation work that must be reviewable, bounded, and validated.
 
-Cowork and Code may share durable runs, approvals, skills, capability catalogs, and runtime lifecycle exports. They should not hide source-of-truth transitions behind surface-specific state.
+These capabilities may share durable runs, approvals, skills, capability catalogs, and runtime lifecycle exports. They should not hide source-of-truth transitions behind legacy mode-specific UI state.
 
-## Cowork Owns
+## Chat-Hosted Agentic Work Owns
 
 - task decomposition and workflow visibility
 - role handoffs and specialist delegation
@@ -22,15 +22,15 @@ Cowork and Code may share durable runs, approvals, skills, capability catalogs, 
 - synthesis and final-response ownership when multiple roles participate
 - external harness comparison evidence when an external harness is available and intentionally invoked
 
-Cowork must show enough state for an operator to understand what is running, what is waiting, what failed, and what still requires judgment.
+Chat must show enough agentic state for an operator to understand what is running, what is waiting, what failed, and what still requires judgment.
 
-## Code Owns
+## Code Capability Owns
 
 - repository inspection, patch planning, implementation, test selection, and validation reporting
 - code-focused claims about files touched, tests run, failures found, and follow-up risk
 - Code Mode runs that are governed by capability snapshots, policy snapshots, approval state, recorded artifact hashes, and execution-time hash checks
 
-Code Mode is a trusted-code, operator-governed surface. It is not a hostile-code sandbox claim. Host isolation adapters may provide additional defense when available, and required isolation must fail closed when the host cannot satisfy it, but that is different from promising arbitrary hostile-code containment.
+Code Mode is trusted-code, operator-governed execution launched from Chat. It is not a hostile-code sandbox claim. Host isolation adapters may provide additional defense when available, and required isolation must fail closed when the host cannot satisfy it, but that is different from promising arbitrary hostile-code containment.
 
 ## Self-Improvement Boundary
 
@@ -73,9 +73,9 @@ Current source anchors for this boundary include:
 
 ## Verification Lanes
 
-The agentic parity lanes are focused behavior-backed lanes. They do not replace broad end-to-end runtime validation, but they now exercise concrete runtime anchors for the Cowork/Code boundary instead of serving as scaffold-only placeholders.
+The agentic parity lanes are focused behavior-backed lanes. They do not replace broad end-to-end runtime validation, but they now exercise concrete runtime anchors for Chat-hosted agentic and code-capability boundaries instead of serving as scaffold-only placeholders.
 
-- `verify:agentic:contracts` (`agentic-contracts`) checks the contract, route, service, workbench, channel, and boundary-document anchors for governed Cowork/Code agentic runtime truth.
+- `verify:agentic:contracts` (`agentic-contracts`) checks the contract, route, service, workbench, channel, and boundary-document anchors for governed Chat-hosted agentic runtime truth.
 - `verify:agentic:governance` (`agentic-governance`) checks review-first self-improvement, callable-vs-inspectable capability boundaries, marketplace/provider governance, approvals, and durable runtime ownership anchors.
 - `verify:agentic:harnesses` (`agentic-harnesses`) checks external harness boundary documentation, availability-gated comparison anchors, and behavioral callable-boundary proof.
 - `verify:agentic:proof` (`agentic-proof`) runs the contract, governance, and harness proof families together as targeted contract/behavior proof; it is not a live end-to-end product proof. `verify:agentic:parity` remains a compatibility alias for the same aggregate lane.

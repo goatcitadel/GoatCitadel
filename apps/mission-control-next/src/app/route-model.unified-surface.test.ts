@@ -9,57 +9,55 @@ import {
   getRouteLabel,
 } from "./route-model";
 
-describe("unified surface mode field", () => {
-  it("collapses /code to chat with mode=code", () => {
+describe("single chat surface route compatibility", () => {
+  it("collapses /code to chat without preserving a Code mode", () => {
     const r = parseAppRoute("http://x/code?sessionId=s1");
     expect(r.area).toBe("chat");
-    expect(r.mode).toBe("code");
+    expect(r.mode).toBeUndefined();
     expect(r.sessionId).toBe("s1");
   });
-  it("collapses /cowork (root) to chat with mode=cowork", () => {
+  it("collapses /cowork root to chat without preserving a Cowork mode", () => {
     const r = parseAppRoute("http://x/cowork");
     expect(r.area).toBe("chat");
-    expect(r.mode).toBe("cowork");
+    expect(r.mode).toBeUndefined();
   });
-  it("keeps /cowork/tasks as the Task Board route", () => {
+  it("routes /cowork/tasks into Ops Kanban", () => {
     const r = parseAppRoute("http://x/cowork/tasks");
-    expect(r.area).toBe("cowork");
-    expect(r.section).toBe("tasks");
+    expect(r.area).toBe("ops");
+    expect(r.section).toBe("kanban");
   });
-  it("keeps /cowork/board as the Agent Board route", () => {
+  it("routes /cowork/board into Ops Kanban", () => {
     const r = parseAppRoute("http://x/cowork/board");
-    expect(r.area).toBe("cowork");
-    expect(r.section).toBe("board");
+    expect(r.area).toBe("ops");
+    expect(r.section).toBe("kanban");
   });
-  it("reads ?mode= on the chat area", () => {
-    expect(parseAppRoute("http://x/chat?mode=cowork").mode).toBe("cowork");
+  it("ignores legacy non-chat ?mode= values on the chat area", () => {
+    expect(parseAppRoute("http://x/chat?mode=cowork").mode).toBeUndefined();
+    expect(parseAppRoute("http://x/chat?mode=code").mode).toBeUndefined();
+    expect(parseAppRoute("http://x/chat?mode=chat").mode).toBe("chat");
     expect(parseAppRoute("http://x/chat").mode).toBeUndefined();
   });
   it("ignores an invalid ?mode=", () => {
     expect(parseAppRoute("http://x/chat?mode=bogus").mode).toBeUndefined();
   });
-  it("round-trips a code thread href", () => {
-    expect(buildAppHref({ area: "chat", mode: "code", sessionId: "s9" })).toBe("/chat?sessionId=s9&mode=code");
+  it("does not round-trip legacy mode values in chat hrefs", () => {
+    expect(buildAppHref({ area: "chat", mode: "code", sessionId: "s9" })).toBe("/chat?sessionId=s9");
   });
-  it("emits bare /chat when no mode is set, but round-trips an explicit chat mode override", () => {
-    // Absent mode: today's session-mode-wins behavior (no mode param to round-trip).
+  it("emits bare /chat for implicit and explicit chat mode", () => {
     expect(buildAppHref({ area: "chat" })).toBe("/chat");
-    // Explicit mode="chat" is an operator override (QA finding N3) and must
-    // round-trip through the URL just like cowork/code, or the override is
-    // lost on any internal navigation that rebuilds the href from the route.
-    expect(buildAppHref({ area: "chat", mode: "chat" })).toBe("/chat?mode=chat");
+    expect(buildAppHref({ area: "chat", mode: "chat" })).toBe("/chat");
   });
-  it("normalizes a stray area:code into chat+mode", () => {
+  it("normalizes a stray area:code into chat", () => {
     const n = normalizeAppRoute({ area: "code", sessionId: "s2" } as never);
     expect(n.area).toBe("chat");
-    expect(n.mode).toBe("code");
+    expect(n.mode).toBeUndefined();
   });
-  it("labels the unified root as Work and mode routes by their routed mode", () => {
+  it("labels the chat surface as Work regardless of legacy mode", () => {
     expect(getRouteLabel({ area: "chat" })).toBe("Work");
-    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Plan");
-    expect(getRouteLabel({ area: "code" })).toBe("Build");
-    expect(getRouteDescription({ area: "chat" })).toContain("One conversation workspace");
-    expect(getRouteDescription({ area: "chat", mode: "code" })).toContain("Build posture");
+    expect(getRouteLabel({ area: "chat", mode: "cowork" })).toBe("Work");
+    expect(getRouteLabel({ area: "code" })).toBe("Work");
+    expect(getRouteDescription({ area: "chat" })).toContain("One chat workspace");
+    expect(getRouteDescription({ area: "chat", mode: "code" })).toContain("One chat workspace");
   });
 });
 
@@ -71,20 +69,17 @@ describe("buildModeRail", () => {
     expect(ids).toContain("chat-memory");
     expect(ids).toContain("chat-approvals");
   });
-  it("cowork mode → Task Board + Agent Board", () => {
+  it("legacy cowork mode still returns the chat rail", () => {
     const items = buildModeRail("cowork");
-    const tasks = items.find((i) => i.id === "mode-tasks");
-    expect(tasks?.area).toBe("cowork");
-    expect(tasks?.section).toBe("tasks");
-    expect(items.some((i) => i.id === "mode-board" && i.section === "board")).toBe(true);
+    expect(items.map((i) => i.id)).toContain("chat-artifacts");
+    expect(items.some((i) => i.area === "cowork")).toBe(false);
   });
-  it("code mode → Files + Runtime + Prompt Packs", () => {
+  it("legacy code mode still returns the chat rail", () => {
     const items = buildModeRail("code");
-    expect(items.some((i) => i.section === "files")).toBe(true);
-    expect(items.some((i) => i.section === "runtime")).toBe(true);
-    expect(items.some((i) => i.section === "prompt-packs")).toBe(true);
+    expect(items.map((i) => i.id)).toContain("chat-artifacts");
+    expect(items.some((i) => i.id === "mode-files")).toBe(false);
   });
-  it("preserves Work mode and context ids when returning to the conversation thread", () => {
+  it("preserves context ids when returning to the conversation thread", () => {
     for (const mode of ["cowork", "code"] as const) {
       const threadItem = buildModeRail(mode).find((item) => item.id === "chat-thread");
       expect(threadItem).toBeDefined();
@@ -104,7 +99,7 @@ describe("buildModeRail", () => {
         ),
       ).toMatchObject({
         area: "chat",
-        mode,
+        mode: undefined,
         sessionId: "session-1",
         turnId: "turn-2",
         runId: "run-3",

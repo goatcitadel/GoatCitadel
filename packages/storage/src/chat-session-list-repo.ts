@@ -87,10 +87,7 @@ export class ChatSessionListRepository {
       params.push(folderId);
     }
 
-    if (input.mode) {
-      clauses.push("COALESCE(p.mode, 'chat') = ?");
-      params.push(input.mode);
-    }
+    void input.mode;
 
     const tag = input.tag?.trim().toLowerCase();
     if (tag) {
@@ -109,7 +106,6 @@ export class ChatSessionListRepository {
           OR LOWER(s.account) LIKE ? ESCAPE '\\'
           OR LOWER(COALESCE(m.folder_name, '')) LIKE ? ESCAPE '\\'
           OR LOWER(COALESCE(m.tags_json, '[]')) LIKE ? ESCAPE '\\'
-          OR LOWER(COALESCE(p.mode, 'chat')) LIKE ? ESCAPE '\\'
           OR EXISTS (
             SELECT 1
             FROM chat_messages AS cm
@@ -119,7 +115,7 @@ export class ChatSessionListRepository {
           )
         )
       `);
-      params.push(like, like, like, like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like);
     }
 
     const parsedCursor = parseCompositeCursor(input.cursor);

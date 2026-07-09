@@ -1,8 +1,8 @@
 ﻿Product Truth
 apps/mission-control-next is the canonical 1.0 shell.
 apps/gateway is the runtime/control-plane owner.
-"Chat, Cowork, and Code are distinct operator surfaces."
-Durable execution owns the shipped resumable Chat / Cowork / Code flow set.
+"Chat is the single primary conversation surface."
+Durable execution owns the shipped resumable Chat flow set; legacy Cowork and Code route/mode inputs normalize into Chat-compatible execution.
 Code Mode is governed trusted-code execution; do not treat it as general hostile-code sandboxing without fresh named proof.
 "Docker is a runtime boundary, not a replacement for auth, policy, approvals, or path jails."
 Experimental routes must be visibly labeled and must not be counted as release-ready proof.
@@ -22,8 +22,8 @@ scripts/verification/lib/release-surface-manifest.mjs (../scripts/verification/l
 apps/gateway/src/app.ts (../apps/gateway/src/app.ts)
 apps/mission-control-next is the canonical 1.0 shell.
 apps/gateway is the runtime/control-plane owner.
-"Chat, Cowork, and Code are distinct operator surfaces."
-Durable execution owns the shipped resumable Chat / Cowork / Code flow set.
+"Chat is the single primary conversation surface."
+Durable execution owns the shipped resumable Chat flow set; legacy Cowork and Code route/mode inputs normalize into Chat-compatible execution.
 Code Mode is governed trusted-code execution; do not treat it as general hostile-code sandboxing without fresh named proof.
 "Docker is a runtime boundary, not a replacement for auth, policy, approvals, or path jails."
 Experimental routes must be visibly labeled and must not be counted as release-ready proof.

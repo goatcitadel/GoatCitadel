@@ -24,12 +24,19 @@ export async function applyAutoRouteToInput(
   sessionId: string,
   input: ChatSendMessageRequest,
 ): Promise<ChatSendMessageRequest> {
+  if (input.mode !== undefined && input.mode !== "chat") {
+    host.persistChatSessionMode?.(sessionId, "chat");
+    return { ...input, mode: "chat", autoRoute: false };
+  }
   if (!input.autoRoute || input.mode !== undefined || !host.surfaceRouter || !host.persistChatSessionMode) {
-    return input;
+    return input.mode === undefined ? input : { ...input, mode: "chat" };
   }
   const persistedMode = host.readChatSessionMode?.(sessionId);
   if (persistedMode !== undefined) {
-    return { ...input, mode: persistedMode };
+    if (persistedMode !== "chat") {
+      host.persistChatSessionMode(sessionId, "chat");
+    }
+    return { ...input, mode: "chat", autoRoute: false };
   }
   const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
@@ -42,8 +49,9 @@ export async function applyAutoRouteToInput(
     turnId: `${sessionId}:pending`,
     context: { hasBoundProject: false }, // TODO(#136 Phase 2): resolve the session's project binding to improve code-intent routing
   });
-  host.persistChatSessionMode(sessionId, classified.mode);
-  return { ...input, mode: classified.mode };
+  void classified;
+  host.persistChatSessionMode(sessionId, "chat");
+  return { ...input, mode: "chat", autoRoute: false };
 }
 
 export interface ModeOverrideHost {
@@ -72,24 +80,11 @@ export function recordModeOverrideIfChanged(
     return;
   }
   const persistedMode = host.readChatSessionMode(sessionId);
-  if (persistedMode === undefined || persistedMode === input.mode) {
+  if (persistedMode === undefined) {
     return;
   }
-  host.persistChatSessionMode(sessionId, input.mode);
-  if (host.recordSurfaceRouteOverrideSignal) {
-    const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
-    const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
-    const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
-    host.recordSurfaceRouteOverrideSignal({
-      citadelId,
-      workspaceId,
-      sessionId,
-      turnId: `${sessionId}:pending`,
-      fromMode: persistedMode,
-      toMode: input.mode,
-      autoConfidence: 0,
-      promptFeatureHash: hashPromptFeatures(input.content),
-    });
+  if (persistedMode !== "chat") {
+    host.persistChatSessionMode(sessionId, "chat");
   }
 }
 

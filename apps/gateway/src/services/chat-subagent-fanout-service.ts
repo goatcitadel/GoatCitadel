@@ -144,7 +144,7 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
 }
 
 /**
- * Registration-side eligibility gate: only cowork/code turns whose
+ * Registration-side eligibility gate: only Chat-normalized turns whose
  * subagentPolicy explicitly permits automatic subagents may hold a live fan-out
  * executor. `ask_when_useful` is a suggestion/confirmation posture, not a
  * model-callable auto-run. Delegated child turns are floored to
@@ -169,7 +169,7 @@ export function shouldRegisterSubagentFanoutExecutor(
     return false;
   }
   const mode = resolvePreparedTurnMode(prepared);
-  if (mode !== "cowork" && mode !== "code") {
+  if (mode !== "chat") {
     return false;
   }
   return (prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy) === "auto_when_useful";

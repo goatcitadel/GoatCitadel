@@ -183,11 +183,11 @@ describe("mission control surface pure state helpers", () => {
   });
 
   it("resolves message mode precedence", () => {
-    expect(resolveMissionControlMessageMode({ lockSurface: true, surface: "code", prefsMode: "chat" })).toBe("code");
+    expect(resolveMissionControlMessageMode({ lockSurface: true, surface: "code", prefsMode: "chat" })).toBe("chat");
     expect(
       resolveMissionControlMessageMode({ lockSurface: false, selectedSessionMode: "cowork", prefsMode: "chat" }),
-    ).toBe("cowork");
-    expect(resolveMissionControlMessageMode({ lockSurface: false, prefsMode: "code" })).toBe("code");
+    ).toBe("chat");
+    expect(resolveMissionControlMessageMode({ lockSurface: false, prefsMode: "code" })).toBe("chat");
     expect(resolveMissionControlMessageMode({ lockSurface: false })).toBe("chat");
   });
 });
@@ -249,7 +249,7 @@ describe("useMissionControlSurfaceState", () => {
     ]);
   });
 
-  it("derives cowork and code surface-specific summaries", async () => {
+  it("normalizes legacy cowork and code surfaces to Chat summaries", async () => {
     const states: Array<ReturnType<typeof useMissionControlSurfaceState>> = [];
     function Harness(props: { mode: "cowork" | "code" }) {
       states.push(
@@ -287,26 +287,25 @@ describe("useMissionControlSurfaceState", () => {
     });
 
     expect(states[0]).toMatchObject({
-      messageMode: "cowork",
-      isCoworkSurface: true,
-      surfaceHeaderSubtitle:
-        "Guided multi-step execution with visible orchestration, checkpoints, and collaboration controls.",
+      messageMode: "chat",
+      isCoworkSurface: false,
+      surfaceHeaderSubtitle: "Fast chat",
       effectiveToolAutonomy: "manual",
     });
     expect(states[0]?.workspaceSummaryCards).toEqual([
       { label: "Projects", value: "5" },
-      { label: "Workflow", value: "6" },
-      { label: "Next", value: "9" },
+      { label: "Mission", value: "6" },
+      { label: "Queue", value: "13" },
     ]);
     expect(states[1]).toMatchObject({
-      messageMode: "code",
-      isCodeSurface: true,
-      codeModeNeedsProjectBinding: true,
+      messageMode: "chat",
+      isCodeSurface: false,
+      codeModeNeedsProjectBinding: false,
     });
     expect(states[1]?.workspaceSummaryCards).toEqual([
       { label: "Projects", value: "5" },
-      { label: "Bound", value: "8" },
-      { label: "Sessions", value: "6" },
+      { label: "Mission", value: "6" },
+      { label: "Queue", value: "13" },
     ]);
 
     let emptyState: ReturnType<typeof useMissionControlSurfaceState> | null = null;
@@ -338,6 +337,6 @@ describe("useMissionControlSurfaceState", () => {
     await act(async () => {
       create(React.createElement(EmptySessionHarness));
     });
-    expect(emptyState?.selectedSessionLabel).toBe("Cowork session");
+    expect(emptyState?.selectedSessionLabel).toBe("Chat session");
   });
 });

@@ -22,9 +22,10 @@ export const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12,
  * summary card and the Insights panel so both surfaces agree on what blocks
  * a full pass; the detail strings rendered next to it stay caller-local.
  */
-export function computePassReadiness(
-  summary: PromptPackReportRecord["summary"] | null | undefined,
-): { blockers: string[]; complete: boolean } {
+export function computePassReadiness(summary: PromptPackReportRecord["summary"] | null | undefined): {
+  blockers: string[];
+  complete: boolean;
+} {
   if (!summary) {
     return { blockers: [], complete: false };
   }
@@ -308,7 +309,7 @@ export function buildPromptPackRunRoute(run?: PromptPackRunRecord): AppRoute | n
     return null;
   }
   return {
-    area: run.mode === "cowork" ? "cowork" : run.mode === "code" ? "code" : "chat",
+    area: "chat",
     sessionId: run.sessionId,
   };
 }

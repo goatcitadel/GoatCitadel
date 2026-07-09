@@ -212,7 +212,7 @@ describe("ProjectsRoutePage", () => {
     mockedFetchChatGeneratedArtifacts.mockResolvedValue({
       items: [artifact()],
     });
-    mockedCreateChatSession.mockResolvedValue({ sessionId: "new-code-session" } as any);
+    mockedCreateChatSession.mockResolvedValue({ sessionId: "new-chat-session" } as any);
     mockedCreateChatProject.mockResolvedValue(project({ projectId: "project-created", name: "Created" }));
     mockedUpdateChatProject.mockResolvedValue(project({ projectId: "project-alpha", name: "Alpha renamed" }));
     mockedArchiveChatProject.mockResolvedValue(project({ projectId: "project-alpha", lifecycleStatus: "archived" }));
@@ -247,15 +247,11 @@ describe("ProjectsRoutePage", () => {
     expect(text).toContain("Project overview");
     expect(text).toContain("Start from intent");
     expect(text).toContain("Release proof");
-    expect(text).toContain("Continue Conversation");
-    expect(text).toContain("Continue Plan");
-    expect(text).toContain("Continue Build");
+    expect(text).toContain("Continue Chat");
     expect(text).toContain("Latest continuation");
     expect(text).toContain("Reopen project artifacts");
     expect(text).toContain("Alpha");
-    expect(text).toContain("Conversation 1");
-    expect(text).toContain("Plan 1");
-    expect(text).toContain("Build 1");
+    expect(text).toContain("Chat 3");
     expect(text).toContain("chat-1");
     expect(text).toContain("No tags yet.");
     expect(text).toContain("Unknown");
@@ -269,7 +265,7 @@ describe("ProjectsRoutePage", () => {
       findButton(renderer.root, "Plan run").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({
-      area: "cowork",
+      area: "chat",
       sessionId: "cowork-1",
       projectId: "project-alpha",
       theme: "ops",
@@ -312,9 +308,7 @@ describe("ProjectsRoutePage", () => {
     const text = pageText(renderer);
     expect(text).toContain("Beta");
     expect(text).toContain("F:\\code\\beta");
-    expect(text).toContain("Conversation 1");
-    expect(text).toMatch(/No\s+plan\s+threads in this project\./);
-    expect(text).toMatch(/No\s+build\s+threads in this project\./);
+    expect(text).toContain("Chat 1");
 
     act(() => {
       findButton(renderer.root, "Fallback mode").props.onClick();
@@ -327,7 +321,7 @@ describe("ProjectsRoutePage", () => {
     });
 
     await act(async () => {
-      findButton(renderer.root, "New Build").props.onClick();
+      findButton(renderer.root, "New Chat").props.onClick();
       await Promise.resolve();
     });
     expect(mockedCreateChatSession).toHaveBeenCalledWith(
@@ -335,15 +329,15 @@ describe("ProjectsRoutePage", () => {
         citadelId: "company",
         workspaceId: "default",
         projectId: "project-beta",
-        mode: "code",
+        mode: "chat",
         origin: "operator",
-        title: "Build - Beta",
+        title: "Chat - Beta",
       },
-      { originSurface: "code" },
+      { originSurface: "chat" },
     );
     expect(navigate).toHaveBeenCalledWith({
-      area: "code",
-      sessionId: "new-code-session",
+      area: "chat",
+      sessionId: "new-chat-session",
       projectId: "project-beta",
       theme: "neon",
     });
@@ -365,16 +359,16 @@ describe("ProjectsRoutePage", () => {
         citadelId: "company",
         workspaceId: "default",
         projectId: "project-alpha",
-        mode: "code",
+        mode: "chat",
         origin: "operator",
         title: "Review - Alpha",
         tags: ["project-intake", "intent:review"],
       },
-      { originSurface: "code" },
+      { originSurface: "chat" },
     );
     expect(navigate).toHaveBeenCalledWith({
-      area: "code",
-      sessionId: "new-code-session",
+      area: "chat",
+      sessionId: "new-chat-session",
       projectId: "project-alpha",
       theme: "ops",
     });
@@ -392,9 +386,9 @@ describe("ProjectsRoutePage", () => {
       session({ sessionId: "chat-run", mode: "chat", lastActivityAt: "2026-05-02T11:00:00.000Z" }),
     ]);
 
-    expect(home.latestByMode.code?.sessionId).toBe("code-proof");
-    expect(home.latestByMode.cowork?.sessionId).toBe("cowork-run");
-    expect(home.latestByMode.chat?.sessionId).toBe("chat-run");
+    expect(home.latestByMode.code).toBeNull();
+    expect(home.latestByMode.cowork).toBeNull();
+    expect(home.latestByMode.chat?.sessionId).toBe("code-proof");
     expect(home.artifactCount).toBe(1);
     expect(home.healthLabel).toBe("Ready to continue");
     expect(home.readiness.map((item) => [item.id, item.status])).toContainEqual(["artifacts", "ready"]);
@@ -407,10 +401,10 @@ describe("ProjectsRoutePage", () => {
     );
 
     act(() => {
-      findButton(renderer.root, "Continue Plan").props.onClick();
+      findButton(renderer.root, "Continue Chat").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({
-      area: "cowork",
+      area: "chat",
       sessionId: "cowork-1",
       projectId: "project-alpha",
       theme: "ops",
@@ -522,13 +516,13 @@ describe("ProjectsRoutePage", () => {
     expect(renderedText(renderer)).toContain("No active projects found in this workspace.");
     expect(renderedText(renderer)).toContain("Create project setup");
     expect(renderedText(renderer)).toContain("Use Start Here sample mission");
-    expect(findButton(renderer.root, "New Conversation").props.disabled).toBe(true);
+    expect(findButton(renderer.root, "New Chat").props.disabled).toBe(true);
     act(() => {
-      findButton(renderer.root, "New Conversation").props.onClick();
+      findButton(renderer.root, "New Chat").props.onClick();
     });
     expect(mockedCreateChatSession).not.toHaveBeenCalled();
     act(() => {
-      findButton(renderer.root, "Start Conversation").props.onClick();
+      findButton(renderer.root, "Start Chat").props.onClick();
       findButton(renderer.root, "Use Start Here sample mission").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
@@ -546,7 +540,7 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-alpha" } }));
 
     await act(async () => {
-      findButton(renderer.root, "New Conversation").props.onClick();
+      findButton(renderer.root, "New Chat").props.onClick();
       await Promise.resolve();
     });
     expect(renderedText(renderer)).toContain("session route failed");

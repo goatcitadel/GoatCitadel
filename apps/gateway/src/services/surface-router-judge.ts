@@ -7,11 +7,8 @@ export interface SurfaceRouterJudgeDeps {
 }
 
 const SURFACE_JUDGE_SYSTEM_PROMPT =
-  'Classify the user\'s first message into exactly one workspace mode:\n' +
-  '- "chat": conversational Q&A or quick help.\n' +
-  '- "cowork": multi-step research, comparison, planning, or coordinated work.\n' +
-  '- "code": editing, running, debugging, or reviewing code in a bound project.\n' +
-  'Reply with ONLY compact JSON, no prose: {"mode":"chat"|"cowork"|"code","confidence":<number 0..1>}.';
+  "GoatCitadel has one operator conversation surface: chat. " +
+  'Reply with ONLY compact JSON, no prose: {"mode":"chat","confidence":<number 0..1>}.';
 
 /** Parse the judge model's reply into a result, or undefined if unparseable/invalid. Pure + exported for testing. */
 export function parseSurfaceJudgeResult(content: string): SurfaceJudgeResult | undefined {
@@ -34,10 +31,8 @@ export function parseSurfaceJudgeResult(content: string): SurfaceJudgeResult | u
   }
   const rawConfidence = (parsed as Record<string, unknown>).confidence;
   const confidence =
-    typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
-      ? Math.max(0, Math.min(1, rawConfidence))
-      : 0.6;
-  return { mode: mode as ChatMode, confidence };
+    typeof rawConfidence === "number" && Number.isFinite(rawConfidence) ? Math.max(0, Math.min(1, rawConfidence)) : 0.6;
+  return { mode: "chat" as ChatMode, confidence };
 }
 
 export function buildSurfaceRouterJudge(deps: SurfaceRouterJudgeDeps) {
@@ -52,7 +47,10 @@ export function buildSurfaceRouterJudge(deps: SurfaceRouterJudgeDeps) {
         model: defaults.model,
         messages: [
           { role: "system", content: SURFACE_JUDGE_SYSTEM_PROMPT },
-          { role: "user", content: `Message: ${input.prompt}\nRecent mode-corrections in this citadel (from->to): ${priorsText}` },
+          {
+            role: "user",
+            content: `Message: ${input.prompt}\nRecent mode-corrections in this citadel (from->to): ${priorsText}`,
+          },
         ],
         temperature: 0,
         max_tokens: 40,

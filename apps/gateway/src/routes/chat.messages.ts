@@ -42,10 +42,11 @@ const routeDecisionSchema = z.object({
 });
 
 const mobileCapabilityIdSchema = z.enum(MOBILE_NATIVE_CAPABILITY_IDS);
+const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
 const sideChatContextSchema = z.object({
   parentSessionId: z.string().min(1),
-  originSurface: z.enum(["chat", "cowork", "code"]),
+  originSurface: chatOnlyModeSchema,
   selectedTurnId: z.string().min(1).optional(),
   recentTurnLimit: z.coerce.number().int().positive().max(12).optional(),
 });
@@ -112,7 +113,7 @@ const sendMessageSchema = z.object({
   routeDecision: routeDecisionSchema.optional(),
   useMemory: z.boolean().optional(),
   attachments: z.array(z.string()).optional(),
-  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  mode: chatOnlyModeSchema.optional(),
   permissionProfileId: z.string().min(1).optional(),
   localOperatorOverrideId: z.string().min(1).optional(),
   policyRunId: z.string().min(1).optional(),
@@ -126,7 +127,7 @@ const sendMessageSchema = z.object({
   commandText: z.string().optional(),
   prefsOverride: z
     .object({
-      mode: z.enum(["chat", "cowork", "code"]).optional(),
+      mode: chatOnlyModeSchema.optional(),
       providerId: z.string().optional(),
       model: z.string().optional(),
       imageProviderId: z.string().optional(),
@@ -183,7 +184,7 @@ const routePreflightSchema = z.object({
   turnId: z.string().optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
-  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  mode: chatOnlyModeSchema.optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
   speedMode: z.enum(["standard", "fast"]).optional(),

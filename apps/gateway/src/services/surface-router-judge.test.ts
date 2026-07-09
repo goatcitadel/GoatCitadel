@@ -28,27 +28,25 @@ describe("parseSurfaceJudgeResult", () => {
     expect(result).toEqual({ mode: "chat", confidence: 0.9 });
   });
 
-  it("parses valid compact JSON for cowork mode", () => {
+  it("normalizes valid compact JSON for cowork mode into chat", () => {
     const result = parseSurfaceJudgeResult('{"mode":"cowork","confidence":0.75}');
-    expect(result).toEqual({ mode: "cowork", confidence: 0.75 });
+    expect(result).toEqual({ mode: "chat", confidence: 0.75 });
   });
 
-  it("parses valid compact JSON for code mode", () => {
+  it("normalizes valid compact JSON for code mode into chat", () => {
     const result = parseSurfaceJudgeResult('{"mode":"code","confidence":0.82}');
-    expect(result).toEqual({ mode: "code", confidence: 0.82 });
+    expect(result).toEqual({ mode: "chat", confidence: 0.82 });
   });
 
   it("extracts JSON embedded in surrounding prose", () => {
-    const result = parseSurfaceJudgeResult(
-      'Here is the classification: {"mode":"cowork","confidence":0.88} — done.',
-    );
-    expect(result).toEqual({ mode: "cowork", confidence: 0.88 });
+    const result = parseSurfaceJudgeResult('Here is the classification: {"mode":"cowork","confidence":0.88} — done.');
+    expect(result).toEqual({ mode: "chat", confidence: 0.88 });
   });
 
   it("extracts JSON from a fenced ```json block", () => {
     const content = '```json\n{"mode":"code","confidence":0.95}\n```';
     const result = parseSurfaceJudgeResult(content);
-    expect(result).toEqual({ mode: "code", confidence: 0.95 });
+    expect(result).toEqual({ mode: "chat", confidence: 0.95 });
   });
 
   it("returns undefined for content with no JSON object", () => {
@@ -96,15 +94,13 @@ describe("buildSurfaceRouterJudge", () => {
   };
 
   it("returns a parsed result and forwards providerId/model from resolveModelDefaults", async () => {
-    const createChatCompletion = vi.fn().mockResolvedValue(
-      makeCompletion('{"mode":"code","confidence":0.82}'),
-    );
+    const createChatCompletion = vi.fn().mockResolvedValue(makeCompletion('{"mode":"code","confidence":0.82}'));
     const resolveModelDefaults = vi.fn().mockReturnValue({ providerId: "openai", model: "gpt-5.4" });
     const judge = buildSurfaceRouterJudge({ createChatCompletion, resolveModelDefaults });
 
     const result = await judge(baseInput);
 
-    expect(result).toEqual({ mode: "code", confidence: 0.82 });
+    expect(result).toEqual({ mode: "chat", confidence: 0.82 });
     expect(createChatCompletion).toHaveBeenCalledOnce();
     const callArg = createChatCompletion.mock.calls[0][0] as { providerId: string; model: string };
     expect(callArg.providerId).toBe("openai");
@@ -112,9 +108,7 @@ describe("buildSurfaceRouterJudge", () => {
   });
 
   it("includes prior corrections in the user message", async () => {
-    const createChatCompletion = vi.fn().mockResolvedValue(
-      makeCompletion('{"mode":"cowork","confidence":0.78}'),
-    );
+    const createChatCompletion = vi.fn().mockResolvedValue(makeCompletion('{"mode":"cowork","confidence":0.78}'));
     const judge = buildSurfaceRouterJudge({
       createChatCompletion,
       resolveModelDefaults: () => ({}),
@@ -123,9 +117,7 @@ describe("buildSurfaceRouterJudge", () => {
     await judge({
       prompt: "Compare these three approaches",
       citadelId: "cit-1",
-      priors: [
-        { fromMode: "chat", toMode: "cowork", recordedAt: "2026-06-01T00:00:00Z" },
-      ],
+      priors: [{ fromMode: "chat", toMode: "cowork", recordedAt: "2026-06-01T00:00:00Z" }],
     });
 
     const userMsg = (
@@ -146,9 +138,7 @@ describe("buildSurfaceRouterJudge", () => {
   });
 
   it("returns undefined when the model returns prose with no JSON", async () => {
-    const createChatCompletion = vi.fn().mockResolvedValue(
-      makeCompletion("I cannot classify this message."),
-    );
+    const createChatCompletion = vi.fn().mockResolvedValue(makeCompletion("I cannot classify this message."));
     const judge = buildSurfaceRouterJudge({
       createChatCompletion,
       resolveModelDefaults: () => ({}),

@@ -2,7 +2,6 @@ import type { ChatMode } from "@goatcitadel/contracts";
 import { GCSegmentedControl } from "./ui";
 
 export function ChatModeSwitch({
-  value,
   disabled,
   onChange,
 }: {
@@ -12,15 +11,11 @@ export function ChatModeSwitch({
 }) {
   return (
     <GCSegmentedControl
-      value={value}
+      value="chat"
       ariaLabel="Chat mode"
       className="chat-mode-switch"
       onChange={onChange}
-      options={[
-        { value: "chat", label: "Chat", disabled },
-        { value: "cowork", label: "Cowork", disabled },
-        { value: "code", label: "Code", disabled },
-      ]}
+      options={[{ value: "chat", label: "Chat", disabled }]}
     />
   );
 }

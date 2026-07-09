@@ -1,9 +1,9 @@
 ﻿Route,Status,Result,Evidence,Notes
 /chat,ship,,,
-/cowork,ship,,,
-/cowork/tasks,ship,,,
-/cowork/board,ship,,,
-/code,ship,,,
+/cowork,hide,,,
+/cowork/tasks,hide,,,
+/cowork/board,hide,,,
+/code,hide,,,
 /projects,ship,,,
 /library/agents,ship,,,
 /library/skills,ship,,,

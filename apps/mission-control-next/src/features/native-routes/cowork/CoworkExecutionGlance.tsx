@@ -73,7 +73,7 @@ export function CoworkExecutionGlance({
   return (
     <NativeCard
       title="Execution at a glance"
-      subtitle="Plan, phase, checkpoint, and attention state derived from visible Cowork task evidence."
+      subtitle="Plan, phase, checkpoint, and attention state derived from visible Chat task evidence."
       density="compact"
       className="mc-next-cowork-execution-card"
       stats={[
@@ -85,7 +85,7 @@ export function CoworkExecutionGlance({
         <section
           className="mc-next-cowork-attention-strip"
           data-tone={snapshot.attentionLabel === "Blocked" ? "blocked" : "attention"}
-          aria-label="Cowork operator attention"
+          aria-label="Chat operator attention"
         >
           <div>
             <AlertTriangle className="h-4 w-4" aria-hidden="true" />
@@ -114,7 +114,7 @@ export function CoworkExecutionGlance({
           Agent board
         </NativeButton>
       </LibraryButtonRow>
-      <section className="mc-next-cowork-execution-summary" aria-label="Cowork execution summary">
+      <section className="mc-next-cowork-execution-summary" aria-label="Chat execution summary">
         <div>
           <p className="mc-next-cowork-execution-kicker">Phase timeline</p>
           <div className="mc-next-cowork-phase-rail" role="list">
@@ -236,7 +236,7 @@ export function buildCoworkExecutionSnapshot(input: {
       ? `${latestTask.title} -> ${formatTaskStatus(latestTask.status)} · ${formatDateTime(
           latestTask.updatedAt ?? latestTask.createdAt,
         )}`
-      : "Create a task or resume Cowork to start the visible execution record.";
+      : "Create a task or resume Chat to start the visible execution record.";
   const pendingApprovalTotal = Math.max(input.pendingApprovals, approvalLinkedTasks.length);
   const attentionLabel =
     blockedTasks.length > 0
@@ -262,7 +262,7 @@ export function buildCoworkExecutionSnapshot(input: {
         : "Task projection";
   const runtimeDetail =
     durableRunIds.size > 0
-      ? "Tasks carry durable run references; inspect the threaded Cowork panel for run-log authority."
+      ? "Tasks carry durable run references; inspect the threaded Chat panel for run-log authority."
       : resumedCount > 0
         ? "Some tasks record stop or resume context; confirm the durable run before claiming completion."
         : "This route summarizes task-board evidence; it is not a replacement for durable run history.";
@@ -321,7 +321,7 @@ function deriveActiveCoworkPhase(input: {
   if (input.doneCount > 0 && input.activeTaskCount === 0) {
     return { id: "done", label: "Done", detail: "Visible work is complete unless archived tasks need recovery." };
   }
-  return { id: "plan", label: "Idle", detail: "Create or restore a task to start Cowork execution." };
+  return { id: "plan", label: "Idle", detail: "Create or restore a task to start Chat execution." };
 }
 
 function deriveCoworkPhaseState(input: {

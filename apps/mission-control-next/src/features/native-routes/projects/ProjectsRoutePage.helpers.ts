@@ -36,9 +36,7 @@ const EMPTY_COUNTS: ProjectCounts = {
 };
 
 export const SURFACES: Array<{ mode: ChatMode; label: string; action: string }> = [
-  { mode: "chat", label: "Conversation", action: "New Conversation" },
-  { mode: "cowork", label: "Plan", action: "New Plan" },
-  { mode: "code", label: "Build", action: "New Build" },
+  { mode: "chat", label: "Chat", action: "New Chat" },
 ];
 
 export type ProjectIntakeMode = {
@@ -62,23 +60,23 @@ export const PROJECT_INTAKE_MODES: ProjectIntakeMode[] = [
   {
     id: "plan",
     label: "Plan",
-    mode: "cowork",
+    mode: "chat",
     titlePrefix: "Plan",
     tag: "intent:plan",
-    detail: "Open supervised planning with phases, risks, and approvals in view.",
+    detail: "Start a planning thread with phases, risks, approvals, and next actions in view.",
   },
   {
     id: "implement",
     label: "Implement",
-    mode: "code",
+    mode: "chat",
     titlePrefix: "Implement",
     tag: "intent:implement",
-    detail: "Start Build for edits, debugging, and validation evidence.",
+    detail: "Start implementation work with code context, validation, and artifact evidence.",
   },
   {
     id: "review",
     label: "Review",
-    mode: "code",
+    mode: "chat",
     titlePrefix: "Review",
     tag: "intent:review",
     detail: "Create a review lane for diffs, tests, residual risk, and handoff notes.",
@@ -86,10 +84,10 @@ export const PROJECT_INTAKE_MODES: ProjectIntakeMode[] = [
   {
     id: "research",
     label: "Research",
-    mode: "cowork",
+    mode: "chat",
     titlePrefix: "Research",
     tag: "intent:research",
-    detail: "Use Plan for multi-step investigation, source capture, and synthesis.",
+    detail: "Run a multi-step investigation with source capture and synthesis.",
   },
   {
     id: "summarize",
@@ -102,7 +100,7 @@ export const PROJECT_INTAKE_MODES: ProjectIntakeMode[] = [
   {
     id: "release-proof",
     label: "Release proof",
-    mode: "code",
+    mode: "chat",
     titlePrefix: "Release proof",
     tag: "intent:release-proof",
     detail: "Collect validation, artifacts, dirty-tree truth, and publish readiness.",
@@ -132,8 +130,6 @@ export function deriveProjectHome(
   const activeCount = sortedSessions.filter((session) => session.lifecycleStatus !== "archived").length;
   const hasSourcePath = Boolean(project.workspacePath?.trim());
   const hasChat = Boolean(latestByMode.chat);
-  const hasCowork = Boolean(latestByMode.cowork);
-  const hasCode = Boolean(latestByMode.code);
   const hasArtifacts = artifactCount > 0;
 
   const readiness: ProjectReadinessItem[] = [
@@ -143,7 +139,7 @@ export function deriveProjectHome(
       status: hasSourcePath ? "ready" : "attention",
       detail: hasSourcePath
         ? `Bound to ${project.workspacePath}.`
-        : "Add a workspace path before Build can become a practical workbench.",
+        : "Add a workspace path before Chat can anchor practical project work.",
     },
     {
       id: "chat",
@@ -152,22 +148,6 @@ export function deriveProjectHome(
       detail: hasChat
         ? "A project conversation is ready to continue."
         : "Start a project conversation for fast context and drafting.",
-    },
-    {
-      id: "cowork",
-      label: "Plan run",
-      status: hasCowork ? "ready" : "attention",
-      detail: hasCowork
-        ? "A supervised planning run is available from this project."
-        : "Start the plan posture when this project needs a durable plan and approval loop.",
-    },
-    {
-      id: "code",
-      label: "Build workbench",
-      status: hasCode ? "ready" : "attention",
-      detail: hasCode
-        ? "A build thread is available for implementation work."
-        : "Open the build posture when this project needs edits, validation, or patch artifacts.",
     },
     {
       id: "artifacts",
@@ -188,8 +168,6 @@ export function deriveProjectHome(
   const health = deriveProjectHealth({
     hasSourcePath,
     hasChat,
-    hasCowork,
-    hasCode,
     hasArtifacts,
     sessionCount: sessions.length,
   });
@@ -208,7 +186,8 @@ export function deriveProjectHome(
 }
 
 export function normalizeMode(mode?: ChatMode): ChatMode {
-  return mode === "cowork" || mode === "code" ? mode : "chat";
+  void mode;
+  return "chat";
 }
 
 export function createEmptyCounts(): ProjectCounts {
@@ -254,27 +233,19 @@ function countProjectArtifactRecords(
 function deriveProjectHealth(input: {
   hasSourcePath: boolean;
   hasChat: boolean;
-  hasCowork: boolean;
-  hasCode: boolean;
   hasArtifacts: boolean;
   sessionCount: number;
 }): Pick<ProjectHome, "healthLabel" | "healthDetail"> {
   if (!input.hasSourcePath) {
     return {
       healthLabel: "Needs source",
-      healthDetail: "Add a workspace path before this project can anchor Build and evidence.",
+      healthDetail: "Add a workspace path before this project can anchor Chat work and evidence.",
     };
   }
   if (input.sessionCount === 0) {
     return {
       healthLabel: "Ready for first thread",
       healthDetail: "The project exists; start Work to create a continuation point.",
-    };
-  }
-  if (!input.hasCowork || !input.hasCode) {
-    return {
-      healthLabel: "Needs Work postures",
-      healthDetail: "Add Plan or Build when this project needs durable execution or implementation proof.",
     };
   }
   if (!input.hasArtifacts) {
@@ -291,12 +262,13 @@ function deriveProjectHealth(input: {
   }
   return {
     healthLabel: "Ready to continue",
-    healthDetail: "Conversation, planning, build, and evidence are all represented for this project.",
+    healthDetail: "Chat continuity and evidence are represented for this project.",
   };
 }
 
 export function labelForMode(mode: ChatMode): string {
-  return mode === "cowork" ? "Plan" : mode === "code" ? "Build" : "Conversation";
+  void mode;
+  return "Chat";
 }
 
 export function dateValue(value?: string): number {

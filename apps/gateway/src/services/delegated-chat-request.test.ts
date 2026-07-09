@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 
 describe("buildDelegatedChatSendRequest", () => {
-  it("keeps the requested mode but forces delegated turns onto the non-orchestrated path", () => {
+  it("normalizes delegated turns into Chat and forces the non-orchestrated path", () => {
     for (const mode of ["cowork", "code"] as const) {
       const request = buildDelegatedChatSendRequest({
         content: "Delegated role: researcher",
@@ -17,7 +17,7 @@ describe("buildDelegatedChatSendRequest", () => {
         normalizationProfile: "prompt_pack_harness",
       });
 
-      expect(request.mode).toBe(mode);
+      expect(request.mode).toBe("chat");
       expect(request.prefsOverride).toMatchObject({
         planningMode: "off",
         orchestrationEnabled: false,

@@ -1,0 +1,1256 @@
+.mc-next-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.4fr);
+  gap: 0.55rem;
+}
+
+.mc-next-settings-grid.is-balanced {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mc-next-settings-grid.is-detail-wide {
+  grid-template-columns: minmax(220px, 0.68fr) minmax(0, 1.55fr);
+}
+
+.mc-next-settings-grid.is-three-column {
+  grid-template-columns: minmax(220px, 0.72fr) minmax(260px, 0.9fr) minmax(0, 1.15fr);
+}
+
+.mc-next-settings-stack {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-settings-panel {
+  align-content: start;
+}
+
+.mc-next-settings-panel-body {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-settings-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.48rem;
+}
+
+.mc-next-settings-field {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.mc-next-settings-field.span-2 {
+  grid-column: 1 / -1;
+}
+
+.mc-next-settings-field > span,
+.mc-next-settings-code-block > span,
+.mc-next-settings-action-copy span,
+.mc-next-settings-metric span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mc-next-settings-input,
+.mc-next-settings-textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.62rem;
+  padding-inline-end: calc(0.62rem + var(--mc-scrollbar-safe-gutter));
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+  font: 400 var(--text-sm)/1.4 var(--mc-font-sans);
+  outline: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.mc-next-settings-input:is(select) {
+  min-height: 1.85rem;
+  line-height: 1.25;
+}
+
+.mc-next-settings-input:focus,
+.mc-next-settings-textarea:focus {
+  border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-area-color) 12%, transparent);
+}
+
+/* NAV-05 (D-Low): keyboard focus ring for the generic interactive primitives
+   that previously had no visible :focus-visible state — generic buttons, the
+   settings filter chips, directory actions, and the form inputs/selects/
+   textareas. Mirrors the .gc-button ring so keyboard navigation is visible on
+   every interactive control, not just the design-system button. */
+.mc-next-button:focus-visible,
+.mc-next-button-secondary:focus-visible,
+.mc-next-settings-filter:focus-visible,
+.mc-next-directory-action:focus-visible,
+.mc-next-settings-input:focus-visible,
+.mc-next-settings-textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.mc-next-settings-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.48rem;
+  align-items: flex-start;
+  color: var(--text-secondary);
+  font: 400 var(--text-xs)/1.4 var(--mc-font-sans);
+}
+
+.mc-next-settings-check input {
+  margin-top: 0.15rem;
+}
+
+.mc-next-settings-textarea {
+  min-height: 5.2rem;
+  resize: vertical;
+}
+
+.mc-next-settings-code,
+.mc-next-settings-code-block pre {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.mc-next-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-height: 1.9rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+}
+
+.mc-next-settings-toggle input {
+  accent-color: color-mix(in oklab, var(--mc-area-color) 78%, white);
+}
+
+/* Modernized shared form components (ConfigFormBuilder / LlmTransportFields):
+   a themed disclosure, grouped field sections, an inline head row, and an
+   inline field error - all sourced from the canonical settings-field tokens. */
+.mc-next-disclosure {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--bg-surface-1) 55%, transparent);
+}
+
+.mc-next-disclosure > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mc-next-settings-field-group {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.mc-next-settings-field-group > h4,
+.mc-next-settings-inline-head h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mc-next-settings-inline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-settings-field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.mc-next-settings-button-row,
+.mc-next-settings-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+}
+
+.mc-next-settings-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 1.55rem;
+  padding: 0.22rem 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  font-size: var(--text-2xs);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+  line-height: 1.16;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+
+.mc-next-settings-filter.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 32%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--card));
+}
+
+.mc-next-settings-filter svg {
+  flex: 0 0 auto;
+}
+
+.mc-next-settings-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.42rem;
+}
+
+.mc-next-settings-metric {
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-settings-metric strong {
+  font-size: var(--text-xl);
+  line-height: 1.25;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  word-break: break-word;
+}
+
+.mc-next-settings-metric p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+}
+
+.mc-next-settings-wizard {
+  display: grid;
+  gap: 0.38rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-settings-wizard-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: start;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-settings-wizard-step.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-area-color) 8%, transparent);
+}
+
+.mc-next-settings-wizard-step.complete {
+  border-color: color-mix(in oklab, var(--success) 30%, var(--border));
+}
+
+.mc-next-settings-wizard-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.mc-next-settings-wizard-step.complete .mc-next-settings-wizard-index {
+  border-color: color-mix(in oklab, var(--success) 36%, var(--border));
+  color: var(--success);
+}
+
+.mc-next-settings-wizard-step.pending {
+  opacity: 0.72;
+}
+
+.mc-next-settings-wizard-step strong {
+  display: block;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.mc-next-settings-wizard-step p {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+}
+
+.mc-next-settings-oauth-code-card {
+  display: grid;
+  gap: 0.24rem;
+  padding: 0.58rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 14%, transparent), transparent 62%),
+    color-mix(in oklab, var(--card) 94%, transparent);
+}
+
+.mc-next-settings-oauth-code-card span {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mc-next-settings-oauth-code-card strong {
+  max-width: 100%;
+  font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+  font-size: clamp(1.25rem, 2.4vw, 2rem);
+  line-height: 1;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-settings-oauth-code-card p {
+  max-width: 58rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+
+.mc-next-settings-selectable-list,
+.mc-next-settings-action-list {
+  display: grid;
+  gap: 0.36rem;
+}
+
+.mc-next-settings-selectable-list.is-compact,
+.mc-next-settings-action-list.is-compact {
+  gap: 0.24rem;
+}
+
+.mc-next-library-action-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.mc-next-library-action-card {
+  display: grid;
+  align-content: start;
+  gap: 0.2rem;
+  min-width: 0;
+  min-height: 7.2rem;
+  padding: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-library-action-card[data-tone="info"] {
+  border-color: color-mix(in oklab, var(--gc-risk-info, var(--mc-area-color)) 34%, var(--border));
+}
+
+.mc-next-library-action-card[data-tone="success"] {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
+}
+
+.mc-next-library-action-card[data-tone="warning"] {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 38%, var(--border));
+}
+
+.mc-next-library-action-card[data-tone="danger"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+}
+
+.mc-next-library-action-card span,
+.mc-next-library-action-card em,
+.mc-next-library-action-card b {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-library-action-card strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-library-action-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-library-action-card .mc-next-settings-filter {
+  width: fit-content;
+  margin-top: 0.1rem;
+}
+
+.mc-next-settings-selectable {
+  display: grid;
+  /* Single full-width column so the row head fills the button (name left,
+     status right) instead of being centered by the inherited base-button
+     `justify-content: center`. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+  align-items: start;
+  gap: 0.2rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 3rem;
+  height: auto;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: inherit;
+  text-align: left;
+  line-height: 1.3;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+
+.mc-next-settings-selectable-list.is-compact .mc-next-settings-selectable {
+  gap: 0.14rem;
+  min-height: 2.25rem;
+  padding: 0.34rem 0.42rem;
+}
+
+.mc-next-settings-selectable:hover,
+.mc-next-settings-selectable:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--mc-area-color) 26%, var(--border));
+}
+
+.mc-next-settings-selectable.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
+}
+
+.mc-next-settings-selectable p,
+.mc-next-settings-action-copy p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-settings-selectable p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.mc-next-settings-selectable-list.is-compact .mc-next-settings-selectable p {
+  display: none;
+}
+
+/* Capability-scope panel: row head (resource name left, enabled/disabled state
+   right) and the inherit/curated chip row above the list. */
+.mc-next-settings-selectable-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.mc-next-settings-selectable-head > span {
+  flex: none;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-settings-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.mc-next-settings-selectable p,
+.mc-next-settings-action-copy p,
+.mc-next-directory-list-item p,
+.mc-next-directory-lane-item p,
+.mc-next-runtime-metric p,
+.mc-next-approvals-list-item p,
+.mc-next-approvals-copy p,
+.mc-next-approvals-summary,
+.mc-next-approvals-compact-list {
+  font-size: var(--text-2xs);
+}
+
+.mc-next-settings-field-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.mc-next-settings-selectable-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.45rem;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-settings-selectable-head strong,
+.mc-next-settings-action-copy strong {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-settings-selectable-head span {
+  overflow: hidden;
+  min-width: 0;
+  max-width: min(12rem, 36vw);
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  line-height: 1.25;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-settings-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: start;
+  min-width: 0;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-settings-action-list.is-compact .mc-next-settings-action-row {
+  padding: 0.36rem 0.42rem;
+}
+
+.mc-next-settings-action-copy {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+}
+
+.mc-next-settings-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 1.35rem;
+  padding: 0.16rem 0.4rem;
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.16;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-trust-policy-table-wrap {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  scrollbar-gutter: stable;
+}
+
+.mc-next-trust-policy-controls {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.72rem;
+  padding-bottom: 0.72rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+}
+
+.mc-next-trust-policy-controls .mc-next-settings-field {
+  max-width: min(100%, 30rem);
+}
+
+.mc-next-trust-policy-table {
+  width: 100%;
+  min-width: 1200px;
+  border-collapse: collapse;
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+}
+
+.mc-next-trust-policy-table th,
+.mc-next-trust-policy-table td {
+  padding: 0.52rem 0.58rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  color: var(--text-secondary);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-trust-policy-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mc-next-trust-policy-table tbody tr:last-child th,
+.mc-next-trust-policy-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.mc-next-trust-policy-table tbody th {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.mc-next-trust-policy-table tbody th strong,
+.mc-next-trust-policy-table tbody th span {
+  display: block;
+  max-width: 18rem;
+}
+
+.mc-next-trust-policy-table tbody th span {
+  margin-top: 0.14rem;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
+.mc-next-trust-policy-table td strong,
+.mc-next-trust-policy-table td span {
+  display: block;
+  max-width: 16rem;
+}
+
+.mc-next-trust-policy-table td strong {
+  color: var(--foreground);
+  font-weight: 800;
+}
+
+.mc-next-trust-policy-table td span {
+  margin-top: 0.14rem;
+  color: var(--text-muted);
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  max-width: 20rem;
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov span {
+  margin-top: 0;
+  max-width: 20rem;
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov .mc-next-status-chip {
+  display: inline-flex;
+  align-self: flex-start;
+}
+
+.mc-next-trust-policy-table td .mc-next-trust-gov-warning {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mc-next-trust-policy-table tbody tr.is-expanded {
+  background: color-mix(in oklab, var(--mc-surface-3) 40%, transparent);
+}
+
+.mc-next-trust-policy-table tbody tr.is-expanded th,
+.mc-next-trust-policy-table tbody tr.is-expanded td {
+  border-bottom: 0;
+}
+
+.mc-next-trust-policy-details-row {
+  background: color-mix(in oklab, var(--mc-surface-2) 30%, transparent);
+}
+
+.mc-next-trust-policy-details-row td {
+  padding: 0.75rem 1rem 1.25rem 1rem !important;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 72%, transparent) !important;
+}
+
+.mc-next-trust-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+
+.mc-next-trust-details-card {
+  background: color-mix(in oklab, var(--mc-surface-3) 60%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  border-radius: var(--r-sm);
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mc-next-trust-details-card h4 {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--foreground);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  padding-bottom: 0.4rem;
+}
+
+.mc-next-trust-details-card-body {
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mc-next-trust-badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+}
+
+.mc-next-trust-badge {
+  background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--r-xs);
+  font-family: monospace;
+  color: var(--text-secondary);
+}
+
+.mc-next-trust-badge.is-secret {
+  border-color: color-mix(in oklab, var(--warning) 60%, transparent);
+  color: var(--warning);
+}
+
+.mc-next-trust-badge.is-missing {
+  border-color: color-mix(in oklab, var(--critical) 60%, transparent);
+  background: color-mix(in oklab, var(--critical) 10%, transparent);
+  color: var(--critical);
+}
+
+.mc-next-trust-action-box {
+  background: color-mix(in oklab, var(--info) 8%, transparent);
+  border: 1px solid color-mix(in oklab, var(--info) 30%, transparent);
+  border-radius: var(--r-sm);
+  padding: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.mc-next-trust-action-box.is-warning {
+  background: color-mix(in oklab, var(--warning) 8%, transparent);
+  border-color: color-mix(in oklab, var(--warning) 30%, transparent);
+}
+
+.mc-next-trust-action-box.is-critical {
+  background: color-mix(in oklab, var(--critical) 8%, transparent);
+  border-color: color-mix(in oklab, var(--critical) 30%, transparent);
+}
+
+.mc-next-trust-toggle-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  color: var(--text-muted);
+  border-radius: var(--r-xs);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+  margin-right: 0.4rem;
+}
+
+.mc-next-trust-toggle-btn:hover {
+  background: color-mix(in oklab, var(--border) 30%, transparent);
+  color: var(--foreground);
+}
+
+.mc-next-trust-row-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+@media (max-width: 1023px) {
+  .mc-next-trust-policy-table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    scrollbar-gutter: auto;
+  }
+
+  .mc-next-trust-policy-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .mc-next-trust-policy-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .mc-next-trust-policy-table tbody,
+  .mc-next-trust-policy-table tr,
+  .mc-next-trust-policy-table th,
+  .mc-next-trust-policy-table td {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .mc-next-trust-policy-table tbody {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .mc-next-trust-policy-table tbody tr {
+    padding: 0.58rem 0.62rem;
+    border: 1px solid color-mix(in oklab, var(--border) 68%, transparent);
+    border-radius: var(--r-sm);
+    background: color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+  }
+
+  .mc-next-trust-policy-table th,
+  .mc-next-trust-policy-table td {
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .mc-next-trust-policy-table td {
+    display: grid;
+    grid-template-columns: minmax(7.5rem, 0.42fr) minmax(0, 1fr);
+    gap: 0.5rem;
+    padding-top: 0.42rem;
+  }
+
+  .mc-next-trust-policy-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: var(--text-2xs);
+    font-weight: 800;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .mc-next-trust-policy-table tbody th strong,
+  .mc-next-trust-policy-table tbody th span,
+  .mc-next-trust-policy-table td strong,
+  .mc-next-trust-policy-table td span {
+    max-width: 100%;
+  }
+}
+
+.mc-next-settings-source-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+  margin-top: 0.2rem;
+}
+
+.mc-next-settings-source-legend span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.14rem 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.mc-next-provenance-coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.4rem;
+}
+
+.mc-next-provenance-coverage-item {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-provenance-coverage-item.is-covered {
+  border-color: color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
+}
+
+.mc-next-provenance-coverage-item div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.mc-next-provenance-coverage-item strong {
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.25;
+}
+
+.mc-next-provenance-coverage-item span {
+  color: color-mix(in oklab, var(--mc-area-color) 62%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mc-next-provenance-coverage-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+.mc-next-decision-journal-item {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.mc-next-decision-journal-item > span {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-decision-journal-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.32rem;
+  margin: 0;
+}
+
+.mc-next-decision-journal-facts div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.34rem 0.38rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
+}
+
+.mc-next-decision-journal-facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-next-decision-journal-facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+/*
+  Memory provenance list — semantically a <dl> of label/value pairs.
+  Mirrors the inline "<strong>label</strong> · value" look that the prior
+  <ul>/<li> markup produced. The "·" separator lives in JSX wrapped in
+  aria-hidden so screen readers don't announce "middle dot" (a11y H-8),
+  while sighted users keep the visual rhythm.
+*/
+.mc-next-memory-provenance-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1rem;
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-memory-provenance-list > div {
+  display: block;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-memory-provenance-list dt {
+  display: inline;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--foreground);
+}
+
+.mc-next-memory-provenance-list dd {
+  display: inline;
+  margin: 0;
+}
+
+.mc-next-memory-provenance-sep {
+  color: var(--text-muted);
+}
+
+.mc-next-settings-code-block {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-settings-code-block pre {
+  margin: 0;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--foreground);
+  font-size: var(--text-2xs);
+  line-height: 1.55;
+}
+
+.mc-next-settings-notice {
+  padding: 0.48rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  font-size: var(--text-2xs);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+}
+
+.mc-next-settings-notice.success {
+  border-color: color-mix(in oklab, var(--success) 34%, var(--border));
+  background: color-mix(in oklab, var(--success) 10%, var(--card));
+}
+
+.mc-next-settings-notice.warning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--card));
+}
+
+.mc-next-settings-notice.error {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 34%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger) 10%, var(--card));
+}
+
+.mc-next-settings-loading {
+  display: grid;
+  place-items: center;
+  gap: 0.48rem;
+  padding: 1rem 0.5rem;
+}
+
+.mc-next-settings-posture-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.55rem;
+}
+
+.mc-next-settings-posture-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-settings-posture-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-settings-posture-card-head h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.mc-next-settings-posture-card-head span {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-settings-posture-card-rows {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-settings-posture-card-rows li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.mc-next-settings-posture-card-row-name {
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-settings-posture-card-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.mc-next-activity-feed {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0;
+  padding: 0;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  list-style: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.mc-next-activity-feed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.42rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
+}
+
+.mc-next-activity-feed-row:hover {
+  border-color: color-mix(in oklab, var(--mc-area-color) 22%, var(--border));
+}
+
+.mc-next-activity-feed-source {
+  font-family: var(--mc-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 30%;
+  text-align: right;
+}

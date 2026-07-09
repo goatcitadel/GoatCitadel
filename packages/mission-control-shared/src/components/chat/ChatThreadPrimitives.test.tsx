@@ -409,7 +409,7 @@ describe("ChatThreadPrimitives", () => {
       />,
     );
 
-    expect(renderedText(renderer)).toContain("Cowork activity");
+    expect(renderedText(renderer)).toContain("Agentic activity");
     expect(renderedText(renderer)).toContain("Now: QA");
     expect(renderedText(renderer)).toContain("Run run-1");
     expect(renderedText(renderer)).toContain("Plan plan-1");

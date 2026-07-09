@@ -652,7 +652,7 @@ export function GoogleMeetStatusPanel({
               onClick={() => onConsultSession(actionableSession)}
             >
               <ExternalLink size={16} />
-              Consult Cowork
+              Consult Chat
             </NativeButton>
             <NativeButton
               variant="secondary"

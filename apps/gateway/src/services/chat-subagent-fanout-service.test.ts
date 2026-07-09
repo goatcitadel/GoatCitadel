@@ -134,7 +134,7 @@ describe("shouldRegisterSubagentFanoutExecutor", () => {
     } as never;
   }
 
-  it("allows registration for cowork/code turns whose subagentPolicy auto-delegates subagents", () => {
+  it("allows registration for Chat-normalized turns whose subagentPolicy auto-delegates subagents", () => {
     expect(
       shouldRegisterSubagentFanoutExecutor(
         preparedWith({ mode: "cowork", normalizedSubagentPolicy: "auto_when_useful" }),
@@ -156,7 +156,7 @@ describe("shouldRegisterSubagentFanoutExecutor", () => {
     expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork" }))).toBe(false);
   });
 
-  it("refuses registration outside cowork/code", () => {
+  it("refuses registration when Chat-normalized turns require confirmation first", () => {
     expect(
       shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", normalizedSubagentPolicy: "ask_when_useful" })),
     ).toBe(false);

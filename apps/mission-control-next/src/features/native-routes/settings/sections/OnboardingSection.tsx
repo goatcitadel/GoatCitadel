@@ -421,14 +421,11 @@ function DemoStartPanel({
       if (result.workspace?.workspaceId) {
         setActiveWorkspaceId(result.workspace.workspaceId);
       }
-      const nextSession =
-        result.sessions.find((item) => item.mode === "cowork") ??
-        result.sessions.find((item) => item.mode === "chat") ??
-        result.sessions[0];
+      const nextSession = result.sessions.find((item) => item.mode === "chat") ?? result.sessions[0];
       setNotice({ tone: result.status === "ready" ? "success" : "warning", message: result.notes[0] ?? "Demo ready." });
       await reload();
       navigate({
-        area: nextSession?.mode === "code" ? "code" : nextSession?.mode === "chat" ? "chat" : "cowork",
+        area: "chat",
         sessionId: nextSession?.sessionId,
         theme: route.theme,
       });

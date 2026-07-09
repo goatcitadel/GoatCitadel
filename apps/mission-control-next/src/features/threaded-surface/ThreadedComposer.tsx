@@ -246,7 +246,7 @@ function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSes
         {confidenceLabel ? <span>{confidenceLabel}</span> : null}
       </div>
       <p>
-        Cowork can split this into {roleSummary} with {formatDelegationMode(suggestion.mode)} execution.
+        Chat can split this into {roleSummary} with {formatDelegationMode(suggestion.mode)} execution.
       </p>
       <p className="mc-next-composer-delegation-objective">{suggestion.objective}</p>
       {reason ? <p className="mc-next-composer-delegation-reason">{reason}</p> : null}

@@ -242,20 +242,20 @@ export interface MissionControlActiveSessionSurfaceProps {
   /** True when auto-routing is active for the current thread (unlocked surface, no override, empty thread). */
   autoRouteActive?: boolean;
   /**
-   * Cowork: the active delegation run's `cancel` control, surfaced beside the
-   * composer so an operator can stop a running delegation from the chat window
-   * without opening the workflow/run-tree panel. `null` unless a running cowork
-   * delegation run exposes a cancel control. A disabled control is still passed
-   * (rendered disabled with its reason) rather than omitted.
+   * Active delegation run cancel control, surfaced beside the composer so an
+   * operator can stop a running delegation from the chat window without opening
+   * the workflow/run-tree panel. `null` unless a running delegation run exposes
+   * a cancel control. A disabled control is still passed (rendered disabled with
+   * its reason) rather than omitted.
    */
   coworkStopRunControl?: CoworkAgenticControlItem | null;
   /**
    * Record operator stop intent for the active delegation run via the existing
    * agentic run control endpoint (`controlAgenticRun(runId, { action: "cancel" })`).
-   * For a cowork run with no attached durable run this is state-only: it records
-   * intent and does not terminate the worker.
+   * For a run with no attached durable run this is state-only: it records intent
+   * and does not terminate the worker.
    */
   onCoworkStopRun?: (control: CoworkAgenticControlItem) => void;
-  /** True while a cowork stop (cancel) control request is in flight. */
+  /** True while a stop (cancel) control request is in flight. */
   coworkStopRunPending?: boolean;
 }

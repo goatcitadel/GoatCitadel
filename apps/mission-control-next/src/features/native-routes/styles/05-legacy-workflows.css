@@ -1,0 +1,571 @@
+.mc-next-task-lanes,
+.mc-next-board-lanes {
+  display: grid;
+  gap: 0.48rem;
+  min-width: 0;
+}
+
+.mc-next-task-lanes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mc-next-directory-grid-native.mc-next-cowork-task-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mc-next-directory-grid-native.mc-next-native-board-grid {
+  grid-template-columns: minmax(14rem, 0.75fr) minmax(20rem, 1fr) minmax(20rem, 1fr);
+  align-items: start;
+}
+
+.mc-next-cowork-workbench {
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.85fr);
+}
+
+.mc-next-cowork-task-grid > .mc-next-cowork-workbench,
+.mc-next-cowork-task-grid > .mc-next-directory-quickjump-card {
+  grid-column: 1 / -1;
+}
+
+.mc-next-cowork-detail-anchor {
+  display: grid;
+  min-width: 0;
+  outline: none;
+  scroll-margin-top: 0.85rem;
+}
+
+.mc-next-cowork-detail-anchor:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 62%, transparent);
+  outline-offset: 3px;
+}
+
+.mc-next-cowork-board-distribution-card {
+  grid-column: 1 / -1;
+}
+
+.mc-next-cowork-selected-task-summary {
+  display: grid;
+  gap: 0.34rem;
+  min-width: 0;
+  padding: 0.56rem 0.6rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--border));
+  border-left: 3px solid color-mix(in oklab, var(--mc-area-color) 62%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+}
+
+.mc-next-cowork-selected-task-summary[data-status="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 34%, var(--border));
+  border-left-color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--gc-risk-danger) 9%, transparent), transparent 62%),
+    color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+}
+
+.mc-next-cowork-selected-task-summary strong {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-selected-task-summary p,
+.mc-next-cowork-selected-task-summary span {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-lead-stack {
+  display: grid;
+  gap: 0.52rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-lead-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(14rem, 0.75fr);
+  gap: 0.52rem;
+  min-width: 0;
+  padding: 0.56rem 0.62rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-danger) 30%, var(--border));
+  border-left: 3px solid color-mix(in oklab, var(--gc-risk-danger) 70%, var(--border));
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--gc-risk-danger) 8%, transparent), transparent 62%),
+    color-mix(in oklab, var(--mc-surface-1) 74%, var(--background));
+}
+
+.mc-next-cowork-lead-detail div {
+  display: grid;
+  align-content: start;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-lead-detail span {
+  color: color-mix(in oklab, var(--gc-risk-danger) 68%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  line-height: 1.18;
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-lead-detail strong {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-lead-detail p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-shell[data-area="cowork"][data-section="tasks"] .mc-next-surface-host-work,
+.mc-next-shell[data-area="cowork"][data-section="board"] .mc-next-surface-host-work {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.mc-next-cowork-execution-card {
+  --cowork-execution-accent: var(--area-cowork);
+  grid-column: 1 / -1;
+}
+
+.mc-next-cowork-execution-summary {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-attention-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.46rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--mc-surface-1));
+}
+
+.mc-next-cowork-attention-strip[data-tone="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger) 9%, var(--mc-surface-1));
+}
+
+.mc-next-cowork-attention-strip > div {
+  display: inline-flex;
+  gap: 0.32rem;
+  align-items: center;
+  color: var(--foreground);
+}
+
+.mc-next-cowork-attention-strip > div svg {
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+}
+
+.mc-next-cowork-attention-strip[data-tone="blocked"] > div svg {
+  color: color-mix(in oklab, var(--gc-risk-danger) 78%, var(--foreground));
+}
+
+.mc-next-cowork-attention-strip strong {
+  font-size: var(--text-xs);
+  line-height: 1.16;
+}
+
+.mc-next-cowork-attention-strip p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-attention-strip .mc-next-button,
+.mc-next-cowork-attention-strip .gc-button {
+  justify-self: end;
+}
+
+.mc-next-cowork-execution-kicker {
+  margin: 0 0 0.28rem;
+  color: color-mix(in oklab, var(--cowork-execution-accent) 62%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-phase-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.34rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-phase-step {
+  position: relative;
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+  min-height: 5.4rem;
+  padding: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--cowork-execution-accent) 5%, transparent), transparent 68%),
+    color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-cowork-phase-title-row {
+  display: flex;
+  gap: 0.34rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.mc-next-cowork-phase-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.08rem 0.32rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-phase-state[data-state="active"] {
+  border-color: color-mix(in oklab, var(--cowork-execution-accent) 34%, var(--border));
+  color: color-mix(in oklab, var(--cowork-execution-accent) 68%, var(--foreground));
+}
+
+.mc-next-cowork-phase-state[data-state="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--foreground));
+}
+
+.mc-next-cowork-phase-state[data-state="complete"] {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-safe) 68%, var(--foreground));
+}
+
+.mc-next-cowork-phase-step[data-state="active"] {
+  border-color: color-mix(in oklab, var(--cowork-execution-accent) 42%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--cowork-execution-accent) 13%, transparent), transparent 72%),
+    color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-cowork-phase-step[data-state="blocked"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 48%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--gc-risk-danger) 12%, transparent), transparent 72%),
+    color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-cowork-phase-step[data-state="complete"] {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 38%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--gc-risk-safe) 10%, transparent), transparent 72%),
+    color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-cowork-phase-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.28rem;
+  height: 1.28rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  border-radius: var(--r-pill);
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.mc-next-cowork-phase-step strong,
+.mc-next-cowork-checkpoint-card strong {
+  display: block;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-phase-step span:not(.mc-next-cowork-phase-index, .mc-next-cowork-phase-state),
+.mc-next-cowork-checkpoint-card span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-phase-step p,
+.mc-next-cowork-checkpoint-card p,
+.mc-next-cowork-execution-truth {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.38;
+}
+
+.mc-next-cowork-checkpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-checkpoint-card {
+  display: grid;
+  align-content: start;
+  gap: 0.18rem;
+  min-width: 0;
+  min-height: 4.35rem;
+  padding: 0.44rem 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-cowork-execution-truth {
+  padding: 0.44rem 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--cowork-execution-accent) 22%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--cowork-execution-accent) 7%, transparent);
+}
+
+.mc-next-cowork-task-board-card {
+  min-width: 0;
+}
+
+.mc-next-cowork-task-grid .mc-next-task-lanes {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-list {
+  max-height: 9.5rem;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-item {
+  gap: 0.16rem;
+  padding: 0.42rem;
+  line-height: 1.25;
+  min-height: 3rem;
+  align-content: center;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-item p {
+  display: none;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-meta {
+  display: none;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-item strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: 0 0 auto;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status {
+  display: inline-flex;
+  margin-top: 0.04rem;
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status[data-status="blocked"] {
+  color: color-mix(in oklab, var(--gc-risk-danger) 74%, var(--foreground));
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-status[data-status="review"] {
+  color: color-mix(in oklab, var(--gc-risk-caution) 74%, var(--foreground));
+}
+
+.mc-next-cowork-task-grid .mc-next-directory-lane-agent {
+  display: none;
+}
+
+.mc-next-board-lanes {
+  grid-template-columns: repeat(4, minmax(13rem, 1fr));
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-list {
+  display: grid;
+  align-content: start;
+  max-height: min(44vh, 26rem);
+}
+
+.mc-next-board-lanes .mc-next-cowork-board-lane-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.34rem;
+  min-height: 8.25rem;
+  height: auto;
+  overflow: visible;
+}
+
+.mc-next-board-lanes .mc-next-cowork-board-lane-item .mc-next-directory-lane-meta {
+  flex: 0 0 auto;
+  line-height: 1.25;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-item strong,
+.mc-next-board-lanes .mc-next-directory-lane-item p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.32;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-item strong {
+  -webkit-line-clamp: 2;
+  flex: 0 0 auto;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-item p {
+  -webkit-line-clamp: 2;
+  min-height: calc(2 * var(--text-xs) * 1.32);
+  flex: 0 0 auto;
+}
+
+.mc-next-board-lanes .mc-next-cowork-board-lane-item .mc-next-directory-lane-status {
+  flex: 0 0 auto;
+  align-items: flex-start;
+  line-height: 1.25;
+}
+
+.mc-next-board-lanes .mc-next-directory-lane-agent {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-directory-lane {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 0.42rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.55rem 0.55rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 14%, var(--border));
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--mc-area-color) 4%, transparent), transparent 60%),
+    color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-directory-lane::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--mc-area-color), transparent 70%);
+  opacity: 0.5;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  pointer-events: none;
+}
+
+.mc-next-directory-lane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--mc-area-color) 60%, var(--text-muted));
+}
+
+.mc-next-directory-lane-list {
+  display: grid;
+  gap: 0.34rem;
+  max-height: 30rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  scrollbar-gutter: stable;
+}
+
+.mc-next-directory-lane-item {
+  appearance: none;
+  display: grid;
+  align-content: start;
+  gap: 0.22rem;
+  min-width: 0;
+  min-height: 5.6rem;
+  padding: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  /* Theme-aware text: the lane item sits on a light --card surface in light
+     theme, so it must not inherit a white title (was invisible white-on-white
+     on the cowork board/tasks lanes). */
+  color: var(--text-primary);
+  text-align: left;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-directory-lane-item strong {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-directory-lane-meta,
+.mc-next-directory-lane-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.mc-next-directory-lane-meta span,
+.mc-next-directory-lane-status span {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mc-next-directory-lane-status {
+  color: var(--text-secondary);
+}

@@ -287,7 +287,7 @@ describe("threaded-surface-core pure helpers", () => {
     expect(shouldShowLearnedMemoryPanel("code", 0)).toBe(true);
   });
 
-  it("lets locked top-level surfaces override the previously selected session mode", () => {
+  it("collapses locked top-level surfaces to chat", () => {
     expect(
       resolveMissionControlMessageMode({
         lockSurface: true,
@@ -295,7 +295,7 @@ describe("threaded-surface-core pure helpers", () => {
         selectedSessionMode: "chat",
         prefsMode: "chat",
       }),
-    ).toBe("cowork");
+    ).toBe("chat");
 
     expect(
       resolveMissionControlMessageMode({
@@ -304,18 +304,18 @@ describe("threaded-surface-core pure helpers", () => {
         selectedSessionMode: "chat",
         prefsMode: "chat",
       }),
-    ).toBe("code");
+    ).toBe("chat");
   });
 
-  it("forces the surface mode when locked", () => {
-    expect(resolveOutboundSurfaceMode({ lockSurface: true, surface: "code", modeOverride: null })).toBe("code");
+  it("forces chat mode when locked", () => {
+    expect(resolveOutboundSurfaceMode({ lockSurface: true, surface: "code", modeOverride: null })).toBe("chat");
   });
 
-  it("returns the override on an unlocked surface", () => {
-    expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: "cowork" })).toBe("cowork");
+  it("ignores legacy overrides on an unlocked surface", () => {
+    expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: "cowork" })).toBe("chat");
   });
 
-  it("returns undefined on a new unlocked thread with no override (enables auto-route)", () => {
-    expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: null })).toBeUndefined();
+  it("returns chat on a new unlocked thread with no override", () => {
+    expect(resolveOutboundSurfaceMode({ lockSurface: false, surface: "chat", modeOverride: null })).toBe("chat");
   });
 });

@@ -200,7 +200,7 @@ describe("chat command runtime dispatch", () => {
       expect(result.message, command).toBeTruthy();
     }
 
-    expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith("session-1", { mode: "code" });
+    expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith("session-1", { mode: "chat" });
     expect(deps.updateChatSessionPrefs).toHaveBeenCalledWith("session-1", {
       providerId: "backup",
       model: "backup-model",

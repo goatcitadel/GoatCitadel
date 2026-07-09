@@ -33,7 +33,7 @@ import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { EmptyState, FilterPillGroup, ModeBar, NativeButton, NativeSelectableList, NoticeBanner } from "../primitives";
+import { EmptyState, FilterPillGroup, NativeButton, NativeSelectableList, NoticeBanner } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -104,7 +104,8 @@ export function ProjectsRoutePage({
 
   const handleOpenSurface = useCallback(
     (mode: ChatMode) => {
-      navigate({ area: mode, theme: route.theme });
+      void mode;
+      navigate({ area: "chat", theme: route.theme });
     },
     [navigate, route.theme],
   );
@@ -261,9 +262,9 @@ export function ProjectsRoutePage({
 
   const groupedSessions = useMemo(
     () => ({
-      chat: selectedSessions.filter((session) => normalizeMode(session.mode) === "chat"),
-      cowork: selectedSessions.filter((session) => normalizeMode(session.mode) === "cowork"),
-      code: selectedSessions.filter((session) => normalizeMode(session.mode) === "code"),
+      chat: selectedSessions,
+      cowork: [] as ChatSessionRecord[],
+      code: [] as ChatSessionRecord[],
     }),
     [selectedSessions],
   );
@@ -285,6 +286,7 @@ export function ProjectsRoutePage({
     if (!selectedProject) {
       return;
     }
+    const requestMode = normalizeMode(mode);
     setActionError(null);
     try {
       const session = await createChatSession(
@@ -292,21 +294,21 @@ export function ProjectsRoutePage({
           citadelId: activeCitadelId,
           workspaceId: activeWorkspaceId,
           projectId: selectedProject.projectId,
-          mode,
+          mode: requestMode,
           origin: "operator",
-          title: options.title ?? `${labelForMode(mode)} - ${selectedProject.name}`,
+          title: options.title ?? `${labelForMode(requestMode)} - ${selectedProject.name}`,
           tags: options.tags,
         },
-        { originSurface: mode },
+        { originSurface: requestMode },
       );
       recordRouteAction("projects", options.intakeId ? "session.intake.created" : "session.created", {
-        mode,
+        mode: requestMode,
         intakeId: options.intakeId,
         projectId: selectedProject.projectId,
         sessionId: session.sessionId,
       });
       navigate({
-        area: mode,
+        area: "chat",
         sessionId: session.sessionId,
         projectId: selectedProject.projectId,
         theme: route.theme,
@@ -333,10 +335,10 @@ export function ProjectsRoutePage({
     if (!selectedProject) {
       return;
     }
-    const latest = projectHome?.latestByMode[mode] ?? null;
+    const latest = projectHome?.latestByMode[normalizeMode(mode)] ?? null;
     if (latest) {
       navigate({
-        area: mode,
+        area: "chat",
         sessionId: latest.sessionId,
         projectId: selectedProject.projectId,
         theme: route.theme,
@@ -579,7 +581,7 @@ export function ProjectsRoutePage({
       area="projects"
       kicker="Citadel > Workspace > Project"
       title="Project containers"
-      description={`Cross-surface project threads inside ${(activeCitadelName ?? activeCitadelId) || "the active Citadel"} > ${activeWorkspaceName}.`}
+      description={`Project chat threads inside ${(activeCitadelName ?? activeCitadelId) || "the active Citadel"} > ${activeWorkspaceName}.`}
       loading={state.loading}
       error={state.error}
       lead={leadContent}
@@ -605,7 +607,7 @@ export function ProjectsRoutePage({
       <NativeGrid className="mc-next-native-projects-grid">
         <NativeCard
           title="Projects"
-          subtitle="Containers that bind Work threads, files, and proof together."
+          subtitle="Containers that bind Chat threads, files, and proof together."
           density="compact"
           stats={[
             { label: "Projects", value: String(state.projects.length) },
@@ -654,11 +656,8 @@ export function ProjectsRoutePage({
                         <span>{counts.chat + counts.cowork + counts.code} threads</span>
                       </div>
                       <p>{project.description?.trim() || project.workspacePath}</p>
-                      <ModeBar chat={counts.chat} cowork={counts.cowork} code={counts.code} />
                       <div className="mc-next-project-counts">
-                        <span>Conversation {counts.chat}</span>
-                        <span>Plan {counts.cowork}</span>
-                        <span>Build {counts.code}</span>
+                        <span>Chat {counts.chat + counts.cowork + counts.code}</span>
                       </div>
                     </button>
                     <div
@@ -714,7 +713,7 @@ export function ProjectsRoutePage({
                   <div className="mc-next-project-empty-guide">
                     <div>
                       <strong>Choose the first project move</strong>
-                      <p>Create a project, start in a surface, or use the sample mission to shape the first run.</p>
+                      <p>Create a project, start Chat, or use the sample mission to shape the first run.</p>
                     </div>
                     <div className="mc-next-settings-button-row">
                       <NativeButton onClick={handleFocusCreateProject}>
@@ -724,7 +723,7 @@ export function ProjectsRoutePage({
                       {SURFACES.map((surface) => (
                         <NativeButton key={surface.mode} onClick={() => handleOpenSurface(surface.mode)}>
                           <MessageSquarePlus className="h-4 w-4" />
-                          {`Start ${surface.label}`}
+                          Start Chat
                         </NativeButton>
                       ))}
                       <NativeButton onClick={handleOpenStartHere}>Use Start Here sample mission</NativeButton>
@@ -913,6 +912,7 @@ function ProjectThreadGroup({
   route: AppRoute;
   navigate: NativeRoutePagesProps["navigate"];
 }) {
+  void mode;
   return (
     <section className="mc-next-directory-lane">
       <div className="mc-next-directory-lane-head">
@@ -928,7 +928,7 @@ function ProjectThreadGroup({
               className="mc-next-directory-lane-item"
               onClick={() =>
                 navigate({
-                  area: mode,
+                  area: "chat",
                   sessionId: session.sessionId,
                   projectId: session.projectId,
                   theme: route.theme,

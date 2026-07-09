@@ -158,7 +158,7 @@ describe("generatePreparedExecutionPlanDraft planner fan-out", () => {
     };
   }
 
-  it("expands planner extras into same-stage workers on the default cowork template", async () => {
+  it("expands planner extras with dependency-derived stages on the default template", async () => {
     const fixture = buildFixture({ content: FANOUT_ASK });
     fixture.createChatCompletion.mockImplementation(async () => ({
       choices: [{ message: { content: JSON.stringify(plannerPayloadWithExtras(fixture.templatePlan)) } }],
@@ -171,20 +171,23 @@ describe("generatePreparedExecutionPlanDraft planner fan-out", () => {
       fixture.templatePlan,
       false,
     );
-    expect(draft.steps).toHaveLength(6);
+    expect(draft.steps).toHaveLength(5);
+
+    expect(draft.steps.some((step) => step.delegatedRole === "Pricing")).toBe(true);
+    expect(draft.steps.some((step) => step.delegatedRole === "Churn")).toBe(true);
 
     const { applyExecutionPlanDraftToOrchestrationPlan } = await import("./chat-turn-planning-helpers.js");
     const applied = applyExecutionPlanDraftToOrchestrationPlan(fixture.templatePlan, draft);
     const byLabel = new Map(applied.steps.map((step) => [step.delegatedRole ?? step.label, step]));
-
-    const worker = applied.steps[1]!;
     const pricing = byLabel.get("Pricing")!;
     const churn = byLabel.get("Churn")!;
-    expect(pricing.stage).toBe(worker.stage);
-    expect(churn.stage).toBe(worker.stage);
+    expect(pricing.dependsOnStepIds).toEqual([fixture.templatePlan.steps[0]!.stepId]);
+    expect(churn.dependsOnStepIds).toEqual([fixture.templatePlan.steps[0]!.stepId]);
+    expect(pricing.stage).toBeGreaterThan(fixture.templatePlan.steps[0]!.stage);
+    expect(churn.stage).toBe(pricing.stage);
     const synthesizer = applied.steps.find((step) => step.role === "synthesizer")!;
-    expect(synthesizer.stage).toBeGreaterThan(pricing.stage);
-    expect(synthesizer.dependsOnStepIds).toEqual(expect.arrayContaining([pricing.stepId, churn.stepId]));
+    expect(synthesizer.dependsOnStepIds).toContain(pricing.stepId);
+    expect(synthesizer.dependsOnStepIds).toContain(churn.stepId);
 
     const plannerRequest = fixture.createChatCompletion.mock.calls[0]![0] as {
       messages: Array<{ role: string; content: string }>;

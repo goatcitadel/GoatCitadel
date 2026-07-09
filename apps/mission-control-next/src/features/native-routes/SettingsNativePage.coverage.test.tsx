@@ -1220,7 +1220,7 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(onboarding.root, "Start safe demo"));
     expect(settingsMocks.bootstrapDemo).toHaveBeenCalledTimes(1);
     expect(setActiveWorkspaceId).toHaveBeenCalledWith("demo");
-    expect(onboardingNavigate).toHaveBeenCalledWith({ area: "cowork", sessionId: "cowork-demo", theme: "ops" });
+    expect(onboardingNavigate).toHaveBeenCalledWith({ area: "chat", sessionId: "cowork-demo", theme: "ops" });
 
     const runtime = await mount("runtime");
     expect(collectText(runtime.root)).toContain("Runtime posture");
@@ -1591,19 +1591,19 @@ describe("SettingsNativePage broad native sections", () => {
 
     await click(findButton(onboarding.root, "Configure"));
     await click(findButton(onboarding.root, "Start demo/local"));
-    await click(findButton(onboarding.root, "Open Plan"));
+    await click(findButton(onboarding.root, "Open Chat"));
     await click(findButton(onboarding.root, "Inspect proof"));
     await click(findButton(onboarding.root, "Access"));
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "onboarding", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "cowork", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "library", section: "artifacts", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "access", theme: "ops" });
 
     await click(findButton(onboarding.root, "Start safe demo"));
     expect(settingsMocks.bootstrapDemo).toHaveBeenCalledTimes(1);
     expect(setActiveWorkspaceId).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith({ area: "code", sessionId: "code-demo", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "chat", sessionId: "code-demo", theme: "ops" });
     expect(collectText(onboarding.root)).toContain("Demo ready.");
 
     await click(buttons(onboarding.root, "Refresh").at(-1)!);

@@ -1029,7 +1029,7 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
     case "sethome":
       return "/sethome";
     case "mode":
-      return `/mode ${interaction.options.getString("mode", true)}`;
+      return "/mode";
     case "plan": {
       const state = interaction.options.getString("state");
       return state ? `/plan ${state}` : "/plan";
@@ -1212,16 +1212,7 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
     new SlashCommandBuilder()
       .setName("sethome")
       .setDescription("Set the current Discord channel or DM as the home delivery target."),
-    new SlashCommandBuilder()
-      .setName("mode")
-      .setDescription("Switch the active GoatCitadel session mode.")
-      .addStringOption((option) =>
-        option
-          .setName("mode")
-          .setDescription("Target mode.")
-          .setRequired(true)
-          .addChoices(stringChoice("chat"), stringChoice("cowork"), stringChoice("code")),
-      ),
+    new SlashCommandBuilder().setName("mode").setDescription("Show the active GoatCitadel chat surface."),
     new SlashCommandBuilder()
       .setName("plan")
       .setDescription("Show or set planning mode.")

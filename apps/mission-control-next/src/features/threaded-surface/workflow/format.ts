@@ -98,16 +98,10 @@ export function formatShortHash(value?: string): string {
 }
 
 export function formatOriginSurface(value?: CodeModeRunRecord["originSurface"]): string {
-  if (value === "code") {
-    return "Code";
-  }
-  if (value === "cowork") {
-    return "Cowork";
-  }
   if (value === "chat") {
     return "Chat";
   }
-  return "not recorded";
+  return value ? "Chat" : "not recorded";
 }
 
 export function formatRunTimestamp(value?: string): string {

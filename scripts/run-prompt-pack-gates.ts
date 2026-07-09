@@ -11,7 +11,9 @@ import type {
 import type { AuthConfig } from "../apps/gateway/src/config.ts";
 
 const LEGACY_TARGET_CODES = ["TEST-04", "TEST-12", "TEST-23", "TEST-32"] as const;
-const MODERN_TARGET_CODE_CANDIDATES = ["TEST-C101", "TEST-W102", "TEST-C147", "TEST-D101"] as const;
+// v7 overall gate pack representatives (one per surface + the budgeted cowork
+// research row); the TEST-C101-era set fell out of use when v1-v3 packs were archived.
+const MODERN_TARGET_CODE_CANDIDATES = ["TEST-C709", "TEST-W713", "TEST-D710", "TEST-W707"] as const;
 const PROMPT_PACK_GATE_CODES_ENV = "PROMPT_PACK_GATE_CODES";
 const PROMPT_PACK_V2_GATING_ENABLED_ENV = "PROMPT_PACK_V2_GATING_ENABLED";
 
@@ -417,7 +419,9 @@ function renderReport(input: {
     report.summary.runFailureCount > 0 ? `${report.summary.runFailureCount} runtime failure(s)` : undefined,
     report.summary.invalidLatestRuns > 0 ? `${report.summary.invalidLatestRuns} invalid latest run(s)` : undefined,
     missingCurrentScores > 0 ? `${missingCurrentScores} completed run(s) without current auto-score` : undefined,
-    report.summary.staleLatestAutoScoreCount > 0 ? `${report.summary.staleLatestAutoScoreCount} stale score row(s)` : undefined,
+    report.summary.staleLatestAutoScoreCount > 0
+      ? `${report.summary.staleLatestAutoScoreCount} stale score row(s)`
+      : undefined,
     report.summary.failCount > 0 ? `${report.summary.failCount} fail verdict(s)` : undefined,
     report.summary.reviewCount > 0 ? `${report.summary.reviewCount} review verdict(s)` : undefined,
     report.summary.judgeErrorCount > 0 ? `${report.summary.judgeErrorCount} judge error(s)` : undefined,

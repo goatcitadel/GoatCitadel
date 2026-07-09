@@ -1605,6 +1605,7 @@ function createHost(): ChatTurnStreamHost & {
     isFeatureEnabled: vi.fn(() => false),
     beginActiveChatTurnExecution: vi.fn(() => new AbortController()),
     endActiveChatTurnExecution: vi.fn(),
+    createHydratedChatTurnTrace: vi.fn((_turnId: string, nextTrace: ChatTurnTraceRecord) => nextTrace),
     steerService: new ChatSteerService(),
     ingestEvent: vi.fn(async () => undefined),
     updateActiveLeafOrThrow: vi.fn(),

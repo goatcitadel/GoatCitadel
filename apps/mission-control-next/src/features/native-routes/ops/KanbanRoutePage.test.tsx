@@ -132,13 +132,13 @@ describe("KanbanRoutePage", () => {
     act(() => renderer.unmount());
   });
 
-  it("signposts the Agent Board from the Kanban header (5.4)", async () => {
+  it("signposts the Run Board from the Kanban header (5.4)", async () => {
     const renderer = await renderPage();
-    const signpost = findRequiredButton(renderer, "agent board");
+    const signpost = findRequiredButton(renderer, "run board");
     await act(async () => {
       signpost.props.onClick();
     });
-    expect(baseProps.navigate).toHaveBeenCalledWith({ area: "cowork", section: "board", theme: "ops" });
+    expect(baseProps.navigate).toHaveBeenCalledWith({ area: "ops", section: "kanban", theme: "ops" });
     act(() => renderer.unmount());
   });
 

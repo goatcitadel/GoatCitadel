@@ -165,7 +165,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
       // The base system prompt (identity/doctrine/runtime grounding) now reaches
       // cowork/code, not just chat — this is the core cowork-quality fix.
       expect(harness.readGuidance()).toContain("You are GoatCitadel");
-      expect(harness.readGuidance()).toContain(`Mode: ${mode}`);
+      expect(harness.readGuidance()).toContain("Mode: chat");
       // Personality overlay is no longer gated to chat-only.
       expect(harness.readGuidance()).toContain("changes voice and framing only");
       expect(harness.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
@@ -176,7 +176,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     const cowork = createHost("cowork", {}, ["coworkRuntimeQualityV1Disabled"]);
     await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
     expect(cowork.readGuidance()).not.toContain("You are GoatCitadel");
-    expect(cowork.host.buildDefaultChatPersonalityOverlay).not.toHaveBeenCalled();
+    expect(cowork.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
 
     const chat = createHost("chat", {}, ["coworkRuntimeQualityV1Disabled"]);
     await prepareAgentChatTurn(chat.host, "session-1", { content: "hello" });
@@ -196,14 +196,14 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(cowork.readGuidance()).toContain("Prefers metric units.");
   });
 
-  it("keeps the sticky session mode as the prepared effective mode when the request omits mode", async () => {
+  it("normalizes the prepared effective mode to Chat when the request omits mode", async () => {
     const harness = createHost("cowork");
 
     const prepared = await prepareAgentChatTurn(harness.host, "session-1", { content: "continue the task" });
 
     expect(prepared.normalized.mode).toBe("chat");
-    expect(prepared.effectiveMode).toBe("cowork");
-    expect(harness.readGuidance()).toContain("Mode: cowork");
+    expect(prepared.effectiveMode).toBe("chat");
+    expect(harness.readGuidance()).toContain("Mode: chat");
   });
 
   it("keeps the stable base prompt block first and appends goal/runtime guidance as volatile blocks", async () => {
@@ -221,17 +221,17 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(Array.isArray(content)).toBe(true);
     const blocks = content as Array<Record<string, unknown>>;
     expect(blocks[0]?.text).toContain("You are GoatCitadel");
-    expect(blocks[0]?.text).toContain("Mode: cowork");
+    expect(blocks[0]?.text).toContain("Mode: chat");
     expect(blocks[0]?.text).not.toContain("Pinned goal");
     expect(blocks[0]?.text).not.toContain("Base Chat guidance.");
     expect(blocks[1]?.text).toContain("## Runtime");
-    expect(blocks[1]?.text).toContain("Mode: cowork");
+    expect(blocks[1]?.text).toContain("Mode: chat");
     expect(blocks[2]?.text).toContain("Pinned goal: ship stable prompts");
     expect(blocks.map((block) => block.text).join("\n\n")).toContain("Base Chat guidance.");
     expect(harness.host.storage.chatSessionMeta.incrementGoalTurnsUsed).toHaveBeenCalledWith("session-1");
   });
 
-  it("keeps planning and project-binding warnings as volatile follow-on guidance", async () => {
+  it("keeps planning warnings as volatile follow-on guidance after code inputs normalize to Chat", async () => {
     const harness = createHost("code", { planningMode: "advisory" });
 
     await prepareAgentChatTurn(harness.host, "session-1", { content: "review the repo" });
@@ -239,12 +239,12 @@ describe("prepareAgentChatTurn personality overlay", () => {
     const content = harness.readGuidanceContent();
     expect(Array.isArray(content)).toBe(true);
     const blocks = content as Array<Record<string, unknown>>;
-    expect(blocks[0]?.text).toContain("Mode: code");
+    expect(blocks[0]?.text).toContain("Mode: chat");
     expect(blocks[0]?.text).not.toContain("Planning mode is active");
     expect(blocks[0]?.text).not.toContain("Code mode requires a bound project");
     const combined = blocks.map((block) => block.text).join("\n\n");
     expect(combined).toContain("Planning mode is active");
-    expect(combined).toContain("Code mode requires a bound project");
+    expect(combined).not.toContain("Code mode requires a bound project");
   });
 
   it("omits the Memory section when there is no operator-profile digest", async () => {
@@ -345,7 +345,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
-  it("ingests attachment references, applies autonomy overrides, and keeps unbound Code mode manual", async () => {
+  it("ingests attachment references and applies autonomy overrides after code inputs normalize to Chat", async () => {
     const harness = createHost("code", { mode: "code", toolAutonomy: "safe_auto" });
     vi.mocked(harness.host.storage.chatAttachments.listByIds).mockReturnValue([
       {
@@ -373,9 +373,12 @@ describe("prepareAgentChatTurn personality overlay", () => {
       },
     });
 
-    expect(harness.host.patchSessionAutonomyPrefs).toHaveBeenCalledWith("session-1", {
-      retrievalMode: "layered",
-    });
+    expect(harness.host.patchSessionAutonomyPrefs).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        retrievalMode: "layered",
+      }),
+    );
     expect(prepared.userMessage.attachments).toEqual([
       {
         attachmentId: "attachment-1",
@@ -384,8 +387,8 @@ describe("prepareAgentChatTurn personality overlay", () => {
         sizeBytes: 42,
       },
     ]);
-    expect(prepared.effectiveToolAutonomy).toBe("manual");
-    expect(harness.readGuidance()).toContain("Code mode requires a bound project");
+    expect(prepared.effectiveToolAutonomy).toBe("safe_auto");
+    expect(harness.readGuidance()).not.toContain("Code mode requires a bound project");
     expect(harness.host.ingestEvent).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({

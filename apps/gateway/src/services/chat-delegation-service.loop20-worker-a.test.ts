@@ -334,7 +334,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
 
   it("validates objective, code project binding, and custom step dependencies before creating work", async () => {
     const earlyValidationHarness = createHarness();
-    const { deps, service } = earlyValidationHarness;
+    const { service } = earlyValidationHarness;
 
     await expect(service.runChatDelegation("sess-1", { objective: "  ", roles: ["qa"] })).rejects.toThrow(
       /objective is required/,
@@ -379,8 +379,8 @@ describe("ChatDelegationService loop 20 coverage", () => {
         roles: ["coder"],
         surfaceMode: "code",
       }),
-    ).rejects.toThrow(/project-bound parent session/);
-    expect(deps.taskLifecycleService.createTask).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(codeHarness.deps.taskLifecycleService.createTask).toHaveBeenCalled();
 
     const cycleHarness = createHarness();
     await expect(
@@ -521,7 +521,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
         sessionId: "sess-1",
         taskId: "task-1",
         runId: result.runId,
-        surface: "cowork",
+        surface: "chat",
         permissionProfileId: "profile-parent",
         localOperatorOverrideId: "override-parent",
       }),

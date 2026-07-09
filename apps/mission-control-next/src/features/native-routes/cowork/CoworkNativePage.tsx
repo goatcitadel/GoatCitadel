@@ -129,7 +129,7 @@ export function CoworkNativePage({
     const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
     const [tasks, deletedTasks, operators] = await Promise.all([
-      nativeLoad("Cowork tasks", fetchTasksByViewPaged("active", activeWorkspaceId, activeCitadelId), {
+      nativeLoad("Chat tasks", fetchTasksByViewPaged("active", activeWorkspaceId, activeCitadelId), {
         items: [],
         view: "active",
       }),
@@ -158,7 +158,7 @@ export function CoworkNativePage({
     });
     recordRouteDataLoad({
       route: `cowork/${section}`,
-      label: "Cowork",
+      label: "Chat",
       startedAt,
       itemCount: tasks.data.items.length + deletedTasks.data.items.length + operators.data.items.length,
       issueCount: issues.length,
@@ -637,10 +637,10 @@ export function CoworkNativePage({
           onOpenBoard={() => navigate({ area: "cowork", section: "board", theme: route.theme })}
           onOpenBlocker={coworkContinuation.firstBlockedTaskId ? handleOpenBlocker : undefined}
         />
-        <section className="mc-next-native-work-pair mc-next-cowork-workbench" aria-label="Cowork task workbench">
+        <section className="mc-next-native-work-pair mc-next-cowork-workbench" aria-label="Chat task workbench">
           <NativeCard
             title="Task board"
-            subtitle="Create, move, restore, and attach deliverables without leaving Cowork."
+            subtitle="Create, move, restore, and attach deliverables without leaving Chat."
             density="compact"
             className="mc-next-cowork-task-board-card"
             scrollBody
@@ -900,7 +900,7 @@ export function CoworkNativePage({
           </section>
         </section>
         <QuickJumpCard
-          title="Cowork routes"
+          title="Legacy work routes"
           subtitle="Quiet route jumps for related operator evidence."
           actions={[
             { label: "Open board", route: { area: "cowork", section: "board", theme: route.theme } },
@@ -915,7 +915,7 @@ export function CoworkNativePage({
 
   // WS-D2: lead with the active run's next action or top blocker, reusing the
   // continuation summary the route already derives. The blocker path reuses the
-  // in-page task selection; the continue path reuses the Cowork navigate. When
+  // in-page task selection; the continue path reuses the Chat navigate. When
   // no task is visible there is no active run, so the lead is suppressed.
   const hasActiveRun = tasks.length > 0 || deletedTasks.length > 0;
   const leadIsBlocker = coworkContinuation.blockerCount > 0 && Boolean(coworkContinuation.firstBlockedTaskId);
@@ -926,7 +926,7 @@ export function CoworkNativePage({
       <article
         className="mc-next-cowork-attention-strip"
         data-tone={leadIsBlocker ? "blocked" : "attention"}
-        aria-label="Cowork next action"
+        aria-label="Chat next action"
       >
         <div>
           {leadIsBlocker ? (
@@ -969,7 +969,7 @@ export function CoworkNativePage({
   return (
     <NativePageFrame
       area="cowork"
-      kicker={`Cowork · ${section === "board" ? "Agent Board" : "Task Board"}`}
+      kicker={`Chat · ${section === "board" ? "Agent Board" : "Task Board"}`}
       title={section === "board" ? "Agent Board" : "Task Board"}
       description={
         section === "board"

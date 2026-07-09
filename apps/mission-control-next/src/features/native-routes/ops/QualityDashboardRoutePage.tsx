@@ -446,8 +446,8 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 formatSecurityEvalStatus(pack.status),
                 `${pack.testCount} tests`,
                 `Chat ${pack.modeCounts.chat ?? 0}`,
-                `Cowork ${pack.modeCounts.cowork ?? 0}`,
-                `Code ${pack.modeCounts.code ?? 0}`,
+                `Legacy plan ${pack.modeCounts.cowork ?? 0}`,
+                `Legacy code ${pack.modeCounts.code ?? 0}`,
               ].join(" · "),
               body:
                 pack.blockers.length > 0
@@ -866,7 +866,7 @@ function formatDesignQualityStatus(
 function formatSecurityModeCounts(
   counts: OpsQualitySnapshotResponse["securityExecution"]["items"][number]["modeCounts"],
 ): string {
-  return `Chat ${counts.chat ?? 0} · Cowork ${counts.cowork ?? 0} · Code ${counts.code ?? 0}`;
+  return `Chat ${counts.chat ?? 0} · Legacy plan ${counts.cowork ?? 0} · Legacy code ${counts.code ?? 0}`;
 }
 
 function formatSecurityToolTierCounts(

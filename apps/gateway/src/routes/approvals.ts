@@ -4,6 +4,8 @@ import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
+const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
+
 const createSchema = z.object({
   kind: z.string().min(1),
   riskLevel: z.enum(["safe", "caution", "danger", "nuclear"]),
@@ -18,7 +20,7 @@ const createSchema = z.object({
       runId: z.string().min(1).optional(),
       durableRunId: z.string().min(1).optional(),
       proactiveRunId: z.string().min(1).optional(),
-      originSurface: z.enum(["chat", "cowork", "code"]).optional(),
+      originSurface: chatOnlyModeSchema.optional(),
       connectorId: z.string().min(1).optional(),
       traceId: z.string().min(1).optional(),
       toolName: z.string().min(1).optional(),

@@ -1355,14 +1355,14 @@ export function deriveCoworkRunViewModel(input: {
       ? {
           id: "answer-required",
           title: "Answer required",
-          summary: "Cowork is waiting for your answer before the run can continue.",
+          summary: "Chat is waiting for your answer before the run can continue.",
         }
       : null,
     !waitingForUserInput && waitingForApproval
       ? {
           id: "approval-required",
           title: "Approval required",
-          summary: "Cowork is paused on an approval gate before it can continue.",
+          summary: "Chat is paused on an approval gate before it can continue.",
         }
       : null,
     errorSummary
@@ -1418,14 +1418,14 @@ export function deriveCoworkRunViewModel(input: {
   const nextAction: CoworkRunViewModel["nextAction"] = empty
     ? {
         kind: "focus_composer",
-        label: "Start Cowork run",
+        label: "Start Chat run",
         note: "Describe the objective, constraints, and desired output in the composer to create a visible run.",
       }
     : waitingForUserInput || waitingForApproval
       ? {
           kind: "review_run_details",
           label: "Resolve blocker",
-          note: "Open the current blocker details, respond, and let Cowork resume the run.",
+          note: "Open the current blocker details, respond, and let Chat resume the run.",
         }
       : errorSummary
         ? {
@@ -1443,7 +1443,7 @@ export function deriveCoworkRunViewModel(input: {
             ? {
                 kind: "retry_turn",
                 label: "Continue from gathered leads",
-                note: "Continue the partial Cowork run without repeating completed lookups; focus on the missing fields.",
+                note: "Continue the partial Chat run without repeating completed lookups; focus on the missing fields.",
               }
             : items.length > 0
               ? {
@@ -1458,25 +1458,25 @@ export function deriveCoworkRunViewModel(input: {
                 };
 
   const nowTitle = empty
-    ? "No Cowork run is active yet"
+    ? "No agentic Chat run is active yet"
     : waitingForUserInput
-      ? "Cowork is waiting for your answer"
+      ? "Chat is waiting for your answer"
       : waitingForApproval
-        ? "Cowork is waiting on approval"
+        ? "Chat is waiting on approval"
         : delegationContinuationNeeded
-          ? "Cowork needs a continuation pass"
+          ? "Chat needs a continuation pass"
           : orchestrationRun
             ? `${humanizeStatus(planState)} run`
             : orchestration
-              ? "Cowork is working from routed trace state"
-              : "Cowork is holding workflow context";
+              ? "Chat is working from routed trace state"
+              : "Chat is holding workflow context";
 
   const phaseLabel = humanizePhaseLabel(orchestrationRun?.currentPhaseId);
   const waveLabel = humanizePhaseLabel(orchestrationRun?.currentWaveId, "Wave");
   const runProgressSummary = [phaseLabel, waveLabel].filter((value): value is string => Boolean(value)).join(" · ");
 
   const nowSummary = empty
-    ? "Describe the objective, constraints, and desired output. Cowork will attach a visible plan, checkpoints, and blockers here."
+    ? "Describe the objective, constraints, and desired output. Chat will attach a visible plan, checkpoints, and blockers here."
     : orchestration?.finalSummary
       ? orchestration.finalSummary
       : delegationContinuationNeeded
@@ -1484,10 +1484,10 @@ export function deriveCoworkRunViewModel(input: {
         : runProgressSummary
           ? `${runProgressSummary} · ${executionState}.`
           : orchestrationRun
-            ? `Execution is ${executionState} and the board is showing live Cowork run state.`
+            ? `Execution is ${executionState} and the board is showing live Chat run state.`
             : currentTrace?.status
-              ? `The active turn is ${humanizeStatus(currentTrace.status)} while Cowork keeps the workflow context visible.`
-              : "Cowork has the current workflow context, even though no canonical run data is loaded yet.";
+              ? `The active turn is ${humanizeStatus(currentTrace.status)} while Chat keeps the workflow context visible.`
+              : "Chat has the current workflow context, even though no canonical run data is loaded yet.";
 
   const facts = [
     orchestration?.workflowTemplate ? { label: "Workflow", value: orchestration.workflowTemplate } : null,
@@ -1648,7 +1648,7 @@ export function deriveCoworkRunViewModel(input: {
             {
               id: "worktree-state",
               title: "Worktree ready",
-              note: `Cowork has a ${humanizeStatus(workbenchState.worktreeStatus)} worktree attached to this session.`,
+              note: `Chat has a ${humanizeStatus(workbenchState.worktreeStatus)} worktree attached to this session.`,
             },
           ]
         : []),
@@ -1730,7 +1730,7 @@ export function deriveCoworkRunViewModel(input: {
     activeTurnId: activeTurn?.turnId ?? null,
     selectedTurnId: selectedTurn?.turnId ?? null,
     hasHistoricalSelection: Boolean(selectedTurn && activeTurn && selectedTurn.turnId !== activeTurn.turnId),
-    headerTitle: "Cowork run",
+    headerTitle: "Agentic Chat run",
     headerSummary: [sourceLabel, freshnessLabel, completenessLabel].join(" · "),
     sourceLabel,
     freshnessLabel,
@@ -1767,7 +1767,7 @@ export function deriveCoworkRunViewModel(input: {
         normalizeSummary(executionPlan?.objective, 120) ??
         normalizeSummary(orchestration?.objective, 120) ??
         normalizeSummary(activeTurn?.userMessage.content, 120) ??
-        "Cowork objective",
+        "Chat objective",
       currentState: nowTitle,
       nextAction: nextAction?.label ?? "Review run details",
       planNodes,

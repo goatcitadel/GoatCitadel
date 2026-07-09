@@ -154,7 +154,7 @@ describe("realtime-derived", () => {
     expect(deriveRealtimeNotification(event({ eventType: "approval_task_changed" }))).toBeUndefined();
     expect(deriveRealtimeNotification(event({ links: { taskId: "task-1" } }))).toMatchObject({
       tone: "info",
-      groupKey: "cowork-tasks",
+      groupKey: "chat-tasks",
       truthMode: "authoritative",
     });
     expect(deriveRealtimeNotification(event({ links: { sessionId: "session-1" } }))).toMatchObject({
@@ -216,7 +216,7 @@ describe("realtime-derived", () => {
         }),
       ),
     ).toMatchObject({
-      message: "Task activity updated in Cowork.",
+      message: "Task activity updated in Chat.",
       attentionKind: "activity_update",
     });
     expect(
@@ -246,7 +246,7 @@ describe("realtime-derived", () => {
       soundCue: "waiting",
     });
     expect(deriveRealtimeNotification(event({ eventType: "task_changed" }))).toMatchObject({
-      groupKey: "cowork-tasks",
+      groupKey: "chat-tasks",
       truthMode: "compatibility",
       soundCue: "soft_update",
     });

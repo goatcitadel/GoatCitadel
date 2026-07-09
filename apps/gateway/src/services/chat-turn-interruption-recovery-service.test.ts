@@ -247,7 +247,7 @@ describe("reconcileInterruptedChatTurns", () => {
     const result = reconcileInterruptedChatTurns(deps);
 
     const trace = storage.chatTurnTraces.get(result.synthesizedTurnIds[0]!);
-    expect(trace.mode).toBe("cowork");
+    expect(trace.mode).toBe("chat");
     expect(trace.thinkingLevel).toBe("extended");
     expect(trace.parentTurnId).toBeUndefined();
     expect(storage.chatSessionBranchState.get("session-b")?.activeLeafTurnId).toBe(trace.turnId);

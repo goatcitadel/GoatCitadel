@@ -316,8 +316,8 @@ export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtim
   if (event.links?.taskId) {
     return {
       tone: "info",
-      message: "Task activity updated in Cowork.",
-      groupKey: "cowork-tasks",
+      message: "Task activity updated in Chat.",
+      groupKey: "chat-tasks",
       truthMode: "authoritative",
       attentionKind: "activity_update",
       soundCue: "soft_update",
@@ -337,8 +337,8 @@ export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtim
   if (haystack.includes("task")) {
     return {
       tone: "info",
-      message: "Task activity updated in Cowork.",
-      groupKey: "cowork-tasks",
+      message: "Task activity updated in Chat.",
+      groupKey: "chat-tasks",
       truthMode: "compatibility",
       attentionKind: "activity_update",
       soundCue: "soft_update",

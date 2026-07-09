@@ -1,0 +1,459 @@
+.mc-next-project-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-top: 0.35rem;
+}
+
+.mc-next-project-counts span {
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-pill);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  padding: 0.12rem 0.32rem;
+}
+
+.mc-next-project-thread-groups {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.mc-next-project-empty-guide {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding: 0.65rem;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--border));
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-empty-guide strong {
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+}
+
+.mc-next-project-empty-guide p {
+  margin: 0.16rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+}
+
+.mc-next-project-home-base,
+.mc-next-project-controls,
+.mc-next-project-control-section {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-project-home-base {
+  margin-bottom: 0.6rem;
+}
+
+.mc-next-project-home-head {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.58rem 0.64rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--border));
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 10%, transparent), transparent 62%),
+    color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-home-head div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.mc-next-project-home-head span,
+.mc-next-project-control-heading {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-home-head strong {
+  color: var(--foreground);
+  font-size: var(--text-lg);
+  line-height: 1.2;
+}
+
+.mc-next-project-home-head p,
+.mc-next-project-intake-card p,
+.mc-next-project-readiness-item p,
+.mc-next-project-recent-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.42;
+}
+
+.mc-next-project-intake-panel {
+  display: grid;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.mc-next-project-intake-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.mc-next-project-intake-head strong,
+.mc-next-project-intake-head span {
+  color: color-mix(in oklab, var(--mc-area-color) 62%, var(--text-muted));
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-project-intake-head span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-project-intake-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.2rem, 1fr));
+  /* P1 (visual review 2026-06-25): see the matching note on the card below. The
+     cards top-align so their (now content-sized) boxes don't stretch to a pinned
+     row height. */
+  align-items: start;
+  gap: 0.36rem;
+}
+
+.mc-next-project-intake-card {
+  appearance: none;
+  display: grid;
+  align-content: start;
+  gap: 0.2rem;
+  min-width: 0;
+  min-height: 6.8rem;
+  /* P1 (visual review 2026-06-25): the card sets a definite min-height, which in
+     an auto grid row created a circular sizing that pinned the row to the
+     min-height; when the inspector narrows the column the wrapping description
+     (5-6 lines) then overflowed into the card below. `height: fit-content` sizes
+     the card box to its own content (min-height still acts as the floor), so the
+     description always fits and rows never overlap. */
+  height: fit-content;
+  padding: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-project-intake-card:hover,
+.mc-next-project-intake-card:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-area-color) 48%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-1));
+}
+
+.mc-next-project-intake-card:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
+  outline-offset: 2px;
+}
+
+.mc-next-project-intake-card svg {
+  color: color-mix(in oklab, var(--mc-area-color) 74%, var(--foreground));
+  /* P1 (visual review 2026-06-25): the icon ships with Tailwind sizing
+     (`h-4 w-4`), which is not compiled in mc-next, so the Lucide glyph fell back
+     to its intrinsic 24px and collapsed its grid row to 0px — the icon then
+     overflowed downward and overlapped the mode eyebrow.
+     Pin an explicit 1rem box so the row sizes correctly. */
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  align-self: start;
+}
+
+.mc-next-project-intake-card.is-chat {
+  border-color: color-mix(in oklab, var(--gc-area-chat) 22%, var(--border));
+}
+
+.mc-next-project-intake-card.is-cowork {
+  border-color: color-mix(in oklab, var(--gc-area-cowork) 22%, var(--border));
+}
+
+.mc-next-project-intake-card.is-code {
+  border-color: color-mix(in oklab, var(--gc-area-code) 22%, var(--border));
+}
+
+.mc-next-project-intake-card span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-project-intake-card strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+}
+
+.mc-next-project-home-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.4rem;
+}
+
+.mc-next-native-projects-grid {
+  grid-template-columns: minmax(18rem, 0.9fr) minmax(28rem, 1.35fr) minmax(19rem, 0.85fr);
+  gap: 0.75rem;
+}
+
+@media (min-width: 1181px) {
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-native-projects-grid {
+    grid-template-columns: minmax(16rem, 0.82fr) minmax(28rem, 1.18fr);
+  }
+
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-project-controls-card {
+    grid-column: 1 / -1;
+  }
+
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-project-controls {
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  }
+}
+
+.mc-next-project-lead-card {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.78rem 0.86rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 32%, var(--border));
+  border-left: 3px solid color-mix(in oklab, var(--mc-area-color) 70%, transparent);
+  border-radius: var(--r-sm);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--mc-area-color) 11%, var(--mc-surface-1)),
+    color-mix(in oklab, var(--mc-surface-2) 94%, transparent)
+  );
+}
+
+.mc-next-project-lead-card p {
+  max-width: 78ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-project-continue-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.36rem;
+}
+
+.mc-next-project-lane-resume-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.36rem;
+}
+
+.mc-next-project-lane-resume-shell {
+  display: grid;
+  gap: 0.34rem;
+  min-width: 0;
+}
+
+.mc-next-project-lane-resume {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  min-height: 4.6rem;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-project-lane-resume.is-chat {
+  border-color: color-mix(in oklab, var(--gc-area-chat) 24%, var(--border));
+}
+
+.mc-next-project-lane-resume.is-cowork {
+  border-color: color-mix(in oklab, var(--gc-area-cowork) 24%, var(--border));
+}
+
+.mc-next-project-lane-resume.is-code {
+  border-color: color-mix(in oklab, var(--gc-area-code) 24%, var(--border));
+}
+
+.mc-next-project-lane-resume span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-lane-resume strong,
+.mc-next-project-lane-resume p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-project-lane-resume strong {
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.25;
+}
+
+.mc-next-project-lane-resume p {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.36;
+}
+
+.mc-next-project-readiness-list,
+.mc-next-project-recent-list {
+  display: grid;
+  gap: 0.36rem;
+  min-width: 0;
+}
+
+.mc-next-project-readiness-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.42rem;
+  align-items: start;
+  padding: 0.46rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+}
+
+.mc-next-project-readiness-item svg {
+  margin-top: 0.05rem;
+  color: color-mix(in oklab, var(--mc-area-color) 80%, var(--foreground));
+}
+
+.mc-next-project-readiness-item.is-attention svg {
+  color: color-mix(in oklab, var(--warning) 76%, var(--foreground));
+}
+
+.mc-next-project-readiness-item strong,
+.mc-next-project-recent-item strong,
+.mc-next-project-control-heading strong {
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.3;
+}
+
+.mc-next-project-recent-item {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.44rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-recent-item > span {
+  color: color-mix(in oklab, var(--mc-area-color) 65%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-control-section {
+  padding: 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-control-heading {
+  display: flex;
+  gap: 0.32rem;
+  align-items: center;
+}
+
+.mc-next-project-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.28rem;
+  align-items: start;
+}
+
+.mc-next-project-card.is-archived .mc-next-project-card-body {
+  opacity: 0.78;
+}
+
+.mc-next-project-card-body {
+  grid-column: 1;
+}
+
+.mc-next-project-card-glyphs {
+  grid-column: 2;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  padding-top: 0.42rem;
+  padding-right: 0.36rem;
+}
+
+.mc-next-project-card-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: var(--r-xs);
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+
+.mc-next-project-card-glyph:hover,
+.mc-next-project-card-glyph:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border));
+  color: var(--foreground);
+}
+
+.mc-next-project-card-glyph.is-pressed {
+  border-color: color-mix(in oklab, var(--mc-area-color) 36%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 16%, var(--card));
+  color: var(--foreground);
+}
+
+.mc-next-project-card-glyph:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

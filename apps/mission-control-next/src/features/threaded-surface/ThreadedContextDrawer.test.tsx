@@ -690,7 +690,7 @@ describe("ThreadedContextDrawer", () => {
       expect(onPrefPatch).not.toHaveBeenCalled();
 
       const consentModal = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
-      expect(consentModal?.props.title).toBe("Allow Cowork to auto-delegate to subagents?");
+      expect(consentModal?.props.title).toBe("Allow Chat to auto-delegate to subagents?");
 
       await act(async () => {
         consentModal?.props.onConfirm();

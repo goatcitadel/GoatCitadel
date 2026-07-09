@@ -8,7 +8,7 @@ This map turns the external orchestration-layer research into GoatCitadel-native
 
 - Durable mission-session orchestration: `packages/orchestration` plus `apps/gateway/src/services/orchestration-lifecycle-service.ts`.
 - Phase execution: `apps/gateway/src/services/orchestration-phase-execution-service.ts`.
-- Per-turn Chat/Cowork/Code orchestration: `apps/gateway/src/orchestration`.
+- Per-turn Chat orchestration, including agentic and code-capability posture: `apps/gateway/src/orchestration`.
 - Runtime truth and evidence: orchestration runs, checkpoints, durable runs, durable timeline events, realtime events, Prompt Lab, and LLM runtime measurements.
 - Operator surface: `apps/mission-control-next`, with Gateway as the API owner.
 

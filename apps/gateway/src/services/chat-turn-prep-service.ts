@@ -213,7 +213,8 @@ export interface PreparedAgentChatTurn {
 export function resolvePreparedTurnMode(
   prepared: Pick<PreparedAgentChatTurn, "effectiveMode" | "prefs" | "normalized">,
 ): ChatSessionPrefsRecord["mode"] {
-  return prepared.effectiveMode ?? prepared.prefs.mode ?? prepared.normalized.mode ?? "chat";
+  void prepared;
+  return "chat";
 }
 
 export const DEFAULT_GOAL_TURN_BUDGET = 20;
@@ -345,7 +346,7 @@ export async function prepareAgentChatTurn(
 
   const prefsOverride = applyChatModePresetToPatch({
     ...(input.prefsOverride ?? {}),
-    mode: input.mode ?? input.prefsOverride?.mode,
+    mode: "chat",
     providerId: input.providerId ?? input.prefsOverride?.providerId,
     model: input.model ?? input.prefsOverride?.model,
     webMode: input.webMode ?? input.prefsOverride?.webMode,
@@ -366,7 +367,7 @@ export async function prepareAgentChatTurn(
     hasAttachments: Boolean(input.attachments?.length || input.parts?.some((part) => part.type !== "text")),
   });
   const projectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
-  const effectiveMode = quickWebTurn ? normalized.mode : prefs.mode;
+  const effectiveMode = "chat";
   const requiresProjectBinding = chatModeRequiresProjectBinding(effectiveMode);
   const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
   const effectiveToolAutonomy =
@@ -776,7 +777,7 @@ export async function generatePreparedExecutionPlanDraft(
     ? undefined
     : selectPlannerDraftModel({ capabilities: routerInput.capabilities, prefs: prepared.prefs });
   const allowProductionExpansion =
-    routerInput.task.mode === "cowork" && !advisoryOnly && !host.isFeatureEnabled("plannerFanoutV1Disabled");
+    prepared.prefs.subagentPolicy !== "off" && !advisoryOnly && !host.isFeatureEnabled("plannerFanoutV1Disabled");
   const maxExtraWorkerSteps = Math.max(0, MAX_PLANNER_PRODUCTION_STEPS - countPlannerProductionSteps(templatePlan));
   // Bound the planner with our OWN timer (not just the provider's timeoutMs) so
   // a provider that ignores its deadline cannot pin the hot turn-prep path. On
@@ -805,7 +806,7 @@ export async function generatePreparedExecutionPlanDraft(
             `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
             "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
             "Use the template delegatedRole as-is. Do not repurpose synthesis, review, critic, or QA steps into worker steps.",
-            "If the mode is chat, delegatedRole must be null for all steps.",
+            "If subagentPolicy is off, delegatedRole must be null for all steps. Otherwise, preserve delegatedRole where the template calls for worker, specialist, review, or synthesis handoff.",
             "Keep step objectives specific, practical, and directly tied to the user request.",
             "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
             ...(allowProductionExpansion && maxExtraWorkerSteps > 0
@@ -819,6 +820,7 @@ export async function generatePreparedExecutionPlanDraft(
           role: "user",
           content: JSON.stringify({
             mode: routerInput.task.mode,
+            subagentPolicy: prepared.prefs.subagentPolicy,
             planningMode: prepared.prefs.planningMode,
             objective: prepared.content,
             workflowTemplate: templatePlan.workflowTemplate,

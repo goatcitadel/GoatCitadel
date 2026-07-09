@@ -186,10 +186,8 @@ export function resolveMissionControlMessageMode(input: {
   selectedSessionMode?: ChatMode | null;
   prefsMode?: ChatMode | null;
 }): ChatMode {
-  if (input.lockSurface && input.surface) {
-    return input.surface;
-  }
-  return input.selectedSessionMode ?? input.prefsMode ?? "chat";
+  void input;
+  return "chat";
 }
 
 export function useMissionControlSurfaceState(input: {

@@ -43,7 +43,7 @@ describe("chat delegate routes", () => {
       objective: "Review the launch plan",
       roles: ["Researcher", "QA"],
       mode: "parallel",
-      surfaceMode: "cowork",
+      surfaceMode: "chat",
       providerId: "openai",
       model: "gpt-5.4",
       steps: [{ role: "Researcher", parallelizable: true }],

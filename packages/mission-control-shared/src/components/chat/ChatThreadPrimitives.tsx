@@ -783,7 +783,7 @@ export function ChatThreadDelegationSummary({
               <PrimitiveStatusChip tone={getDelegationStatusTone(delegationRun.status)}>
                 {delegationRun.status}
               </PrimitiveStatusChip>
-              <span>Cowork activity</span>
+              <span>Agentic activity</span>
               <span>{countsLine}</span>
               {currentStep ? <span>Now: {formatStepLabel(currentStep)}</span> : null}
               {runChips.map((chip) => (

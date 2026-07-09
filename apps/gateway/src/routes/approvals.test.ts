@@ -137,7 +137,7 @@ describe("approvals routes", () => {
         linkage: {
           workspaceId: "workspace-1",
           runId: "run-1",
-          originSurface: "cowork",
+          originSurface: "chat",
           toolName: "browser.search",
           actionType: "tool.invoke",
           permissionProfileId: "profile-safe",
@@ -155,7 +155,7 @@ describe("approvals routes", () => {
         linkage: expect.objectContaining({
           workspaceId: "workspace-1",
           runId: "run-1",
-          originSurface: "cowork",
+          originSurface: "chat",
           toolName: "browser.search",
           actionType: "tool.invoke",
           permissionProfileId: "profile-safe",

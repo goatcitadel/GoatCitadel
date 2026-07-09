@@ -170,9 +170,9 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
         <NativeButton
           variant="secondary"
           className="mc-next-kanban-action"
-          onClick={() => props.navigate({ area: "cowork", section: "board", theme: props.route.theme })}
+          onClick={() => props.navigate({ area: "ops", section: "kanban", theme: props.route.theme })}
         >
-          <Users className="h-3 w-3" /> Agent Board
+          <Users className="h-3 w-3" /> Run Board
         </NativeButton>
       }
     >

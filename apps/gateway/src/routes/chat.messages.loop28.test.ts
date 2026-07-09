@@ -53,7 +53,7 @@ describe("chat message route-decision tails", () => {
       speedMode: undefined,
       subagentPolicy: undefined,
       prefsOverride: {
-        mode: "cowork",
+        mode: "chat",
         webMode: "deep",
         providerId: "anthropic",
         model: "claude-sonnet-4-6",
@@ -106,7 +106,7 @@ describe("chat message route-decision tails", () => {
       turnId: "turn-2",
       providerId: "openai",
       model: "gpt-5.4",
-      mode: "code",
+      mode: "chat",
       webMode: "off",
       thinkingLevel: "minimal",
       speedMode: "fast",

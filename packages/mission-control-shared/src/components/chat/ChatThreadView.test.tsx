@@ -360,7 +360,7 @@ describe("ChatThreadView", () => {
         thread={{ sessionId: "sess-empty", turns: [] }}
       />,
     );
-    expect(renderedText(coworkEmpty)).toContain("Cowork will create a visible run plan");
+    expect(renderedText(coworkEmpty)).toContain("Chat will create a visible run plan");
   });
 
   it("shows deterministic labels for active and terminal turns without assistant output", () => {
@@ -716,7 +716,7 @@ describe("ChatThreadView", () => {
       />,
     );
 
-    expect(renderedText(renderer)).toContain("Cowork activity");
+    expect(renderedText(renderer)).toContain("Agentic activity");
     expect(renderedText(renderer)).toContain("Now: Research Lead");
     expect(renderedText(renderer)).toContain("Map the launch risks");
     expect(renderedText(renderer)).toContain("Could not validate source freshness.");

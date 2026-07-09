@@ -956,7 +956,7 @@ describe("DiscordRuntimeService internals", () => {
       {
         name: "mode",
         input: createSlashInteraction("mode", { strings: { mode: "cowork" } }),
-        expected: "/mode cowork",
+        expected: "/mode",
       },
       { name: "plan unset", input: createSlashInteraction("plan"), expected: "/plan" },
       { name: "plan set", input: createSlashInteraction("plan", { strings: { state: "off" } }), expected: "/plan off" },

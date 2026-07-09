@@ -82,12 +82,18 @@ export interface ChatRequestSurfaceOptions {
 }
 
 function originSurfaceHeader(options?: ChatRequestSurfaceOptions): HeadersInit | undefined {
-  return options?.originSurface ? { "x-goatcitadel-origin-surface": options.originSurface } : undefined;
+  return options?.originSurface
+    ? { "x-goatcitadel-origin-surface": normalizeChatSurface(options.originSurface) }
+    : undefined;
 }
 
 function originSurfaceInit(options?: ChatRequestSurfaceOptions): Pick<RequestInit, "headers"> {
   const headers = originSurfaceHeader(options);
   return headers ? { headers } : {};
+}
+
+function normalizeChatSurface(_surface?: ChatMode | ChatGeneratedArtifactSourceSurface | null): "chat" {
+  return "chat";
 }
 
 export interface ChatProjectsResponse {
@@ -581,7 +587,7 @@ export async function fetchChatGeneratedArtifacts(input?: {
   if (input?.sessionId) query.set("sessionId", input.sessionId);
   if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input?.projectId) query.set("projectId", input.projectId);
-  if (input?.sourceSurface) query.set("sourceSurface", input.sourceSurface);
+  if (input?.sourceSurface) query.set("sourceSurface", normalizeChatSurface(input.sourceSurface));
   if (input?.kind) query.set("kind", input.kind);
   query.set("limit", String(input?.limit ?? 300));
   return request<ChatGeneratedArtifactsResponse>(`/api/v1/chat/generated-artifacts?${query.toString()}`);
@@ -611,7 +617,7 @@ export async function fetchChatSessionGeneratedArtifacts(
 ): Promise<ChatGeneratedArtifactsResponse> {
   const query = new URLSearchParams();
   if (input?.kind) query.set("kind", input.kind);
-  if (input?.sourceSurface) query.set("sourceSurface", input.sourceSurface);
+  if (input?.sourceSurface) query.set("sourceSurface", normalizeChatSurface(input.sourceSurface));
   query.set("limit", String(input?.limit ?? 300));
   return request<ChatGeneratedArtifactsResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/generated-artifacts?${query.toString()}`,

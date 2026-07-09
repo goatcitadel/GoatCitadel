@@ -218,10 +218,10 @@ describe("ThreadedTimeline", () => {
     resetChatStreamingPreviewForTests();
   });
 
-  it("folds Cowork subagent activity behind an expandable card", () => {
+  it("folds agentic subagent activity behind an expandable card", () => {
     const markup = renderToStaticMarkup(<ThreadedTimeline props={buildProps() as any} />);
 
-    expect(markup).toContain("Cowork activity");
+    expect(markup).toContain("Agentic activity");
     expect(markup).toContain("Now: Atmosphere");
     expect(markup).toContain("Open details");
     expect(markup).toContain("Menu");
@@ -564,7 +564,7 @@ describe("ThreadedTimeline", () => {
       "Loading thread",
     );
     expect(renderToStaticMarkup(<ThreadedTimeline props={buildProps({ thread: null }) as any} />)).toContain(
-      "Cowork will create a visible run plan",
+      "Chat will create a visible run plan",
     );
     expect(
       renderToStaticMarkup(
@@ -652,8 +652,6 @@ describe("ThreadedTimeline", () => {
       renderer.root.findAll((node) => node.type === "button" && collectButtonText(node).includes(label))[0]!;
 
     findButton("Orient me").props.onClick();
-    findButton("Continue in Cowork").props.onClick();
-    findButton("Open in Code").props.onClick();
     findButton("Attach files").props.onClick();
     const clickEvent = { type: "click" };
     findButton("Approvals").props.onClick(clickEvent);
@@ -661,8 +659,7 @@ describe("ThreadedTimeline", () => {
     expect(onDraftChange).toHaveBeenCalledWith(
       "Summarize the current workspace state and suggest the safest next step.",
     );
-    expect(onNavigateSurface).toHaveBeenCalledWith("cowork");
-    expect(onNavigateSurface).toHaveBeenCalledWith("code");
+    expect(onNavigateSurface).not.toHaveBeenCalled();
     expect(onAttachFiles).toHaveBeenCalledTimes(1);
     expect(onOpenApprovals).toHaveBeenCalledTimes(1);
     expect(onOpenApprovals).toHaveBeenCalledWith();
@@ -1651,7 +1648,7 @@ describe("ThreadedTimeline", () => {
     });
 
     const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
-    expect(renderedText(renderer)).toContain("Cowork activity");
+    expect(renderedText(renderer)).toContain("Agentic activity");
     expect(renderedText(renderer)).toContain("Completed 1 · Running 1 · Pending 1 · Failed 0 · Skipped 1");
     expect(renderedText(renderer)).toContain("Now: QA");
 

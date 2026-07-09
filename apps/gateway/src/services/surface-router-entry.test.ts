@@ -32,17 +32,17 @@ describe("applyAutoRouteToInput", () => {
   it("auto-routes and persists when autoRoute set and no persisted mode", async () => {
     const host = makeHost();
     const out = await applyAutoRouteToInput(host as never, "s1", { content: "run tests in the repo", autoRoute: true });
-    expect(out.mode).toBe("code");
-    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "code");
+    expect(out.mode).toBe("chat");
+    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
     expect(host.surfaceRouter.route).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses the persisted sticky mode instead of reclassifying later autoRoute turns", async () => {
+  it("repairs a persisted legacy sticky mode instead of reclassifying later autoRoute turns", async () => {
     const host = makeHost({ readChatSessionMode: vi.fn(() => "cowork") });
     const out = await applyAutoRouteToInput(host as never, "s1", { content: "run tests in the repo", autoRoute: true });
-    expect(out.mode).toBe("cowork");
+    expect(out.mode).toBe("chat");
     expect(host.surfaceRouter.route).not.toHaveBeenCalled();
-    expect(host.persistChatSessionMode).not.toHaveBeenCalled();
+    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
   });
 
   it("does nothing when autoRoute is not set", async () => {
@@ -78,14 +78,13 @@ describe("recordModeOverrideIfChanged", () => {
     const host = makeOverrideHost();
     recordModeOverrideIfChanged(host as never, "s1", { content: "actually just chat", mode: "chat" });
     expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
-    expect(host.recordSurfaceRouteOverrideSignal).toHaveBeenCalledTimes(1);
-    expect(host.recordSurfaceRouteOverrideSignal.mock.calls[0][0]).toMatchObject({ fromMode: "code", toMode: "chat" });
+    expect(host.recordSurfaceRouteOverrideSignal).not.toHaveBeenCalled();
   });
 
-  it("does nothing on a sticky turn (mode unchanged)", () => {
+  it("repairs a sticky legacy turn without recording an override signal", () => {
     const host = makeOverrideHost();
     recordModeOverrideIfChanged(host as never, "s1", { content: "keep going", mode: "code" });
-    expect(host.persistChatSessionMode).not.toHaveBeenCalled();
+    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
     expect(host.recordSurfaceRouteOverrideSignal).not.toHaveBeenCalled();
   });
 
@@ -103,8 +102,8 @@ describe("applySurfaceRoutingPreflight", () => {
       content: "run tests in the repo",
       autoRoute: true,
     });
-    expect(out.mode).toBe("code");
-    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "code");
+    expect(out.mode).toBe("chat");
+    expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
   });
 
   it("calls onError and returns original input when router throws", async () => {

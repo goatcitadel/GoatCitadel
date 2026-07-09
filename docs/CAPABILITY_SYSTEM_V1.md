@@ -70,7 +70,7 @@ Mission Control consumes the new APIs through the canonical Next shell and share
 - `packages/mission-control-shared/src/api/capabilities.ts` (capabilities API client)
 - `packages/mission-control-shared/src/api/client.ts` (shell API client)
 - `apps/mission-control-next/src/features/native-routes/library/` (Skills / Capabilities surfaces)
-- `packages/threaded-surface-core/src/chat/` (Chat / Cowork / Code outbound execution)
+- `packages/threaded-surface-core/src/chat/` (single Chat outbound execution, including agentic and code-capability requests)
 - `packages/mission-control-shared/src/components/InlineApprovalPrompt.tsx` (inline approval UI)
 
 The chat approval UI now renders in a composer-adjacent footer instead of the old status lane.

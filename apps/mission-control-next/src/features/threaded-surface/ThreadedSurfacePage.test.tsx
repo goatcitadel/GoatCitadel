@@ -608,11 +608,11 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain(">Archive<");
   });
 
-  it("marks Conversation, Plan, and Build with distinct stage posture", () => {
+  it("normalizes Conversation, Plan, and Build stage posture into Chat", () => {
     const expectations = [
-      ["chat", "fast-conversation", "Conversation workspace stage"],
-      ["cowork", "orchestration-checkpoints", "Planning workspace stage"],
-      ["code", "workbench-proof", "Build workspace stage"],
+      ["chat", "chat", "Chat workspace stage"],
+      ["cowork", "chat", "Chat workspace stage"],
+      ["code", "chat", "Chat workspace stage"],
     ] as const;
 
     for (const [surface, posture, stageLabel] of expectations) {
@@ -877,8 +877,9 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="code" input={input} />);
     });
 
-    // The cross-area nav buttons ("Open in Cowork", "Back to Chat") are replaced by the in-surface
-    // mode control. Verify the control is present and the remaining header actions still wire correctly.
+    // The old cross-area nav buttons are replaced by a read-only Chat surface
+    // readout. Verify the current control is present and the remaining header
+    // actions still wire correctly.
     await act(async () => {
       findExactButton(renderer!.root, "Archive").props.onClick();
       findButton(renderer!.root, "Show context").props.onClick();
@@ -893,11 +894,11 @@ describe("ThreadedSurfacePage", () => {
       dropzone.props.onDrop();
     });
 
-    // Mode control is present in the header
-    const modeControlTrigger = renderer!.root.findAll(
-      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-trigger"),
+    const modeControl = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-control"),
     );
-    expect(modeControlTrigger.length).toBeGreaterThan(0);
+    expect(modeControl.length).toBeGreaterThan(0);
+    expect(modeControl[0]!.props["data-mode"]).toBe("chat");
     expect(activeProps.onToggleArchiveSession).toHaveBeenCalledTimes(1);
     expect(input.onDockOpenChange).toHaveBeenCalledWith(true);
     expect(input.dropTargetProps.onDragEnter).toHaveBeenCalledTimes(1);
@@ -930,21 +931,19 @@ describe("ThreadedSurfacePage", () => {
     expect(normalizeText(collectText(renderer!.root))).toContain("0 Projects");
     expect(normalizeText(collectText(renderer!.root))).toContain("0 Approvals");
     await act(async () => {
-      findButton(renderer!.root, "Start conversation").props.onClick();
+      findButton(renderer!.root, "Start chat").props.onClick();
       findButton(renderer!.root, "Open Start Here").props.onClick();
       findButton(renderer!.root, "Attach files").props.onClick();
-      findButton(renderer!.root, "Plan multi-step work").props.onClick();
-      findButton(renderer!.root, "Build with code context").props.onClick();
     });
 
     expect(emptyInput.emptyStateProps.onCreateSession).toHaveBeenCalledTimes(1);
     expect(emptyInput.emptyStateProps.onOpenStartHere).toHaveBeenCalledTimes(1);
     expect(emptyInput.dropTargetProps.onAttachFiles).toHaveBeenCalledTimes(1);
-    expect(emptyInput.emptyStateProps.onOpenCowork).toHaveBeenCalledTimes(1);
-    expect(emptyInput.emptyStateProps.onOpenCode).toHaveBeenCalledTimes(1);
+    expect(emptyInput.emptyStateProps.onOpenCowork).not.toHaveBeenCalled();
+    expect(emptyInput.emptyStateProps.onOpenCode).not.toHaveBeenCalled();
   });
 
-  it("opens the session rail from mobile and routes chat sessions into cowork or code", async () => {
+  it("opens the session rail from mobile while keeping legacy routes in Chat", async () => {
     vi.stubGlobal("HTMLElement", class HTMLElement {});
     const activeProps = buildActiveSessionProps({
       mode: "chat",
@@ -964,17 +963,17 @@ describe("ThreadedSurfacePage", () => {
       renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
     });
 
-    // The cross-area nav buttons ("Continue in Cowork", "Open in Code") are replaced by the mode control.
     await act(async () => {
       findButton(renderer!.root, "Sessions").props.onClick();
     });
 
-    // Rail toggle still works; mode control is present instead of old nav buttons
+    // Rail toggle still works; the old mode switcher is now a read-only Chat readout.
     expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
-    const modeControlTrigger = renderer!.root.findAll(
-      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-trigger"),
+    const modeControl = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-control"),
     );
-    expect(modeControlTrigger.length).toBeGreaterThan(0);
+    expect(modeControl.length).toBeGreaterThan(0);
+    expect(modeControl[0]!.props["data-mode"]).toBe("chat");
   });
 
   it("toggles the code workbench from mobile and conversation controls", async () => {
@@ -1418,12 +1417,12 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    // The cross-area nav buttons ("Open in Code", "Back to Chat") are replaced by the mode control.
-    // Verify the control is present in the cowork surface header.
-    const modeControlTrigger = renderer!.root.findAll(
-      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-trigger"),
+    // The old cross-area nav buttons are replaced by a read-only Chat surface readout.
+    const modeControl = renderer!.root.findAll(
+      (n) => typeof n.props.className === "string" && n.props.className.includes("mc-next-threaded-mode-control"),
     );
-    expect(modeControlTrigger.length).toBeGreaterThan(0);
+    expect(modeControl.length).toBeGreaterThan(0);
+    expect(modeControl[0]!.props["data-mode"]).toBe("chat");
 
     const projectInputs = renderer!.root.findAllByType("input");
     await act(async () => {

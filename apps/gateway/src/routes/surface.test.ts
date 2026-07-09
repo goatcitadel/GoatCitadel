@@ -15,7 +15,7 @@ afterAll(async () => {
 });
 
 describe("POST /api/v1/surface/classify", () => {
-  it("classifies an explicit code prompt as code (read-only heuristic)", async () => {
+  it("normalizes an explicit code prompt into Chat while keeping heuristic provenance", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/surface/classify",
@@ -23,7 +23,7 @@ describe("POST /api/v1/surface/classify", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.mode).toBe("code");
+    expect(body.mode).toBe("chat");
     expect(body.source).toBe("heuristic");
     expect(Array.isArray(body.alternatives)).toBe(true);
   });

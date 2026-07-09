@@ -153,7 +153,7 @@ describe("ThreadedTimeline loop 25 branch tails", () => {
     coworkProps.delegationRun.steps[0].status = "completed";
     const coworkMarkup = renderToStaticMarkup(<ThreadedTimeline props={coworkProps} />);
     expect(coworkMarkup).toContain("partial");
-    expect(coworkMarkup).toContain("Cowork activity");
+    expect(coworkMarkup).toContain("Agentic activity");
 
     const completedProps = buildProps();
     completedProps.delegationRun.status = "completed";

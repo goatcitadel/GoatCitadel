@@ -20,19 +20,19 @@ import { adaptLegacyUrl, coerceLegacyHrefToNext, resolveRouteFromLocation } from
 describe("legacy route adapter", () => {
   it("maps legacy work surface tabs into the new areas", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=chat")).toBe("/chat");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=cowork")).toBe("/chat?mode=cowork");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=code")).toBe("/chat?mode=code");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=cowork")).toBe("/chat");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=dashboard&surface=code")).toBe("/chat");
   });
 
   it("maps bare legacy surface parameters into the new areas", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=chat")).toBe("/chat");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=cowork")).toBe("/chat?mode=cowork");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=code")).toBe("/chat?mode=code");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=cowork")).toBe("/chat");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?surface=code")).toBe("/chat");
   });
 
-  it("maps legacy herd tabs into the cowork board", () => {
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=herd-live")).toBe("/cowork/board");
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=herd-lab")).toBe("/cowork/board");
+  it("maps legacy herd tabs into Ops Kanban", () => {
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=herd-live")).toBe("/ops/kanban");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?tab=herd-lab")).toBe("/ops/kanban");
   });
 
   it("maps legacy observe routes into library and ops destinations", () => {
@@ -57,13 +57,9 @@ describe("legacy route adapter", () => {
   });
 
   it("maps legacy operate routes into task and approval destinations", () => {
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=cowork")).toBe(
-      "/chat?mode=cowork",
-    );
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=code")).toBe(
-      "/chat?mode=code",
-    );
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=tasks")).toBe("/cowork/tasks");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=cowork")).toBe("/chat");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=code")).toBe("/chat");
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=tasks")).toBe("/ops/kanban");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=approvals")).toBe("/ops/approvals");
   });
 
@@ -112,7 +108,7 @@ describe("legacy route adapter", () => {
       "/library/agents?view=catalog",
     );
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=agents&tab=board")).toBe(
-      "/cowork/board",
+      "/ops/kanban",
     );
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=agents")).toBe("/library/agents");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=tools")).toBe("/settings/tools");
@@ -189,11 +185,11 @@ describe("mission-control-next route model", () => {
   });
 
   it("covers route labels, descriptions, navigation preservation, and legacy tab aliases", () => {
-    expect(getRouteLabel({ area: "cowork", section: "tasks" })).toBe("Task Board");
-    expect(getRouteLabel({ area: "cowork", section: "board" })).toBe("Agent Board");
-    expect(getRouteLabel({ area: "cowork" })).toBe("Plan");
-    expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("board exposes");
-    expect(getRouteDescription({ area: "cowork" })).toContain("Plan posture");
+    expect(getRouteLabel({ area: "cowork", section: "tasks" })).toBe("Kanban");
+    expect(getRouteLabel({ area: "cowork", section: "board" })).toBe("Kanban");
+    expect(getRouteLabel({ area: "cowork" })).toBe("Work");
+    expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("Multi-agent board");
+    expect(getRouteDescription({ area: "cowork" })).toContain("One chat workspace");
     expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
 
     expect(
@@ -222,11 +218,11 @@ describe("mission-control-next route model", () => {
 
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=assembly")).toMatchObject({
       area: "chat",
-      mode: "cowork",
+      mode: undefined,
     });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=tasks")).toMatchObject({
-      area: "cowork",
-      section: "tasks",
+      area: "ops",
+      section: "kanban",
     });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=approvals")).toMatchObject({
       area: "ops",
@@ -314,12 +310,12 @@ describe("mission-control-next route model", () => {
       view: "catalog",
     });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=office")).toMatchObject({
-      area: "cowork",
-      section: "board",
+      area: "ops",
+      section: "kanban",
     });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=officelab")).toMatchObject({
-      area: "cowork",
-      section: "board",
+      area: "ops",
+      section: "kanban",
     });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=unknown")).toMatchObject({ area: "chat" });
     expect(resolveRouteFromLocation(new URL("http://goatcitadel.local/settings"))).toMatchObject({ area: "settings" });
@@ -366,14 +362,14 @@ describe("mission-control-next route model", () => {
     const chatCodeScope = getRouteReleaseScope({ area: "chat", mode: "code" });
     const chatCoworkScope = getRouteReleaseScope({ area: "chat", mode: "cowork" });
     expect(codeScope.status).toBe("ship");
-    expect(chatCodeScope.releaseAction).toContain("review build proof");
-    expect(chatCodeScope.verification).toContain("verify:code:workbench-loop");
-    expect(chatCoworkScope.releaseAction).toContain("durable planning run");
-    expect(chatCoworkScope.verification).toContain("verify:durable:recovery");
+    expect(chatCodeScope.releaseAction).toContain("Send a Chat turn");
+    expect(chatCodeScope.verification).toContain("verify:surface:regression");
+    expect(chatCoworkScope.releaseAction).toContain("Send a Chat turn");
+    expect(chatCoworkScope.verification).toContain("verify:surface:regression");
     expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
       "needs_release_polish" satisfies ReleaseSurfaceStatus,
     );
-    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(45);
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(41);
     expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(5);
     expect(describeReleaseScopeForOperator(getRouteReleaseScope({ area: "settings", section: "providers" }))).toBe(
       "Release-ready. Action: Configure provider credentials and run provider/model smoke evidence. Verification: verify:surface:regression, provider exercise paths. Constraint: Provider setup is release-bearing with smoke evidence, model discovery state, and plain failure copy.",

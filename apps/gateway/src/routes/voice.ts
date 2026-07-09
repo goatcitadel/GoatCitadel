@@ -68,7 +68,10 @@ const meetTranscriptSchema = z.object({
 });
 
 const meetConsultSchema = z.object({
-  target: z.enum(["chat", "cowork", "code"]).optional(),
+  target: z
+    .enum(["chat", "cowork", "code"])
+    .transform(() => "chat" as const)
+    .optional(),
   prompt: z.string().optional(),
 });
 

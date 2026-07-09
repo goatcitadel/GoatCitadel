@@ -85,7 +85,7 @@ describe("chat misc routes", () => {
         operatorId: "operator-test",
         authActorId: "operator-test",
         authActorSource: "loopback",
-        surface: "cowork",
+        surface: "chat",
       }),
     );
   });

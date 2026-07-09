@@ -13,12 +13,8 @@ Status meanings:
 
 | Route | Status | Required action path or release truth |
 |---|---|---|
-| `/chat` | `ship` | Send a Chat turn and inspect model/tool/runtime context when present. |
-| `/cowork` | `ship` | Start/resume durable Cowork work; inspect next action, blockers, approvals, and evidence truth. |
-| `/cowork/tasks` | `ship` | Review tasks/deliverables, continuation state, and blocker hierarchy. |
-| `/cowork/board` | `ship` | Inspect agent posture without implying autonomous live-control parity. |
-| `/code` | `ship` | Bind source, edit, validate, inspect diffs, and preserve Code Mode proof truth, including execution backend posture. |
-| `/projects` | `ship` | Continue Chat/Cowork/Code work from a project home base. |
+| `/chat` | `ship` | Send a Chat turn and inspect model/tool/runtime context, approvals, artifacts, planning, delegation, and code-capability context when present. |
+| `/projects` | `ship` | Continue Chat work from a project home base. |
 | `/library/agents` | `ship` | Inspect reusable agent profiles and catalog controls. |
 | `/library/skills` | `ship` | Review skill activation posture and lifecycle evidence. |
 | `/library/capabilities` | `ship` | Inspect capability availability, degraded posture, and callable/inspectable truth. |
@@ -54,7 +50,7 @@ Status meanings:
 | `/settings/permissions` | `ship` | Configure permission profiles and local operator override evidence. |
 | `/settings/trust-policy` | `ship` | Inspect the unified Trust & Policy matrix, then jump to Permissions, Tools, MCP, Skills, Capabilities, or Approvals for edits. |
 | `/settings/budget` | `ship` | Set budget mode and review cost evidence. |
-| `/settings/onboarding` | `ship` | Complete Start Here: provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection. |
+| `/settings/onboarding` | `ship` | Complete Start Here: provider/local path, first Chat task, retained evidence, and Run Detail inspection. |
 | `/settings/runtime` | `ship` | Configure runtime posture while experimental sidecars stay labeled. |
 | `/settings/local-ai` | `ship` | Inspect local hardware readiness, model-fit recommendations, and approval-gated local model jobs without claiming autonomous installs or mature local inference. |
 | `/settings/workspaces` | `ship` | Configure workspace context, guidance, and extension posture. |

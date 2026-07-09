@@ -873,11 +873,11 @@ describe("MissionControlNextApp", () => {
     renderer.unmount();
 
     renderer = await renderApp("http://localhost:5173/cowork/tasks");
-    expect(JSON.stringify(renderer.toJSON())).toContain("Native cowork/tasks");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Native ops/kanban");
     renderer.unmount();
 
     renderer = await renderApp("http://localhost:5173/code?sessionId=code-session");
-    expect(JSON.stringify(renderer.toJSON())).toContain("Threaded code");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
     renderer.unmount();
 
     renderer = await renderApp("http://localhost:5173/projects/Project-1");
@@ -885,20 +885,20 @@ describe("MissionControlNextApp", () => {
     renderer.unmount();
   });
 
-  it("chat surface renders with lockSurface=false (auto-route enabled); cowork and code stay locked", async () => {
-    // Chat must be unlocked so the gateway auto-router can classify a new thread's first turn.
+  it("chat, cowork, and code route inputs normalize to unlocked Chat", async () => {
+    // Chat stays unlocked so the gateway auto-router can classify a new thread's first turn.
     let renderer = await renderApp("http://localhost:5173/chat?sessionId=session-1");
     expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false, hidePageHeader: true });
     renderer.unmount();
 
-    // Cowork must remain locked to its explicit surface.
+    // Legacy Cowork route inputs normalize back into the unified Chat surface.
     renderer = await renderApp("http://localhost:5173/cowork?sessionId=session-1");
-    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "cowork", lockSurface: true });
+    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false });
     renderer.unmount();
 
-    // Code must remain locked to its explicit surface.
+    // Legacy Code route inputs also normalize back into the unified Chat surface.
     renderer = await renderApp("http://localhost:5173/code?sessionId=code-session");
-    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "code", lockSurface: true });
+    expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false });
     renderer.unmount();
   });
 

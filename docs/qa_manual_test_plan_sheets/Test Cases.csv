@@ -156,7 +156,7 @@ NAV-02,"Shell, Navigation, And Visual Coverage",Legacy Redirects,,,"Open legacy 
 Compare expected redirect paths in the release-surface manifest.","Action: open /?tab=chat, /?surface=code, and /?space=observe&page=activity&tab=scheduler.","Legacy URLs redirect to current routes.
 Redirected routes load the next shell.
 No legacy shell source is treated as canonical product proof.",,,,,,,,,,
-NAV-03,"Shell, Navigation, And Visual Coverage",Shell State Persistence,,,"Switch between Chat, Cowork, Code, Projects, Library, Ops, and Settings.
+NAV-03,"Shell, Navigation, And Visual Coverage",Shell State Persistence,,,"Switch between Chat, Projects, Library, Ops, and Settings.
 Change route query params such as sessionId, projectId, runId, and theme where supported.
 Refresh after each major area.
 Use browser back/forward.","Action: while on /chat, add a real sessionId query param from an existing session, then switch areas, refresh, and use browser back/forward.","Shell chrome persists.
@@ -166,7 +166,7 @@ Thread-preserving nav items preserve only intended IDs.",,,,,,,,,,
 NAV-04,"Shell, Navigation, And Visual Coverage","Desktop, Laptop, Narrow, And Mobile Layout",,"desktop: 1440 x 1024
 laptop: 1280 x 800
 narrow desktop: 1180 x 900
-mobile: 390 x 844","Open /chat, /cowork, /code, /projects, /library/capabilities, /ops/runtime, and /settings/providers.
+mobile: 390 x 844","Open /chat, /projects, /library/capabilities, /ops/runtime, and /settings/providers.
 Repeat in light and dark theme.
 Test primary navigation and secondary nav at each viewport.","Action: use browser devtools or Playwright viewport presets for 1440x1024, 1280x800, 1180x900, and 390x844.","No clipped primary actions.
 No overlapping status chips or toolbar controls.
@@ -183,7 +183,7 @@ Streaming, waiting, blocked, and error states are visible.",,,,,,,,,,
 SETUP-01,"Onboarding, Providers, And Models",Start Here First-Run Flow,,,"Open /settings/onboarding.
 Follow Start Here through setup readiness.
 Choose provider/local path.
-Complete first Chat, Cowork, and Code guidance if available.
+Complete first Chat guidance if available.
 Inspect retained evidence and Run Detail links.",Prompt after onboarding reaches first Chat: Give me a one-paragraph smoke-test response for GoatCitadel setup and mention the active provider/model if you can see it.,"Start Here guides without overwhelming.
 Incomplete items are clear.
 Completed items persist after refresh.
@@ -281,15 +281,15 @@ Switch routes and return.
 Test mobile layout.","Prompt: Create a small QA Artifact Canary with a title and three bullets, then keep the context drawer/dock open so I can inspect artifact, memory, and approval panels.","Panels do not cover composer or critical status.
 Drawer state is understandable after route switches.
 Mobile panel behavior is usable.",,,,,,,,,,
-COWORK-01,Cowork Surface,Start Or Resume Durable Cowork Run,,,"Open /cowork.
+COWORK-01,Chat Agentic Work,Start Or Resume Durable Chat Run,,,"Open /chat.
 Start a supervised multi-step task.
 Inspect plan, next action, blockers, and evidence.
 Refresh during the run.
-Resume an existing run.","Prompt in Cowork: Plan and execute a three-step QA sweep: 1 inspect route coverage, 2 identify one runtime-truth risk, 3 produce a checklist. Pause and show evidence after each step.","Cowork feels distinct from Chat.
+Resume an existing run.","Prompt in Chat: Plan and execute a three-step QA sweep: 1 inspect route coverage, 2 identify one runtime-truth risk, 3 produce a checklist. Pause and show evidence after each step.","Agentic work stays visible inside Chat.
 Durable run/run detail is visible when present.
 Current step and checkpoint state survive refresh.
 Blocked/waiting/running/completed states are not blurred.",,,,,,,,,,
-COWORK-02,Cowork Surface,Task Board,,,"Open /cowork/tasks.
+COWORK-02,Ops,Task Board,,,"Open /ops/kanban.
 Create a task.
 Edit status, owner/agent, deliverable, and blocker fields if available.
 Soft-delete/archive and restore.
@@ -297,63 +297,63 @@ Refresh.","Action/prompt: create task titled QA Board Canary, status Blocked, de
 Board counts match visible items.
 Restore works without duplicating tasks.
 Blocker hierarchy is clear.",,,,,,,,,,
-COWORK-03,Cowork Surface,Agent Board,,,"Open /cowork/board.
+COWORK-03,Ops,Agent Board,,,"Open /ops/kanban.
 Inspect agent posture.
 Trigger or seed a running/blocked/done agent state.
-Compare with /ops/kanban if relevant.","Prompt in Cowork: Create a tiny delegation board with three agent states: one running, one blocked on approval, and one done. Keep it as inspectable posture only.","Agent board is an inspectable posture surface.
+Compare with /ops/kanban if relevant.","Prompt in Chat: Create a tiny delegation board with three agent states: one running, one blocked on approval, and one done. Keep it as inspectable posture only.","Agent board is an inspectable posture surface.
 It does not imply autonomous live-control parity.
 Experimental bulk controls stay labeled when present.",,,,,,,,,,
-COWORK-04,Cowork Surface,Approval Wait And Resume,,,"Trigger a Cowork action that requires approval.
+COWORK-04,Chat Agentic Work,Approval Wait And Resume,,,"Trigger a Chat action that requires approval.
 Confirm composer/run state blocks appropriately.
 Resolve approval from Ops -> Approvals.
-Return to Cowork and resume if required.",Prompt in Cowork: Run a supervised task that must ask for my approval before creating or modifying any file. Stop at the approval gate and show the pending approval.,"Approval wait is explicit.
+Return to Chat and resume if required.",Prompt in Chat: Run a supervised task that must ask for my approval before creating or modifying any file. Stop at the approval gate and show the pending approval.,"Approval wait is explicit.
 Approval resolution does not advance only UI-side state.
 Durable execution owns the resume.",,,,,,,,,,
-COWORK-05,Cowork Surface,Gateway Restart During Cowork Run,,,"Start a durable Cowork run.
+COWORK-05,Chat Agentic Work,Gateway Restart During Chat Run,,,"Start a durable Chat run.
 Stop gateway mid-run.
 Restart gateway.
-Inspect Cowork, Ops -> Sessions, Ops -> Diagnostics, and run detail.",Prompt in Cowork: Start a durable QA task that takes at least three checkpoints and waits between steps. Restart the gateway after checkpoint one.,"Run recovers, waits, retries, dead-letters, or fails with clear state.
+Inspect Chat, Ops -> Sessions, Ops -> Diagnostics, and run detail.",Prompt in Chat: Start a durable QA task that takes at least three checkpoints and waits between steps. Restart the gateway after checkpoint one.,"Run recovers, waits, retries, dead-letters, or fails with clear state.
 No orphaned ""running"" fiction remains.
 Recovery evidence is inspectable.",,,,,,,,,,
-CODE-01,Code Surface And Code Mode,Code Workbench Basics,,,"Open /code.
+CODE-01,Chat-Hosted Code Capability,Code Workbench Basics,,,"Open /chat.
 Bind a safe test source/workspace.
 Inspect file tree.
 Open and edit a file if supported.
 Review diff.
-Run a targeted validation command if supported.","Prompt in Code: Bind the QA test repo, open package.json, identify the dev and verification scripts, and propose a one-line change in a throwaway QA file for diff review.","Code feels distinct from Chat/Cowork.
+Run a targeted validation command if supported.","Prompt in Chat: Bind the QA test repo, open package.json, identify the dev and verification scripts, and propose a one-line change in a throwaway QA file for diff review.","Code work is presented as a governed Chat capability.
 Source binding and path boundaries are visible.
 Diffs are inspectable before risky mutation.
 Validation output is bounded and readable.",,,,,,,,,,
-CODE-02,Code Surface And Code Mode,File Path Jail,,,"Attempt to open a file inside the allowed workspace.
+CODE-02,Chat-Hosted Code Capability,File Path Jail,,,"Attempt to open a file inside the allowed workspace.
 Attempt a traversal-like path outside the allowed workspace.
-Attempt symlink or junction edge cases if safe.","Action/prompt in Code: Open README.md inside the workspace, then attempt to open ../.env or C:\Windows\win.ini and verify the path jail blocks it.","Allowed files open.
+Attempt symlink or junction edge cases if safe.","Action/prompt in Chat: Open README.md inside the workspace, then attempt to open ../.env or C:\Windows\win.ini and verify the path jail blocks it.","Allowed files open.
 Out-of-root paths are blocked.
 Error copy explains the boundary without exposing secrets.",,,,,,,,,,
-CODE-03,Code Surface And Code Mode,Code Mode Approval Gate,,,"Start a simple trusted-code Code Mode run.
+CODE-03,Chat-Hosted Code Capability,Code Mode Approval Gate,,,"Start a simple trusted-code Code Mode run from Chat.
 Inspect pending approval.
 Approve.
-Inspect run detail, artifacts, hashes, stdout/stderr, and backend metadata.",Prompt in Code with Code Mode enabled: Run a trusted Code Mode canary that reads package.json scripts and writes a bounded artifact summary. Require approval before execution.,"Every run is operator-approved.
+Inspect run detail, artifacts, hashes, stdout/stderr, and backend metadata.",Prompt in Chat with Code Mode enabled: Run a trusted Code Mode canary that reads package.json scripts and writes a bounded artifact summary. Require approval before execution.,"Every run is operator-approved.
 Source/artifact hashes are recorded.
 stdout/stderr are bounded and truncation state is visible.
 Host isolation metadata is truthful.
 No hostile-code safety claim is made unless named proof supports it.",,,,,,,,,,
-CODE-04,Code Surface And Code Mode,Code Mode Reject And Failure,,,"Start a Code Mode run.
+CODE-04,Chat-Hosted Code Capability,Code Mode Reject And Failure,,,"Start a Code Mode run from Chat.
 Reject the approval.
 Start another run that fails validation or runtime execution safely.
-Inspect run ledger.","Prompt in Code with Code Mode enabled: Run an intentional failure canary that throws Error('QA intentional Code Mode failure') after approval, then keep the failed run ledger visible.","Rejected runs do not execute.
+Inspect run ledger.","Prompt in Chat with Code Mode enabled: Run an intentional failure canary that throws Error('QA intentional Code Mode failure') after approval, then keep the failed run ledger visible.","Rejected runs do not execute.
 Failed runs retain artifact evidence.
 Failure phase/error code is visible.
 Candidate-save does not happen after reject/failure.",,,,,,,,,,
-CODE-05,Code Surface And Code Mode,Candidate Lifecycle,,,"Create or inspect a generated candidate.
+CODE-05,Chat-Hosted Code Capability,Candidate Lifecycle,,,"Create or inspect a generated candidate.
 Open candidate details.
 Promote candidate.
 Revoke candidate.
 Roll back if supported.
-Inspect callable catalog after each step.","Prompt in Code: After a successful Code Mode run, save the result as a candidate, then walk me through promote, revoke, and rollback while showing callable catalog changes.","Candidate/proposal is inspectable before activation.
+Inspect callable catalog after each step.","Prompt in Chat: After a successful Code Mode run, save the result as a candidate, then walk me through promote, revoke, and rollback while showing callable catalog changes.","Candidate/proposal is inspectable before activation.
 Promotion/revocation changes lifecycle state.
 Callable catalog widens only after explicit activation.
 Rollback/revoke does not leave stale callable entries.",,,,,,,,,,
-CODE-06,Code Surface And Code Mode,Execution Backend Truth,,,"Inspect /api/v1/code-mode/execution-backends or UI equivalent.
+CODE-06,Chat-Hosted Code Capability,Execution Backend Truth,,,"Inspect /api/v1/code-mode/execution-backends or UI equivalent.
 Compare host runner, Docker backend, and Aider adapter availability.
 Try an unavailable required backend.","Action: open /api/v1/code-mode/execution-backends or the Code Mode backend UI. For unavailable-backend edge, require Docker backend while Docker/image config is missing.","Default trusted-code host runner is visible.
 Docker runs only when explicitly configured.
@@ -362,7 +362,7 @@ Required isolation fails closed when unavailable.",,,,,,,,,,
 PROJ-01,Projects,Project CRUD And Navigation,,,"Open /projects.
 Create a test project.
 Open project detail route.
-Link or continue Chat, Cowork, and Code work from the project.
+Link or continue Chat work from the project.
 Edit project metadata.
 Archive/delete if supported.","Action/prompt: create project QA Project Canary, then from that project start a Chat prompt: Summarize this project and link this session to the project.","Project appears in list and direct route.
 Cross-surface continuation keeps project identity.
@@ -446,7 +446,7 @@ Issues include source drift, stale low-value records, duplicates, contradictions
 Resolution persists.",,,,,,,,,,
 LIB-KNOW-01,"Library: Memory, Knowledge, Notes",Knowledge Sources,,,"Open /library/knowledge.
 Add or inspect a knowledge source.
-Search or attach it to Chat/Cowork context.
+Search or attach it to Chat context.
 Remove or disable it if supported.",Action: add a knowledge source containing QA Knowledge Canary = silver relay. Prompt: Use knowledge context to tell me the QA Knowledge Canary and cite the source.,"Source identity/provenance is visible.
 Attached context can be inspected.
 Disabled source no longer appears as active context.",,,,,,,,,,
@@ -471,7 +471,7 @@ Try unsupported MIME and traversal-like paths.","Action: upload qa-file-canary.t
 Preview route uses safe CSP.
 Traversal and unsupported content are rejected clearly.",,,,,,,,,,
 LIB-ART-01,"Library: Communications, Files, Artifacts, Prompt Packs",Generated Artifacts,,,"Open /library/artifacts.
-Generate a small artifact from Chat/Cowork/Code.
+Generate a small artifact from Chat.
 Reopen artifact.
 Inspect linked run/session/source/decision evidence.","Prompt: Create a markdown artifact titled QA Artifact Canary with three bullets: route coverage, approval evidence, runtime recovery.","Artifact remains accessible after refresh.
 Provenance links resolve.
@@ -534,7 +534,7 @@ Backup state is visible.
 Experimental sidecars stay labeled.",,,,,,,,,,
 OPS-DIAG-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Diagnostics Directory,,,"Open /ops/diagnostics.
 Inspect durable, daemon, admin, docs, readiness, and verification diagnostics.
-Open one run/detail view.","Action: open /ops/diagnostics after creating a Chat turn, Cowork run, and pending approval so diagnostics have real links to inspect.","Diagnostics are drill-in surfaces, not raw JSON-only.
+Open one run/detail view.","Action: open /ops/diagnostics after creating a Chat turn, Chat-hosted agentic run, and pending approval so diagnostics have real links to inspect.","Diagnostics are drill-in surfaces, not raw JSON-only.
 Readiness failures are actionable.
 Docs/verification links resolve.",,,,,,,,,,
 OPS-COST-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Costs And Budget Evidence,,,"Open /ops/costs.
@@ -557,7 +557,7 @@ Timezone and disabled state are clear.",,,,,,,,,,
 OPS-NOTIF-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Notifications And Operator Attention,,,"Open /ops/notifications.
 Generate a blocked/failed/done/waiting event.
 Inspect notification signals.
-Adjust notification preferences if visible.","Prompt/action: create one done Chat turn, one failed Code Mode canary, and one approval-wait Cowork task to produce done/failed/waiting signals.","Needs-attention signals appear.
+Adjust notification preferences if visible.","Prompt/action: create one done Chat turn, one failed Code Mode canary, and one approval-wait Chat task to produce done/failed/waiting signals.","Needs-attention signals appear.
 Done/failed/blocked states are distinguishable.
 Sound/browser notification settings persist.",,,,,,,,,,
 OPS-IMP-01,"Ops: Activity, Sessions, Runtime, Diagnostics",Improvement Experimental Surface,,,"Open /ops/improvement.
@@ -578,7 +578,7 @@ Pending item does not require raw JSON to understand.",,,,,,,,,,
 APPR-02,Approvals And Durable Runs,"Approve, Reject, And History",,,"Approve one pending item.
 Reject another pending item.
 Inspect history and replay.
-Return to linked Chat/Cowork/Code surface.",Action: create two pending approvals with APPR-01 trigger; approve one and reject the other.,"Approved/rejected state is durable.
+Return to linked Chat surface.",Action: create two pending approvals with APPR-01 trigger; approve one and reject the other.,"Approved/rejected state is durable.
 Follow-on work is visible as completed, pending, skipped, unknown, or failed.
 Reject prevents side effects.",,,,,,,,,,
 APPR-03,Approvals And Durable Runs,Resolve Failure,,,"Open a pending approval.
@@ -603,25 +603,25 @@ Attempt resolve if control remains visible.",Action: use a seeded expired approv
 History shows expired.
 Resolve action is disabled or rejected.",,,,,,,,,,
 DUR-01,Approvals And Durable Runs,Durable Run List And Detail,,,"Create or find a durable run.
-Open run detail from Cowork, Ops -> Diagnostics, or lifecycle links.
-Inspect timeline, checkpoints, retry status, dead-letter state, and evidence.",Prompt in Cowork: Start a durable run named QA Durable Canary with three checkpoints and show me the run detail link before completing.,"Run state is readable.
+Open run detail from Chat, Ops -> Diagnostics, or lifecycle links.
+Inspect timeline, checkpoints, retry status, dead-letter state, and evidence.",Prompt in Chat: Start a durable run named QA Durable Canary with three checkpoints and show me the run detail link before completing.,"Run state is readable.
 Checkpoints are available when expected.
 Session/turn/run/approval concepts are not conflated.",,,,,,,,,,
 DUR-02,Approvals And Durable Runs,"Pause, Resume, Retry, Dead Letter",,,"Create a pauseable/waiting run.
 Pause.
 Resume manually.
 Trigger retry if safe.
-Inspect dead-letter or blocked state if available.",Prompt in Cowork: Start a durable run that pauses for manual approval after checkpoint one; keep it paused until I explicitly resume.,"Paused vs waiting-for-event is distinct.
+Inspect dead-letter or blocked state if available.",Prompt in Chat: Start a durable run that pauses for manual approval after checkpoint one; keep it paused until I explicitly resume.,"Paused vs waiting-for-event is distinct.
 Resume is an operator-visible action.
 Retry/dead-letter states have evidence and next action.",,,,,,,,,,
 DUR-03,Approvals And Durable Runs,Approval Resolves While Run Paused,,,"Create paused run linked to approval.
 Resolve approval.
-Inspect run and approval state.","Prompt in Cowork: Start a durable run that asks for approval, then pause the run before I resolve the approval.","Approval may resolve.
+Inspect run and approval state.","Prompt in Chat: Start a durable run that asks for approval, then pause the run before I resolve the approval.","Approval may resolve.
 Run remains paused unless explicitly resumed.
 UI does not say ""all done"" when downstream work is unresolved.",,,,,,,,,,
-DUR-04,Approvals And Durable Runs,Restart Recovery,,,"Start durable Chat/Cowork/Code flow.
+DUR-04,Approvals And Durable Runs,Restart Recovery,,,"Start durable Chat flow.
 Restart gateway.
-Inspect run, session, approval, and activity state.",Prompt in Cowork: Start a durable QA run with three checkpoints and wait 20 seconds between checkpoints; restart gateway after checkpoint one.,"State survives restart.
+Inspect run, session, approval, and activity state.",Prompt in Chat: Start a durable QA run with three checkpoints and wait 20 seconds between checkpoints; restart gateway after checkpoint one.,"State survives restart.
 Recovery truth is visible.
 No stale running/completed fiction remains.",,,,,,,,,,
 SET-01,Settings And Governance,General Settings,,,"Open /settings/general.
@@ -922,7 +922,7 @@ Try read and mutation actions.
 Restore.","Prompt before disconnect: Network offline QA canary. Then disconnect/block gateway, try a read and mutation, restore, and inspect recovery.","Offline/degraded state is visible.
 Mutations do not appear successful until confirmed.
 Recovery refreshes current truth.",,,,,,,,,,
-EDGE-05,Cross-Cutting Edge Cases,Workspace Switch During Work,,,"Start Chat/Cowork/Code work in workspace A.
+EDGE-05,Cross-Cutting Edge Cases,Workspace Switch During Work,,,"Start Chat work in workspace A.
 Switch to workspace B mid-flow.
 Create memory/task/note.
 Switch back.",Prompt/action: in workspace A start Chat prompt 'Workspace A QA canary'; switch to workspace B and create note 'Workspace B QA canary'; switch back and compare scope.,"Workspace-specific state does not leak silently.

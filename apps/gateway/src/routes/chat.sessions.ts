@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
+const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
+
 const listChatSessionsSchema = z.object({
   scope: z.enum(["mission", "external", "all"]).optional(),
   citadelId: z.string().min(1).optional(),
@@ -10,7 +12,7 @@ const listChatSessionsSchema = z.object({
   tag: z.string().min(1).optional(),
   q: z.string().optional(),
   view: z.enum(["active", "archived", "all"]).optional(),
-  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  mode: chatOnlyModeSchema.optional(),
   limit: z.coerce.number().int().positive().max(1000).default(200),
   cursor: z.string().optional(),
   includeHidden: z
@@ -24,7 +26,7 @@ const searchChatSessionsSchema = z.object({
   mode: z.enum(["discovery", "scroll", "browse"]).default("discovery"),
   citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
-  surface: z.enum(["chat", "cowork", "code"]).optional(),
+  surface: chatOnlyModeSchema.optional(),
   limit: z.coerce.number().int().positive().max(200).default(20),
   cursor: z.string().optional(),
   includeHidden: z
@@ -59,13 +61,13 @@ const createSessionSchema = z.object({
   folderName: z.string().optional(),
   tags: z.array(z.string()).max(32).optional(),
   projectId: z.string().optional(),
-  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  mode: chatOnlyModeSchema.optional(),
   origin: z.enum(["operator", "prompt_pack", "system"]).optional(),
   includeInHistory: z.boolean().optional(),
 });
 
 const createSideChatSchema = z.object({
-  createdFromSurface: z.enum(["chat", "cowork", "code"]).optional(),
+  createdFromSurface: chatOnlyModeSchema.optional(),
   sourceTurnId: z.string().min(1).optional(),
 });
 
@@ -137,7 +139,7 @@ const generatedArtifactsQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
-  sourceSurface: z.enum(["chat", "cowork", "code"]).optional(),
+  sourceSurface: chatOnlyModeSchema.optional(),
   kind: z.enum(["markdown", "html", "mermaid", "code", "text"]).optional(),
   limit: z.coerce.number().int().positive().max(1000).default(300),
 });

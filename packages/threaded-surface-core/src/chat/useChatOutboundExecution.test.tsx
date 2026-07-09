@@ -449,7 +449,7 @@ describe("useChatOutboundExecution", () => {
     });
   });
 
-  it("sends the locked Cowork surface mode even when session prefs still say Chat", async () => {
+  it("coerces a locked Cowork surface send to Chat", async () => {
     await act(async () => {
       create(<Harness surfaceMode="cowork" fullWebAccess />);
     });
@@ -468,14 +468,14 @@ describe("useChatOutboundExecution", () => {
       "session-1",
       expect.objectContaining({
         content: "Coordinate beta outreach",
-        mode: "cowork",
+        mode: "chat",
         fullWebAccess: true,
       }),
-      { originSurface: "cowork" },
+      { originSurface: "chat" },
     );
   });
 
-  it("retries with the locked Cowork surface mode even when session prefs still say Chat", async () => {
+  it("coerces a locked Cowork surface retry to Chat", async () => {
     await act(async () => {
       create(<Harness surfaceMode="cowork" />);
     });
@@ -495,13 +495,13 @@ describe("useChatOutboundExecution", () => {
       "session-1",
       "turn-1",
       expect.objectContaining({
-        mode: "cowork",
+        mode: "chat",
       }),
-      { originSurface: "cowork" },
+      { originSurface: "chat" },
     );
   });
 
-  it("edits with the locked Cowork surface mode even when session prefs still say Chat", async () => {
+  it("coerces a locked Cowork surface edit to Chat", async () => {
     await act(async () => {
       create(<Harness surfaceMode="cowork" />);
     });
@@ -522,13 +522,13 @@ describe("useChatOutboundExecution", () => {
       "turn-1",
       expect.objectContaining({
         content: "Edited prompt",
-        mode: "cowork",
+        mode: "chat",
       }),
-      { originSurface: "cowork" },
+      { originSurface: "chat" },
     );
   });
 
-  it("streams the locked Cowork surface mode even when session prefs still say Chat", async () => {
+  it("coerces a locked Cowork surface stream to Chat", async () => {
     streamAgentChatMessageMock.mockImplementation(async (_sessionId, _payload, onChunk) => {
       onChunk({
         type: "message_start",
@@ -566,10 +566,10 @@ describe("useChatOutboundExecution", () => {
       "session-1",
       expect.objectContaining({
         content: "Coordinate beta outreach",
-        mode: "cowork",
+        mode: "chat",
       }),
       expect.any(Function),
-      expect.objectContaining({ originSurface: "cowork" }),
+      expect.objectContaining({ originSurface: "chat" }),
     );
   });
 
@@ -626,7 +626,7 @@ describe("useChatOutboundExecution", () => {
     });
   });
 
-  it("resumes interrupted streams with the locked Cowork surface mode", async () => {
+  it("resumes interrupted legacy-surface streams with Chat origin", async () => {
     streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
       onChunk({
         type: "message_start",
@@ -670,7 +670,7 @@ describe("useChatOutboundExecution", () => {
       expect.any(Function),
       expect.objectContaining({
         sinceEventId: "evt-0",
-        originSurface: "cowork",
+        originSurface: "chat",
       }),
     );
   });
@@ -2397,7 +2397,7 @@ describe("useChatOutboundExecution", () => {
     expect(latest?.getSnapshot().streamStatus).toBe("streaming");
   });
 
-  it("an explicit surfaceMode override sends explicit mode and no autoRoute on the first turn", async () => {
+  it("an explicit legacy surfaceMode override still sends Chat and no autoRoute on the first turn", async () => {
     // Render with a fresh thread (0 prior turns) and surfaceMode="code" (unlocked override path).
     // The Harness initialThread defaults to makeThread() which has 1 turn, so pass initialThread=null
     // to simulate a brand-new session where isFirstTurn=true.
@@ -2419,9 +2419,9 @@ describe("useChatOutboundExecution", () => {
       "session-1",
       expect.objectContaining({
         content: "build the parser",
-        mode: "code",
+        mode: "chat",
       }),
-      { originSurface: "code" },
+      { originSurface: "chat" },
     );
     // autoRoute must NOT be present when an explicit surfaceMode is provided
     expect(sendAgentChatMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("autoRoute");

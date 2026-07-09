@@ -926,7 +926,7 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       "Score all completed defensive security runs before treating this gate as release evidence.",
     );
     expect(text).toContain("Red-team packs are visible as governed definitions");
-    expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
+    expect(text).toContain("Available · 18 tests · Chat 6 · Legacy plan 6 · Legacy code 6");
     expect(text).toContain("Import and open defensive security pack");
     expect(text).toContain("Review security pack scoring");
     expect(text).toContain("Security execution depth");
@@ -1100,7 +1100,7 @@ describe("NativeRoutePages Library provenance helpers", () => {
       findButton(renderer!.root, "Open source thread").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({
-      area: "cowork",
+      area: "chat",
       sessionId: "session-1",
       turnId: "turn-1",
       artifactId: "artifact-1",

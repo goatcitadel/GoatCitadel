@@ -265,10 +265,10 @@ describe("CoworkCanvasPanel", () => {
 
     const text = textOf(renderer.toJSON()).replace(/\s+/g, " ");
     expect(text).toContain("Historical turn selected.");
-    expect(text).toContain("Cowork has not attached a visible plan yet.");
+    expect(text).toContain("Chat has not attached a visible plan yet.");
     expect(text).toContain("Role activity will land here when the run fans out.");
     expect(text).toContain("Recent checkpoints will appear here once the run starts moving.");
-    expect(text).toContain("Operator actions will collect here when Cowork needs follow-up work.");
+    expect(text).toContain("Operator actions will collect here when Chat needs follow-up work.");
     expect(text).toContain("Outputs and attached tasks will appear here as the run produces them.");
     expect(text).toContain("Human approval is required.");
     expect(text).toContain("Raw details");

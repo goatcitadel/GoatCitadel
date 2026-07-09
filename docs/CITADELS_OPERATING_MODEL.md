@@ -15,7 +15,7 @@ flowchart TD
   Citadel["Citadel\ncharter, rules, memory boundary, defaults, files, agents, proof"]
   Workspace["Workspace\nfunctional zone and local specialization"]
   Project["Project\ninitiative or workstream"]
-  Surfaces["Chat / Cowork / Code"]
+  Surfaces["Chat"]
   Library["Files / Memory / Agents / Artifacts"]
 
   Citadel --> Workspace
@@ -31,7 +31,7 @@ flowchart TD
 - Workspace owns functional specialization inside the Citadel, such as
   Engineering, Marketing, Finance, Family Admin, or Client Delivery.
 - Project owns bounded work inside one workspace.
-- Chat, Cowork, Code, files, memory, agents, artifacts, and runtime decisions
+- Chat, files, memory, agents, artifacts, code capabilities, and runtime decisions
   receive an effective scope that includes both `citadelId` and `workspaceId`.
 
 Default Citadels are seeded as:

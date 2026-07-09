@@ -6,7 +6,7 @@ Last updated: 2026-05-26
 
 GoatCitadel is a local-first AI operations console for chat, coding, orchestration, memory, tools, approvals, and operator-visible runtime truth.
 
-It is not just a chat UI. It is a multi-surface, multi-provider, skill-aware workspace where users can:
+It is not just a chat UI. It is a chat-first, multi-provider, skill-aware workspace where users can:
 
 - chat with AI naturally
 - supervise agentic workflows
@@ -19,11 +19,12 @@ It is not just a chat UI. It is a multi-surface, multi-provider, skill-aware wor
 - `apps/mission-control-next` is the canonical `1.0` Mission Control shell.
 - `apps/mission-control` source is archived from disk; generated build/runtime residue may still exist locally but is not a shipped compatibility source.
 - The Fastify gateway owns orchestration, approvals, memory, integrations, audit trails, policy enforcement, durable execution, and runtime APIs.
-- Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
-- Durable execution owns the shipped resumable mission-session Chat, Cowork, and Code flow set.
+- Chat is the only primary conversation surface. Planning, research, agentic orchestration, approvals, and code-capability work happen inside Chat.
+- Legacy Cowork and Code route/mode inputs are compatibility shims that normalize to Chat or Ops Kanban.
+- Durable execution owns the shipped resumable mission-session Chat flow set, including agentic planning/delegation and code-capability turns.
 - The capability system governs tools, runtime skills, candidates, proposals, and Code Mode runs through inspectable and callable catalogs.
 - Autonomous activation is governed by expiring operator grants and remains subordinate to deny-wins policy, approvals, auth, path jails, provenance, and health checks.
-- Code Mode v1 is a governed trusted-code surface with explicit approval, immutable ledger references, recorded artifact hashes, and execution-time hash checks. Do not claim hostile-code sandboxing.
+- Code Mode v1 is a governed trusted-code capability launched from Chat with explicit approval, immutable ledger references, recorded artifact hashes, and execution-time hash checks. Do not claim hostile-code sandboxing.
 - Native Windows desktop hosting and installer paths are part of the product shape.
 - Docker is a supported local/shared-host runtime boundary, but it does not replace auth, approvals, path jails, or policy.
 - Public claims must stay aligned with `docs/1_0_CONTRACT.md`, `docs/CANONICAL_RUNTIME_STATE_MODEL.md`, and current implementation.
@@ -32,9 +33,7 @@ It is not just a chat UI. It is a multi-surface, multi-provider, skill-aware wor
 
 | Surface | Purpose | Primary Feel |
 |---|---|---|
-| Chat | Fast conversation, questions, drafting, lightweight help | Simple, direct, low-friction |
-| Cowork | Agentic orchestration, planning, research, approvals, durable multi-step work | Guided, powerful, transparent |
-| Code | Focused implementation, debugging, review, governed code execution | Technical, precise, test-driven |
+| Chat | Conversation, questions, drafting, planning, research, approvals, agentic work, and code-capability context | Simple, direct, low-friction |
 | Projects | Workspace and project organization | Structured, navigable |
 | Library | Skills, memory, files, artifacts, capability evidence | Inspectable, provenance-aware |
 | Ops | Runtime health, activity, cost, diagnostics, backups, release proof | Operational, high-signal |
@@ -61,9 +60,9 @@ Do not dress roadmap, diagnostics, or partial support as finished product behavi
 
 Users should understand which model/provider is being used, why it was selected, what tools or capabilities were available, what tools were used, where memory/context came from, what approvals were required, what persisted as evidence, and what still needs human judgment.
 
-### 3. One Runtime, Multiple Modes
+### 3. One Runtime, One Chat Surface
 
-Chat, Cowork, and Code should share runtime foundations where possible, but each surface needs distinct defaults, UX framing, and policy posture.
+Chat is the primary operator surface. Runtime foundations still support planning, delegation, approvals, memory, tools, and governed Code Mode, but the user should not have to switch to separate Cowork or Code panes to use them.
 
 ### 4. Human-in-the-Loop by Default
 
@@ -111,13 +110,13 @@ When facts conflict, prefer:
 
 Chat should feel immediate and natural. It should prioritize responsiveness, preserve conversation flow, show citations/tool/runtime status when relevant, and avoid becoming a dense orchestration console.
 
-### Cowork
+### Agentic Work In Chat
 
-Cowork is the home for supervised agentic work. It should show task decomposition, execution state, approvals, retries, pivots, blocked states, checkpoints, delegation lineage, and synthesis integrity. It must use the shared Gateway, durable execution, policy, memory, and capability foundations.
+Supervised agentic work lives inside Chat. It should show task decomposition, execution state, approvals, retries, pivots, blocked states, checkpoints, delegation lineage, and synthesis integrity without requiring a separate Cowork surface. It must use the shared Gateway, durable execution, policy, memory, and capability foundations.
 
-### Code
+### Code Capability In Chat
 
-Code should deliver trustworthy implementation help. It should preserve existing project patterns, use minimal reviewable diffs, respect file ownership and architecture boundaries, run targeted validation when feasible, and surface approval and artifact truth for governed Code Mode work.
+Implementation help and governed Code Mode runs should be launched, reviewed, and explained from Chat. They should preserve existing project patterns, use minimal reviewable diffs, respect file ownership and architecture boundaries, run targeted validation when feasible, and surface approval and artifact truth for governed Code Mode work.
 
 Code should avoid sweeping rewrites without justification, casual dependency additions, unrelated formatting churn, unsafe claims about sandboxing, and bypassing policy, path jails, approvals, or capability activation rules.
 
@@ -162,7 +161,7 @@ Provider work should preserve clean abstractions for OpenAI, Anthropic, Google, 
 
 ### Durable Execution and Orchestration
 
-Durable runs are the authority for resumable mission-session Chat, Cowork, and Code work. Approval-gated resume must re-enter durable execution rather than advancing only UI or side-table state.
+Durable runs are the authority for resumable mission-session Chat work, including planning, research, delegation, approvals, and code-capability turns. Approval-gated resume must re-enter durable execution rather than advancing only UI or side-table state.
 
 ### Capability and Skills Layer
 

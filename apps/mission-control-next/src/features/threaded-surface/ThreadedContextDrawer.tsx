@@ -56,7 +56,7 @@ function formatThreadedSecuritySummary(permissionOverrideActive?: boolean): stri
   const overrideCopy = permissionOverrideActive
     ? "A local operator override is active for this session, so normal prompts may be reduced while the override lasts."
     : "No local operator override is active for this session.";
-  return `${overrideCopy} Deny-wins policy, approval gates, auth boundaries, path jails, provenance, and health checks remain enforced. Code Mode is a governed trusted-code surface; this drawer does not claim hostile-code sandboxing.`;
+  return `${overrideCopy} Deny-wins policy, approval gates, auth boundaries, path jails, provenance, and health checks remain enforced. The code capability is governed trusted-code execution; this drawer does not claim hostile-code sandboxing.`;
 }
 
 function formatTrustRouteSummary(props: MissionThreadedContextDockProps): string | null {
@@ -612,8 +612,8 @@ export function ThreadedContextDrawer({
 
       <ConfirmModal
         open={pendingSubagentAuto !== null}
-        title="Allow Cowork to auto-delegate to subagents?"
-        message="Auto-delegation lets Cowork split runs across multiple subagents without asking each time. You will still see the run plan and can stop it. This persists for this session."
+        title="Allow Chat to auto-delegate to subagents?"
+        message="Auto-delegation lets Chat split runs across multiple subagents without asking each time. You will still see the run plan and can stop it. This persists for this session."
         confirmLabel="Allow auto-delegation"
         cancelLabel="Keep asking"
         danger

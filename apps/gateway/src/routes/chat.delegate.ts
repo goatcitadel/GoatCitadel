@@ -12,11 +12,13 @@ const delegateStepSchema = z.object({
   dependsOnStepIds: z.array(z.string().min(1)).optional(),
 });
 
+const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
+
 const delegateBodySchema = z.object({
   objective: z.string().min(1),
   roles: z.array(z.string().min(1)).min(1),
   mode: z.enum(["sequential", "parallel"]).default("sequential"),
-  surfaceMode: z.enum(["chat", "cowork", "code"]).optional(),
+  surfaceMode: chatOnlyModeSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   steps: z.array(delegateStepSchema).optional(),
@@ -43,7 +45,7 @@ const delegateAcceptSchema = z.object({
   objective: z.string().min(1),
   roles: z.array(z.string().min(1)).min(1),
   mode: z.enum(["sequential", "parallel"]).optional(),
-  surfaceMode: z.enum(["chat", "cowork", "code"]).optional(),
+  surfaceMode: chatOnlyModeSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   steps: z.array(delegateStepSchema).optional(),

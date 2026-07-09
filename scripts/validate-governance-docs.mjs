@@ -110,7 +110,7 @@ if (
 ) {
   errors.push("AGENTS.md must keep the canonical Mission Control Next and archived legacy shell guidance explicit.");
 }
-if (!/trusted-code surface/i.test(agentsGuide) || !/Do not claim hostile-code sandboxing/i.test(agentsGuide)) {
+if (!/trusted-code capability/i.test(agentsGuide) || !/Do not claim hostile-code sandboxing/i.test(agentsGuide)) {
   errors.push("AGENTS.md must keep Code Mode guidance truthful and avoid hostile-code sandbox claims.");
 }
 if (!/js\/unhandled-error-in-stream-pipeline/.test(agentsGuide) || !/Dependabot/.test(agentsGuide)) {
@@ -231,8 +231,8 @@ const durableFoundation = await readFile(path.join(root, "docs", "DURABLE_RUNS_R
 if (!/historical implementation background/i.test(durableFoundation) || !/not the active rollout source of truth/i.test(durableFoundation)) {
   errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must describe itself as historical implementation background rather than an active rollout plan.");
 }
-if (!/default to `true`/i.test(durableFoundation) || !/Shipped Chat \/ Cowork \/ Code operator sends/i.test(durableFoundation)) {
-  errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must match the shipped durable-by-default posture for Chat/Cowork/Code operator flows.");
+if (!/default to `true`/i.test(durableFoundation) || !/Shipped Chat operator sends/i.test(durableFoundation)) {
+  errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must match the shipped durable-by-default posture for Chat operator flows.");
 }
 if (/default:\s*`false`/i.test(durableFoundation) || /Next Step \(Activation Plan\)/i.test(durableFoundation) || /keep the feature disabled by default/i.test(durableFoundation)) {
   errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must not reintroduce stale default-off or activation-plan language.");
@@ -383,12 +383,13 @@ if (!/local-first AI workbench/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must define GoatCitadel 1.0 as a local-first AI workbench.");
 }
 if (
-  !/Chat \/ Cowork \/ Code \/ Projects \/ Library \/ Ops \/ Settings/i.test(contract) ||
+  !/Work \/ Projects \/ Library \/ Ops \/ Settings/i.test(contract) ||
+  !/single Chat surface/i.test(contract) ||
   !/Work \/ Observe \/ Tune.*legacy release taxonomy/i.test(contract)
 ) {
   errors.push("docs/1_0_CONTRACT.md must define the current Mission Control Next IA and demote Work / Observe / Tune to release taxonomy.");
 }
-if (!/trusted-code surface/i.test(contract) || !/best-effort and fail-closed/i.test(contract)) {
+if (!/trusted-code capability/i.test(contract) || !/best-effort and fail-closed/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the Code Mode security posture narrow and explicit.");
 }
 if (!/Backup create, list, and verify are shipped through the admin API\/CLI surface/i.test(contract)) {

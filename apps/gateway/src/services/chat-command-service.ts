@@ -283,7 +283,7 @@ export interface ChatCommandCatalogItem {
 export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
   return [
     { command: "/new", usage: "/new [title]", description: "Start a fresh session." },
-    { command: "/mode", usage: "/mode chat|cowork|code", description: "Switch session mode." },
+    { command: "/mode", usage: "/mode", description: "Show the current Chat surface." },
     { command: "/plan", usage: "/plan [on|off]", description: "Show or set advisory planning mode." },
     {
       command: "/model",
@@ -480,12 +480,15 @@ export async function parseChatCommand(
   }
 
   if (command === "/mode") {
-    const mode = (args[0] ?? "").toLowerCase() as ChatMode;
-    if (mode !== "chat" && mode !== "cowork" && mode !== "code") {
-      return { ok: false, command, args, message: "Usage: /mode chat|cowork|code" };
-    }
-    const prefs = deps.updateChatSessionPrefs(sessionId, { mode });
-    return { ok: true, command, args, prefs, message: `Mode set to ${prefs.mode}.` };
+    const prefs = deps.updateChatSessionPrefs(sessionId, { mode: "chat" });
+    return {
+      ok: true,
+      command,
+      args,
+      prefs,
+      message:
+        "Mission Control uses Chat as the only conversation surface. Planning, tools, and Code Mode run inside Chat.",
+    };
   }
 
   if (command === "/plan") {

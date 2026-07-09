@@ -74,7 +74,7 @@ describe("capabilities API", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends Code Mode originSurface in both body and gateway headers", async () => {
+  it("normalizes Code Mode originSurface to Chat in both body and gateway headers", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ runId: "code-run-1", status: "approval_pending" }));
     vi.stubGlobal("fetch", fetchMock);
     const { createCodeModeRun } = await import("./capabilities");
@@ -91,11 +91,11 @@ describe("capabilities API", () => {
 
     const call = fetchMock.mock.calls[0];
     expect(String(call?.[0])).toContain("/api/v1/code-mode/runs");
-    expect(toHeaderRecord(call?.[1]?.headers)["x-goatcitadel-origin-surface"]).toBe("code");
+    expect(toHeaderRecord(call?.[1]?.headers)["x-goatcitadel-origin-surface"]).toBe("chat");
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
       language: "typescript",
       source: "return { ok: true };",
-      originSurface: "code",
+      originSurface: "chat",
       sessionId: "session-1",
       turnId: "turn-1",
       permissionProfileId: "trusted-local-power",

@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { shouldAutoRouteSend } from "./useChatOutboundExecution";
 
 describe("shouldAutoRouteSend", () => {
-  it("returns true for a first-turn send with no surface lock (auto-route fires)", () => {
+  it("returns false for a first-turn send with no surface lock because Chat is the only surface", () => {
     expect(
       shouldAutoRouteSend({
         action: "send",
         threadEmpty: true,
         surfaceMode: undefined,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("returns false when the thread is non-empty (later turns do not auto-route)", () => {

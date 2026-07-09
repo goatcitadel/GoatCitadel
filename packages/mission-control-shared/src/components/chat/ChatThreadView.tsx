@@ -191,7 +191,7 @@ export function ChatThreadView({
         </p>
         <p>
           {mode === "cowork"
-            ? "Describe the objective, constraints, and desired output. Cowork will create a visible run plan here."
+            ? "Describe the objective, constraints, and desired output. Chat will create a visible run plan here."
             : "Start with a plain request, or type /help to see commands."}
         </p>
       </div>

@@ -546,7 +546,7 @@ describe("capabilities routes", () => {
     expect(createCodeModeRun).toHaveBeenCalledWith({
       language: "typescript",
       source: "return { ok: true };",
-      originSurface: "code",
+      originSurface: "chat",
       input: { path: "/tmp/demo" },
       requestedOutputIntent: "Summarize files",
       saveCandidateOnSuccess: true,
@@ -561,7 +561,7 @@ describe("capabilities routes", () => {
     });
   });
 
-  it("falls back to the Code Mode origin surface header when the request body omits it", async () => {
+  it("normalizes the legacy Code Mode origin surface header when the request body omits it", async () => {
     const service = await registerCapabilitiesService();
 
     const response = await app!.inject({
@@ -580,7 +580,7 @@ describe("capabilities routes", () => {
     expect(service.createCodeModeRun).toHaveBeenCalledWith({
       language: "typescript",
       source: "return { ok: true };",
-      originSurface: "code",
+      originSurface: "chat",
       operatorId: "operator-test",
     });
   });

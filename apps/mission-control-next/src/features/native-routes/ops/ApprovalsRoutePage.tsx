@@ -1013,14 +1013,9 @@ function buildLiveLaneRoute(approval: ApprovalRequest): AppRoute | null {
     approval.kind === "code_mode.run" ||
     approval.linkage.actionType === "code_mode.run" ||
     approval.linkage.toolName === "code_mode.run";
-  const area =
-    approval.linkage.originSurface === "cowork" || approval.linkage.originSurface === "code"
-      ? approval.linkage.originSurface
-      : codeModeLinked
-        ? "code"
-        : "chat";
+  void codeModeLinked;
   return {
-    area,
+    area: "chat",
     sessionId: approval.linkage.sessionId,
     turnId: approval.linkage.turnId,
     approvalId: approval.approvalId,

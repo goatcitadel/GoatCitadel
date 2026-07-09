@@ -1242,7 +1242,7 @@ describe("MissionThreadedControllerHost", () => {
       expect.objectContaining({
         language: "typescript",
         source: "export const x = 1;",
-        originSurface: "code",
+        originSurface: "chat",
         sessionId: "session-1",
       }),
     );
@@ -1271,7 +1271,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(fetchAgenticRunsMock).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
       sessionId: "session-1",
-      surface: "cowork",
+      surface: "chat",
       limit: 1,
     });
     expect(fetchAgenticRunTreeMock).toHaveBeenCalledWith("agentic-run-1", { workspaceId: "workspace-1" });
@@ -1475,7 +1475,7 @@ describe("MissionThreadedControllerHost", () => {
       await outboundInput.operations.handleCommandExecution("session-1", "/goal pause");
       await flushEffects();
     });
-    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause", { surface: "cowork" });
+    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause", { surface: "chat" });
 
     parseChatCommandMock.mockClear();
     await act(async () => {
@@ -1491,8 +1491,8 @@ describe("MissionThreadedControllerHost", () => {
     expect(parseChatCommandMock).not.toHaveBeenCalled();
     expect(createChatSideChatMock).toHaveBeenCalledWith(
       "session-1",
-      { createdFromSurface: "cowork", sourceTurnId: undefined },
-      { originSurface: "cowork" },
+      { createdFromSurface: "chat", sourceTurnId: undefined },
+      { originSurface: "chat" },
     );
     expect(streamAgentChatMessageMock).toHaveBeenCalledWith(
       "session-btw",
@@ -1501,7 +1501,7 @@ describe("MissionThreadedControllerHost", () => {
         mode: "chat",
         sideChatContext: expect.objectContaining({
           parentSessionId: "session-1",
-          originSurface: "cowork",
+          originSurface: "chat",
         }),
       }),
       expect.any(Function),
@@ -1883,7 +1883,7 @@ describe("MissionThreadedControllerHost", () => {
       selectedModel: undefined,
     });
     await renderHost({ lockSurface: true, surface: "cowork" });
-    expect(useChatRoutePreflightMock.mock.calls.at(-1)?.[0].prefs).toEqual(expect.objectContaining({ mode: "cowork" }));
+    expect(useChatRoutePreflightMock.mock.calls.at(-1)?.[0].prefs).toEqual(expect.objectContaining({ mode: "chat" }));
 
     for (const item of [
       { mode: "chat" as ChatMode, lockSurface: true },
@@ -2055,7 +2055,7 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(8);
     });
     expect(createCodeModeRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({ language: "typescript", originSurface: "code" }),
+      expect.objectContaining({ language: "typescript", originSurface: "chat" }),
     );
 
     setupMocks();
@@ -2864,7 +2864,7 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(8);
     });
 
-    expect(onResolvedModeChange).toHaveBeenCalledWith("code", "session-sync");
+    expect(onResolvedModeChange).toHaveBeenCalledWith("chat", "session-sync");
   });
 
   describe("auto-route surfaceMode wiring guard (#136)", () => {
@@ -2877,7 +2877,7 @@ describe("MissionThreadedControllerHost", () => {
       const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
         sessionConfig: { surfaceMode?: string };
       };
-      expect(lastInput.sessionConfig.surfaceMode).toBeUndefined();
+      expect(lastInput.sessionConfig.surfaceMode).toBe("chat");
     });
 
     it("passes the locked surface mode to the outbound hook when locked", async () => {
@@ -2885,7 +2885,7 @@ describe("MissionThreadedControllerHost", () => {
       const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
         sessionConfig: { surfaceMode?: string };
       };
-      expect(lastInput.sessionConfig.surfaceMode).toBe("cowork");
+      expect(lastInput.sessionConfig.surfaceMode).toBe("chat");
     });
 
     it("passes the override mode to the outbound hook after onModeOverride is called", async () => {
@@ -2894,7 +2894,7 @@ describe("MissionThreadedControllerHost", () => {
       const beforeInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
         sessionConfig: { surfaceMode?: string };
       };
-      expect(beforeInput.sessionConfig.surfaceMode).toBeUndefined();
+      expect(beforeInput.sessionConfig.surfaceMode).toBe("chat");
 
       // Trigger a mode override via the activeSessionSurfaceProps callback.
       // activeSessionSurfaceProps is non-null because setupMocks sets selectedSession.
@@ -2906,7 +2906,7 @@ describe("MissionThreadedControllerHost", () => {
       const afterInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
         sessionConfig: { surfaceMode?: string };
       };
-      expect(afterInput.sessionConfig.surfaceMode).toBe("code");
+      expect(afterInput.sessionConfig.surfaceMode).toBe("chat");
     });
 
     it("seeds modeOverride from initialModeOverride so an explicit ?mode=chat wins over the session's own cowork mode (QA finding N3)", async () => {
@@ -3020,7 +3020,7 @@ describe("MissionThreadedControllerHost", () => {
         latestSurfaceInput?.activeSessionSurfaceProps?.onModeOverride("cowork");
         await flushEffects(4);
       });
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("cowork");
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
 
       // Now switch session. The URL seed (initialModeOverride="chat") is still
       // the same prop value — only a manual adjustment happened — so the reset
@@ -3071,7 +3071,7 @@ describe("MissionThreadedControllerHost", () => {
         latestSurfaceInput?.activeSessionSurfaceProps?.onModeOverride("cowork");
         await flushEffects(4);
       });
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("cowork");
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
 
       // The prop transitions "chat" -> undefined (e.g. the operator navigated away
       // from ?mode=chat entirely), simulating a real navigation boundary.
@@ -3176,8 +3176,8 @@ describe("MissionThreadedControllerHost", () => {
         refreshViewState: vi.fn(async () => undefined),
       });
       await renderHost();
-      // Unlocked (no lockSurface), no modeOverride (starts null), empty thread → autoRouteActive = true.
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(true);
+      // Auto-route surface switching is disabled; Chat remains the only routed surface.
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
       // surfaceRoutePreview is undefined because the mock returns undefined (draft is empty, hook returns undefined).
       expect(latestSurfaceInput?.activeSessionSurfaceProps?.surfaceRoutePreview).toBeUndefined();
     });
@@ -3265,7 +3265,7 @@ describe("MissionThreadedControllerHost", () => {
       setupEmptyThread({ hasBoundProject: false });
       mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
       await renderHost();
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(true);
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
 
       await act(async () => {
         latestSurfaceInput?.activeSessionSurfaceProps?.onSend();

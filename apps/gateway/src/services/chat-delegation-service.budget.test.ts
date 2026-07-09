@@ -338,7 +338,7 @@ describe("ChatDelegationService subagent budget enforcement", () => {
     );
   });
 
-  it("lets Cowork children run without the default child timeout", async () => {
+  it("applies the default child timeout to legacy Cowork children", async () => {
     const { deps, service } = createHarness({
       subagentDefaults: { childTimeoutSeconds: 0.01, coworkChildTimeoutSeconds: null, maxDepth: 4 },
     });
@@ -359,13 +359,13 @@ describe("ChatDelegationService subagent budget enforcement", () => {
 
     expect(result.steps[0]).toEqual(
       expect.objectContaining({
-        status: "completed",
-        output: "slow cowork child completed",
+        status: "failed",
+        error: expect.stringMatching(/timeout_exceeded/),
       }),
     );
     expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
       expect.any(String),
-      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({ status: "failed" }),
     );
   });
 

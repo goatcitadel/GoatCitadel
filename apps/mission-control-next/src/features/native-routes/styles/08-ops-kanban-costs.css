@@ -1,0 +1,605 @@
+.mc-next-ops-attention-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-ops-attention-item {
+  /* Wrapping flex instead of a two-column grid: the actions cluster wants
+     up to 15rem, which crushed the copy column (and its status chip) to a
+     sliver in narrow panels. Wrapped, the actions drop below the copy. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
+}
+
+.mc-next-ops-attention-item.tone-danger {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 34%, var(--border));
+}
+
+.mc-next-ops-attention-item.tone-caution {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 32%, var(--border));
+}
+
+.mc-next-ops-attention-copy {
+  display: grid;
+  gap: 0.28rem;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.mc-next-ops-attention-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ops-attention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  flex: 0 1 auto;
+  margin-left: auto;
+}
+
+.mc-next-shell[data-area="library"] .page-header,
+.mc-next-shell[data-area="ops"] .page-header,
+.mc-next-shell[data-area="settings"] .page-header,
+.mc-next-shell[data-area="library"] .page-header-citadel,
+.mc-next-shell[data-area="ops"] .page-header-citadel,
+.mc-next-shell[data-area="settings"] .page-header-citadel,
+.mc-next-shell[data-area="library"] .page-header-command,
+.mc-next-shell[data-area="ops"] .page-header-command,
+.mc-next-shell[data-area="settings"] .page-header-command {
+  margin-bottom: 0.7rem;
+}
+
+.mc-next-shell[data-area="library"] .tune-posture-bar,
+.mc-next-shell[data-area="ops"] .tune-posture-bar,
+.mc-next-shell[data-area="settings"] .tune-posture-bar {
+  position: static;
+  top: auto;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.55rem;
+  padding: 0.72rem 0.8rem;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.mc-next-shell[data-area="library"] .tune-posture-label,
+.mc-next-shell[data-area="ops"] .tune-posture-label,
+.mc-next-shell[data-area="settings"] .tune-posture-label {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.mc-next-shell[data-area="library"] .tune-posture-value,
+.mc-next-shell[data-area="ops"] .tune-posture-value,
+.mc-next-shell[data-area="settings"] .tune-posture-value {
+  font-size: var(--text-md);
+}
+
+.mc-next-shell[data-area="library"] .tune-posture-note,
+.mc-next-shell[data-area="ops"] .tune-posture-note,
+.mc-next-shell[data-area="settings"] .tune-posture-note {
+  font-size: var(--text-sm);
+}
+
+.mc-next-shell[data-area="library"] .operator-summary-strip,
+.mc-next-shell[data-area="ops"] .operator-summary-strip,
+.mc-next-shell[data-area="settings"] .operator-summary-strip {
+  gap: 0.55rem;
+  margin-top: 0;
+}
+
+.mc-next-shell[data-area="library"] .operator-summary-card,
+.mc-next-shell[data-area="ops"] .operator-summary-card,
+.mc-next-shell[data-area="settings"] .operator-summary-card {
+  min-width: 0;
+  padding: 0.8rem 0.9rem;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  box-shadow: none;
+}
+
+.mc-next-shell[data-area="library"] .sessions-summary-strip,
+.mc-next-shell[data-area="ops"] .sessions-summary-strip,
+.mc-next-shell[data-area="settings"] .sessions-summary-strip {
+  margin-bottom: 0.45rem;
+}
+
+@media (min-width: 1024px) {
+  .mc-next-shell[data-area="library"] .page-tabs-tier-section,
+  .mc-next-shell[data-area="ops"] .page-tabs-tier-section,
+  .mc-next-shell[data-area="settings"] .page-tabs-tier-section {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .mc-next-settings-grid,
+  .mc-next-settings-grid.is-balanced,
+  .mc-next-settings-grid.is-detail-wide,
+  .mc-next-settings-grid.is-three-column,
+  .mc-next-native-projects-grid,
+  .mc-next-native-work-pair,
+  .mc-next-directory-grid-native.mc-next-native-board-grid,
+  .mc-next-native-board-grid,
+  .mc-next-directory-grid-native.mc-next-cowork-task-grid,
+  .mc-next-cowork-task-grid,
+  .mc-next-task-lanes,
+  .mc-next-board-lanes {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-cowork-task-grid .mc-next-task-lanes {
+    grid-template-columns: 1fr;
+    overflow-x: visible;
+  }
+
+  .mc-next-cowork-phase-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mc-next-cowork-attention-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-lead-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-project-intake-grid,
+  .mc-next-project-lane-resume-list {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-settings-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-settings-field.span-2 {
+    grid-column: auto;
+  }
+
+  .mc-next-settings-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-ops-attention-item {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-ops-attention-actions {
+    justify-content: flex-start;
+  }
+
+  .mc-next-project-continue-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .mc-next-directory-page {
+    padding-inline: 0.45rem;
+  }
+
+  .mc-next-directory-action,
+  .mc-next-settings-filter,
+  .mc-next-approvals-link-button {
+    width: 100%;
+  }
+
+  .mc-next-cowork-phase-rail,
+  .mc-next-cowork-checkpoint-grid,
+  .mc-next-citadel-template-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Shell explanation cards (O19) */
+.mc-next-approvals-shell-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+.mc-next-approvals-shell-card {
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  border: 1px solid var(--mc-border-subtle);
+  border-left: 0.1875rem solid var(--mc-border-strong);
+  border-radius: var(--r-xs);
+  padding: 0.625rem 0.75rem;
+}
+.mc-next-approvals-shell-card-risk-danger {
+  border-left-color: var(--gc-risk-danger);
+  background: color-mix(in oklab, var(--gc-risk-danger) 8%, transparent);
+}
+.mc-next-approvals-shell-card-risk-caution {
+  border-left-color: var(--gc-risk-caution);
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, transparent);
+}
+.mc-next-approvals-shell-card-risk-info {
+  border-left-color: var(--gc-risk-safe);
+}
+.mc-next-approvals-shell-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.mc-next-approvals-shell-summary {
+  flex: 1;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+.mc-next-approvals-shell-chip {
+  font-size: var(--text-2xs);
+  padding: 0.125rem 0.4375rem;
+  border-radius: 0.25rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.mc-next-approvals-shell-chip-danger {
+  background: color-mix(in oklab, var(--gc-risk-danger) 18%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
+}
+.mc-next-approvals-shell-chip-caution {
+  background: color-mix(in oklab, var(--gc-risk-caution) 18%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+}
+.mc-next-approvals-shell-details {
+  margin: 0.5rem 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.125rem 0.75rem;
+  font-size: var(--text-xs);
+}
+.mc-next-approvals-shell-details dt {
+  color: var(--muted-foreground);
+}
+.mc-next-approvals-shell-details dd {
+  margin: 0;
+}
+.mc-next-approvals-shell-note {
+  margin-left: 0.375rem;
+  font-size: var(--text-2xs);
+}
+.mc-next-approvals-shell-note-danger {
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
+}
+.mc-next-approvals-shell-note-caution {
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+}
+.mc-next-approvals-shell-raw {
+  display: block;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--mc-border-subtle);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--text-2xs);
+  color: var(--muted-foreground);
+}
+
+.mc-next-kanban-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  margin-bottom: 0.55rem;
+  align-items: center;
+}
+
+.mc-next-kanban-action {
+  min-height: 2rem;
+  padding: 0.32rem 0.62rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-kanban-board {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.58rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.mc-next-kanban-column {
+  min-width: 0;
+  background: var(--mc-surface-1);
+  border-radius: var(--r-sm);
+  padding: 0.55rem;
+  min-height: 6rem;
+}
+
+.mc-next-kanban-column header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.mc-next-kanban-column header h3 {
+  font-size: var(--text-md);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0;
+}
+
+.mc-next-kanban-column header .count {
+  font-size: var(--text-xs);
+  opacity: 0.7;
+}
+
+.mc-next-kanban-column ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+
+/* Virtualized lane scroller: bounds the column so react-virtuoso can window the
+   cards. The inner <ul> keeps the flex/gap list styling above. */
+.mc-next-kanban-column-scroller {
+  max-height: min(62vh, 38rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.mc-next-kanban-column-scroller > div > ul {
+  gap: 0.38rem;
+}
+
+.mc-next-kanban-card {
+  background: var(--mc-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 0.46rem 0.55rem;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mc-next-kanban-card.tone-active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 54%, var(--border));
+}
+
+.mc-next-kanban-card.tone-warning {
+  border-color: color-mix(in oklab, var(--warning) 54%, var(--border));
+}
+
+.mc-next-kanban-card.tone-success {
+  border-color: color-mix(in oklab, var(--success) 50%, var(--border));
+}
+
+.mc-next-kanban-card label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.mc-next-kanban-card .title {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.mc-next-kanban-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  color: var(--text-secondary);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.mc-next-kanban-status-chip {
+  align-self: flex-start;
+}
+
+.mc-next-kanban-card small {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  opacity: 0.7;
+}
+
+.mc-next-kanban-card .distress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.mc-next-kanban-card .distress.critical {
+  color: var(--danger);
+}
+
+.mc-next-kanban-card .distress.warn {
+  color: var(--warning);
+}
+
+.mc-next-kanban-card .retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-kanban-card .run-id {
+  padding-top: 0.2rem;
+  border-top: 1px dashed var(--mc-border-subtle);
+  font-family: var(--mc-font-mono);
+  word-break: break-all;
+}
+
+.mc-next-kanban-empty {
+  border: 1px dashed var(--mc-border-subtle);
+  border-radius: var(--r-xs);
+  padding: 0.65rem;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .mc-next-kanban-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .mc-next-kanban-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .mc-next-kanban-action {
+    flex: 1 1 9rem;
+  }
+
+  .mc-next-kanban-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Runtime spend chart (Ops · Costs) — W-5 ship punchlist.
+   Pure SVG implementation; no chart library. The canonical area tokens
+   colour each provider segment; anomaly columns recolour to
+   --gc-risk-caution and emit a callout below the chart. */
+.mc-next-runtime-spend-chart {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+}
+
+.mc-next-runtime-spend-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.85rem;
+  font-family: var(--mc-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+
+.mc-next-runtime-spend-chart-legend-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.mc-next-runtime-spend-chart-legend-swatch {
+  display: inline-block;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 0.18rem;
+  border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.mc-next-runtime-spend-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 700 / 200;
+}
+
+.mc-next-runtime-spend-chart-gridline {
+  stroke: color-mix(in oklab, var(--border) 65%, transparent);
+  stroke-width: 1;
+}
+
+.mc-next-runtime-spend-chart-axis-label {
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-xs);
+  fill: var(--text-muted);
+}
+
+.mc-next-runtime-spend-chart-axis-label.is-anomaly {
+  fill: color-mix(in oklab, var(--gc-risk-caution) 80%, var(--foreground));
+  font-weight: 600;
+}
+
+.mc-next-runtime-spend-chart-segment {
+  transition:
+    opacity var(--motion-fast) var(--motion-ease),
+    fill var(--motion-fast) var(--motion-ease);
+  opacity: 0.92;
+}
+
+.mc-next-runtime-spend-chart-bar:hover .mc-next-runtime-spend-chart-segment {
+  opacity: 1;
+}
+
+.mc-next-runtime-spend-chart-segment.is-anomaly {
+  opacity: 1;
+}
+
+.mc-next-runtime-spend-chart-callout {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, var(--card));
+  color: color-mix(in oklab, var(--gc-risk-caution) 78%, var(--foreground));
+  border-radius: var(--r-xs);
+  font-family: var(--mc-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+}
+
+.mc-next-runtime-spend-chart.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 9rem;
+  padding: 1rem;
+  border: 1px dashed color-mix(in oklab, var(--border) 90%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
+}
+
+.mc-next-runtime-spend-chart-empty {
+  display: grid;
+  gap: 0.32rem;
+  text-align: center;
+  max-width: 36ch;
+}
+
+.mc-next-runtime-spend-chart-empty strong {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.mc-next-runtime-spend-chart-empty p {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-next-runtime-spend-chart-segment {
+    transition: none;
+  }
+}

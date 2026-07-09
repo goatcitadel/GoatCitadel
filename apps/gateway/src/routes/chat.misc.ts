@@ -5,8 +5,10 @@ import { sessionParamsSchema } from "./chat.shared.js";
 const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
   request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
 
+const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
+
 const prefsPatchSchema = z.object({
-  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  mode: chatOnlyModeSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   planningMode: z.enum(["off", "advisory"]).optional(),
@@ -44,7 +46,7 @@ const commandParseSchema = z.object({
   policyTaskId: z.string().optional(),
   permissionProfileId: z.string().optional(),
   localOperatorOverrideId: z.string().optional(),
-  surface: z.enum(["chat", "cowork", "code"]).optional(),
+  surface: chatOnlyModeSchema.optional(),
 });
 
 const researchRunSchema = z.object({
@@ -56,7 +58,7 @@ const researchRunSchema = z.object({
   policyTaskId: z.string().optional(),
   permissionProfileId: z.string().optional(),
   localOperatorOverrideId: z.string().optional(),
-  surface: z.enum(["chat", "cowork", "code"]).optional(),
+  surface: chatOnlyModeSchema.optional(),
 });
 
 const researchParamsSchema = z.object({

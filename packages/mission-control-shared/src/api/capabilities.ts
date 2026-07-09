@@ -219,9 +219,10 @@ export async function compareCodeModeRuns(
 }
 
 export async function createCodeModeRun(input: CodeModeRunRequest): Promise<CodeModeRunRecord> {
+  const requestBody = input.originSurface ? { ...input, originSurface: "chat" as const } : input;
   return request("/api/v1/code-mode/runs", {
     method: "POST",
-    headers: input.originSurface ? { "x-goatcitadel-origin-surface": input.originSurface } : undefined,
-    body: JSON.stringify(input),
+    headers: input.originSurface ? { "x-goatcitadel-origin-surface": "chat" } : undefined,
+    body: JSON.stringify(requestBody),
   });
 }

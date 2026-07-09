@@ -177,11 +177,11 @@ describe("PromptPacksWorkbenchPage loop 24 helper tails", () => {
       sessionId: "chat-1",
     });
     expect(buildPromptPackRunRoute({ mode: "cowork", sessionId: "cowork-1" } as any)).toEqual({
-      area: "cowork",
+      area: "chat",
       sessionId: "cowork-1",
     });
     expect(buildPromptPackRunRoute({ mode: "code", sessionId: "code-1" } as any)).toEqual({
-      area: "code",
+      area: "chat",
       sessionId: "code-1",
     });
     expect(buildPromptPackRunRoute({ mode: "unknown", sessionId: "fallback-1" } as any)).toEqual({

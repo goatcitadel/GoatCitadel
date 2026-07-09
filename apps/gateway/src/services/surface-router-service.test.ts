@@ -24,12 +24,17 @@ describe("SurfaceRouterService", () => {
       context: { hasBoundProject: true },
     });
 
-    expect(result.mode).toBe("code");
+    expect(result.mode).toBe("chat");
     expect(append).toHaveBeenCalledTimes(1);
     const traceArg = append.mock.calls[0][0];
     expect(traceArg.kind).toBe("routing_choice");
-    expect(traceArg.selected).toBe("code");
-    expect(traceArg.scope).toMatchObject({ citadelId: "personal", workspaceId: "default", sessionId: "s1", turnId: "t1" });
+    expect(traceArg.selected).toBe("chat");
+    expect(traceArg.scope).toMatchObject({
+      citadelId: "personal",
+      workspaceId: "default",
+      sessionId: "s1",
+      turnId: "t1",
+    });
   });
 
   it("falls back to the judge when heuristic confidence is below threshold", async () => {
@@ -57,11 +62,11 @@ describe("SurfaceRouterService", () => {
       context: { hasBoundProject: false },
     });
 
-    expect(result.mode).toBe("code");
+    expect(result.mode).toBe("chat");
     expect(judge).toHaveBeenCalledTimes(1);
     expect(append).toHaveBeenCalledTimes(1);
     const traceArg = append.mock.calls[0][0];
-    expect(traceArg.selected).toBe("code");
+    expect(traceArg.selected).toBe("chat");
   });
 
   it("does not call the judge when heuristic confidence is at or above threshold", async () => {
@@ -89,7 +94,7 @@ describe("SurfaceRouterService", () => {
       context: { hasBoundProject: true },
     });
 
-    expect(result.mode).toBe("code");
+    expect(result.mode).toBe("chat");
     expect(result.source).toBe("heuristic");
     expect(judge).not.toHaveBeenCalled();
   });

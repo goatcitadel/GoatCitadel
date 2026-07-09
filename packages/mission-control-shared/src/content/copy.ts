@@ -88,7 +88,7 @@ export const appCopy = {
     { id: "cron", label: "Scheduler", code: "CRN" },
     { id: "sessions", label: "Sessions", code: "SES" },
     { id: "chat", label: "Chat", code: "CHT" },
-    { id: "assembly", label: "Cowork", code: "AOM" },
+    { id: "assembly", label: "Agentic Runs", code: "AOM" },
     { id: "promptLab", label: "Quality", code: "PLB" },
     { id: "improvement", label: "Improvement", code: "IMP" },
     { id: "skills", label: "Skills", code: "SKL" },
@@ -110,7 +110,6 @@ export const appCopy = {
       items: [
         "dashboard",
         "chat",
-        "assembly",
         "promptLab",
         "improvement",
         "tasks",
@@ -127,7 +126,7 @@ export const appCopy = {
   nextStepByTab: {
     addons: "Install optional extras only after reviewing trust, source, and runtime notes.",
     onboarding: "Finish setup once, then move into Summit or Chat.",
-    dashboard: "Start in Work when you want the fastest path into Chat, Cowork, or Code.",
+    dashboard: "Start in Work when you want the fastest path into Chat.",
     system: "If anything feels slow, check vitals here first.",
     files: "Create or update a file, then review path and risk hints before saving.",
     memory: "Use this when replies feel off-context or forgetful.",
@@ -138,7 +137,7 @@ export const appCopy = {
     cron: "Review scheduled jobs and confirm recent runs look healthy.",
     sessions: "Choose a session and inspect timeline, usage, and outcomes.",
     chat: "Pick a project, open a session, and send a message.",
-    assembly: "Use Cowork when the task needs decomposition, orchestration, checkpoints, or multi-model debate.",
+    assembly: "Use Chat when the task needs decomposition, orchestration, checkpoints, or multi-model debate.",
     promptLab: "Use Quality to run prompt tests, review regressions, and compare reliability over time.",
     improvement: "Review weekly replay findings, then apply or revert low-risk adjustments.",
     skills: "Decide which skills are always on, guarded, or off.",
@@ -158,19 +157,23 @@ export const appCopy = {
 export const pageCopy: Record<PageId, PageCopy> = {
   dashboard: {
     title: "Work",
-    subtitle: "Choose the right mode for fast chat, structured orchestration, or focused implementation.",
+    subtitle:
+      "Start in Chat, then let the run expand into planning, orchestration, or implementation help when needed.",
     guide: {
-      what: "Work is the main entry point into Chat, Cowork, and Code.",
-      when: "Open this first when you want to choose the right mode before diving into the work.",
+      what: "Work is the main entry point into Chat.",
+      when: "Open this first when you want a fast conversation that can still grow into agentic work.",
       actions: [
         "Jump into Chat for a fast answer or drafting loop.",
-        "Switch to Cowork when the task needs orchestration, checkpoints, or multiple roles.",
-        "Use Code when correctness, diffs, and validation matter most.",
+        "Turn on planning or subagents when the task needs orchestration, checkpoints, or multiple roles.",
+        "Use governed code capabilities from Chat when correctness, diffs, and validation matter most.",
       ],
       terms: [
-        { term: "Chat", meaning: "Fast conversation and lightweight help." },
-        { term: "Cowork", meaning: "Structured agentic work with visible workflow state." },
-        { term: "Code", meaning: "Implementation-focused help with tighter engineering discipline." },
+        {
+          term: "Chat",
+          meaning: "The single conversation surface for fast help, agentic work, and implementation help.",
+        },
+        { term: "Subagents", meaning: "Optional delegated work with visible run state and operator controls." },
+        { term: "Code capability", meaning: "Governed implementation help with approval and artifact evidence." },
       ],
     },
   },
@@ -381,13 +384,13 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   assembly: {
-    title: "Cowork",
-    subtitle: "Run structured agentic workflows with visible stages, checkpoints, and deliberate model coordination.",
+    title: "Agentic Runs",
+    subtitle: "Review structured agentic workflow evidence created from Chat.",
     guide: {
-      what: "Cowork is the home for deeper agentic work: task decomposition, research + synthesis, model coordination, and checkpointed execution.",
-      when: "Use this when the task deserves more than a simple chat loop and you want first-class orchestration instead of an ad hoc thread.",
+      what: "Agentic run evidence shows deeper Chat work: task decomposition, research + synthesis, model coordination, and checkpointed execution.",
+      when: "Use this when a Chat task deserves more than a simple answer and you want first-class orchestration evidence.",
       actions: [
-        "Start with a concise problem statement and a domain preset.",
+        "Start in Chat with a concise problem statement and a domain preset.",
         "Pick a small but meaningfully diverse participant set when you need multi-model debate.",
         "Use checkpoints and approvals when the workflow needs human judgment between steps.",
         "Watch the stage timeline, then export the result to artifact, task, or chat when it is stable enough.",

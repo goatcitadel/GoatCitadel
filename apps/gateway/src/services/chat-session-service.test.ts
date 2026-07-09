@@ -218,12 +218,12 @@ describe("chat session service", () => {
         reflectionMode: "on",
       });
       expect(prefs).toMatchObject({
-        mode: "code",
+        mode: "chat",
         providerId: "openai",
         model: "gpt-5",
       });
       expect(getChatSessionPrefs(deps, created.sessionId)).toMatchObject({
-        mode: "code",
+        mode: "chat",
         providerId: "openai",
         model: "gpt-5",
       });

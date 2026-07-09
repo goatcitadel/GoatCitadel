@@ -47,7 +47,7 @@ describe("chat session routes", () => {
       query: "deploy",
       mode: "discovery",
       workspaceId: "default",
-      surface: "code",
+      surface: "chat",
       limit: 2,
     });
 
@@ -60,7 +60,7 @@ describe("chat session routes", () => {
     ).resolves.toMatchObject({ statusCode: 201 });
     expect(chatSessions.createChatSession).toHaveBeenCalledWith({
       title: "New",
-      mode: "cowork",
+      mode: "chat",
       tags: ["ops"],
       includeInHistory: false,
     });
@@ -100,7 +100,7 @@ describe("chat session routes", () => {
     });
     expect(sideChat.statusCode).toBe(201);
     expect(chatSessions.createChatSideChat).toHaveBeenCalledWith("sess-1", {
-      createdFromSurface: "code",
+      createdFromSurface: "chat",
       sourceTurnId: "turn-1",
     });
     const existingSideChat = await app.inject({

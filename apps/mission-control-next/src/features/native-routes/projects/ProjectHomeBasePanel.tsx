@@ -54,7 +54,7 @@ export function ProjectHomeBasePanel({
       <div className="mc-next-project-intake-panel" aria-label="Project intake modes">
         <div className="mc-next-project-intake-head">
           <strong>Start from intent</strong>
-          <span>Ask / plan / implement / proof</span>
+          <span>Ask / plan / implement / proof in Chat</span>
         </div>
         <div className="mc-next-project-intake-grid">
           {PROJECT_INTAKE_MODES.map((intent) => {
@@ -78,11 +78,7 @@ export function ProjectHomeBasePanel({
       </div>
 
       <div className="mc-next-project-home-metrics">
-        <ProjectMetric
-          label="Active threads"
-          value={String(home.activeCount)}
-          detail="Conversation, planning, and build work still in motion."
-        />
+        <ProjectMetric label="Active threads" value={String(home.activeCount)} detail="Chat work still in motion." />
         <ProjectMetric
           label="Artifacts"
           value={String(home.artifactCount)}
@@ -112,7 +108,7 @@ export function ProjectHomeBasePanel({
       <div className="mc-next-project-lane-resume-shell">
         <div className="mc-next-directory-lane-head">
           <strong>Latest continuation</strong>
-          <span>Conversation / Plan / Build</span>
+          <span>Chat</span>
         </div>
         <div className="mc-next-project-lane-resume-list" aria-label="Latest project continuation points">
           {SURFACES.map((surface) => {

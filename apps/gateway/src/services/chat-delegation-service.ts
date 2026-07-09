@@ -242,7 +242,7 @@ export class ChatDelegationService {
     });
     const stages = buildDelegationStages(delegationSteps);
     const prefs = deps.ensureChatSessionModelDefaults(sessionId, deps.storage.chatSessionPrefs.ensure(sessionId));
-    const executionMode: ChatMode = input.surfaceMode ?? prefs.mode;
+    const executionMode: ChatMode = "chat";
     const providerId = input.providerId ?? prefs.providerId;
     const model = input.model ?? prefs.model;
     const sessionWorkspaceId = deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(sessionId).workspaceId);
@@ -263,7 +263,7 @@ export class ChatDelegationService {
       priority: "normal",
       createdBy: "chat",
       agenticContext: {
-        boardId: `cowork:${sessionWorkspaceId}`,
+        boardId: `chat:${sessionWorkspaceId}`,
         runId,
         parentRunId: input.policyRunId,
         childRunIds,
@@ -272,7 +272,7 @@ export class ChatDelegationService {
         status: "running",
         contextMode: "fork",
         workspaceScope: {
-          kind: executionMode === "code" ? "worktree" : "session",
+          kind: "session",
         },
         providerId,
         model,
@@ -314,10 +314,7 @@ export class ChatDelegationService {
     const completedOutputs = new Map<string, { role: string; output: string }>();
     const stepResults = new Map<string, DelegationStepExecutionResult>();
     const subagentDefaults = deps.subagentDefaults ?? DEFAULT_SUBAGENT_DEFAULTS;
-    const childTimeoutSeconds =
-      executionMode === "cowork"
-        ? (subagentDefaults.coworkChildTimeoutSeconds ?? 0)
-        : subagentDefaults.childTimeoutSeconds;
+    const childTimeoutSeconds = subagentDefaults.childTimeoutSeconds;
     const inferredParentDepth = resolveInferredParentDepth(deps, sessionId);
     const parentDepth = input.parentSubagentDepth ?? inferredParentDepth;
     const childDepth = computeChildDepth(parentDepth);

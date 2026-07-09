@@ -86,13 +86,13 @@ export function CoworkCanvasPanel({
         </div>
       </header>
 
-      <div className="chat-cowork-source-row" aria-label="Cowork run source and freshness">
+      <div className="chat-cowork-source-row" aria-label="Agentic run source and freshness">
         <span>{viewModel.sourceLabel}</span>
         <span>{viewModel.freshnessLabel}</span>
         <span>{viewModel.completenessLabel}</span>
       </div>
 
-      <div className="chat-cowork-posture-row" aria-label="Cowork run summary">
+      <div className="chat-cowork-posture-row" aria-label="Agentic run summary">
         <div className="chat-cowork-stage-strip">
           {viewModel.stageCards.map((item) => (
             <div key={`${item.label}-${item.value}`} className="chat-cowork-stage-card">
@@ -148,7 +148,7 @@ export function CoworkCanvasPanel({
           <section className="chat-cowork-section chat-cowork-section-primary">
             <p className="chat-cowork-section-label">Progress</p>
             <div className="chat-cowork-progress-grid">
-              {renderSectionList("Plan", viewModel.planItems, "Cowork has not attached a visible plan yet.")}
+              {renderSectionList("Plan", viewModel.planItems, "Chat has not attached a visible plan yet.")}
               {renderSectionList(
                 "Roles / steps",
                 viewModel.roleItems,
@@ -304,7 +304,7 @@ export function CoworkCanvasPanel({
               </>
             ) : (
               <p className="chat-cowork-section-copy">
-                Operator actions will collect here when Cowork needs follow-up work.
+                Operator actions will collect here when Chat needs follow-up work.
               </p>
             )}
           </section>

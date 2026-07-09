@@ -1,0 +1,365 @@
+.mc-next-directory-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.7rem;
+  min-width: 0;
+  max-width: min(100%, 1400px);
+  width: 100%;
+  margin-inline: auto;
+  padding: 0.85rem 1rem 3.7rem;
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-menu,
+.mc-next-shell[data-area="library"] .mc-next-rail-menu,
+.mc-next-shell[data-area="ops"] .mc-next-rail-menu,
+.mc-next-shell[data-area="projects"] .mc-next-rail-menu {
+  gap: 0.55rem;
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-group,
+.mc-next-shell[data-area="library"] .mc-next-rail-group,
+.mc-next-shell[data-area="ops"] .mc-next-rail-group,
+.mc-next-shell[data-area="projects"] .mc-next-rail-group {
+  gap: 0.32rem;
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-link,
+.mc-next-shell[data-area="library"] .mc-next-rail-link,
+.mc-next-shell[data-area="ops"] .mc-next-rail-link,
+.mc-next-shell[data-area="projects"] .mc-next-rail-link {
+  min-height: 2.45rem;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: var(--r-sm);
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-link strong,
+.mc-next-shell[data-area="library"] .mc-next-rail-link strong,
+.mc-next-shell[data-area="ops"] .mc-next-rail-link strong,
+.mc-next-shell[data-area="projects"] .mc-next-rail-link strong {
+  font-size: var(--text-2xs);
+  line-height: 1.2;
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-link > div > span,
+.mc-next-shell[data-area="library"] .mc-next-rail-link > div > span,
+.mc-next-shell[data-area="ops"] .mc-next-rail-link > div > span,
+.mc-next-shell[data-area="projects"] .mc-next-rail-link > div > span {
+  display: none;
+}
+
+.mc-next-shell[data-area="library"] .notification-stack,
+.mc-next-shell[data-area="ops"] .notification-stack,
+.mc-next-shell[data-area="settings"] .notification-stack {
+  width: min(12.5rem, calc(100vw - 1.5rem));
+  right: 0.75rem;
+  bottom: 0.75rem;
+}
+
+.mc-next-directory-header {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.18rem;
+  align-items: start;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  padding: 0.85rem 0 0.55rem 0.7rem;
+  border: 0;
+  border-bottom: 1px solid var(--mc-border-subtle);
+  /* More present area-accent: a left bar keyed to the active area color. The
+     top hairline (::before) and kicker dot stay; this gives the header a
+     stronger, scannable area anchor without tinting body text. */
+  border-left: 3px solid color-mix(in oklab, var(--mc-area-color) 55%, transparent);
+  border-radius: 0;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--mc-area-color) 6%, transparent), transparent 60%);
+  box-shadow: none;
+}
+
+.mc-next-directory-header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--mc-area-color), transparent 70%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.mc-next-directory-header[data-area="chat"] {
+  --mc-area-color: var(--gc-area-chat);
+}
+.mc-next-directory-header[data-area="cowork"] {
+  --mc-area-color: var(--gc-area-cowork);
+}
+.mc-next-directory-header[data-area="code"] {
+  --mc-area-color: var(--gc-area-code);
+}
+.mc-next-directory-header[data-area="projects"] {
+  --mc-area-color: var(--gc-area-projects);
+}
+.mc-next-directory-header[data-area="library"] {
+  --mc-area-color: var(--gc-area-library);
+}
+.mc-next-directory-header[data-area="ops"] {
+  --mc-area-color: var(--gc-area-ops);
+}
+.mc-next-directory-header[data-area="settings"] {
+  --mc-area-color: var(--gc-area-settings);
+}
+
+.mc-next-directory-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--mc-area-color) 14%, var(--mc-surface-1));
+  color: color-mix(in oklab, var(--mc-area-color) 80%, var(--foreground));
+}
+
+.mc-next-directory-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.mc-next-directory-copy p,
+.mc-next-directory-copy span,
+.mc-next-directory-card-head p,
+.mc-next-directory-list-item p,
+.mc-next-directory-loading,
+.mc-next-directory-lane-item p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.mc-next-directory-copy p {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--mc-area-color) 60%, var(--text-muted));
+}
+
+.mc-next-directory-copy p::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--mc-area-color);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--mc-area-color) 60%, transparent);
+  flex: 0 0 auto;
+}
+
+.mc-next-directory-copy h1,
+.mc-next-directory-card-head h2 {
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.mc-next-directory-copy h1 {
+  font-size: clamp(1.05rem, 1.45vw, 1.4rem);
+  line-height: 1.22;
+  font-weight: 700;
+}
+
+.mc-next-directory-copy span {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  max-width: 64ch;
+}
+
+/* F-M11: route-header title row hosting the title and the on-surface
+   "Experimental" badge for experimental release-scoped routes. */
+.mc-next-directory-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mc-next-experimental-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 40%, var(--border));
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, var(--card));
+  color: color-mix(in oklab, var(--gc-risk-caution) 82%, var(--foreground));
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mc-next-experimental-badge[data-release-status="needs_release_polish"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 40%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 14%, var(--card));
+  color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 82%, var(--foreground));
+}
+
+/* F-M11: inline experimental note for the Personalities settings section. */
+.mc-next-settings-experimental-note {
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 30%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--card));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-settings-experimental-note strong {
+  color: color-mix(in oklab, var(--gc-risk-caution) 82%, var(--foreground));
+}
+
+.mc-next-directory-alert {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--card));
+  color: var(--foreground);
+}
+
+.mc-next-directory-head-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-directory-head-metrics {
+  display: flex;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-directory-head-metric {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  align-content: start;
+}
+
+.mc-next-directory-head-metric-label {
+  font-size: var(--text-xs);
+  line-height: 1.22;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 650;
+}
+
+.mc-next-directory-head-metric-value {
+  font: 600 var(--text-xl)/1.22 var(--mc-font-sans);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-directory-head-metric-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.16rem;
+  font: 500 var(--text-2xs)/1.2 var(--mc-font-mono);
+  color: var(--text-secondary);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-directory-head-metric-delta svg {
+  width: 0.85em;
+  height: 0.85em;
+  flex-shrink: 0;
+}
+
+.mc-next-directory-head-metric-delta[data-tone="up"] {
+  color: color-mix(in oklab, var(--gc-risk-safe) 70%, var(--foreground));
+}
+
+.mc-next-directory-head-metric-delta[data-tone="down"] {
+  color: color-mix(in oklab, var(--gc-risk-danger) 70%, var(--foreground));
+}
+
+.mc-next-directory-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mc-next-new-session-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--gc-area-chat);
+  background: color-mix(in oklab, var(--gc-area-chat) 14%, var(--mc-surface-1));
+  color: var(--foreground);
+  font: 600 var(--text-xs)/1.1 var(--mc-font-sans);
+  cursor: pointer;
+  transition:
+    transform var(--motion-fast) var(--motion-ease),
+    filter var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.mc-next-new-session-button[data-mode="chat"] {
+  --new-session-accent: var(--gc-area-chat);
+}
+
+.mc-next-new-session-button[data-mode="cowork"] {
+  --new-session-accent: var(--gc-area-cowork);
+}
+
+.mc-next-new-session-button[data-mode="code"] {
+  --new-session-accent: var(--gc-area-code);
+}
+
+.mc-next-new-session-button {
+  border-color: color-mix(in oklab, var(--new-session-accent, var(--mc-area-color)) 32%, var(--border));
+  background: color-mix(in oklab, var(--new-session-accent, var(--mc-area-color)) 12%, var(--mc-surface-1));
+}
+
+.mc-next-new-session-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+
+.mc-next-new-session-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mc-next-new-session-button-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--new-session-accent, var(--mc-area-color));
+  flex: 0 0 auto;
+}

@@ -203,7 +203,7 @@ export class ChatSessionPrefsRepository {
       input.imageProviderId !== undefined && nextImageProviderId !== (current.imageProviderId ?? null);
     this.upsertStmt.run({
       sessionId,
-      mode: input.mode ?? current.mode,
+      mode: "chat",
       planningMode: input.planningMode ?? current.planningMode,
       providerId: nextProviderId,
       model:
@@ -257,7 +257,7 @@ export class ChatSessionPrefsRepository {
 function mapRow(row: ChatSessionPrefsRow): ChatSessionPrefsRecord {
   return {
     sessionId: row.session_id,
-    mode: row.mode,
+    mode: "chat",
     planningMode: row.planning_mode,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,

@@ -54,14 +54,19 @@ export class SurfaceRouterService {
       const judged = await this.judge({ prompt: request.prompt, citadelId: request.citadelId, priors });
       if (judged) {
         result = {
-          mode: judged.mode,
+          mode: "chat",
           confidence: judged.confidence,
           source: "judge",
-          rationale: `llm-judge (heuristic was low-confidence: ${result.confidence.toFixed(2)})`,
-          alternatives: (["chat", "cowork", "code"] as ChatMode[]).filter((mode) => mode !== judged.mode),
+          rationale: `llm-judge normalized to chat-only surface (heuristic was low-confidence: ${result.confidence.toFixed(2)})`,
+          alternatives: [],
         };
       }
     }
+    result = {
+      ...result,
+      mode: "chat",
+      alternatives: [],
+    };
     this.traceRepo.append({
       kind: "routing_choice",
       scope: {

@@ -6,16 +6,16 @@ Open gateway /health and Mission Control root.","Baseline is captured; /health i
 "PRE-02","P0","Preflight","Config","config/runtime","Config sync and secrets posture","Use test env only.","Run pnpm config:sync or equivalent managed config setup.
 Verify no real secrets are committed or displayed in UI.
 Open Settings Access and Settings Providers.","Config loads; provider secret references are masked; unavailable secure-store paths are described honestly.","Synthetic provider keys or intentionally missing keys","Leaking secrets or claiming secure-store when unavailable.","Missing provider credentials should show setup-needed, not crash.","pnpm docs:check; security-focused route tests","","","","","","","","","Manual QA"
-"NAV-01","P0","Navigation","Shell","/chat /cowork /code /projects /library /ops /settings","Primary IA navigation and active state","Mission Control Next running.","Click each primary nav area.
+"NAV-01","P0","Navigation","Shell","/chat /projects /library /ops /settings","Primary IA navigation and active state","Mission Control Next running.","Click each primary nav area.
 Confirm URL, active rail item, page title, and shell chrome.
 Use browser back/forward across areas.","Routes update correctly; active state follows current route; no legacy Work/Observe/Tune primary chrome appears.","Desktop browser","Wrong shell or route model regressions.","Back/forward and deep links keep expected section.","pnpm verify:surface:regression","","","","","","","","","Manual QA"
 "NAV-02","P0","Navigation","Shell","all release routes","Command palette and direct-route coverage","Mission Control Next running.","Open command palette or route finder if available.
-Search for Chat, Cowork, Code, Runtime, Providers, Memory, Approvals.
+Search for Chat, Runtime, Providers, Memory, Approvals.
 Navigate to experimental routes by direct route or command surface.","Ship routes are discoverable; experimental routes are reachable but clearly labeled experimental.","Route list from Route Coverage tab","Hidden or experimental routes misrepresented.","Invalid route falls back safely to Chat or not-found copy.","pnpm verify:surface:regression; route-model tests","","","","","","","","","Manual QA"
 "NAV-03","P1","Navigation","Legacy redirects","legacy query URLs","Legacy URL compatibility redirects","Mission Control Next running.","Open representative legacy URLs from release-surface manifest.
 Confirm expected modern path.
 Check no legacy shell source is used.","Legacy redirects land on current Mission Control Next paths.","Legacy redirect manifest","Old links strand operators or imply retired shell parity.","Unknown legacy params fail safely.","pnpm verify:ui:parity","","","","","","","","","Manual QA"
-"NAV-04","P0","Navigation","Responsive shell","all top routes","Desktop, narrow desktop, laptop, and mobile layout smoke","Browser dev tools available.","Open Chat, Cowork, Code, Memory, Runtime, Providers, Approvals at 1440x1024, 1180x900, 1280x800, and 390x844.
+"NAV-04","P0","Navigation","Responsive shell","all top routes","Desktop, narrow desktop, laptop, and mobile layout smoke","Browser dev tools available.","Open Chat, Memory, Runtime, Providers, Approvals at 1440x1024, 1180x900, 1280x800, and 390x844.
 Check for overlapping text, clipped controls, scroll traps, and inaccessible actions.
 Repeat dark and light themes.","Core controls remain reachable; text does not overlap; layout state is readable in both themes.","Viewport variants from release manifest","Visual readiness gap despite automated screenshot pass.","Long provider names and long session titles should not break layout.","pnpm verify:visual:regression","","","","","","","","","Manual QA"
 "NAV-05","P1","Navigation","Theme","?theme=light; dark default","Theme persistence and contrast","Mission Control Next running.","Switch theme from dark to light and back.
@@ -46,42 +46,42 @@ Approve or deny, then return to Chat.","Approval linkages are visible; Chat wait
 Navigate away and back.
 Open session list/history.
 Start a branch or restore prior context if UI supports it.","Session summary is a derived view but messages/turns persist; route parameters keep expected context.","Synthetic chat session","Lost history or derived projection treated as canonical.","Deleted/archived session behavior is clear.","chat session storage tests","","","","","","","","","Manual QA"
-"COWORK-01","P0","Cowork","Threaded Cowork","/cowork","Start a supervised multi-step task","Provider/fake provider configured; synthetic workspace.","Open /cowork.
+"COWORK-01","P0","Chat agentic work","Threaded Chat","/chat","Start a supervised multi-step task","Provider/fake provider configured; synthetic workspace.","Open /chat.
 Start a task that needs planning and execution.
 Inspect plan, current step, blockers, and evidence.
-Verify distinction from plain Chat.","Cowork shows decomposition, current execution state, checkpoints, and oversight controls.","Synthetic task prompt","Cowork degenerates into opaque chat.","Ambiguous task should request clarification or safe plan.","verify:durable:recovery; agentic proof lanes","","","","","","","","","Manual QA"
-"COWORK-02","P0","Cowork","Durable execution","/cowork; /ops/diagnostics","Approval wait, resume, and durable Run Detail","Create a task that requests an approval.","Start Cowork task.
+Verify agentic work remains visible inside Chat.","Chat shows decomposition, current execution state, checkpoints, and oversight controls.","Synthetic task prompt","Agentic work degenerates into opaque chat.","Ambiguous task should request clarification or safe plan.","verify:durable:recovery; agentic proof lanes","","","","","","","","","Manual QA"
+"COWORK-02","P0","Chat agentic work","Durable execution","/chat; /ops/diagnostics","Approval wait, resume, and durable Run Detail","Create a task that requests an approval.","Start Chat task.
 Pause at approval.
 Open approval and Run Detail.
 Approve.
 Confirm phase advances through durable run.","Approval resume re-enters durable execution; Run Detail links session/task/approval/run truth.","Approval-gated fixture","UI advances without durable run.","Deny, timeout, and retry paths stay inspectable.","verify:runtime:truth; verify:durable:recovery","","","","","","","","","Manual QA"
-"COWORK-03","P1","Cowork","Task Board","/cowork/tasks","Task state, blockers, deliverables","At least one active and one completed/blocked task.","Open /cowork/tasks.
+"COWORK-03","P1","Ops","Task Board","/ops/kanban","Task state, blockers, deliverables","At least one active and one completed/blocked task.","Open /ops/kanban.
 Filter/sort if available.
 Open task detail.
 Check blocker hierarchy and deliverables.","Task states are readable and tied to underlying run/session evidence.","Synthetic tasks","Task board becomes unrelated product or stale projection.","Empty state and large list performance.","surface regression; task route tests","","","","","","","","","Manual QA"
-"COWORK-04","P2","Cowork","Agent Board","/cowork/board","Agent posture without autonomy overclaim","Mission Control Next running.","Open /cowork/board.
+"COWORK-04","P2","Ops","Agent Board","/ops/kanban","Agent posture without autonomy overclaim","Mission Control Next running.","Open /ops/kanban.
 Inspect available agents/posture.
 Check labels around autonomy and live control.
 Try board actions that are enabled.","Board shows inspectable posture and does not imply ungoverned autonomous control.","Agent catalog fixtures","Autonomy claim exceeds governed grants.","No agents configured state.","surface regression; agentic governance","","","","","","","","","Manual QA"
-"COWORK-05","P1","Cowork","Worktree evidence","/cowork; /ops/sessions","Worktree-owned orchestration truth","Use a task that creates or references a worktree if supported.","Start orchestration task.
+"COWORK-05","P1","Chat agentic work","Worktree evidence","/chat; /ops/sessions","Worktree-owned orchestration truth","Use a task that creates or references a worktree if supported.","Start orchestration task from Chat.
 Inspect worktree path/status/base ref.
 Open session/run evidence.
 Confirm UI labels inferred vs canonical fields.","Worktree execution truth is explicit; derived positions do not overwrite durable state.","Safe test repo","Lost ownership or misleading execution state.","Missing worktree should block clearly.","orchestration service tests","","","","","","","","","Manual QA"
-"CODE-01","P0","Code","Threaded Code","/code","Bind source and run a code-assist workflow","Use disposable fixture repo/workspace.","Open /code.
+"CODE-01","P0","Chat code capability","Threaded Chat","/chat","Bind source and run a code-assist workflow","Use disposable fixture repo/workspace.","Open /chat.
 Bind or select source.
 Ask for a small safe change plan, but do not apply real changes in manual QA unless intended.
-Inspect file/diff/validation controls.","Code feels technical and precise; source, diffs, validation, and approval posture are visible.","Disposable fixture repo","Code surface edits unintended files or hides diff.","No source selected state is clear.","verify:code:workbench-loop","","","","","","","","","Manual QA"
-"CODE-02","P0","Code","Code Mode","/code; /ops/approvals","Governed Code Mode approval and artifact proof","Code Mode feature enabled in safe fixture.","Request a Code Mode run.
+Inspect file/diff/validation controls.","Code capability feels technical and precise; source, diffs, validation, and approval posture are visible.","Disposable fixture repo","Code capability edits unintended files or hides diff.","No source selected state is clear.","verify:code:workbench-loop","","","","","","","","","Manual QA"
+"CODE-02","P0","Chat code capability","Code Mode","/chat; /ops/approvals","Governed Code Mode approval and artifact proof","Code Mode feature enabled in safe fixture.","Request a Code Mode run from Chat.
 Review approval payload and policy snapshot.
 Approve.
 Inspect run record, artifact hashes, stdout/stderr truncation state, and backend metadata.","Run is approved before execution; immutable artifact refs and hashes are inspectable; backend truth is shown.","Synthetic code input","Bypassing approval or unverified artifact mutation.","Expired approval must not execute.","verify:code-mode:sandbox; code-mode repo tests","","","","","","","","","Manual QA"
-"CODE-03","P0","Code","Sandbox truth","/code; /ops/quality","Fail-closed and hostile-sandbox claim copy","Configured environment with one unavailable isolation requirement if safe.","Inspect Code Mode backend availability.
+"CODE-03","P0","Chat code capability","Sandbox truth","/chat; /ops/quality","Fail-closed and hostile-sandbox claim copy","Configured environment with one unavailable isolation requirement if safe.","Inspect Code Mode backend availability.
 Trigger or simulate unavailable required isolation.
 Search UI/release copy for hostile-code claims.
 Check fail-closed metadata.","Required isolation unavailable blocks execution; hostile-code claims are platform/exact-proof scoped only.","Sandbox metadata fixture","Overclaiming public hostile-code sandboxing.","Docker selected without config should be disabled or blocked.","verify:code-mode:sandbox; verify:code-mode:hostile-sandbox","","","","","","","","","Manual QA"
-"PROJECTS-01","P1","Projects","Projects","/projects","Project home and cross-surface continuation","Create or seed a project with Chat/Cowork/Code sessions.","Open /projects.
+"PROJECTS-01","P1","Projects","Projects","/projects","Project home and Chat continuation","Create or seed a project with Chat sessions.","Open /projects.
 Select project.
-Open recent Chat, Cowork, and Code items.
+Open recent Chat items.
 Return to project home.","Project groups work without losing route context; continuation links preserve correct surface.","Synthetic project","Project route becomes a disconnected file browser.","Pinned/archived project state.","projects route tests; surface regression","","","","","","","","","Manual QA"
 "LIB-AGENTS-01","P1","Library","Agents","/library/agents","Agent profiles and catalog controls","Agent catalog present or empty state.","Open Agents.
 Inspect profile details, trust/provenance, and actions.
@@ -175,7 +175,7 @@ Save if required.
 Refresh and navigate away/back.","Defaults persist and show saved/degraded state clearly.","Synthetic setting","Settings silently fail or mutate wrong scope.","Invalid input validation.","settings route tests","","","","","","","","","Manual QA"
 "SET-ONB-01","P0","Settings","Start Here","/settings/onboarding","First-run readiness path","Fresh or reset test runtime if possible.","Open Start Here.
 Walk provider/local path selection.
-Complete first Chat, Cowork, and Code task prompts if safe.
+Complete first Chat task prompts if safe.
 Open retained evidence and Run Detail links.","Onboarding guides a beginner without hiding provider, local runtime, approval, or evidence truth.","Fresh runtime","First-run flow dead-ends or overclaims readiness.","Missing provider path and local-only path.","verify:install; surface regression","","","","","","","","","Manual QA"
 "SET-PROV-01","P0","Settings","Providers","/settings/providers","Provider credentials, model discovery, smoke evidence","Use fake provider or sandbox credentials.","Open Providers.
 Inspect configured/unconfigured providers.
@@ -190,7 +190,7 @@ Inspect auth mode, device grants, secret-store truth.
 Try denied companion/device action in safe way.
 Check error copy.","Access boundaries are clear; device/companion mutation denied where expected.","Auth test tokens","Privilege escalation or secret exposure.","Expired/tampered token.","verify:auth:matrix; privileged auth tests","","","","","","","","","Manual QA"
 "SET-PERM-01","P0","Settings","Permissions","/settings/permissions","Permission profiles and local operator override","Synthetic profile or built-in profiles.","Open Permissions.
-Inspect active profile for Chat/Cowork/Code.
+Inspect active profile for Chat.
 Create/edit safe custom profile if supported.
 Enable/revoke local operator override and inspect audit/evidence.","Profiles and override are scoped, time-boxed, audited, and subordinate to deny-wins boundaries.","Synthetic workspace profile","Override bypasses auth/path jail/disabled capability.","Expired override and missing profile.","verify:agentic:governance","","","","","","","","","Manual QA"
 "SET-TRUST-01","P0","Settings","Trust & Policy","/settings/trust-policy","Unified trust and policy snapshot","Gateway running.","Open Trust & Policy.
@@ -212,7 +212,7 @@ Check copy around installs and local inference maturity.","Local AI is advisory/
 "SET-WORK-01","P1","Settings","Workspaces","/settings/workspaces","Workspace context and guidance","Synthetic workspace available.","Open Workspaces.
 Create/edit workspace context if safe.
 Add guidance and inspect scope.
-Verify Chat/Cowork/Code inherit scope visibly.","Workspace memory/guidance is scoped and does not leak into user identity memory.","Synthetic workspace","Workspace guidance silently affects all workspaces.","Archived/deleted workspace.","workspace route/storage tests","","","","","","","","","Manual QA"
+Verify Chat inherits scope visibly.","Workspace memory/guidance is scoped and does not leak into user identity memory.","Synthetic workspace","Workspace guidance silently affects all workspaces.","Archived/deleted workspace.","workspace route/storage tests","","","","","","","","","Manual QA"
 "SET-ADD-01","P2","Settings","Add-ons","/settings/addons","Experimental add-on and capability-pack posture","Mission Control Next running.","Open Add-ons.
 Confirm experimental label.
 Preview/stage/export capability pack if safe.
@@ -271,14 +271,14 @@ Inspect ledger/status copy.","Pre-boundary failures may be replay-eligible; unkn
 Send valid signed fixture if available.
 Repeat same event id.
 Inspect logs and UI diagnostics.","Unsigned/malformed rejected; duplicate idempotent; errors are clear without secret leakage.","Webhook fixtures","Webhook accepts spoofed event or duplicates effects.","Clock skew and missing headers.","webhook security tests","","","","","","","","","Manual QA"
-"A11Y-01","P0","Accessibility","Keyboard","primary surfaces","Keyboard-only navigation and focus visibility","Browser running.","Use Tab/Shift+Tab through Chat, Cowork, Code, Settings Providers, Approvals.
+"A11Y-01","P0","Accessibility","Keyboard","primary surfaces","Keyboard-only navigation and focus visibility","Browser running.","Use Tab/Shift+Tab through Chat, Settings Providers, Approvals.
 Activate primary actions with Enter/Space.
 Open and close modals/panels without mouse.","Focus is visible and logical; actions are reachable; focus returns sensibly.","Desktop browser","Keyboard trap or hidden focus.","Mobile keyboard/accessibility if practical.","manual axe/keyboard checks","","","","","","","","","Manual QA"
 "A11Y-02","P1","Accessibility","Screen reader semantics","primary surfaces","Landmarks, headings, labels, live status","Screen reader or accessibility tree inspector.","Inspect headings and landmarks.
 Check buttons/icon controls have accessible names.
 Verify streaming/status updates are announced or visibly persistent.
 Check error states.","Controls are named; status and errors are accessible without relying on color only.","Representative surfaces","Unlabeled icon-only actions.","Collapsed/expanded controls.","component tests; manual SR pass","","","","","","","","","Manual QA"
-"PERF-01","P1","Performance","UI","route navigation","Manual responsiveness under normal data","Seed moderate sessions/tasks/events if available.","Navigate Chat -> Cowork -> Code -> Memory -> Runtime -> Providers repeatedly.
+"PERF-01","P1","Performance","UI","route navigation","Manual responsiveness under normal data","Seed moderate sessions/tasks/events if available.","Navigate Chat -> Memory -> Runtime -> Providers repeatedly.
 Scroll long lists.
 Open inspectors/details.
 Record visible lag over 2 seconds.","Navigation feels responsive; long lists are scannable and do not freeze the shell.","Moderate synthetic dataset","1.0 shell feels too heavy for operator work.","Low-power laptop and mobile viewport.","perf:check:next","","","","","","","","","Manual QA"

@@ -193,7 +193,7 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     await flush();
     const rendered = textOf(renderer.toJSON());
     expect(apiMocks.fetchAgenticChannelDeliveries).toHaveBeenCalledWith({ limit: 3 });
-    expect(rendered).toContain("Code runtime availability");
+    expect(rendered).toContain("Code capability availability");
     expect(rendered).toContain("Generated");
     expect(rendered).toContain("2026-01-01T00:00:00.000Z");
     expect(rendered).toContain("Scalability");

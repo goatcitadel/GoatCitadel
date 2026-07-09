@@ -111,7 +111,7 @@ describe("chat API origin surface headers", () => {
   );
 
   it(
-    "allows Cowork to override chat-route origin surface",
+    "normalizes legacy Cowork origin surface to Chat",
     async () => {
       const fetchMock = vi.fn(async () => jsonResponse({ sessionId: "session-1", turnId: "turn-1" }));
       vi.stubGlobal("fetch", fetchMock);
@@ -126,7 +126,7 @@ describe("chat API origin surface headers", () => {
       );
 
       const headers = toHeaderRecord(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(headers["x-goatcitadel-origin-surface"]).toBe("cowork");
+      expect(headers["x-goatcitadel-origin-surface"]).toBe("chat");
       expect(headers["x-goatcitadel-browser-intent"]).toBe("mutation");
     },
     CHAT_API_TEST_TIMEOUT_MS,

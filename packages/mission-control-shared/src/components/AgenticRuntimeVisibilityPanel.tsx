@@ -63,7 +63,7 @@ export function AgenticRuntimeVisibilityPanel({
   }, [deliveryLimit]);
 
   const groups = useMemo(() => buildRuntimePostureGroups(availability), [availability]);
-  const heading = surface === "code" ? "Code runtime availability" : "Cowork runtime availability";
+  const heading = surface === "code" ? "Code capability availability" : "Agentic runtime availability";
 
   return (
     <section className={["agentic-runtime-visibility", className].filter(Boolean).join(" ")}>

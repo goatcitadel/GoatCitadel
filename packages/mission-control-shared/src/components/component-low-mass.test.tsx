@@ -176,10 +176,7 @@ describe("small shared shell components", () => {
 
     const onModeChange = vi.fn();
     const modeSwitch = create(<ChatModeSwitch value="chat" onChange={onModeChange} />);
-    act(() => {
-      modeSwitch.root.findAllByType("button")[1]!.props.onClick();
-    });
-    expect(onModeChange).toHaveBeenCalledWith("cowork");
+    expect(modeSwitch.root.findAllByType("button")).toHaveLength(1);
     modeSwitch.update(<ChatModeSwitch value="chat" disabled onChange={onModeChange} />);
     expect(modeSwitch.root.findAllByType("button").every((button) => button.props.disabled)).toBe(true);
 

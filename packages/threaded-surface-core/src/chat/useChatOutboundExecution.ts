@@ -1,5 +1,6 @@
 import type {
   ChatMessageRecord,
+  ChatMode,
   RoutingPreflightResult,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
@@ -47,8 +48,8 @@ const ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE = "Please confirm the route fallback b
 const STREAMING_REQUEST_FAILED_MESSAGE = "Streaming request failed.";
 
 /**
- * Determines whether a send action on a new (empty) chat thread should use
- * the gateway auto-router instead of an explicit mode.
+ * Chat is the only operator conversation surface, so sends no longer ask the
+ * gateway to auto-route a thread into a separate work surface.
  *
  * Exported for unit testing. The hook inlines this logic directly for
  * performance (avoid an extra call in the hot send path).
@@ -62,7 +63,10 @@ export function shouldAutoRouteSend({
   threadEmpty: boolean;
   surfaceMode: string | undefined;
 }): boolean {
-  return action === "send" && threadEmpty && surfaceMode === undefined;
+  void action;
+  void threadEmpty;
+  void surfaceMode;
+  return false;
 }
 
 export function abortActiveChatStream(stream: ActiveChatStreamState | null): void {
@@ -375,9 +379,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       const currentPrefs = prefsRef.current;
-      const effectiveMode = surfaceMode ?? currentPrefs?.mode ?? "chat";
-      const isFirstTurn = item.action === "send" && (threadRef.current?.turns?.length ?? 0) === 0;
-      const shouldAutoRoute = isFirstTurn && surfaceMode === undefined;
+      const effectiveMode: ChatMode = "chat";
+      const shouldAutoRoute = false;
       const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
       const executionModel = currentPrefs?.model ?? selectedModel;
       const outboundPrefs = resolveOutboundExecutionPrefs(currentPrefs);

@@ -158,7 +158,7 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
         ))}
       </div>
 
-      <div className="mc-next-panel-tab-row" role="tablist" aria-label="Cowork workflow views">
+      <div className="mc-next-panel-tab-row" role="tablist" aria-label="Agentic workflow views">
         {COWORK_TAB_DEFS.map((tab, index) => {
           const selected = activeTab === tab.id;
           return (
@@ -194,7 +194,7 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
           <PanelList
             title="Plan"
             items={viewModel.planItems.items}
-            emptyCopy="Cowork has not attached a visible plan yet."
+            emptyCopy="Chat has not attached a visible plan yet."
           />
           <PanelList
             title="Roles / steps"
@@ -226,7 +226,7 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
           <PanelList
             title="Operator actions"
             items={viewModel.operatorActionItems.items}
-            emptyCopy="Operator actions will collect here when Cowork needs follow-up work."
+            emptyCopy="Operator actions will collect here when Chat needs follow-up work."
           />
         </div>
       ) : null}
@@ -286,7 +286,7 @@ function CoworkCommandCenter({
   onRefreshRunState?: () => void;
 }) {
   return (
-    <section className="mc-next-cowork-command-center" aria-label="Cowork current objective and action">
+    <section className="mc-next-cowork-command-center" aria-label="Agentic current objective and action">
       <div className="mc-next-cowork-command-primary">
         <p className="mc-next-panel-kicker">Current objective</p>
         <h5>{viewModel.runMap.objective || viewModel.headerTitle}</h5>
@@ -465,7 +465,7 @@ function CoworkInterventionPanel({
   }, [pendingApprovalId, pendingApprovalLabel]);
 
   return (
-    <section className="mc-next-cowork-intervention" aria-label="Cowork blockers approvals and checkpoints">
+    <section className="mc-next-cowork-intervention" aria-label="Agentic blockers approvals and checkpoints">
       <p className="mc-next-sr-only" role="status" aria-live="polite" aria-atomic="true">
         {approvalAnnouncement}
       </p>
@@ -540,7 +540,7 @@ function RunMapPanel({
         </section>
       </div>
 
-      <div className="mc-next-cowork-run-map-graph" aria-label="Cowork plan graph">
+      <div className="mc-next-cowork-run-map-graph" aria-label="Agentic plan graph">
         {viewModel.runMap.planNodes.map((node, index) => (
           <div key={node.id} className="mc-next-cowork-run-map-node-wrap">
             <article

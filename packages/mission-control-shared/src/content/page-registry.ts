@@ -46,7 +46,7 @@ interface RouteInfo {
 export const SPACE_META: Record<Space, { label: string; description: string }> = {
   operate: {
     label: "Work",
-    description: "Chat, Cowork, Code, and the decisions around active work.",
+    description: "Chat, decisions, approvals, and active work.",
   },
   observe: {
     label: "Observe",
@@ -164,8 +164,6 @@ export const SPACE_PAGES: Record<Space, Array<{ page: SpacePage; label: string }
 export const VISIBLE_SPACE_PAGES: Record<Space, Array<{ page: VisiblePage; label: string }>> = {
   operate: [
     { page: "chat", label: "Chat" },
-    { page: "cowork", label: "Cowork" },
-    { page: "code", label: "Code" },
     { page: "tasks", label: "Tasks" },
     { page: "approvals", label: "Approvals" },
   ],
@@ -194,7 +192,7 @@ export const DEFAULT_ROUTE: ResolvedRoute = {
 const LEGACY_TAB_REDIRECTS: Record<string, ResolvedRoute> = {
   dashboard: { space: "operate", page: "surface", surface: "chat" },
   chat: { space: "operate", page: "surface", surface: "chat" },
-  assembly: { space: "operate", page: "surface", surface: "cowork" },
+  assembly: { space: "operate", page: "surface", surface: "chat" },
   tasks: { space: "operate", page: "tasks" },
   approvals: { space: "operate", page: "approvals" },
   activity: { space: "observe", page: "activity", tab: "activity" },
@@ -292,7 +290,7 @@ export function normalizeResolvedRoute(route: ResolvedRoute): ResolvedRoute {
   if (route.space === "operate" && route.page === "surface") {
     return {
       ...route,
-      surface: route.surface ?? "chat",
+      surface: "chat",
     };
   }
   if (route.page === "activity") {
@@ -426,7 +424,7 @@ export function buildRouteSearch(route: ResolvedRoute): string {
 
 export function getPageLabel(route: ResolvedRoute): string {
   if (route.space === "operate" && route.page === "surface" && route.surface) {
-    return route.surface === "chat" ? "Chat" : route.surface === "cowork" ? "Cowork" : "Code";
+    return "Chat";
   }
   return PAGE_META[route.page].label;
 }
@@ -434,7 +432,7 @@ export function getPageLabel(route: ResolvedRoute): string {
 export function getVisiblePage(route: ResolvedRoute): VisiblePage {
   if (route.space === "operate") {
     if (route.page === "surface") {
-      return route.surface ?? "chat";
+      return "chat";
     }
     return route.page === "tasks" ? "tasks" : "approvals";
   }
@@ -483,7 +481,7 @@ export function buildRouteForVisiblePage(currentRoute: ResolvedRoute, targetPage
     return {
       space: "operate",
       page: "surface",
-      surface: targetPage,
+      surface: "chat",
       sessionId: currentRoute.sessionId,
       turnId: currentRoute.turnId,
       artifactId: currentRoute.artifactId,

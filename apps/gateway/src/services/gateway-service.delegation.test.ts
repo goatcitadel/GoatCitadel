@@ -277,7 +277,7 @@ describe("GatewayService.runChatDelegation", () => {
       expect.objectContaining({
         workspaceId: "default",
         projectId: "proj-1",
-        mode: "cowork",
+        mode: "chat",
       }),
     );
     expect(gateway.taskLifecycleService.registerTaskSubagent).toHaveBeenCalledWith(
@@ -296,7 +296,7 @@ describe("GatewayService.runChatDelegation", () => {
     expect(gateway.agentSendChatMessage).toHaveBeenCalledWith(
       "delegate-session-1",
       expect.objectContaining({
-        mode: "cowork",
+        mode: "chat",
         providerId: "openai",
         model: "gpt-5.4",
       }),

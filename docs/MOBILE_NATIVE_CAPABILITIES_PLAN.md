@@ -15,7 +15,7 @@ The shared contract lives in `@goatcitadel/contracts` as:
 - `MobileContextEnvelope`
 - heartbeat, context-audit, push-registration, and revocation request/response shapes
 
-Chat/Cowork/Code send requests may include `mobileContext?: MobileContextEnvelope[]`. The gateway validates the payload, persists sanitized provenance, and adds safe summaries to the request context. Mobile should not inject GPS or notification content as untyped text except as an explicit compatibility fallback for older gateways.
+Chat send requests may include `mobileContext?: MobileContextEnvelope[]`. The gateway validates the payload, persists sanitized provenance, and adds safe summaries to the request context. Legacy non-chat send inputs normalize to Chat before mobile context is applied. Mobile should not inject GPS or notification content as untyped text except as an explicit compatibility fallback for older gateways.
 
 ## Safety Invariants
 

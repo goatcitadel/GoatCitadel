@@ -77,12 +77,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const candidateRollbackBodySchema = z.object({
     targetVersionId: z.string().trim().min(1),
   });
+  const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
   const codeModeRunBodySchema = z.object({
     language: z.enum(["javascript", "typescript"]),
     source: z.string().min(1),
     executionBackendId: z.string().trim().min(1).optional(),
-    originSurface: z.enum(["chat", "cowork", "code"]).optional(),
+    originSurface: chatOnlyModeSchema.optional(),
     input: z.record(z.unknown()).optional(),
     requestedOutputIntent: z.string().trim().min(1).optional(),
     saveCandidateOnSuccess: z.boolean().optional(),
@@ -459,5 +460,5 @@ function readCodeModeOriginSurface(
 ): "chat" | "cowork" | "code" | undefined {
   const raw = headers["x-goatcitadel-origin-surface"];
   const value = Array.isArray(raw) ? raw[0] : raw;
-  return value === "chat" || value === "cowork" || value === "code" ? value : undefined;
+  return value === "chat" || value === "cowork" || value === "code" ? "chat" : undefined;
 }

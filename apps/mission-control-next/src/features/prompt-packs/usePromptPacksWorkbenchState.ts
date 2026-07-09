@@ -71,11 +71,8 @@ export interface UsePromptPacksWorkbenchStateOptions {
   initialPackId?: string;
 }
 
-export function usePromptPacksWorkbenchState({
-  variant,
-  navigate,
-  initialPackId,
-}: UsePromptPacksWorkbenchStateOptions) {
+export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchStateOptions) {
+  const { variant, navigate, initialPackId } = options;
   const isOpsVariant = variant === "ops";
   const v2UiEnabled = isPromptPackV2UiEnabled();
   const hasLoadedOnceRef = useRef(false);
@@ -887,7 +884,7 @@ export function usePromptPacksWorkbenchState({
   const draftVerdict = computeDraftVerdict(scoreDraft, scoreDraft.overrideVerdict);
   const executionStyleDescription =
     executionStyle === "agentic_surface"
-      ? "Agentic uses the real surface orchestration preset for the selected Chat, Cowork, or Code mode."
+      ? "Agentic uses the real Chat orchestration path with planning, tools, approvals, and code context inline."
       : "Harness uses the deterministic single-turn Prompt Lab wrapper.";
   const selectedDiagnosticMetadata = selectedRun?.diagnosticMetadata ?? selectedTest?.diagnosticMetadata;
   const { blockers: passReadinessBlockers, complete: passReadinessComplete } = computePassReadiness(report?.summary);
@@ -914,7 +911,11 @@ export function usePromptPacksWorkbenchState({
     },
     {
       label: "Pass readiness",
-      value: report ? (passReadinessComplete ? `${(report.summary.effectivePassRate * 100).toFixed(1)}%` : "Incomplete") : "No report yet",
+      value: report
+        ? passReadinessComplete
+          ? `${(report.summary.effectivePassRate * 100).toFixed(1)}%`
+          : "Incomplete"
+        : "No report yet",
       detail: passReadinessDetail,
     },
     {
@@ -1052,5 +1053,3 @@ export function usePromptPacksWorkbenchState({
     navigate,
   };
 }
-
-export type PromptPacksWorkbenchState = ReturnType<typeof usePromptPacksWorkbenchState>;

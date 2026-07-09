@@ -35,83 +35,51 @@ function findByText(root: ReactTestInstance, textPattern: RegExp): ReactTestInst
   return undefined;
 }
 
-function findButton(root: ReactTestInstance, textPattern: RegExp): ReactTestInstance {
-  const buttons = root.findAll((node) => node.type === "button");
-  const match = buttons.find((button) => textPattern.test(textOf(button)));
-  if (!match) throw new Error(`No button matching ${textPattern}`);
-  return match;
-}
-
-function findMenuItem(root: ReactTestInstance, textPattern: RegExp): ReactTestInstance {
-  const items = root.findAll((node) => node.props.role === "menuitem");
-  const match = items.find((item) => textPattern.test(textOf(item)));
-  if (!match) {
-    throw new Error(`No menuitem matching ${textPattern}. Available: ${items.map(textOf).join(", ")}`);
-  }
-  return match;
-}
-
 describe("ThreadedModeControl", () => {
-  it("shows the resolved pinned mode label", async () => {
+  it("shows the normalized Chat surface label", async () => {
     let renderer: ReturnType<typeof create> | null = null;
     await act(async () => {
       renderer = create(<ThreadedModeControl mode="code" onOverride={() => {}} />);
     });
 
-    expect(findButton(renderer!.root, /build/i)).toBeDefined();
+    const control = renderer!.root.findByProps({ "data-mode": "chat" });
+    expect(control.props.className).toContain("is-readonly");
+    expect(findByText(renderer!.root, /^Surface Chat/i)).toBeDefined();
   });
 
-  it("calls onOverride when a different mode is picked", async () => {
+  it("does not expose override controls when an override handler is provided", async () => {
     const onOverride = vi.fn();
     let renderer: ReturnType<typeof create> | null = null;
     await act(async () => {
       renderer = create(<ThreadedModeControl mode="chat" onOverride={onOverride} />);
     });
 
-    await act(async () => {
-      findButton(renderer!.root, /conversation/i).props.onClick();
-    });
-
-    await act(async () => {
-      findMenuItem(renderer!.root, /^build/i).props.onClick();
-    });
-
-    expect(onOverride).toHaveBeenCalledWith("code");
-  });
-
-  it("does not call onOverride when the current mode is re-picked", async () => {
-    const onOverride = vi.fn();
-    let renderer: ReturnType<typeof create> | null = null;
-    await act(async () => {
-      renderer = create(<ThreadedModeControl mode="chat" onOverride={onOverride} />);
-    });
-
-    await act(async () => {
-      findButton(renderer!.root, /conversation/i).props.onClick();
-    });
-
-    await act(async () => {
-      findMenuItem(renderer!.root, /^conversation/i).props.onClick();
-    });
-
+    expect(renderer!.root.findAll((node) => node.type === "button")).toHaveLength(0);
+    expect(renderer!.root.findAll((node) => node.props.role === "menuitem")).toHaveLength(0);
     expect(onOverride).not.toHaveBeenCalled();
   });
 
-  it("renders auto-route confidence and rationale", async () => {
+  it("keeps legacy pinned modes normalized to Chat", async () => {
+    const onOverride = vi.fn();
+    let renderer: ReturnType<typeof create> | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedModeControl mode="cowork" onOverride={onOverride} />);
+    });
+
+    expect(renderer!.root.findByProps({ "data-mode": "chat" })).toBeDefined();
+    expect(findByText(renderer!.root, /Surface Chat/i)).toBeDefined();
+    expect(onOverride).not.toHaveBeenCalled();
+  });
+
+  it("renders Chat confidence and rationale", async () => {
     let renderer: ReturnType<typeof create> | null = null;
     await act(async () => {
       renderer = create(<ThreadedModeControl mode={undefined} preview={PREVIEW} onOverride={() => {}} />);
     });
 
-    expect(findButton(renderer!.root, /auto: build/i)).toBeDefined();
-    expect(findByText(renderer!.root, /82% heuristic/i)).toBeDefined();
-
-    await act(async () => {
-      findButton(renderer!.root, /auto: build/i).props.onClick();
-    });
-
+    expect(findByText(renderer!.root, /Chat · 82% heuristic/i)).toBeDefined();
     expect(findByText(renderer!.root, /draft asks for a code change/i)).toBeDefined();
-    expect(findByText(renderer!.root, /also considered plan, conversation/i)).toBeDefined();
+    expect(renderer!.root.findAll((node) => node.props.role === "menuitem")).toHaveLength(0);
   });
 
   it("renders a compact non-interactive mirror for the composer", async () => {
@@ -122,7 +90,7 @@ describe("ThreadedModeControl", () => {
       );
     });
 
-    expect(findByText(renderer!.root, /auto: build/i)).toBeDefined();
+    expect(findByText(renderer!.root, /Surface Chat/i)).toBeDefined();
     expect(renderer!.root.findAll((node) => node.type === "button")).toHaveLength(0);
   });
 
@@ -132,9 +100,9 @@ describe("ThreadedModeControl", () => {
       renderer = create(<ThreadedModeControl mode="cowork" />);
     });
 
-    const control = renderer!.root.findByProps({ "data-mode": "cowork" });
+    const control = renderer!.root.findByProps({ "data-mode": "chat" });
     expect(control.props.className).toContain("is-readonly");
-    expect(findByText(renderer!.root, /guided agentic work/i)).toBeDefined();
+    expect(findByText(renderer!.root, /planning, tools, approvals, and code context/i)).toBeDefined();
     expect(renderer!.root.findAll((node) => node.type === "button")).toHaveLength(0);
   });
 });

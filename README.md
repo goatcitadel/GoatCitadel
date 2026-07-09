@@ -56,7 +56,7 @@ Full model: [docs/CITADELS_OPERATING_MODEL.md](./docs/CITADELS_OPERATING_MODEL.m
 
 | What GoatCitadel gives you | How it stays trustworthy |
 | --- | --- |
-| One unified work surface that routes each turn to Chat, Cowork, or Code mode automatically, with a one-click operator override | Route decisions are visible per turn, and mode changes toward code execution require operator confirmation |
+| One Chat work surface for conversation, planning, agentic work, approvals, and governed code-capability context | Runtime decisions, tools, memory, approvals, and code execution evidence stay visible without switching panes |
 | Citadels: protected operating spaces with charters, wards, councils, vaults, and blueprints | Always-on Ward deny/approval enforcement at the policy gate, fail-closed scope resolution, sealed secrets behind the OS keychain |
 | Supervised agentic work with plans, checkpoints, retries, approval waits, and parallel sub-agent fan-out | Durable mission sessions, retained operator evidence, and orchestration decision traces in Run Detail |
 | Governed trusted-code execution for implementation, review, and debugging | Explicit approval, artifact hashes, execution-time checks, path jails, policy gates, and adversarial sandbox canaries |
@@ -80,9 +80,9 @@ Full model: [docs/CITADELS_OPERATING_MODEL.md](./docs/CITADELS_OPERATING_MODEL.m
 
 The last release cycle concentrated on speed, parallelism, governance depth, and auditability:
 
-- **One surface, routed for you.** Chat, Cowork, and Code collapsed into a single Work surface. The gateway's surface router recommends `auto | chat | cowork | code` per turn from live context, the composer shows the predicted mode as you type, and you can override with one click. Turns that head toward code execution still require operator confirmation.
-- **Real parallel agentic execution.** Cowork/Code turns can spawn bounded sub-agents through the `agent.fanout` tool (policy-gated, audited, recursion blocked by construction), and the planner can declare independent worker steps that run concurrently. Read-only, low-risk tool batches pre-execute in parallel while per-tool policy and audit order is preserved.
-- **It feels fast now.** Terminal synthesizer tokens stream live during Cowork instead of buffering until the pipeline completes, trivial asks skip the planner entirely, planner drafts route to a speed-biased model, live-tail readers wake on append instead of polling, and a per-chunk idle watchdog turns hung provider streams into recoverable errors instead of infinite spinners.
+- **One Chat surface.** Chat now carries conversation, planning, supervised agentic work, approvals, artifacts, and governed code-capability context inline. Legacy non-chat route and mode inputs normalize back to Chat or Ops Kanban.
+- **Real parallel agentic execution.** Chat turns can spawn bounded sub-agents through the `agent.fanout` tool (policy-gated, audited, recursion blocked by construction), and the planner can declare independent worker steps that run concurrently. Read-only, low-risk tool batches pre-execute in parallel while per-tool policy and audit order is preserved.
+- **It feels fast now.** Terminal synthesizer tokens stream live during agentic runs instead of buffering until the pipeline completes, trivial asks skip the planner entirely, planner drafts route to a speed-biased model, live-tail readers wake on append instead of polling, and a per-chunk idle watchdog turns hung provider streams into recoverable errors instead of infinite spinners.
 - **Evidence you can hand to an auditor.** Runs produce signed, offline-verifiable evidence receipts (digest, signature, structure proof), and operators can export compliance bundles that verify without trusting the runtime that produced them. Orchestration decision traces (planner, policy gates, model selection) are visible in Run Detail.
 - **Governance down to a single tool call.** Citadel Wards are enforced at the policy gate on every invocation, MCP tools and skills can be allowlisted per workspace/Citadel (enforced at MCP invocation), and skills carry declared governance metadata (approval, risk tier, trust scope) surfaced in the Trust UI.
 - **Hardened Code Mode.** Docker sandbox images are digest-pinned fail-closed, the macOS Seatbelt read scope is narrowed to runtime essentials, synthetic-env guards block host env leakage, and a dedicated adversarial canary CI lane is a required gate — with the Windows AppContainer hostile-sandbox promotion slice green.
@@ -99,20 +99,20 @@ The images below are regenerated from a sanitized Mission Control Next demo runt
 
 <table>
   <tr>
-    <td width="50%"><img src="./docs/screenshots/mission-control-next/chat.png" alt="Mission Control unified Work surface in Chat mode" /></td>
-    <td width="50%"><img src="./docs/screenshots/mission-control-next/cowork.png" alt="Mission Control unified Work surface in Cowork mode" /></td>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/chat.png" alt="Mission Control Chat surface" /></td>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/cowork.png" alt="Mission Control Chat agentic planning context" /></td>
   </tr>
   <tr>
-    <td><strong>Work · Chat mode</strong><br />Fast conversation with live mode routing, runtime context, citations, and tool visibility close at hand.</td>
-    <td><strong>Work · Cowork mode</strong><br />Supervised agentic runs with visible objectives, plans, approvals, checkpoints, and delegation lineage.</td>
+    <td><strong>Chat</strong><br />Fast conversation with runtime context, citations, tool visibility, approvals, and artifacts close at hand.</td>
+    <td><strong>Chat · Agentic work</strong><br />Supervised runs with visible objectives, plans, approvals, checkpoints, and delegation lineage.</td>
   </tr>
   <tr>
-    <td width="50%"><img src="./docs/screenshots/mission-control-next/code.png" alt="Mission Control unified Work surface in Code mode" /></td>
+    <td width="50%"><img src="./docs/screenshots/mission-control-next/code.png" alt="Mission Control Chat code capability context" /></td>
     <td width="50%"><img src="./docs/screenshots/mission-control-next/projects.png" alt="Mission Control Projects surface" /></td>
   </tr>
   <tr>
-    <td><strong>Work · Code mode</strong><br />Implementation, review, debugging, workbench state, and governed Code Mode runs.</td>
-    <td><strong>Projects</strong><br />Project containers that group Chat, Cowork, and Code threads together.</td>
+    <td><strong>Chat · Code capability</strong><br />Implementation, review, debugging, workbench state, and governed Code Mode runs launched from Chat.</td>
+    <td><strong>Projects</strong><br />Project containers that group Chat threads, files, and evidence together.</td>
   </tr>
   <tr>
     <td width="50%"><img src="./docs/screenshots/mission-control-next/library-citadel-overview.png" alt="Mission Control Citadel overview surface" /></td>
@@ -142,13 +142,11 @@ pnpm screenshots:capture
 
 ## Product Surfaces
 
-Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Chat, Cowork, and Code are governed modes inside the unified Work surface: new threads start in `auto` mode, the surface router recommends a mode per turn from live context, the composer shows the prediction as you type, and a one-click chip overrides it. Turns routed toward code execution require operator confirmation before anything runs.
+Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Work is Chat: planning, research, supervised agentic execution, approvals, artifacts, and governed code-capability context appear inline instead of separate Cowork or Code panes. Code execution still requires operator confirmation before anything runs.
 
 | Surface | Purpose | Primary feel |
 | --- | --- | --- |
-| Work · Chat mode | Fast conversation, questions, drafting, lightweight help | Simple, direct, low-friction |
-| Work · Cowork mode | Supervised agentic work, planning, research, approvals, durable multi-step execution | Guided, transparent, powerful |
-| Work · Code mode | Implementation, debugging, review, governed trusted-code execution | Technical, precise, test-driven |
+| Work / Chat | Conversation, questions, drafting, planning, research, approvals, durable multi-step execution, and code-capability context | Simple, direct, low-friction |
 | Projects | Workspace and project organization | Structured, navigable |
 | Library | Citadels, agents, skills, capabilities, memory, files, artifacts, prompt packs | Inspectable, provenance-aware |
 | Ops | Approvals, activity, spend, runtime health, diagnostics, backups, release proof | Operational, high-signal |
@@ -161,14 +159,14 @@ Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Chat
 | Canonical shell | [apps/mission-control-next](./apps/mission-control-next) is the `1.0` Mission Control shell. |
 | Retired shell | `apps/mission-control` source is archived from disk. Generated build/runtime residue may still exist locally, but it is not a shipped compatibility source. |
 | Runtime owner | [apps/gateway](./apps/gateway) is the Fastify control plane for runtime APIs, orchestration, approvals, memory, integrations, audit, policy, realtime events, and persistence coordination. |
-| Visible IA | Mission Control navigation is `Work / Projects / Library / Ops / Settings`. Chat, Cowork, and Code run as governed modes inside the unified Work surface; `chat / cowork / code` remain the underlying route areas in the release scope. |
-| Unified surface routing | The gateway surface router recommends `auto / chat / cowork / code` per turn with a live composer preview and one-click operator override. Code-directed turns require operator confirmation before execution. |
-| Route scope | The current visible route surface is 50 routes: 45 `ship`, 0 `needs_release_polish`, and 5 `experimental`. See [docs/1_0_RELEASE_SURFACE_SCOPE.md](./docs/1_0_RELEASE_SURFACE_SCOPE.md). |
+| Visible IA | Mission Control navigation is `Work / Projects / Library / Ops / Settings`; Work is the single Chat surface. Legacy `cowork` and `code` routes normalize to Chat or Ops Kanban. |
+| Unified surface routing | The gateway normalizes conversation mode to Chat. Planning, research, approvals, and Code Mode context run as Chat capabilities rather than separate primary surfaces. |
+| Route scope | The current visible route surface is 46 routes: 41 `ship`, 0 `needs_release_polish`, and 5 `experimental`. See [docs/1_0_RELEASE_SURFACE_SCOPE.md](./docs/1_0_RELEASE_SURFACE_SCOPE.md). |
 | Citadels | Six Citadel Library routes ship (Overview, Mason, Wards, Council, Blueprint, Vault). Gatehouse Ward `deny`, `require_approval`, and `redact` effects are enforced at the policy gate on every tool invocation and every matched ward is audited; `require_dry_run` enforcement is wired at the side-effect runner (integration/a2a caller wiring is a tracked follow-up); `route_local` is evaluated and audited but not yet enforced. Vault secrets are sealed per Citadel behind the OS keychain and fail closed. |
 | Capability scoping | MCP tools and skills can be allowlisted per workspace/Citadel; scope is enforced at MCP invocation. The dedicated capability-scoping Settings panels remain `hide` (not part of the certified release surface) while agent-side skill-discovery scoping and visual coverage land. |
-| Durable execution | Durable runs own the shipped resumable mission-session Chat, Cowork, and Code flow set. Cowork/Code turns may fan out to bounded, policy-gated sub-agents via `agent.fanout` and planner-declared parallel workers. |
+| Durable execution | Durable runs own the shipped resumable mission-session Chat flow set. Chat turns may fan out to bounded, policy-gated sub-agents via `agent.fanout` and planner-declared parallel workers. |
 | Evidence & compliance | Runs produce signed, offline-verifiable evidence receipts, compliance export bundles carry content plus signed receipt plus structure proof, and orchestration decision traces are visible in Run Detail. |
-| Code Mode | Code Mode v1 is a governed trusted-code surface with explicit approval, recorded artifact hashes, execution-time hash checks, and separate `hostileSandboxClaim` metadata. The Windows AppContainer hostile-sandbox promotion slice now has green adversarial canary proof; the public cross-platform hostile-code claim remains not promoted until Linux, macOS, and Windows proof all pass. |
+| Code Mode | Code Mode v1 is a governed trusted-code capability launched from Chat with explicit approval, recorded artifact hashes, execution-time hash checks, and separate `hostileSandboxClaim` metadata. The Windows AppContainer hostile-sandbox promotion slice now has green adversarial canary proof; the public cross-platform hostile-code claim remains not promoted until Linux, macOS, and Windows proof all pass. |
 | Code backends | The trusted-code host runner is the default. Docker is selectable only when explicitly configured and its sandbox image is digest-pinned fail-closed. The Aider adapter is Docker-backed and audit-only; no patch replay, candidate promotion, or operator-workspace mutation is claimed. |
 | Governed activation | Autonomous high-risk activation is opt-in through expiring operator grants scoped by workspace, surface, risk tier, capability/tool patterns, budget/count, grantor, reason, expiry, and revocation. Activations still pass deny-wins policy, path jails, auth, provenance, and health checks before durable evidence is recorded. |
 | Memory | `MemoryLifecycleService` owns operator-facing memory lifecycle behavior, explicit recall, trace-derived memory proposals, feedback, dedupe, scope, and write policy. Memory composition is Citadel/workspace scope-aware. |
@@ -452,7 +450,7 @@ pnpm verify:visual:regression
 Safe public claims today:
 
 - The GoatCitadel `1.0` product contract is defined by [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md) and backed by [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md); the published release line delivering that contract is the `0.1.0-rc.1` release candidate.
-- Chat, Cowork, and Code are distinct governed modes of one unified Work surface, backed by shared runtime foundations, with per-turn automatic routing and operator override.
+- Chat is the single governed Work surface, backed by shared runtime foundations for conversation, planning, agentic execution, approvals, artifacts, and Code Mode context.
 - Citadels are the operator-facing governance model: Citadel → workspace → project scope resolution is fail-closed, Gatehouse Ward `deny` and `require_approval` effects are enforced at the policy gate on every tool invocation, Vault secrets are sealed per Citadel behind the OS keychain, and Blueprints export/import without secrets.
 - Durable execution owns the shipped mission-session resumable flow set, including bounded policy-gated sub-agent fan-out via `agent.fanout` and planner-declared parallel workers.
 - Runs produce signed, offline-verifiable evidence receipts, and compliance export bundles verify offline via digest, signature, and structure proof.

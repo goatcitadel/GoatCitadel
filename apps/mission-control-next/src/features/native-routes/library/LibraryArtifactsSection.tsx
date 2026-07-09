@@ -235,14 +235,14 @@ export function LibraryArtifactsSection({
                       tone: "neutral",
                     },
                     {
-                      id: "use-code",
-                      label: "Use in Build",
+                      id: "use-chat-review",
+                      label: "Review in Chat",
                       value: "Review",
-                      description: "Open Work in the build posture with this artifact selected as evidence.",
-                      actionLabel: "Build",
+                      description: "Open Chat with this artifact selected as evidence.",
+                      actionLabel: "Chat",
                       onClick: () =>
                         navigate({
-                          area: "code",
+                          area: "chat",
                           artifactId: selectedArtifact.artifactId,
                           ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
                           theme: route.theme,
@@ -256,7 +256,7 @@ export function LibraryArtifactsSection({
                     variant="default"
                     onClick={() =>
                       navigate({
-                        area: selectedArtifact.sourceSurface,
+                        area: "chat",
                         sessionId: selectedArtifact.sessionId,
                         ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
                         turnId: selectedArtifact.turnId,

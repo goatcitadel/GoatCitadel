@@ -490,10 +490,10 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const handleConsultGoogleMeetSession = async (session: GoogleMeetSessionRecord) => {
     setMeetBusySessionId(session.sessionId);
     try {
-      const updated = await createGoogleMeetConsultHandoff(session.sessionId, { target: "cowork" });
+      const updated = await createGoogleMeetConsultHandoff(session.sessionId, { target: "chat" });
       setNotice({
         tone: "success",
-        message: `Consult handoff ${updated.consultHandoff?.handoffId ?? "created"} is ready for Cowork.`,
+        message: `Consult handoff ${updated.consultHandoff?.handoffId ?? "created"} is ready for Chat.`,
       });
       await reload();
     } catch (consultError) {

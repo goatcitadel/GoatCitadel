@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- ThreadedSurfacePage coordinates chat/cowork/code layout, composer chrome, timeline, drawer, and workflow panels while decomposition lands (plan W3.1 in local decomposition notes). */
+/* eslint-disable max-lines -- ThreadedSurfacePage coordinates the chat layout, composer chrome, timeline, drawer, and workflow panels while decomposition lands (plan W3.1 in local decomposition notes). */
 import {
   useCallback,
   useEffect,
@@ -79,25 +79,25 @@ const MODE_META: Record<
   { label: string; icon: typeof MessageSquareText; helper: string; posture: string; stageLabel: string }
 > = {
   chat: {
-    label: "Conversation",
+    label: "Chat",
     icon: MessageSquareText,
-    helper: "Fast conversation, attachments, and lightweight help.",
-    posture: "fast-conversation",
-    stageLabel: "Conversation workspace stage",
+    helper: "Conversation, attachments, planning, tools, approvals, and source context in one place.",
+    posture: "chat",
+    stageLabel: "Chat workspace stage",
   },
   cowork: {
-    label: "Plan",
+    label: "Chat",
     icon: Workflow,
-    helper: "Delegation-first work with visible orchestration and checkpoints.",
-    posture: "orchestration-checkpoints",
-    stageLabel: "Planning workspace stage",
+    helper: "Legacy planning posture now resolves into Chat.",
+    posture: "chat",
+    stageLabel: "Chat workspace stage",
   },
   code: {
-    label: "Build",
+    label: "Chat",
     icon: Code2,
-    helper: "Implementation-focused thread with workbench and code-mode tools.",
-    posture: "workbench-proof",
-    stageLabel: "Build workspace stage",
+    helper: "Legacy build posture now resolves into Chat with governed code capabilities.",
+    posture: "chat",
+    stageLabel: "Chat workspace stage",
   },
 };
 
@@ -112,13 +112,16 @@ type EmptyStateGuidance = {
 const EMPTY_STATE_GUIDANCE: Record<ChatMode, EmptyStateGuidance> = {
   chat: {
     title: "Start with the first useful move",
-    body: "Ask directly, attach context, or open Start Here when this workspace still needs its first mission.",
-    startLabel: "Start conversation",
+    body: "Ask directly, attach context, or open Start Here when this workspace still needs its first chat.",
+    startLabel: "Start chat",
     startHereLabel: "Open Start Here",
     cards: [
       { title: "Fast answer", body: "Draft, compare, summarize, or ask a short question." },
       { title: "Guided setup", body: "Use the sample mission when provider, workspace, or memory context is unclear." },
-      { title: "Escalate", body: "Add planning or source-bound build context when the work needs more structure." },
+      {
+        title: "Escalate",
+        body: "Ask for a plan, use tools, or add source context in the same chat when the work needs structure.",
+      },
     ],
   },
   cowork: {
@@ -253,7 +256,7 @@ export function ThreadedSurfacePage({
   const [activeUtilityPanel, setActiveUtilityPanel] = useState<ThreadedUtilityPanelId | null>(null);
   const dockOpen = Boolean((input.dockOpen || activeUtilityPanel) && activeProps);
   const workflowPanel = input.workflowPanel;
-  const activeMode = activeProps?.mode ?? surface;
+  const activeMode: ChatMode = "chat";
   const modeMeta = MODE_META[activeMode];
   const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(true);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
@@ -441,7 +444,7 @@ export function ThreadedSurfacePage({
       data-mode={surface}
       data-active-mode={activeMode}
       data-area={surface}
-      data-surface-intent={MODE_META[surface].posture}
+      data-surface-intent={MODE_META.chat.posture}
       style={rootStyle}
     >
       <button
@@ -1684,8 +1687,9 @@ function ThreadEmptyState({
   input: MissionThreadedRenderSurfaceInput;
   dropTarget: MissionThreadedDropTargetProps;
 }) {
-  const Icon = MODE_META[surface].icon;
-  const guidance = EMPTY_STATE_GUIDANCE[surface];
+  void surface;
+  const Icon = MODE_META.chat.icon;
+  const guidance = EMPTY_STATE_GUIDANCE.chat;
   return (
     <section
       className={`mc-next-threaded-empty mc-next-threaded-dropzone${dropTarget.isDragActive ? " drop-active" : ""}`}
@@ -1704,7 +1708,7 @@ function ThreadEmptyState({
       <h2>{guidance.title}</h2>
       <p>{guidance.body}</p>
       <p className="mc-next-threaded-empty-support">{helper}</p>
-      <div className="mc-next-threaded-empty-guidance" aria-label={`${MODE_META[surface].label} starting points`}>
+      <div className="mc-next-threaded-empty-guidance" aria-label="Chat starting points">
         {guidance.cards.map((card) => (
           <div key={card.title} className="mc-next-threaded-empty-card">
             <strong>{card.title}</strong>
@@ -1750,21 +1754,6 @@ function ThreadEmptyState({
           >
             Approvals ({input.emptyStateProps.approvalsCount})
           </button>
-        ) : null}
-        {surface === "cowork" ? (
-          <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenTasks}>
-            Open task board
-          </button>
-        ) : null}
-        {surface === "chat" ? (
-          <>
-            <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCowork}>
-              Plan multi-step work
-            </button>
-            <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCode}>
-              Build with code context
-            </button>
-          </>
         ) : null}
       </div>
     </section>
@@ -1937,7 +1926,7 @@ function SessionRow({
   nested?: boolean;
 }) {
   const label = item.title?.trim() || renderSessionLabel(item.sessionId);
-  const mode = item.mode ?? "chat";
+  const mode: ChatMode = "chat";
   const delegatedLabel = item.delegationParent?.label?.trim() || item.delegationParent?.role?.trim();
   const meta = delegatedLabel
     ? `Delegated task · ${delegatedLabel}`
@@ -1959,7 +1948,7 @@ function SessionRow({
       >
         <div className="mc-next-threaded-session-row-main">
           <div className="mc-next-threaded-session-row-copy">
-            <span className={`mc-next-threaded-mode-label mode-${mode}`}>{MODE_META[mode].label}</span>
+            <span className="mc-next-threaded-mode-label mode-chat">Chat</span>
             <div className="mc-next-threaded-session-titleline">
               <strong>{label}</strong>
               <time className="mc-next-threaded-session-time" dateTime={item.updatedAt}>

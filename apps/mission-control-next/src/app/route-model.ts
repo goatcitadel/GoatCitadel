@@ -103,19 +103,19 @@ export const AREA_META: Record<PrimaryArea, AreaMeta> = {
     id: "chat",
     label: "Work",
     kicker: "Conversation",
-    description: "One conversation workspace for planning, building, search, attachments, and quick help.",
+    description: "One chat workspace for planning, building, search, attachments, approvals, and quick help.",
   },
   cowork: {
     id: "cowork",
-    label: "Plan",
-    kicker: "Orchestration",
-    description: "Delegation, tasks, checkpoints, and shared execution.",
+    label: "Chat",
+    kicker: "Legacy",
+    description: "Legacy planning links now open Chat or the Ops board.",
   },
   code: {
     id: "code",
-    label: "Build",
-    kicker: "Implementation",
-    description: "Workbench, files, diffs, runs, and code-mode control.",
+    label: "Chat",
+    kicker: "Legacy",
+    description: "Legacy Code links now open Chat with governed code capabilities available inside the conversation.",
   },
   projects: {
     id: "projects",
@@ -626,56 +626,9 @@ const MODE_RAIL_APPROVALS: RailItem = {
   preserveThread: true,
 };
 
-/** Mode-adaptive rail for the unified chat surface (keyed on route.mode). */
+/** Chat rail for the single conversation surface. Legacy mode values are ignored. */
 export function buildModeRail(mode: ChatMode | undefined): RailItem[] {
-  const m = mode ?? "chat";
-  if (m === "cowork") {
-    return [
-      MODE_RAIL_THREAD,
-      {
-        id: "mode-tasks",
-        label: "Task Board",
-        description: "Planning, assigned, review, blocked, and done.",
-        area: "cowork",
-        section: "tasks",
-      },
-      {
-        id: "mode-board",
-        label: "Agent Board",
-        description: "Agent posture and live board state.",
-        area: "cowork",
-        section: "board",
-      },
-      MODE_RAIL_APPROVALS,
-    ];
-  }
-  if (m === "code") {
-    return [
-      MODE_RAIL_THREAD,
-      {
-        id: "mode-files",
-        label: "Files",
-        description: "Browse shared workspace files outside the active thread.",
-        area: "library",
-        section: "files",
-      },
-      {
-        id: "mode-runtime",
-        label: "Runtime",
-        description: "Serving posture and spend while coding.",
-        area: "ops",
-        section: "runtime",
-      },
-      {
-        id: "mode-prompt-packs",
-        label: "Prompt Packs",
-        description: "Quality gates and pack authoring.",
-        area: "library",
-        section: "prompt-packs",
-      },
-      MODE_RAIL_APPROVALS,
-    ];
-  }
+  void mode;
   return [
     MODE_RAIL_THREAD,
     {
@@ -783,19 +736,17 @@ export function railGroupForSection(area: PrimaryArea, section: AppRoute["sectio
  * ungrouped sections render two. Falls back to the area label for root/unknown.
  */
 export function routeKicker(route: AppRoute): string {
-  const areaLabel = AREA_META[route.area].label;
-  const section = route.section;
-  if (route.area === "chat" && route.mode && route.mode !== "chat" && !section) {
-    return `${areaLabel} · ${route.mode === "cowork" ? "Plan" : "Build"}`;
-  }
+  const normalized = normalizeAppRoute(route);
+  const areaLabel = AREA_META[normalized.area].label;
+  const section = normalized.section;
   if (!section) {
     return areaLabel;
   }
-  const sectionLabel = RAIL_ITEMS[route.area]?.find((item) => item.section === section)?.label;
+  const sectionLabel = RAIL_ITEMS[normalized.area]?.find((item) => item.section === section)?.label;
   if (!sectionLabel) {
     return areaLabel;
   }
-  const group = railGroupForSection(route.area, section);
+  const group = railGroupForSection(normalized.area, section);
   // Collapse to "Area · Section" when the section's name equals its group's (e.g.
   // the Knowledge section inside the Knowledge group) to avoid a redundant
   // "Library · Knowledge · Knowledge".
@@ -810,41 +761,42 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "chat",
     section: "root",
     status: "ship",
-    releaseAction: "Send a normal Work conversation turn and inspect model/tool/runtime context when present.",
+    releaseAction:
+      "Send a Chat turn and inspect model, tool, approval, memory, runtime, artifact, and code-capability context when present.",
     verification: "verify:surface:regression, verify:runtime:truth",
-    note: "Core conversational lane remains release-bearing.",
+    note: "Chat is the only release-bearing conversation surface.",
   },
   {
     area: "cowork",
     section: "workspace",
-    status: "ship",
-    releaseAction: "Start or resume a durable planning run, then inspect blockers, approvals, and evidence.",
-    verification: "verify:surface:regression, verify:durable:recovery, verify:runtime:truth",
-    note: "Flagship durable flow is release-bearing with next-action, blocker, approval, and evidence truth visible.",
+    status: "hide",
+    releaseAction: "Redirect legacy planning workspace links into Chat.",
+    verification: "route-model tests; not release-bearing as a visible surface",
+    note: "Planning and orchestration remain Chat capabilities rather than a separate operator surface.",
   },
   {
     area: "cowork",
     section: "tasks",
-    status: "ship",
-    releaseAction: "Review task state, blocked work, and deliverables from the planning lane.",
-    verification: "verify:surface:regression",
-    note: "Task board is release-bearing for continuation, deliverable, and blocker review.",
+    status: "hide",
+    releaseAction: "Redirect legacy task-board links to Ops Kanban.",
+    verification: "route-model tests; Ops Kanban proof lane",
+    note: "Task state is operational detail, not a separate planning surface.",
   },
   {
     area: "cowork",
     section: "board",
-    status: "ship",
-    releaseAction: "Inspect agent posture and delegation board state.",
-    verification: "verify:surface:regression",
-    note: "Agent board is release-bearing as an inspectable posture surface and does not claim autonomous live-control parity.",
+    status: "hide",
+    releaseAction: "Redirect legacy agent-board links to Ops Kanban.",
+    verification: "route-model tests; Ops Kanban proof lane",
+    note: "Agent posture is operational detail, not a separate planning surface.",
   },
   {
     area: "code",
     section: "root",
-    status: "ship",
-    releaseAction: "Bind a source, edit files, run validation, inspect diffs, and review build proof.",
-    verification: "verify:surface:regression, verify:code:workbench-loop, verify:code-mode:sandbox",
-    note: "Build workbench is release-bearing with source binding, validation/diff review, and governed Code Mode proof truth.",
+    status: "hide",
+    releaseAction: "Redirect legacy Code links into Chat.",
+    verification: "route-model tests, verify:code-mode:sandbox",
+    note: "Code Mode remains a governed trusted-code capability, not a visible Code surface.",
   },
   {
     area: "projects",
@@ -1234,10 +1186,13 @@ const ROUTE_RELEASE_SCOPE_BY_KEY = new Map(ROUTE_RELEASE_SCOPE.map((scope) => [g
 
 export function normalizeAppRoute(route: AppRoute): AppRoute {
   if (route.area === "code") {
-    return normalizeAppRoute({ ...route, area: "chat", mode: "code", section: undefined });
+    return normalizeAppRoute({ ...route, area: "chat", mode: undefined, section: undefined });
   }
-  if (route.area === "cowork" && (!route.section || route.section === "workspace")) {
-    return normalizeAppRoute({ ...route, area: "chat", mode: "cowork", section: undefined });
+  if (route.area === "cowork") {
+    if (route.section === "tasks" || route.section === "board") {
+      return normalizeAppRoute({ ...route, area: "ops", section: "kanban", mode: undefined });
+    }
+    return normalizeAppRoute({ ...route, area: "chat", mode: undefined, section: undefined });
   }
 
   const base = {
@@ -1252,13 +1207,6 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
     view: route.view,
   };
 
-  if (route.area === "cowork") {
-    return {
-      ...base,
-      area: "cowork",
-      section: (route.section as CoworkSection | undefined) ?? "workspace",
-    };
-  }
   if (route.area === "library") {
     return {
       ...base,
@@ -1283,7 +1231,7 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
   return {
     ...base,
     area: route.area,
-    mode: route.area === "chat" ? route.mode : undefined,
+    mode: route.area === "chat" && route.mode === "chat" ? "chat" : undefined,
   };
 }
 
@@ -1300,7 +1248,7 @@ export function parseAppRoute(input: string | URL): AppRoute {
   const routeArea = normalizedArea;
   const routeSection = area === "settings" && parts[1] === "safety" ? "permissions" : parts[1];
   const rawMode = readParam(params, "mode");
-  const parsedMode = isChatMode(rawMode) ? rawMode : undefined;
+  const parsedMode = rawMode === "chat" ? "chat" : undefined;
   const nextRoute: AppRoute = normalizeAppRoute({
     area: routeArea,
     section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),
@@ -1333,21 +1281,14 @@ export function buildAppHref(route: AppRoute): string {
   }
   writeParam(params, "view", next.view);
   // theme is a global localStorage preference, not per-URL state (see 819ef761f); do not serialize it into hrefs.
-  // An explicitly-set mode="chat" is an operator override (QA finding N3) and must round-trip
-  // through the URL just like cowork/code; an absent mode (undefined) still omits the param so
-  // today's session-mode-wins behavior is unaffected.
-  if (next.area === "chat" && next.mode) {
-    writeParam(params, "mode", next.mode);
-  }
+  // Chat is the only operator conversation surface; legacy mode params are not serialized.
 
   const path =
     next.area === "chat"
       ? "/chat"
       : next.area === "projects"
         ? `/projects${next.projectId ? `/${encodeURIComponent(next.projectId)}` : ""}`
-        : next.area === "cowork" && (!next.section || next.section === "workspace")
-          ? "/cowork"
-          : `/${next.area}/${next.section ?? ""}`;
+        : `/${next.area}/${next.section ?? ""}`;
 
   const query = params.toString();
   return query ? `${path}?${query}` : path;
@@ -1356,13 +1297,10 @@ export function buildAppHref(route: AppRoute): string {
 export function getRouteLabel(route: AppRoute): string {
   const next = normalizeAppRoute(route);
   if (next.area === "chat") {
-    return next.mode === "cowork" ? "Plan" : next.mode === "code" ? "Build" : AREA_META.chat.label;
+    return AREA_META.chat.label;
   }
-  if (next.area === "code" || next.area === "projects") {
+  if (next.area === "projects") {
     return AREA_META[next.area].label;
-  }
-  if (next.area === "cowork") {
-    return next.section === "tasks" ? "Task Board" : next.section === "board" ? "Agent Board" : "Plan";
   }
 
   const item = RAIL_ITEMS[next.area].find((entry) => entry.section === next.section);
@@ -1372,25 +1310,10 @@ export function getRouteLabel(route: AppRoute): string {
 export function getRouteDescription(route: AppRoute): string {
   const next = normalizeAppRoute(route);
   if (next.area === "chat") {
-    if (next.mode === "cowork") {
-      return "Plan posture keeps decomposition, checkpoints, approvals, and proof inside the unified work surface.";
-    }
-    if (next.mode === "code") {
-      return "Build posture keeps project binding, governed execution, diffs, and validation inside the unified work surface.";
-    }
     return AREA_META.chat.description;
   }
-  if (next.area === "code" || next.area === "projects") {
+  if (next.area === "projects") {
     return AREA_META[next.area].description;
-  }
-  if (next.area === "cowork") {
-    if (next.section === "tasks") {
-      return "Tasks, activities, deliverables, and blockers stay inside the planning lane instead of floating as a separate product.";
-    }
-    if (next.section === "board") {
-      return "The board exposes live agent posture without forcing agent catalog chrome over active work.";
-    }
-    return AREA_META.cowork.description;
   }
   return (
     RAIL_ITEMS[next.area].find((entry) => entry.section === next.section)?.description ??
@@ -1408,12 +1331,7 @@ export function getRouteReleaseKey(route: RouteReleaseKeyInput): string {
 
 export function getRouteReleaseScope(route: AppRoute): RouteReleaseScope {
   const normalized = normalizeAppRoute(route);
-  const releaseRoute =
-    normalized.area === "chat" && normalized.mode === "code"
-      ? ({ ...normalized, area: "code", mode: undefined, section: undefined } as AppRoute)
-      : normalized.area === "chat" && normalized.mode === "cowork"
-        ? ({ ...normalized, area: "cowork", mode: undefined, section: "workspace" } as AppRoute)
-        : normalized;
+  const releaseRoute = normalized;
   const key = getRouteReleaseKey(releaseRoute);
   return (
     ROUTE_RELEASE_SCOPE_BY_KEY.get(key) ?? {
@@ -1497,9 +1415,6 @@ export function isRailItemActive(route: AppRoute, item: RailItem): boolean {
 }
 
 function defaultSectionForArea(area: PrimaryArea): RouteReleaseScope["section"] {
-  if (area === "cowork") {
-    return "workspace";
-  }
   if (area === "library") {
     return "agents";
   }
@@ -1522,10 +1437,6 @@ function isPrimaryArea(value: string | undefined): value is PrimaryArea {
     value === "ops" ||
     value === "settings"
   );
-}
-
-function isChatMode(value: string | undefined): value is ChatMode {
-  return value === "chat" || value === "cowork" || value === "code";
 }
 
 function readParam(params: URLSearchParams, key: string): string | undefined {

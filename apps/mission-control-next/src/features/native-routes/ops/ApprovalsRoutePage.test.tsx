@@ -411,13 +411,13 @@ describe("ApprovalsRoutePage", () => {
 
     const liveLink = findLink(renderer!.root, "Open live session");
     expect(liveLink.props.href).toBe(
-      "/chat?sessionId=session-1&turnId=turn-1&approvalId=11111111-1111-4111-8111-111111111111&mode=cowork",
+      "/chat?sessionId=session-1&turnId=turn-1&approvalId=11111111-1111-4111-8111-111111111111",
     );
     await act(async () => {
       liveLink.props.onClick({ preventDefault: vi.fn() });
     });
     expect(navigate).toHaveBeenCalledWith({
-      area: "cowork",
+      area: "chat",
       sessionId: "session-1",
       turnId: "turn-1",
       approvalId: "11111111-1111-4111-8111-111111111111",
@@ -455,7 +455,7 @@ describe("ApprovalsRoutePage", () => {
     expect(approvalHarness.onRejectAllPending).toHaveBeenCalledTimes(1);
   });
 
-  it("routes Code Mode approvals back to the Code surface when origin linkage is present", async () => {
+  it("routes Code Mode approvals back to Chat when origin linkage is present", async () => {
     const navigate = vi.fn();
     approvalHarness.overrides = {
       selectedApproval: {
@@ -477,14 +477,14 @@ describe("ApprovalsRoutePage", () => {
       findLink(renderer!.root, "Open live session").props.onClick({ preventDefault: vi.fn() });
     });
     expect(navigate).toHaveBeenCalledWith({
-      area: "code",
+      area: "chat",
       sessionId: "session-1",
       turnId: "turn-1",
       approvalId: "11111111-1111-4111-8111-111111111111",
     });
   });
 
-  it("routes Code Mode approvals back to Code when origin surface is missing", async () => {
+  it("routes Code Mode approvals back to Chat when origin surface is missing", async () => {
     const navigate = vi.fn();
     approvalHarness.overrides = {
       selectedApproval: {
@@ -506,7 +506,7 @@ describe("ApprovalsRoutePage", () => {
       findLink(renderer!.root, "Open live session").props.onClick({ preventDefault: vi.fn() });
     });
     expect(navigate).toHaveBeenCalledWith({
-      area: "code",
+      area: "chat",
       sessionId: "session-1",
       turnId: "turn-1",
       approvalId: "11111111-1111-4111-8111-111111111111",

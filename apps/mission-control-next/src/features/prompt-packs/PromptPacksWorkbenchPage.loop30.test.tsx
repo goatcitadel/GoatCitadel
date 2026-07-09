@@ -117,7 +117,7 @@ describe("PromptPacksWorkbenchPage loop 30 helper matrix", () => {
     expect(computeDraftVerdict(draft, "review")).toBe("review");
 
     expect(buildPromptPackRunRoute({ mode: "cowork", sessionId: "session-cowork" } as any)).toEqual({
-      area: "cowork",
+      area: "chat",
       sessionId: "session-cowork",
     });
     expect(buildPromptPackRunRoute({ mode: "unknown", sessionId: "session-chat" } as any)).toEqual({

@@ -1,0 +1,443 @@
+/* Cohesive native-route grammar: compact operations rhythm, section panels first,
+   lighter nested data rows second. */
+.mc-next-directory-page {
+  gap: 0.58rem;
+  padding: 0.68rem 0.72rem 0.95rem;
+}
+
+.mc-next-directory-header {
+  gap: 0.16rem 0.55rem;
+  padding: 0.64rem 0 0.48rem 0.62rem;
+  border-left-width: 2px;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--mc-area-color) 4%, transparent), transparent 72%),
+    color-mix(in oklab, var(--background) 78%, transparent);
+}
+
+.mc-next-directory-header:has(.mc-next-directory-icon) {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.mc-next-directory-header:has(.mc-next-directory-icon) .mc-next-directory-copy {
+  grid-column: 2;
+}
+
+.mc-next-directory-header:has(.mc-next-directory-icon) .mc-next-directory-head-row {
+  grid-column: 1 / -1;
+}
+
+.mc-next-directory-icon {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: var(--r-sm);
+}
+
+.mc-next-directory-copy p {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.13em;
+}
+
+.mc-next-directory-copy h1,
+.mc-next-directory-card-head h2 {
+  letter-spacing: 0;
+}
+
+.mc-next-directory-copy h1 {
+  font-size: var(--text-lg);
+  line-height: 1.16;
+}
+
+.mc-next-directory-copy span {
+  max-width: 72ch;
+  font-size: var(--text-xs);
+  line-height: 1.34;
+}
+
+.mc-next-directory-head-row {
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.34rem;
+}
+
+.mc-next-directory-head-metrics {
+  gap: 0.12rem;
+  padding: 0.08rem 0;
+}
+
+.mc-next-directory-head-metric {
+  min-width: 4.8rem;
+  padding: 0.02rem 0.55rem 0.02rem 0;
+  border-right: 1px solid color-mix(in oklab, var(--border) 54%, transparent);
+}
+
+.mc-next-directory-head-metric:last-child {
+  border-right: 0;
+}
+
+.mc-next-directory-head-metric-label {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+}
+
+.mc-next-directory-head-metric-value {
+  font-size: var(--text-md);
+  letter-spacing: 0;
+}
+
+.mc-next-directory-grid-native {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 0.56rem;
+}
+
+.mc-next-native-work-pair,
+.mc-next-native-stack,
+.mc-next-settings-grid,
+.mc-next-settings-stack {
+  gap: 0.56rem;
+}
+
+.mc-next-settings-grid {
+  grid-template-columns: minmax(min(100%, 16rem), 0.78fr) minmax(0, 1.42fr);
+}
+
+.mc-next-settings-grid.is-balanced,
+.mc-next-settings-grid.is-three-column {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+}
+
+.mc-next-settings-grid.is-detail-wide {
+  grid-template-columns: minmax(min(100%, 16rem), 0.68fr) minmax(0, 1.54fr);
+}
+
+.mc-next-settings-field-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.mc-next-directory-card {
+  gap: 0.48rem;
+  padding: 0.64rem 0.68rem;
+  border-color: color-mix(in oklab, var(--border) 60%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--foreground) 1.5%, transparent), transparent 66%),
+    color-mix(in oklab, var(--mc-surface-2) 78%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+
+.mc-next-directory-card.is-compact {
+  gap: 0.38rem;
+  padding: 0.48rem 0.54rem;
+}
+
+.mc-next-directory-lead {
+  margin-bottom: 0.08rem;
+  padding: 0.62rem 0.72rem;
+  border-width: 1px;
+  border-color: color-mix(in oklab, var(--mc-area-color) 36%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 11%, transparent), transparent 58%),
+    color-mix(in oklab, var(--mc-surface-2) 84%, transparent);
+}
+
+.mc-next-directory-card.is-featured,
+.mc-next-citadel-default-card {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 9%, transparent), transparent 58%),
+    color-mix(in oklab, var(--mc-surface-2) 85%, transparent);
+}
+
+.mc-next-directory-quickjump-card {
+  border-style: solid;
+  border-color: color-mix(in oklab, var(--mc-surface-2) 72%, var(--background));
+  background: color-mix(in oklab, var(--mc-surface-2) 58%, transparent);
+}
+
+.mc-next-directory-quickjump-card .mc-next-directory-action {
+  justify-content: space-between;
+  min-height: 1.7rem;
+  padding-block: 0.24rem;
+  border-color: color-mix(in oklab, var(--border) 24%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 58%, transparent);
+}
+
+.mc-next-directory-card-head {
+  gap: 0.24rem;
+  padding-bottom: 0.34rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 46%, transparent);
+}
+
+.mc-next-directory-card.is-compact .mc-next-directory-card-head {
+  padding-bottom: 0.26rem;
+}
+
+.mc-next-directory-card-head h2 {
+  font-size: var(--text-xs);
+  line-height: 1.22;
+}
+
+.mc-next-directory-card-head p {
+  max-width: 64ch;
+  font-size: var(--text-2xs);
+  line-height: 1.34;
+}
+
+.mc-next-directory-card-body,
+.mc-next-settings-panel-body {
+  gap: 0.42rem;
+}
+
+.mc-next-directory-stats {
+  grid-template-columns: repeat(auto-fit, minmax(5.4rem, 1fr));
+  gap: 0.18rem;
+}
+
+.mc-next-directory-stats div {
+  padding: 0.08rem 0.55rem 0.08rem 0;
+  border: 0;
+  border-right: 1px solid color-mix(in oklab, var(--border) 54%, transparent);
+  border-radius: 0;
+  background: transparent;
+}
+
+.mc-next-directory-stats div:last-child {
+  border-right: 0;
+}
+
+.mc-next-directory-list {
+  gap: 0.28rem;
+}
+
+.mc-next-directory-list-item,
+.mc-next-settings-selectable,
+.mc-next-settings-action-row,
+.mc-next-runtime-metric,
+.mc-next-settings-metric,
+.mc-next-library-action-card,
+.mc-next-activity-feed-row,
+.mc-next-ops-attention-item,
+.mc-next-settings-posture-card,
+.mc-next-provenance-coverage-item,
+.mc-next-decision-journal-facts div,
+.mc-next-settings-code-block,
+.mc-next-settings-notice,
+.mc-next-empty-state,
+.mc-next-project-recent-card,
+.mc-next-citadel-template-card,
+.mc-next-vault-item,
+.mc-next-shell .task-queue-card,
+.mc-next-shell .event-card,
+.mc-next-shell .quality-page-card,
+.mc-next-shell .operator-summary-card,
+.mc-next-shell .integrations-setup-mode-card,
+.mc-next-shell .channel-setup-connection-card,
+.mc-next-shell .channel-setup-field-card,
+.mc-next-shell .artifacts-generated-card,
+.mc-next-shell .chat-trace-card,
+.mc-next-shell .chat-preset-picker-card {
+  border-color: color-mix(in oklab, var(--border) 62%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 78%, transparent);
+  box-shadow: none;
+}
+
+.mc-next-directory-list-item:hover,
+.mc-next-settings-selectable:hover,
+.mc-next-settings-action-row:hover,
+.mc-next-activity-feed-row:hover,
+.mc-next-project-recent-card:hover,
+.mc-next-project-recent-card:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-area-color) 28%, var(--border));
+  background: color-mix(in oklab, var(--mc-surface-1) 86%, transparent);
+}
+
+.mc-next-runtime-metric-grid,
+.mc-next-settings-metric-grid,
+.mc-next-provenance-coverage-grid,
+.mc-next-library-action-card-grid,
+.mc-next-project-recents-grid,
+.mc-next-citadel-template-grid {
+  gap: 0.38rem;
+}
+
+.mc-next-runtime-metric strong,
+.mc-next-settings-metric strong {
+  letter-spacing: 0;
+}
+
+.mc-next-citadel-defaults {
+  gap: 0.5rem;
+}
+
+.mc-next-citadel-template-grid {
+  grid-template-columns: repeat(2, minmax(min(100%, 13rem), 1fr));
+}
+
+.mc-next-citadel-template-card {
+  gap: 0.38rem;
+  padding: 0.56rem;
+}
+
+.mc-next-citadel-template-card span {
+  letter-spacing: 0.06em;
+}
+
+.mc-next-directory-page .mc-next-empty-state {
+  min-height: 5.25rem;
+  gap: 0.32rem;
+  padding: 0.72rem 0.82rem;
+  border-style: solid;
+  border-color: color-mix(in oklab, var(--mc-surface-2) 72%, var(--background));
+  background: color-mix(in oklab, var(--mc-surface-1) 56%, transparent);
+}
+
+.mc-next-directory-page .mc-next-empty-state[data-size="compact"] {
+  min-height: 3.75rem;
+  padding: 0.48rem 0.56rem;
+}
+
+.mc-next-directory-page .mc-next-empty-state-title {
+  font-size: var(--text-xs);
+  line-height: 1.24;
+  letter-spacing: 0;
+}
+
+.mc-next-directory-page .mc-next-empty-state-description {
+  font-size: var(--text-2xs);
+  line-height: 1.34;
+}
+
+.mc-next-project-thread-groups {
+  gap: 0.32rem;
+  margin-top: 0.34rem;
+}
+
+.mc-next-project-thread-groups .mc-next-directory-lane {
+  gap: 0.24rem;
+  padding: 0.42rem 0.46rem;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--mc-area-color) 3%, transparent), transparent 60%),
+    color-mix(in oklab, var(--mc-surface-1) 76%, transparent);
+}
+
+.mc-next-project-thread-groups .mc-next-empty-state {
+  min-height: 2.95rem;
+  padding: 0.34rem 0.45rem;
+}
+
+.mc-next-project-empty-guide {
+  gap: 0.36rem;
+  margin-top: 0.32rem;
+  padding: 0.48rem;
+}
+
+.mc-next-project-empty-guide .mc-next-settings-button-row {
+  gap: 0.28rem;
+}
+
+.mc-next-shell[data-area="projects"] .mc-next-directory-head-actions {
+  gap: 0.24rem;
+}
+
+.mc-next-shell[data-area="projects"] .mc-next-new-session-button {
+  min-height: 1.65rem;
+  gap: 0.28rem;
+  padding: 0.22rem 0.42rem;
+  font-size: var(--text-2xs);
+}
+
+.mc-next-shell[data-area="projects"] .mc-next-new-session-button svg {
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
+.mc-next-shell[data-area="projects"] .mc-next-new-session-button-swatch {
+  width: 6px;
+  height: 6px;
+}
+
+.mc-next-project-home-base,
+.mc-next-project-controls,
+.mc-next-project-control-section {
+  gap: 0.38rem;
+}
+
+.mc-next-project-home-base {
+  margin-bottom: 0.28rem;
+}
+
+.mc-next-project-home-head {
+  padding: 0.42rem 0.5rem;
+}
+
+.mc-next-project-home-head strong {
+  font-size: var(--text-sm);
+}
+
+.mc-next-project-home-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  gap: 0.28rem;
+}
+
+.mc-next-project-intake-grid,
+.mc-next-project-lane-resume-list {
+  grid-template-columns: repeat(auto-fit, minmax(6.8rem, 1fr));
+  gap: 0.26rem;
+}
+
+.mc-next-project-intake-card {
+  min-height: 5.2rem;
+  padding: 0.38rem;
+}
+
+.mc-next-project-lane-resume {
+  min-height: 3.45rem;
+  padding: 0.36rem 0.4rem;
+}
+
+.mc-next-project-controls-card .mc-next-settings-textarea {
+  min-height: 3.6rem;
+}
+
+.mc-next-project-control-section > .mc-next-button {
+  justify-self: start;
+}
+
+@media (min-width: 1181px) {
+  .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-native-projects-grid {
+    grid-template-columns: minmax(14rem, 0.7fr) minmax(27rem, 1.3fr);
+    gap: 0.48rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .mc-next-directory-page {
+    gap: 0.52rem;
+    padding-inline: 0.44rem;
+  }
+
+  .mc-next-directory-header {
+    padding-left: 0.5rem;
+  }
+
+  .mc-next-directory-header:has(.mc-next-directory-icon) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-directory-header:has(.mc-next-directory-icon) .mc-next-directory-copy,
+  .mc-next-directory-header:has(.mc-next-directory-icon) .mc-next-directory-head-row {
+    grid-column: auto;
+  }
+
+  .mc-next-directory-icon {
+    display: none;
+  }
+
+  .mc-next-directory-head-metric {
+    min-width: 4.8rem;
+  }
+
+  .mc-next-settings-grid,
+  .mc-next-settings-grid.is-detail-wide {
+    grid-template-columns: 1fr;
+  }
+}

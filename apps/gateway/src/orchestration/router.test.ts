@@ -126,9 +126,9 @@ describe("orchestration router", () => {
 
     expect(shouldUseModeOrchestration(input)).toBe(true);
     const plan = buildOrchestrationPlan(input);
-    expect(plan.workflowTemplate).toBe("chat.answer.review");
-    expect(plan.routeDecision.visibility).toBe("summarized");
-    expect(plan.steps.map((step) => step.role)).toEqual(["answerer", "reviewer", "synthesizer"]);
+    expect(plan.workflowTemplate).toBe("cowork.research.synthesize.critic");
+    expect(plan.routeDecision.visibility).toBe("explicit");
+    expect(plan.steps.map((step) => step.role)).toEqual(["researcher", "researcher", "critic", "synthesizer"]);
   });
 
   it("keeps explicit web lookups on the tool-backed single-agent path", () => {

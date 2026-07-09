@@ -37,7 +37,10 @@ const agenticRunStatusSchema = z.enum([
 
 const a2aTaskExportPreviewBodySchema = z.object({
   goal: z.string().min(1).max(4000),
-  sourceSurface: z.enum(["chat", "cowork", "code", "project", "ops", "library"]).optional(),
+  sourceSurface: z
+    .enum(["chat", "cowork", "code", "project", "ops", "library"])
+    .transform((surface) => (surface === "cowork" || surface === "code" ? "chat" : surface))
+    .optional(),
   workspaceId: z.string().min(1).max(120).optional(),
   projectId: z.string().min(1).max(240).optional(),
   sessionId: z.string().min(1).max(240).optional(),

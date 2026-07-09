@@ -6,7 +6,7 @@ The canonical current runtime posture lives in `docs/CANONICAL_RUNTIME_STATE_MOD
 
 ## Current Shipped Posture
 
-- Shipped Chat / Cowork / Code operator sends, retry, resume, approval wait/resume, worker restart recovery, and dead-letter recovery now run on durable execution by default.
+- Shipped Chat operator sends, retry, resume, approval wait/resume, worker restart recovery, and dead-letter recovery now run on durable execution by default. Legacy Cowork and Code route/mode inputs normalize into Chat-compatible durable execution.
 - Cowork/orchestration now uses the durable workflow key `orchestration.plan.execute`, links each orchestration run to one durable run by default, and allocates one worktree per orchestration run by default.
 - Approval resume for orchestration is durable-worker owned: the approval endpoint records operator intent and requeues the linked durable run, while the durable workflow resumes the same orchestration/worktree context.
 - `assistant.durable.enabled`, `executionEnabled`, `chatAutoPromoteEnabled`, and `durableKernelV1Enabled` default to `true` in the shipped gateway runtime.

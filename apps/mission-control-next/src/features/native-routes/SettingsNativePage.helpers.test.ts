@@ -273,8 +273,8 @@ describe("SettingsNativePage helpers", () => {
     expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "active", "active"]);
     expect(demoItems[3]!.meta).toBe("starter-ready");
     expect(demoItems.at(-1)!.meta).toBe("proof-needed");
-    expect(demoItems[3]!.actionLabel).toBe("Open Plan");
-    expect(demoItems[3]!.route).toEqual({ area: "cowork", sessionId: "cowork-1", projectId: "project-1" });
+    expect(demoItems[3]!.actionLabel).toBe("Open Chat");
+    expect(demoItems[3]!.route).toEqual({ area: "chat", sessionId: "chat-1", projectId: "project-1" });
 
     const durableTaskItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null, {
       recentRuns: [
@@ -291,7 +291,7 @@ describe("SettingsNativePage helpers", () => {
       ],
       evidenceEnvelopes: [],
     });
-    expect(durableTaskItems[3]!.description).toContain("recent durable build exists");
+    expect(durableTaskItems[3]!.description).toContain("recent durable run exists");
     expect(durableTaskItems[3]!.actionLabel).toBe("Open Run Detail");
     expect(durableTaskItems[3]!.route).toEqual({
       area: "ops",

@@ -58,7 +58,7 @@ export function buildDelegatedChatSendRequest(
     content: input.content,
     providerId: input.providerId,
     model: input.model,
-    mode: input.mode,
+    mode: "chat",
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,

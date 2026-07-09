@@ -90,7 +90,7 @@ const EXPERIMENTAL_COMMAND_ROUTES: ReadonlyArray<{
 
 function preloadRouteChunk(targetRoute: AppRoute): void {
   const normalized = normalizeAppRoute(targetRoute);
-  if (normalized.area === "chat" || normalized.area === "cowork" || normalized.area === "code") {
+  if (normalized.area === "chat") {
     void preloadThreadedSurfaceRoute();
     return;
   }
@@ -297,7 +297,7 @@ export function MissionControlNextApp() {
   // the `@media (max-width: 1023px)` CSS tier so the in-drawer area switcher
   // only renders on mobile and never duplicates the desktop topbar nav.
   const isMobileNav = useMediaQuery("(max-width: 1023px)");
-  const isWorkArea = route.area === "chat" || route.area === "cowork" || route.area === "code";
+  const isWorkArea = route.area === "chat";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
   const hasVisibleInspector = detailPanelPinned || inspectorOpen;
@@ -803,74 +803,6 @@ export function renderRouteContent(input: {
   const openLibraryArtifacts = () => input.navigate({ area: "library", section: "artifacts", theme: route.theme });
   const openOpsRuntime = () => input.navigate({ area: "ops", section: "runtime", theme: route.theme });
   if (route.area === "chat") {
-    if (route.mode === "cowork") {
-      return (
-        <LazyThreadedSurfaceRoute
-          workspaceId={input.activeWorkspaceId}
-          workspaceName={input.activeWorkspaceName}
-          gatewayStatus={input.gatewayStatus}
-          approvalsCount={input.pendingApprovals}
-          surface="cowork"
-          lockSurface
-          onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
-          onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-          onOpenApprovals={(approvalId?: string) =>
-            input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
-          }
-          onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
-          onOpenPersonalitiesSettings={openPersonalitiesSettings}
-          onOpenLibraryArtifacts={openLibraryArtifacts}
-          onOpenOpsRuntime={openOpsRuntime}
-          onOpenUniversalRunDetail={(runId) =>
-            input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
-          }
-          onNavigateSurface={(surface, options) =>
-            input.navigate({
-              area: surface,
-              theme: route.theme,
-              sessionId: options?.sessionId ?? undefined,
-              turnId: options?.turnId ?? undefined,
-              artifactId: options?.artifactId ?? undefined,
-            })
-          }
-        />
-      );
-    }
-
-    if (route.mode === "code") {
-      return (
-        <LazyThreadedSurfaceRoute
-          workspaceId={input.activeWorkspaceId}
-          workspaceName={input.activeWorkspaceName}
-          gatewayStatus={input.gatewayStatus}
-          approvalsCount={input.pendingApprovals}
-          surface="code"
-          lockSurface
-          onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
-          onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-          onOpenApprovals={(approvalId?: string) =>
-            input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
-          }
-          onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
-          onOpenPersonalitiesSettings={openPersonalitiesSettings}
-          onOpenLibraryArtifacts={openLibraryArtifacts}
-          onOpenOpsRuntime={openOpsRuntime}
-          onOpenUniversalRunDetail={(runId) =>
-            input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
-          }
-          onNavigateSurface={(surface, options) =>
-            input.navigate({
-              area: surface,
-              theme: route.theme,
-              sessionId: options?.sessionId ?? undefined,
-              turnId: options?.turnId ?? undefined,
-              artifactId: options?.artifactId ?? undefined,
-            })
-          }
-        />
-      );
-    }
-
     return (
       <LazyThreadedSurfaceRoute
         workspaceId={input.activeWorkspaceId}
@@ -880,10 +812,8 @@ export function renderRouteContent(input: {
         surface="chat"
         lockSurface={false}
         hidePageHeader
-        initialModeOverride={route.mode === "chat" ? "chat" : undefined}
-        onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
-        onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
-        onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
+        initialModeOverride="chat"
+        onOpenTasks={() => input.navigate({ area: "ops", section: "kanban", theme: route.theme })}
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
@@ -894,41 +824,17 @@ export function renderRouteContent(input: {
         onOpenUniversalRunDetail={(runId) =>
           input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
         }
-        onNavigateSurface={(surface, options) =>
+        onNavigateSurface={(_surface, options) =>
           input.navigate({
-            area: surface,
+            area: "chat",
             theme: route.theme,
             sessionId: options?.sessionId ?? undefined,
             turnId: options?.turnId ?? undefined,
             artifactId: options?.artifactId ?? undefined,
           })
         }
-        onResolvedModeChange={(mode, origin) => {
-          // An explicit ?mode=chat is a one-time seed of operator intent (QA finding
-          // N3), not a standing force. Suppress the URL rewrite (agree-suppression)
-          // while ?mode=chat is present and EITHER:
-          //   - the resolved mode still agrees with the URL (mode === "chat"), so
-          //     there is nothing untruthful to correct; or
-          //   - this is a passive session-mode sync (arrival, session switch) that
-          //     carries no operator intent — it merely echoes the selected
-          //     session's own stored mode and must never clobber the seed.
-          // Once the operator manually changes the mode away from chat (origin:
-          // "manual-override" with a disagreeing mode), the URL must follow
-          // truthfully so it never lies about the resolved surface.
-          const isSessionSync = (origin ?? "session-sync") === "session-sync";
-          if (route.mode === "chat" && (mode === "chat" || isSessionSync)) {
-            return;
-          }
-          input.navigate({ ...route, area: "chat", mode }, { replace: true });
-        }}
       />
     );
-  }
-
-  if (route.area === "cowork") {
-    if (route.section === "tasks" || route.section === "board") {
-      return <LazyNativeRoutePages {...input} route={route} />;
-    }
   }
 
   if (route.area === "projects") {

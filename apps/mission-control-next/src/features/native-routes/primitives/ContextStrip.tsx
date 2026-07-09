@@ -13,8 +13,8 @@ export type ContextStripProps = {
 
 const MODE_LABEL: Record<ContextStripMode, string> = {
   chat: "Chat",
-  cowork: "Cowork",
-  code: "Code",
+  cowork: "Chat",
+  code: "Chat",
 };
 
 export function ContextStrip({ model, mode, memory, cost, tokens, attachments }: ContextStripProps) {

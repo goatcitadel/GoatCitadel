@@ -1,0 +1,265 @@
+/* W-3 cross-project Recent sessions row on the Projects route. */
+.mc-next-project-recents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.mc-next-project-recent-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.28rem;
+  padding: 0.75rem;
+  text-align: left;
+  background: color-mix(in oklab, var(--bg-surface-1) 92%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
+  font: inherit;
+  color: inherit;
+}
+
+.mc-next-project-recent-card:hover,
+.mc-next-project-recent-card:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-area-color) 32%, var(--border-default));
+  background: color-mix(in oklab, var(--bg-surface-1) 100%, transparent);
+}
+
+.mc-next-project-recent-card strong {
+  font-size: var(--text-sm);
+  color: var(--fg-primary);
+  line-height: 1.3;
+}
+
+.mc-next-project-recent-meta {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.mc-next-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: var(--r-pill);
+  font-size: var(--text-xs);
+  background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
+  color: color-mix(in oklab, var(--mc-area-color) 60%, var(--fg-primary));
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 24%, var(--border-subtle));
+}
+
+.mc-next-mode-chip.mode-chat {
+  background: color-mix(in oklab, var(--area-chat) 14%, transparent);
+  color: color-mix(in oklab, var(--area-chat) 60%, var(--fg-primary));
+  border-color: color-mix(in oklab, var(--area-chat) 24%, var(--border-subtle));
+}
+
+.mc-next-mode-chip.mode-cowork {
+  background: color-mix(in oklab, var(--area-cowork) 14%, transparent);
+  color: color-mix(in oklab, var(--area-cowork) 60%, var(--fg-primary));
+  border-color: color-mix(in oklab, var(--area-cowork) 24%, var(--border-subtle));
+}
+
+.mc-next-mode-chip.mode-code {
+  background: color-mix(in oklab, var(--area-code) 14%, transparent);
+  color: color-mix(in oklab, var(--area-code) 60%, var(--fg-primary));
+  border-color: color-mix(in oklab, var(--area-code) 24%, var(--border-subtle));
+}
+
+/* The Mason setup surface (library/citadel). */
+.mc-next-mason-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted-foreground);
+}
+
+.mc-next-mason-start {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mc-next-mason-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  margin: 0.7rem 0 0.55rem;
+}
+
+.mc-next-mason-field > span {
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+
+.mc-next-mason-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.mc-next-mason-error {
+  margin: 0 0 0.55rem;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.mc-next-mason-footnote,
+.mc-next-citadel-footnote {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
+.mc-next-citadel-purpose {
+  margin: 0 0 0.6rem;
+  color: var(--foreground);
+}
+
+.mc-next-citadel-defaults {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.mc-next-citadel-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.mc-next-citadel-template-card {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.72rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-citadel-template-card header {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.mc-next-citadel-template-card span {
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-citadel-template-card strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+}
+
+.mc-next-citadel-template-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ward-result {
+  margin: 0.6rem 0 0;
+  font-size: var(--text-sm);
+  color: var(--foreground);
+}
+
+.mc-next-blueprint-json {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.mc-next-blueprint-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.mc-next-blueprint-ok {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  font-size: var(--text-sm);
+  color: color-mix(in oklab, var(--area-cowork, var(--foreground)) 70%, var(--foreground));
+}
+
+.mc-next-blueprint-errors {
+  margin-top: 0.6rem;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.mc-next-blueprint-errors > p {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.3rem;
+}
+
+.mc-next-vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-vault-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+}
+
+.mc-next-vault-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.mc-next-vault-item-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.mc-next-vault-value {
+  display: block;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  font-size: var(--text-xs);
+  word-break: break-all;
+}

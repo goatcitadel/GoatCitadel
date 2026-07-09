@@ -88,7 +88,7 @@ describe("chat routes additional coverage", () => {
     expect(createResponse.statusCode).toBe(201);
     expect(createChatSession).toHaveBeenCalledWith({
       title: "Fresh chat",
-      mode: "cowork",
+      mode: "chat",
       origin: "prompt_pack",
       includeInHistory: false,
     });
@@ -709,7 +709,7 @@ describe("chat routes additional coverage", () => {
     expect(routePreflight).toHaveBeenCalledWith("sess-1", {
       action: "send",
       prefsOverride: {
-        mode: "cowork",
+        mode: "chat",
         webMode: "auto",
         thinkingLevel: "extended",
       },

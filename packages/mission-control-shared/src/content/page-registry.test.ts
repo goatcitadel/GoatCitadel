@@ -119,7 +119,7 @@ describe("page-registry route model", () => {
         artifactId: "artifact-code",
       }),
     ).toBe(
-      "?space=operate&page=surface&surface=code&sessionId=sess-code&turnId=turn-code&artifactId=artifact-code&approvalId=approval-code",
+      "?space=operate&page=surface&surface=chat&sessionId=sess-code&turnId=turn-code&artifactId=artifact-code&approvalId=approval-code",
     );
     expect(
       buildRouteSearch({
@@ -140,7 +140,7 @@ describe("page-registry route model", () => {
     expect(readRouteFromLocation()).toMatchObject({
       space: "operate",
       page: "surface",
-      surface: "code",
+      surface: "chat",
       sessionId: "sess-code",
       turnId: "turn-code",
       approvalId: "approval-code",
@@ -175,7 +175,7 @@ describe("page-registry route model", () => {
     expect(readRouteFromLocation()).toMatchObject({ space: "observe", page: "quality", artifactId: "artifact-2" });
 
     setLocation("http://localhost:5173/?tab=chat&surface=cowork");
-    expect(readRouteFromLocation()).toMatchObject({ space: "operate", page: "surface", surface: "cowork" });
+    expect(readRouteFromLocation()).toMatchObject({ space: "operate", page: "surface", surface: "chat" });
 
     setLocation("http://localhost:5173/?tab=chat&surface=unknown");
     expect(readRouteFromLocation()).toMatchObject({ space: "operate", page: "surface", surface: "chat" });
@@ -200,9 +200,9 @@ describe("page-registry route model", () => {
     expect(isWorkSurface("code")).toBe(true);
     expect(isWorkSurface("scheduler")).toBe(false);
     expect(isWorkSurface(null)).toBe(false);
-    expect(getPageLabel({ space: "operate", page: "surface", surface: "cowork" })).toBe("Cowork");
+    expect(getPageLabel({ space: "operate", page: "surface", surface: "cowork" })).toBe("Chat");
     expect(getPageLabel({ space: "operate", page: "surface", surface: "chat" })).toBe("Chat");
-    expect(getPageLabel({ space: "operate", page: "surface", surface: "code" })).toBe("Code");
+    expect(getPageLabel({ space: "operate", page: "surface", surface: "code" })).toBe("Chat");
     expect(getPageLabel({ space: "configure", page: "tools" })).toBe("Tools");
     expect(getVisiblePage({ space: "operate", page: "surface" })).toBe("chat");
     expect(getVisiblePage({ space: "operate", page: "tasks" })).toBe("tasks");
@@ -237,7 +237,7 @@ describe("page-registry route model", () => {
     expect(buildRouteForVisiblePage(current, "code")).toMatchObject({
       space: "operate",
       page: "surface",
-      surface: "code",
+      surface: "chat",
       sessionId: "sess-1",
       turnId: "turn-1",
       artifactId: "artifact-1",

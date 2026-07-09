@@ -36,8 +36,8 @@ Current product truth to preserve while testing:
 
 - `apps/mission-control-next` is the canonical `1.0` shell.
 - `apps/gateway` is the runtime/control-plane owner.
-- Chat, Cowork, and Code are distinct operator surfaces.
-- Durable execution owns the shipped resumable Chat / Cowork / Code flow set.
+- Chat is the single primary conversation surface.
+- Durable execution owns the shipped resumable Chat flow set; legacy Cowork and Code route/mode inputs normalize into Chat-compatible execution.
 - Code Mode is governed trusted-code execution; do not treat it as general hostile-code sandboxing without fresh named proof.
 - Docker is a runtime boundary, not a replacement for auth, policy, approvals, or path jails.
 - Experimental routes must be visibly labeled and must not be counted as release-ready proof.
@@ -149,7 +149,7 @@ Run the plan in this order to avoid spending hours debugging follow-on failures 
 
 1. Startup, health, and shell navigation
 2. Onboarding, provider setup, and basic Chat
-3. Chat / Cowork / Code core flows
+3. Chat core flows, including planning, subagents, and code capabilities
 4. Projects, Library, Ops, and Settings route coverage
 5. Approvals, durable runs, runtime truth, and recovery
 6. Capability, Code Mode, tools, skills, and trust policy
@@ -466,7 +466,7 @@ Result:
 
 Steps:
 
-1. Switch between Chat, Cowork, Code, Projects, Library, Ops, and Settings.
+1. Switch between Chat, Projects, Library, Ops, and Settings.
 2. Change route query params such as `sessionId`, `projectId`, `runId`, and `theme` where supported.
 3. Refresh after each major area.
 4. Use browser back/forward.
@@ -532,7 +532,7 @@ Steps:
 1. Open `/settings/onboarding`.
 2. Follow Start Here through setup readiness.
 3. Choose provider/local path.
-4. Complete first Chat, Cowork, and Code guidance if available.
+4. Complete first Chat guidance if available.
 5. Inspect retained evidence and Run Detail links.
 
 Expected:
@@ -879,22 +879,22 @@ Expected:
 
 Result:
 
-## Code Surface And Code Mode
+## Chat-Hosted Code Capability
 
-### CODE-01 Code Workbench Basics
+### CODE-01 Code Capability Basics
 
 Steps:
 
-1. Open `/code`.
+1. Open `/chat`.
 2. Bind a safe test source/workspace.
-3. Inspect file tree.
-4. Open and edit a file if supported.
-5. Review diff.
+3. Ask for a focused implementation or review task.
+4. Inspect any code-capability context, approval prompts, and artifact evidence that appears.
+5. Review diff or execution evidence before any risky mutation.
 6. Run a targeted validation command if supported.
 
 Expected:
 
-- Code feels distinct from Chat/Cowork.
+- Code work is presented as a governed Chat capability, not a separate primary surface.
 - Source binding and path boundaries are visible.
 - Diffs are inspectable before risky mutation.
 - Validation output is bounded and readable.
@@ -1002,7 +1002,7 @@ Steps:
 1. Open `/projects`.
 2. Create a test project.
 3. Open project detail route.
-4. Link or continue Chat, Cowork, and Code work from the project.
+4. Link or continue Chat work from the project.
 5. Edit project metadata.
 6. Archive/delete if supported.
 
@@ -1233,7 +1233,7 @@ Steps:
 
 1. Open `/library/knowledge`.
 2. Add or inspect a knowledge source.
-3. Search or attach it to Chat/Cowork context.
+3. Search or attach it to Chat context.
 4. Remove or disable it if supported.
 
 Expected:
@@ -1304,7 +1304,7 @@ Result:
 Steps:
 
 1. Open `/library/artifacts`.
-2. Generate a small artifact from Chat/Cowork/Code.
+2. Generate a small artifact from Chat.
 3. Reopen artifact.
 4. Inspect linked run/session/source/decision evidence.
 
@@ -1613,7 +1613,7 @@ Steps:
 1. Approve one pending item.
 2. Reject another pending item.
 3. Inspect history and replay.
-4. Return to linked Chat/Cowork/Code surface.
+4. Return to the linked Chat surface.
 
 Expected:
 
@@ -1742,7 +1742,7 @@ Result:
 
 Steps:
 
-1. Start durable Chat/Cowork/Code flow.
+1. Start a durable Chat flow.
 2. Restart gateway.
 3. Inspect run, session, approval, and activity state.
 
@@ -2635,7 +2635,7 @@ Result:
 
 Steps:
 
-1. Start Chat/Cowork/Code work in workspace A.
+1. Start Chat work in workspace A.
 2. Switch to workspace B mid-flow.
 3. Create memory/task/note.
 4. Switch back.
@@ -2776,7 +2776,7 @@ Manual QA is good enough to sign off only when:
 - all required lane cases are `Pass` or explicitly `N/A`
 - no visible ship route is broken, misleading, or half-wired
 - experimental routes are labeled and not counted as release-ready proof
-- Chat, Cowork, and Code are distinct and usable
+- Chat is usable as the single primary work surface, including planning, subagents, approvals, artifacts, and code capabilities
 - approvals, durable execution, and runtime lifecycle truth stay honest under degraded/restart scenarios
 - provider/model/tool/memory/cost behavior is inspectable
 - risky actions remain approval/policy governed

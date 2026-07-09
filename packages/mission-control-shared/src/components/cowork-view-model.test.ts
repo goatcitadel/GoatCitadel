@@ -279,7 +279,7 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.completenessLabel).toBe("Completeness: delegation partial");
     expect(viewModel.stageCards.find((item) => item.label === "Workflow")?.value).toBe("partial");
     expect(viewModel.stageCards.find((item) => item.label === "Execution")?.value).toBe("partial");
-    expect(viewModel.now.title).toBe("Cowork needs a continuation pass");
+    expect(viewModel.now.title).toBe("Chat needs a continuation pass");
     expect(viewModel.continuationGate.reasonCodes).toContain("delegation_partial");
   });
 
@@ -854,7 +854,7 @@ describe("deriveCoworkRunViewModel", () => {
 
     expect(empty.empty).toBe(true);
     expect(empty.nextAction?.kind).toBe("focus_composer");
-    expect(empty.now.title).toBe("No Cowork run is active yet");
+    expect(empty.now.title).toBe("No agentic Chat run is active yet");
     expect(empty.runMap.planNodes.map((node) => node.id)).toEqual(["plan", "research", "patch", "qa", "ship"]);
     expect(resolveActiveWorkflowTurn(null)).toBeNull();
     expect(
@@ -1081,7 +1081,7 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.freshnessLabel).toBe("Freshness: partially refreshed");
     expect(viewModel.completenessLabel).toBe("Completeness: partial");
     expect(viewModel.nextAction?.kind).toBe("review_run_details");
-    expect(viewModel.now.title).toBe("Cowork is waiting for your answer");
+    expect(viewModel.now.title).toBe("Chat is waiting for your answer");
     expect(viewModel.blockers.map((blocker) => blocker.id)).toEqual(
       expect.arrayContaining(["answer-required", "refresh-failed", "durable-recovery", "delegation-failed"]),
     );
