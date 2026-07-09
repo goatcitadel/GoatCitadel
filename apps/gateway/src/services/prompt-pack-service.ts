@@ -4,6 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
+import {
+  SECURITY_RED_TEAM_PACK_FILE,
+  buildSecurityQualityGateRecord,
+  buildSecurityRedTeamEvalPack,
+  resolveEvalAssetsPackPath,
+} from "./prompt-pack/security-eval.js";
 
 const log = logger.child("prompt-pack-service");
 const DEFAULT_WORKSPACE_ID = "default";
@@ -111,12 +117,6 @@ import {
   toPromptPackChatToolRunRows,
   truncatePromptPackLogValue,
 } from "./prompt-pack/trace-and-score-helpers.js";
-import {
-  SECURITY_RED_TEAM_PACK_FILE,
-  buildSecurityQualityGateRecord,
-  buildSecurityRedTeamEvalPack,
-  resolveEvalAssetsPackPath,
-} from "./prompt-pack/security-eval.js";
 import {
   buildPromptPackRuntimeSignalClusterRows,
   collectPromptPackExpectedToolFamilies,

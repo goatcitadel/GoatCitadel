@@ -340,12 +340,7 @@ import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
 import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
-import {
-  collectMcpBrowserFallbackTargets,
-  discoverMcpTools,
-  inferMcpToolsForServer,
-  invokeMcpRuntimeTool,
-} from "./mcp-runtime.js";
+import { collectMcpBrowserFallbackTargets, invokeMcpRuntimeTool } from "./mcp-runtime.js";
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
@@ -452,7 +447,7 @@ import * as settingsAuthService from "./settings-auth-service.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
-import { buildPublicMcpAuthState, McpOAuthTokenService } from "./mcp-oauth-token-service.js";
+import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import { McpElicitationService } from "./mcp-elicitation-service.js";
 import { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
@@ -622,19 +617,9 @@ import {
 } from "./comms-service.js";
 import { buildChannelVoiceReplyAttachment } from "./channel-voice-reply-service.js";
 import { listChatModelSuggestions } from "./chat-model-suggestions.js";
-import {
-  MCP_APPROVAL_INBOX_URL,
-  createInternalMcpApprovalInboxTools,
-  isInternalMcpApprovalInboxServer,
-} from "./mcp-approval-inbox.js";
-import {
-  MCP_DURABLE_TASKS_URL,
-  createInternalMcpDurableTasksTools,
-  isInternalMcpDurableTasksServer,
-} from "./mcp-durable-tasks.js";
 import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
-import { applyMcpRedaction, inferMcpCategory, normalizeMcpPolicy, wildcardMatch } from "./mcp-server-policy.js";
+import { applyMcpRedaction, wildcardMatch } from "./mcp-server-policy.js";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 
 export interface MemoryFileEntry {
@@ -655,7 +640,6 @@ const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
 // hypothetical out-of-band settings write.
 const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
-import { hashSensitiveToken } from "./device-access-helpers.js";
 import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
@@ -8311,10 +8295,6 @@ interface McpAuthStateRecord {
   lastRefreshedAt?: string;
   error?: string;
   lastCodePreview?: string;
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }
 
 function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean): number {
