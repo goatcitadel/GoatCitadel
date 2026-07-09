@@ -419,6 +419,60 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
   }
 });
 
+test("SQLite prompt pack content hash migration upgrades already-migrated databases", () => {
+  const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-prompt-pack-hash-${randomUUID()}.db`);
+  try {
+    const seed = new DatabaseSync(dbPath);
+    seed.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+      CREATE TABLE prompt_packs (
+        pack_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        source_label TEXT,
+        test_count INTEGER NOT NULL DEFAULT 0,
+        policy_v2_json TEXT NOT NULL DEFAULT '{}',
+        policy_v2_hash TEXT NOT NULL DEFAULT '',
+        policy_v2_source TEXT NOT NULL DEFAULT 'inherited_default',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    const markApplied = seed.prepare(`
+      INSERT INTO schema_migrations (version, name, applied_at)
+      VALUES (?, ?, ?)
+    `);
+    for (let version = 1; version <= 135; version += 1) {
+      markApplied.run(version, `legacy-${version}`, "2026-07-08T00:00:00.000Z");
+    }
+    seed.close();
+
+    const migrated = createDatabase({ dbPath });
+    try {
+      const columns = migrated
+        .prepare("PRAGMA table_info(prompt_packs)")
+        .all<{ name: string }>()
+        .map((row) => row.name);
+      assert.equal(columns.includes("content_sha256"), true);
+      const row = migrated.prepare("SELECT name FROM schema_migrations WHERE version = 136").get<{ name: string }>();
+      assert.equal(row?.name, "prompt_packs_content_sha256");
+    } finally {
+      migrated.close();
+    }
+  } finally {
+    try {
+      fs.rmSync(dbPath, { force: true });
+      fs.rmSync(`${dbPath}-wal`, { force: true });
+      fs.rmSync(`${dbPath}-shm`, { force: true });
+    } catch {
+      // ignore cleanup failures in tests
+    }
+  }
+});
+
 test("SQLite migration runner rolls back the active migration when migration SQL fails", () => {
   const execCalls: string[] = [];
   const fakeDb = {

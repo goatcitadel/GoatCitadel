@@ -137,48 +137,53 @@ describe("shouldRegisterSubagentFanoutExecutor", () => {
   it("allows registration for Chat-normalized turns whose subagentPolicy auto-delegates subagents", () => {
     expect(
       shouldRegisterSubagentFanoutExecutor(
-        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "auto_when_useful" }),
+        preparedWith({ mode: "chat", normalizedSubagentPolicy: "auto_when_useful" }),
       ),
     ).toBe(true);
     expect(
-      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "code", prefsSubagentPolicy: "auto_when_useful" })),
+      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", prefsSubagentPolicy: "auto_when_useful" })),
     ).toBe(true);
   });
 
   it("refuses registration for ask-before-delegating or missing subagentPolicy", () => {
     expect(
-      shouldRegisterSubagentFanoutExecutor(
-        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "ask_when_useful" }),
-      ),
+      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", normalizedSubagentPolicy: "ask_when_useful" })),
     ).toBe(false);
     // Contract default when the pref is absent is ask_when_useful, which must
     // remain a suggestion/confirmation posture rather than model-callable.
-    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork" }))).toBe(false);
+    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat" }))).toBe(false);
   });
 
-  it("refuses registration when Chat-normalized turns require confirmation first", () => {
+  it("treats legacy Cowork or Code prefs as Chat-normalized during registration", () => {
     expect(
-      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", normalizedSubagentPolicy: "ask_when_useful" })),
-    ).toBe(false);
+      shouldRegisterSubagentFanoutExecutor(
+        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "auto_when_useful" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRegisterSubagentFanoutExecutor(
+        preparedWith({ mode: "code", normalizedSubagentPolicy: "auto_when_useful" }),
+      ),
+    ).toBe(true);
   });
 
   it("refuses registration for restricted autonomous permission profiles", () => {
-    const prepared = preparedWith({ mode: "cowork", normalizedSubagentPolicy: "auto_when_useful" });
+    const prepared = preparedWith({ mode: "chat", normalizedSubagentPolicy: "auto_when_useful" });
     expect(shouldRegisterSubagentFanoutExecutor(prepared, SCHEDULED_TURN_PERMISSION_PROFILE_ID)).toBe(false);
     expect(shouldRegisterSubagentFanoutExecutor(prepared, HEARTBEAT_PERMISSION_PROFILE_ID)).toBe(false);
   });
 
   it("refuses registration when the turn is floored to subagentPolicy off (the delegated-child shape)", () => {
-    expect(
-      shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork", normalizedSubagentPolicy: "off" })),
-    ).toBe(false);
-    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "cowork", prefsSubagentPolicy: "off" }))).toBe(
+    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", normalizedSubagentPolicy: "off" }))).toBe(
+      false,
+    );
+    expect(shouldRegisterSubagentFanoutExecutor(preparedWith({ mode: "chat", prefsSubagentPolicy: "off" }))).toBe(
       false,
     );
     // The normalized (request-level) floor wins over a permissive session pref.
     expect(
       shouldRegisterSubagentFanoutExecutor(
-        preparedWith({ mode: "cowork", normalizedSubagentPolicy: "off", prefsSubagentPolicy: "ask_when_useful" }),
+        preparedWith({ mode: "chat", normalizedSubagentPolicy: "off", prefsSubagentPolicy: "ask_when_useful" }),
       ),
     ).toBe(false);
   });

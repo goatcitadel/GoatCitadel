@@ -28,6 +28,10 @@ const realtimeClientSecretSchema = z.object({
   instructionsProfile: z.string().trim().min(1).max(128).optional(),
 });
 
+const realtimeSessionParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
 const talkParamsSchema = z.object({
   id: z.string().min(1),
 });
@@ -113,6 +117,19 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(201).send(await fastify.services.voice.createRealtimeVoiceClientSecret(parsed.data));
     } catch (error) {
       const statusCode = error instanceof OpenAIRealtimeVoiceError ? error.statusCode : 502;
+      return reply.code(statusCode).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/voice/realtime/sessions/:id/stop", async (request, reply) => {
+    const params = realtimeSessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.voice.stopRealtimeVoiceSession(params.data.id));
+    } catch (error) {
+      const statusCode = error instanceof OpenAIRealtimeVoiceError ? error.statusCode : 400;
       return reply.code(statusCode).send({ error: (error as Error).message });
     }
   });

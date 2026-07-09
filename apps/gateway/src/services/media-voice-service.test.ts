@@ -420,6 +420,7 @@ describe("MediaVoiceService", () => {
 
       const withHandoff = service.createGoogleMeetConsultHandoff(session.sessionId, { target: "cowork" });
       expect(withHandoff.state).toBe("consulting");
+      expect(withHandoff.consultHandoff?.target).toBe("chat");
       expect(withHandoff.consultHandoff?.transcriptChunkIds).toHaveLength(1);
 
       const stopped = service.stopGoogleMeetSession(session.sessionId);
@@ -517,6 +518,28 @@ describe("MediaVoiceService", () => {
         expect.objectContaining({
           category: "voice",
           event: "voice.realtime.client_secret.created",
+        }),
+      );
+      const stopped = service.stopRealtimeVoiceSession(response.voiceSessionId);
+      expect(stopped).toMatchObject({
+        provider: "openai-realtime",
+        state: "stopped",
+        apiKeyReady: true,
+        model: "gpt-realtime-2.1",
+        voice: "marin",
+      });
+      expect(stopped.activeVoiceSessionId).toBeUndefined();
+      const lastStatusWrite = systemSettings.set.mock.calls.at(-1)?.[1] as
+        | { activeVoiceSessionId?: string; state?: string }
+        | undefined;
+      expect(lastStatusWrite).toMatchObject({ state: "stopped" });
+      expect(lastStatusWrite?.activeVoiceSessionId).toBeUndefined();
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "system",
+        "voice",
+        expect.objectContaining({
+          type: "openai_realtime_voice_stopped",
+          voiceSessionId: response.voiceSessionId,
         }),
       );
     } finally {

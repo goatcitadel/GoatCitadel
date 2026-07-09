@@ -1046,6 +1046,46 @@ export class MediaVoiceService {
     }
   }
 
+  public stopRealtimeVoiceSession(voiceSessionId: string): OpenAIRealtimeVoiceStatus {
+    const trimmedVoiceSessionId = voiceSessionId.trim();
+    if (!trimmedVoiceSessionId) {
+      throw new OpenAIRealtimeVoiceError("OpenAI Realtime voice session id is required.", 400);
+    }
+
+    const now = new Date().toISOString();
+    const existing = this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(
+      VOICE_REALTIME_STATUS_SETTING_KEY,
+    )?.value;
+    const current = this.resolveOpenAIRealtimeStatus(now);
+    if (existing?.activeVoiceSessionId && existing.activeVoiceSessionId !== trimmedVoiceSessionId) {
+      return current;
+    }
+
+    const status: OpenAIRealtimeVoiceStatus = {
+      provider: "openai-realtime",
+      state: "stopped",
+      apiKeyReady: Boolean(process.env.OPENAI_API_KEY?.trim()),
+      model: current.model,
+      voice: current.voice,
+      updatedAt: now,
+    };
+    this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+    this.deps.publishRealtime("system", "voice", {
+      type: "openai_realtime_voice_stopped",
+      voiceSessionId: trimmedVoiceSessionId,
+    });
+    this.deps.recordDevDiagnostic({
+      level: "info",
+      category: "voice",
+      event: "voice.realtime.stopped",
+      message: "Stopped OpenAI Realtime voice session",
+      context: {
+        voiceSessionId: trimmedVoiceSessionId,
+      },
+    });
+    return status;
+  }
+
   // ── Wake word ───────────────────────────────────────────────────────────
 
   public async startVoiceWake(): Promise<VoiceStatus["wake"]> {
@@ -1206,11 +1246,12 @@ export class MediaVoiceService {
   ): GoogleMeetSessionRecord {
     const record = this.requireGoogleMeetSession(sessionId);
     const now = new Date().toISOString();
+    const target = input.target === "cowork" || input.target === "code" ? "chat" : (input.target ?? "chat");
     const handoff: GoogleMeetConsultHandoff = {
       handoffId: randomUUID(),
       sessionId,
       createdAt: now,
-      target: input.target ?? "cowork",
+      target,
       prompt: input.prompt?.trim() || "Review this meeting transcript and suggest the next operator action.",
       transcriptChunkIds: record.transcript.map((chunk) => chunk.chunkId),
     };

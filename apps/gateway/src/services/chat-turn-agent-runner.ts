@@ -568,10 +568,10 @@ export interface ChatTurnAgentRunnerDeps {
   /**
    * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
    * like the gates above. Absent or returning false (default) ⇒ the spawn tool
-   * may be exposed in cowork/code only when the session's subagentPolicy is
-   * `auto_when_useful`; returning true removes it from every turn's tool schema
-   * (the policy-engine runtime hook fails closed as well, so an in-flight call
-   * cannot slip through a mid-turn flag flip).
+   * may be exposed in Chat-normalized turns only when the session's
+   * subagentPolicy is `auto_when_useful`; returning true removes it from every
+   * turn's tool schema (the policy-engine runtime hook fails closed as well, so
+   * an in-flight call cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => boolean;
 }
@@ -3827,7 +3827,7 @@ export class ChatTurnAgentRunner {
     const restrictedAutonomousProfile =
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
-    // R3-8 `agent.fanout` exposure gate: only interactive cowork/code turns
+    // R3-8 `agent.fanout` exposure gate: only interactive Chat-normalized turns
     // whose session subagentPolicy explicitly allows automatic subagents may
     // see the spawn tool. `ask_when_useful` remains a suggestion/confirmation
     // posture owned by the UI delegation path, not a model-callable auto-run.
@@ -3836,7 +3836,7 @@ export class ChatTurnAgentRunner {
     // restricted-profile exclusion mirrors the schedule.manage anti-recursion
     // rule for scheduled/heartbeat turns.
     const subagentFanoutEligible =
-      (input.mode === "cowork" || input.mode === "code") &&
+      input.mode === "chat" &&
       input.subagentPolicy === "auto_when_useful" &&
       !restrictedAutonomousProfile &&
       this.deps.subagentFanoutV1Disabled?.() !== true;

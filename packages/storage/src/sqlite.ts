@@ -1615,6 +1615,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "dry_run_commits_ledger_parity",
         up: createDryRunCommitSchema,
       },
+      {
+        version: 136,
+        name: "prompt_packs_content_sha256",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "prompt_packs", "content_sha256", "TEXT");
+        },
+      },
     ],
   },
 ];

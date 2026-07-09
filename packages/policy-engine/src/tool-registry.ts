@@ -153,8 +153,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     // R3-8 fan-out primitive, part B. Deliberately NOT readOnly: it spawns
     // delegated LLM child turns, so the parallel read-only batch pre-executor
     // must never treat it as side-effect free. Exposure is additionally gated
-    // per turn (cowork/code + subagentPolicy === "auto_when_useful" + kill
-    // switch `subagentFanoutV1Disabled`) in the chat orchestrator's tool schema.
+    // per turn (Chat-normalized mode + subagentPolicy === "auto_when_useful" +
+    // kill switch `subagentFanoutV1Disabled`) in the chat orchestrator's tool
+    // schema.
     name: SUBAGENT_FANOUT_TOOL_NAME,
     category: "session",
     riskLevel: "caution",

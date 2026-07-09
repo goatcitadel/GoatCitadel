@@ -59,7 +59,7 @@ function turnInput(overrides: Partial<ChatTurnAgentRunnerInput> & { sessionSuffi
     turnId: `turn-fanout-${sessionSuffix}`,
     userMessageId: `msg-fanout-${sessionSuffix}`,
     content: "Compare vendor A, vendor B, and vendor C on pricing and support.",
-    mode: "cowork",
+    mode: "chat",
     providerId: "glm",
     model: "glm-5",
     webMode: "off",
@@ -110,35 +110,33 @@ function exposedToolNames(request: ChatCompletionRequest | undefined): string[] 
 }
 
 describe("ChatTurnAgentRunner agent.fanout exposure (R3-8)", () => {
-  it("exposes agent.fanout in cowork when subagentPolicy auto-delegates subagents", async () => {
+  it("exposes agent.fanout in Chat when subagentPolicy auto-delegates subagents", async () => {
     const harness = buildHarness({});
-    await harness.orchestrator.run(turnInput({ sessionSuffix: "cowork-on", subagentPolicy: "auto_when_useful" }));
+    await harness.orchestrator.run(turnInput({ sessionSuffix: "chat-on", subagentPolicy: "auto_when_useful" }));
     expect(exposedToolNames(harness.completionRequests[0])).toContain(FANOUT_MODEL_TOOL_NAME);
   });
 
   it("hides agent.fanout when subagentPolicy asks before delegating", async () => {
     const harness = buildHarness({});
-    await harness.orchestrator.run(turnInput({ sessionSuffix: "cowork-ask", subagentPolicy: "ask_when_useful" }));
+    await harness.orchestrator.run(turnInput({ sessionSuffix: "chat-ask", subagentPolicy: "ask_when_useful" }));
     expect(exposedToolNames(harness.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
   });
 
-  it("exposes agent.fanout in code mode under auto_when_useful", async () => {
+  it("hides agent.fanout from legacy unnormalized Cowork or Code modes", async () => {
     const harness = buildHarness({});
     await harness.orchestrator.run(
-      turnInput({ sessionSuffix: "code-on", mode: "code", subagentPolicy: "auto_when_useful" }),
+      turnInput({ sessionSuffix: "code-legacy", mode: "code", subagentPolicy: "auto_when_useful" }),
     );
-    expect(exposedToolNames(harness.completionRequests[0])).toContain(FANOUT_MODEL_TOOL_NAME);
+    expect(exposedToolNames(harness.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
+    await harness.orchestrator.run(
+      turnInput({ sessionSuffix: "cowork-legacy", mode: "cowork", subagentPolicy: "auto_when_useful" }),
+    );
+    expect(exposedToolNames(harness.completionRequests[1])).not.toContain(FANOUT_MODEL_TOOL_NAME);
   });
 
   it("hides agent.fanout when subagentPolicy is off", async () => {
     const harness = buildHarness({});
     await harness.orchestrator.run(turnInput({ sessionSuffix: "policy-off", subagentPolicy: "off" }));
-    expect(exposedToolNames(harness.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
-  });
-
-  it("hides agent.fanout in plain chat mode", async () => {
-    const harness = buildHarness({});
-    await harness.orchestrator.run(turnInput({ sessionSuffix: "chat-mode", mode: "chat" }));
     expect(exposedToolNames(harness.completionRequests[0])).not.toContain(FANOUT_MODEL_TOOL_NAME);
   });
 

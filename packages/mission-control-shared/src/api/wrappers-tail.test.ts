@@ -400,6 +400,9 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(voice.stopGoogleMeetSession("meet/1"), "/api/v1/voice/google-meet/sessions/meet%2F1/stop", {
       method: "POST",
     });
+    await expectCall(voice.stopRealtimeVoiceSession("voice/1"), "/api/v1/voice/realtime/sessions/voice%2F1/stop", {
+      method: "POST",
+    });
     await expectCall(voice.installVoiceRuntime(), "/api/v1/voice/runtime/install", { method: "POST" });
     await expectCall(voice.selectVoiceRuntimeModel("model/1"), "/api/v1/voice/runtime/models/model%2F1/select", {
       method: "POST",

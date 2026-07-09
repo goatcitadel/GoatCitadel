@@ -13,6 +13,7 @@ import {
   fetchVoiceStatus,
   generateLlmImage,
   startVoiceTalkSession,
+  stopRealtimeVoiceSession,
   stopVoiceTalkSession,
   transcribeVoice,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -61,6 +62,12 @@ interface LiveVoiceConnection {
   mediaStream: MediaStream;
   audioElement: HTMLAudioElement;
   voiceSessionId: string;
+}
+
+interface PendingLiveVoiceStart {
+  canceled: boolean;
+  mediaStream: MediaStream | null;
+  voiceSessionId: string | null;
 }
 
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
@@ -323,6 +330,7 @@ export function useChatMultimodalControls(input: {
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const lastSpokenMessageIdRef = useRef<string | null>(null);
   const liveVoiceConnectionRef = useRef<LiveVoiceConnection | null>(null);
+  const liveVoiceStartRef = useRef<PendingLiveVoiceStart | null>(null);
   const primedSessionIdRef = useRef<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
@@ -452,8 +460,22 @@ export function useChatMultimodalControls(input: {
 
   useEffect(
     () => () => {
-      cleanupLiveVoiceConnection(liveVoiceConnectionRef.current);
+      const connection = liveVoiceConnectionRef.current;
+      const pendingStart = liveVoiceStartRef.current;
+      if (pendingStart) {
+        pendingStart.canceled = true;
+      }
+      for (const track of pendingStart?.mediaStream?.getTracks() ?? []) {
+        track.stop();
+      }
+      cleanupLiveVoiceConnection(connection);
       liveVoiceConnectionRef.current = null;
+      liveVoiceStartRef.current = null;
+      if (connection?.voiceSessionId) {
+        void stopRealtimeVoiceSession(connection.voiceSessionId).catch(() => undefined);
+      } else if (pendingStart?.voiceSessionId) {
+        void stopRealtimeVoiceSession(pendingStart.voiceSessionId).catch(() => undefined);
+      }
     },
     [],
   );
@@ -535,27 +557,72 @@ export function useChatMultimodalControls(input: {
   }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, voiceStatus?.talk?.activeSessionId]);
 
   const stopLiveVoice = useCallback(
-    (announce = true) => {
-      if (!liveVoiceConnectionRef.current) {
+    async (announce = true) => {
+      const connection = liveVoiceConnectionRef.current;
+      const pendingStart = liveVoiceStartRef.current;
+      if (pendingStart) {
+        pendingStart.canceled = true;
+      }
+      if (!connection) {
         setLiveVoiceState("idle");
         setLiveVoiceMuted(false);
+        if (pendingStart?.voiceSessionId) {
+          await stopRealtimeVoiceSession(pendingStart.voiceSessionId).catch(() => undefined);
+          await refreshVoiceState();
+        }
         return;
       }
       setLiveVoiceState("stopping");
-      cleanupLiveVoiceConnection(liveVoiceConnectionRef.current);
+      cleanupLiveVoiceConnection(connection);
       liveVoiceConnectionRef.current = null;
       setLiveVoiceMuted(false);
       setLiveVoiceState("idle");
+      try {
+        await stopRealtimeVoiceSession(connection.voiceSessionId);
+      } finally {
+        await refreshVoiceState();
+      }
       if (announce) {
         pushLocalNotice("OpenAI Realtime voice stopped.", "neutral");
       }
     },
-    [pushLocalNotice],
+    [pushLocalNotice, refreshVoiceState],
+  );
+
+  const cancelPendingLiveVoiceStart = useCallback(
+    async (announce = true) => {
+      const pendingStart = liveVoiceStartRef.current;
+      if (!pendingStart) {
+        setLiveVoiceState("idle");
+        setLiveVoiceMuted(false);
+        return;
+      }
+      pendingStart.canceled = true;
+      liveVoiceStartRef.current = null;
+      setLiveVoiceState("stopping");
+      for (const track of pendingStart.mediaStream?.getTracks() ?? []) {
+        track.stop();
+      }
+      if (pendingStart.voiceSessionId) {
+        await stopRealtimeVoiceSession(pendingStart.voiceSessionId).catch(() => undefined);
+      }
+      setLiveVoiceMuted(false);
+      setLiveVoiceState("idle");
+      await refreshVoiceState();
+      if (announce) {
+        pushLocalNotice("OpenAI Realtime voice stopped.", "neutral");
+      }
+    },
+    [pushLocalNotice, refreshVoiceState],
   );
 
   const handleToggleLiveVoice = useCallback(async () => {
     if (liveVoiceConnectionRef.current) {
-      stopLiveVoice();
+      await stopLiveVoice();
+      return;
+    }
+    if (liveVoiceStartRef.current) {
+      await cancelPendingLiveVoiceStart();
       return;
     }
     if (!supportsBrowserRealtimeVoice()) {
@@ -567,14 +634,35 @@ export function useChatMultimodalControls(input: {
     setVoiceBusy(true);
     setError(null);
     setLiveVoiceState("connecting");
+    let issuedVoiceSessionId: string | null = null;
+    let pendingMediaStream: MediaStream | null = null;
     let pendingConnection: LiveVoiceConnection | null = null;
+    const pendingStart: PendingLiveVoiceStart = {
+      canceled: false,
+      mediaStream: null,
+      voiceSessionId: null,
+    };
+    liveVoiceStartRef.current = pendingStart;
+    let canceledStart = false;
+    const abortIfCanceled = () => {
+      if (pendingStart.canceled || liveVoiceStartRef.current !== pendingStart) {
+        canceledStart = true;
+        throw new Error("OpenAI Realtime voice start was canceled.");
+      }
+    };
     try {
       const token = await createRealtimeVoiceClientSecret({
         surface: "chat",
         sessionId: selectedSessionId ?? undefined,
       });
+      issuedVoiceSessionId = token.voiceSessionId;
+      pendingStart.voiceSessionId = token.voiceSessionId;
+      abortIfCanceled();
       setLiveVoiceState("requesting_mic");
       const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      pendingMediaStream = mediaStream;
+      pendingStart.mediaStream = mediaStream;
+      abortIfCanceled();
       setLiveVoiceState("connecting");
 
       const peerConnection = new window.RTCPeerConnection();
@@ -608,12 +696,14 @@ export function useChatMultimodalControls(input: {
         voiceSessionId: token.voiceSessionId,
       };
       liveVoiceConnectionRef.current = pendingConnection;
+      abortIfCanceled();
 
       const offer = await peerConnection.createOffer();
       if (!offer.sdp) {
         throw new Error("Unable to create a WebRTC offer for OpenAI Realtime voice.");
       }
       await peerConnection.setLocalDescription(offer);
+      abortIfCanceled();
       const sdpResponse = await fetch(OPENAI_REALTIME_CALLS_URL, {
         method: "POST",
         body: offer.sdp,
@@ -626,25 +716,44 @@ export function useChatMultimodalControls(input: {
         const message = (await sdpResponse.text()).trim() || sdpResponse.statusText || "Realtime connection failed.";
         throw new Error(`OpenAI Realtime WebRTC connection failed (${sdpResponse.status}): ${message}`);
       }
+      abortIfCanceled();
       await peerConnection.setRemoteDescription({
         type: "answer",
         sdp: await sdpResponse.text(),
       });
+      abortIfCanceled();
       setLiveVoiceState("listening");
       pushLocalNotice("OpenAI Realtime voice is live.", "success");
       await refreshVoiceState();
     } catch (error) {
       cleanupLiveVoiceConnection(pendingConnection);
+      if (!pendingConnection) {
+        for (const track of pendingMediaStream?.getTracks() ?? []) {
+          track.stop();
+        }
+      }
       if (liveVoiceConnectionRef.current === pendingConnection) {
         liveVoiceConnectionRef.current = null;
+      }
+      if (issuedVoiceSessionId) {
+        await stopRealtimeVoiceSession(issuedVoiceSessionId).catch(() => undefined);
+      }
+      if (canceledStart || pendingStart.canceled) {
+        setLiveVoiceMuted(false);
+        setLiveVoiceState("idle");
+        await refreshVoiceState();
+        return;
       }
       setLiveVoiceState("error");
       setError((error as Error).message);
       await refreshVoiceState();
     } finally {
+      if (liveVoiceStartRef.current === pendingStart) {
+        liveVoiceStartRef.current = null;
+      }
       setVoiceBusy(false);
     }
-  }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, stopLiveVoice]);
+  }, [cancelPendingLiveVoiceStart, pushLocalNotice, refreshVoiceState, selectedSessionId, setError, stopLiveVoice]);
 
   const handleToggleLiveVoiceMute = useCallback(() => {
     const connection = liveVoiceConnectionRef.current;

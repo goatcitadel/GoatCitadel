@@ -16,6 +16,7 @@ export const voiceRouteMethods = [
   "startTalkSession",
   "startVoiceWake",
   "stopGoogleMeetSession",
+  "stopRealtimeVoiceSession",
   "stopTalkSession",
   "stopVoiceWake",
   "transcribeVoice",

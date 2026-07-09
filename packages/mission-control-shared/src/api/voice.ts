@@ -7,6 +7,7 @@ import type {
   GoogleMeetTranscriptChunk,
   OpenAIRealtimeClientSecretRequest,
   OpenAIRealtimeClientSecretResponse,
+  OpenAIRealtimeVoiceStatus,
   VoiceRuntimeInstallRequest,
   VoiceRuntimeStatus,
   VoiceStatus,
@@ -49,6 +50,16 @@ export async function createRealtimeVoiceClientSecret(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function stopRealtimeVoiceSession(voiceSessionId: string): Promise<OpenAIRealtimeVoiceStatus> {
+  return request<OpenAIRealtimeVoiceStatus>(
+    `/api/v1/voice/realtime/sessions/${encodeURIComponent(voiceSessionId)}/stop`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export async function fetchGoogleMeetPrerequisiteStatus(

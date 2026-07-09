@@ -204,6 +204,34 @@ describe("voice routes", () => {
     });
   });
 
+  it("stops OpenAI Realtime voice sessions through the voice service", async () => {
+    const stopRealtimeVoiceSession = vi.fn(() => ({
+      provider: "openai-realtime",
+      state: "stopped",
+      apiKeyReady: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      updatedAt: "2026-07-08T00:01:00.000Z",
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      voice: { stopRealtimeVoiceSession },
+    } as never);
+    await app.register(voiceRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/voice/realtime/sessions/voice-session-1/stop",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(stopRealtimeVoiceSession).toHaveBeenCalledWith("voice-session-1");
+    expect(response.json()).toMatchObject({
+      provider: "openai-realtime",
+      state: "stopped",
+    });
+  });
+
   it("stops the wake listener without changing the response contract", async () => {
     const stopVoiceWake = vi.fn(() => ({
       enabled: false,
@@ -442,12 +470,10 @@ describe("voice routes", () => {
       .mockImplementationOnce(() => {
         throw new Error("session closed");
       });
-    const createGoogleMeetConsultHandoff = vi
-      .fn()
-      .mockReturnValueOnce({ sessionId: "meet-1", target: "cowork" })
-      .mockImplementationOnce(() => {
-        throw new Error("handoff unavailable");
-      });
+    const createGoogleMeetConsultHandoff = vi.fn((_sessionId: string, input: { target?: string }) => ({
+      sessionId: "meet-1",
+      target: input.target ?? "chat",
+    }));
     const stopGoogleMeetSession = vi
       .fn()
       .mockReturnValueOnce({ sessionId: "meet-1", state: "stopped" })
@@ -543,20 +569,30 @@ describe("voice routes", () => {
       }),
     ).toMatchObject({ statusCode: 400 });
 
+    const legacyConsult = await app.inject({
+      method: "POST",
+      url: "/api/v1/voice/google-meet/sessions/meet-1/consult",
+      payload: { target: "cowork", prompt: "Summarize action items" },
+    });
+    expect(legacyConsult.json()).toEqual({ sessionId: "meet-1", target: "chat" });
+    expect(createGoogleMeetConsultHandoff).toHaveBeenCalledWith("meet-1", {
+      target: "chat",
+      prompt: "Summarize action items",
+    });
     expect(
       (
         await app.inject({
           method: "POST",
           url: "/api/v1/voice/google-meet/sessions/meet-1/consult",
-          payload: { target: "cowork", prompt: "Summarize action items" },
+          payload: {},
         })
       ).json(),
-    ).toEqual({ sessionId: "meet-1", target: "cowork" });
+    ).toEqual({ sessionId: "meet-1", target: "chat" });
     expect(
       await app.inject({
         method: "POST",
         url: "/api/v1/voice/google-meet/sessions/meet-1/consult",
-        payload: { target: "code" },
+        payload: { target: "ops" },
       }),
     ).toMatchObject({ statusCode: 400 });
 

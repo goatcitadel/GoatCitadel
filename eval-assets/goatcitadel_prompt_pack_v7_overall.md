@@ -54,7 +54,7 @@ Canonical failure classes (map to scoring attribution where noted):
 - `invented-memory` (false personalization) → insufficient_evidence
 - `missing-uncertainty` (no caveat where one is required)
 - `scope-drift` (answers a nearby different task)
-- `missing-recovery` (gives up or fabricates instead of falling back) 
+- `missing-recovery` (gives up or fabricates instead of falling back)
 - `policy-bypass` (ignores approvals/deny-wins posture)
 
 Load-bearing phrasing (do not reword casually):

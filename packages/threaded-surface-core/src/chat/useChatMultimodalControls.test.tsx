@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchVoiceStatus: vi.fn(),
   generateLlmImage: vi.fn(),
   startVoiceTalkSession: vi.fn(),
+  stopRealtimeVoiceSession: vi.fn(),
   stopVoiceTalkSession: vi.fn(),
   transcribeVoice: vi.fn(),
 }));
@@ -27,6 +28,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchVoiceStatus: apiMocks.fetchVoiceStatus,
   generateLlmImage: apiMocks.generateLlmImage,
   startVoiceTalkSession: apiMocks.startVoiceTalkSession,
+  stopRealtimeVoiceSession: apiMocks.stopRealtimeVoiceSession,
   stopVoiceTalkSession: apiMocks.stopVoiceTalkSession,
   transcribeVoice: apiMocks.transcribeVoice,
 }));
@@ -267,6 +269,14 @@ describe("useChatMultimodalControls", () => {
         value: "ek_test",
       },
     });
+    apiMocks.stopRealtimeVoiceSession.mockResolvedValue({
+      provider: "openai-realtime",
+      state: "stopped",
+      apiKeyReady: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      updatedAt: "2026-07-08T00:01:00.000Z",
+    });
     apiMocks.startVoiceTalkSession.mockResolvedValue({});
     apiMocks.stopVoiceTalkSession.mockResolvedValue({});
     helperMocks.fileToBase64.mockResolvedValue("audio-bytes");
@@ -409,7 +419,70 @@ describe("useChatMultimodalControls", () => {
     expect(browser.peerConnection.close).toHaveBeenCalled();
     expect(browser.audioTrack.stop).toHaveBeenCalled();
     expect(browser.audioElement.remove).toHaveBeenCalled();
+    expect(apiMocks.stopRealtimeVoiceSession).toHaveBeenCalledWith("voice-session-1");
     expect(latest!.controls.liveVoiceActive).toBe(false);
+  });
+
+  it("cancels a pending OpenAI Realtime start without opening a second session", async () => {
+    apiMocks.fetchVoiceStatus.mockResolvedValue({
+      talk: { activeSessionId: null },
+      realtime: {
+        provider: "openai-realtime",
+        state: "ready",
+        apiKeyReady: true,
+        model: "gpt-realtime-2.1",
+        voice: "marin",
+        updatedAt: "2026-07-08T00:00:00.000Z",
+      },
+    });
+    let resolveToken!: (value: Awaited<ReturnType<typeof apiMocks.createRealtimeVoiceClientSecret>>) => void;
+    apiMocks.createRealtimeVoiceClientSecret.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveToken = resolve;
+      }),
+    );
+    const browser = installRealtimeBrowserMocks();
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    let startPromise!: Promise<void>;
+    act(() => {
+      startPromise = latest!.controls.handleToggleLiveVoice();
+    });
+    await flushAsyncEffects();
+    expect(latest!.controls.liveVoiceState).toBe("connecting");
+
+    await act(async () => {
+      await latest!.controls.handleToggleLiveVoice();
+      await flushAsyncEffects();
+    });
+    expect(apiMocks.createRealtimeVoiceClientSecret).toHaveBeenCalledTimes(1);
+
+    resolveToken({
+      provider: "openai-realtime",
+      surface: "chat",
+      voiceSessionId: "voice-session-1",
+      sessionId: "session-1",
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      status: "ready",
+      createdAt: "2026-07-08T00:00:00.000Z",
+      clientSecret: {
+        value: "ek_test",
+      },
+    });
+    await act(async () => {
+      await startPromise;
+      await flushAsyncEffects();
+    });
+
+    expect(apiMocks.stopRealtimeVoiceSession).toHaveBeenCalledWith("voice-session-1");
+    expect(browser.getUserMedia).not.toHaveBeenCalled();
+    expect(browser.fetchMock).not.toHaveBeenCalled();
+    expect(latest!.controls.liveVoiceActive).toBe(false);
+    expect(latest!.controls.liveVoiceState).toBe("idle");
   });
 
   it("treats a partial voice status without talk as inactive instead of crashing", async () => {

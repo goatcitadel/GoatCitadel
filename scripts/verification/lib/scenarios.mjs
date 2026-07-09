@@ -312,7 +312,7 @@ export async function runAgenticGovernanceLane(context) {
     profile: "governance",
     id: "agentic.governance.review-first",
     lane: "agentic-governance",
-    title: "Review-first Cowork and Code governance anchors",
+    title: "Review-first Chat governance anchors",
     subsystem: "agentic",
   });
   await runAgenticProofScenario(context, {
@@ -4767,28 +4767,28 @@ async function runMissionControlNextMobileShellProof(context, input) {
     await runScenario(
       context,
       {
-        id: "surface-regression.mobile.cowork-tasks",
+        id: "surface-regression.mobile.ops-kanban",
         lane: "surface-regression",
         title: "Mission Control Next mobile task board avoids overflow and clipped primary actions",
         subsystem: "mission-control",
       },
       async ({ correlationId }) => {
         const browserLogCursor = browserLog.mark();
-        await page.goto(buildVerificationUiUrl(input.uiUrl, "/cowork/tasks"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(input.uiUrl, "/ops/kanban"), { waitUntil: "domcontentloaded" });
         await waitForVerificationRouteReady(
           page,
-          { expectedArea: "cowork", expectedSection: "tasks", readySelector: ".mc-next-directory-page" },
+          { expectedArea: "ops", expectedSection: "kanban", readySelector: ".mc-next-kanban-board" },
           input.packageName,
         );
         await setBrowserCorrelation(page, correlationId, input.sessionId);
-        await assertNoHorizontalOverflow(page, "mobile cowork tasks");
-        const primaryTaskAction = page.locator(".mc-next-directory-page button, .mc-next-directory-action").first();
+        await assertNoHorizontalOverflow(page, "mobile ops kanban");
+        const primaryTaskAction = page.locator(".mc-next-kanban-board button, .mc-next-kanban-column").first();
         await assertLocatorFullyVisible(page, primaryTaskAction, "task board primary action");
         await performVerificationInteraction(page, "open-inspector", input.packageName);
-        await assertNoHorizontalOverflow(page, "mobile cowork tasks with inspector");
+        await assertNoHorizontalOverflow(page, "mobile ops kanban with inspector");
         const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
         const artifacts = await captureBrowserArtifacts(context, {
-          slug: "surface-regression-mobile-cowork-tasks",
+          slug: "surface-regression-mobile-ops-kanban",
           page,
           browserLog,
           gatewayUrl: input.gatewayUrl,

@@ -218,7 +218,8 @@ const CHECK_GROUPS = Object.freeze({
         "Proposals and unactivated candidates are inspectable",
       ]),
       fileContains("docs/CANONICAL_RUNTIME_STATE_MODEL.md", [
-        "Mission-session Chat / Cowork / Code",
+        "Mission-session Chat LLM HTTP/SSE send",
+        "Planning, research, delegation, and code-capability turns run inside Chat.",
         "Cowork/orchestration runs are durable-run backed",
         "Approval-gated orchestration resume must re-enter the linked durable run",
       ]),
@@ -467,7 +468,10 @@ const CHECK_GROUPS = Object.freeze({
         "Do not adopt Python gateway runtime",
       ]),
       fileContains("eval-assets/goatcitadel_prompt_pack_v4_agentic_focused.md", ["Cowork", "Code"]),
-      fileContains("apps/gateway/src/services/prompt-pack-service.ts", ["agentic_surface"]),
+      fileContains("apps/gateway/src/services/prompt-pack-service.ts", [
+        "resolvePromptPackExecutionProfile",
+        "executionProfile",
+      ]),
       fileContains("apps/gateway/src/services/prompt-pack-execution-profile.ts", [
         "agentic_surface",
         "single_turn_harness",

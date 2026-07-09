@@ -974,6 +974,7 @@ export {
   startVoiceTalkSession,
   startVoiceWake,
   stopGoogleMeetSession,
+  stopRealtimeVoiceSession,
   stopVoiceTalkSession,
   stopVoiceWake,
   transcribeVoice,
