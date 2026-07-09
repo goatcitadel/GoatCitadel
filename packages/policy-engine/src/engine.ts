@@ -41,6 +41,7 @@ import {
 } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { classifyArgumentRisk } from "./sandbox/argument-risk-gate.js";
+import { HttpMutationOutcomeUnknownError } from "./sandbox/http-request-policy.js";
 import { executeTool, resolveFixedOutboundHostsForTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
 import {
   buildInternalToolCall,
@@ -1531,6 +1532,47 @@ export class ToolPolicyEngine {
         }),
       };
     } catch (error) {
+      if (error instanceof HttpMutationOutcomeUnknownError) {
+        const reason = `execution outcome unknown: ${error.message}`;
+        const result = {
+          status: "failed",
+          deliveryStatus: "manual_reconciliation_required",
+          externalOutcome: error.externalOutcome,
+          manualReconciliationRequired: error.manualReconciliationRequired,
+          error: error.message,
+          fallbackReason: error.message,
+        };
+        await this.recordInvocation(auditEventId, request, "executed", reason, result, approvalId, evaluation);
+        const completedAt = new Date().toISOString();
+        return {
+          outcome: "executed",
+          policyReason: reason,
+          auditEventId,
+          result,
+          wardEffect: evaluation?.wardEffect,
+          internalCall,
+          internalResult: buildInternalToolResult({
+            toolName: request.toolName,
+            outcome: "executed",
+            result,
+            completedAt,
+          }),
+          audit: buildToolAuditRecord({
+            auditEventId,
+            request,
+            outcome: "executed",
+            policyReason: reason,
+            startedAt: startedAt ?? completedAt,
+            completedAt,
+            approvalId,
+            matchedGrantId,
+            reasonCodes: evaluation?.reasonCodes,
+            permissionProfileId: evaluation?.permissionProfileId,
+            localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+            approvalMode: evaluation?.approvalMode,
+          }),
+        };
+      }
       const reason = `execution error: ${(error as Error).message}`;
       await this.recordBlocked(auditEventId, request, reason, {
         error: (error as Error).message,

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { fetchAllowlisted } from "./network-guard.js";
+import { fetchAllowlisted, fetchAllowlistedOnce } from "./network-guard.js";
 
 // Regression coverage for CODEX_FINDING #11 (Firecrawl redirect bypass) and
 // #14 (skill-lookup SSRF). The fix consolidates outbound HTTP through
@@ -121,6 +121,142 @@ describe("fetchAllowlisted (codex #11, #14)", () => {
     const response = await fetchAllowlisted("https://skillsmp.com/a", { allowlist: ["skillsmp.com"] });
     expect(await response.text()).toBe("final");
     expect(stub).toHaveBeenCalledTimes(2);
+  });
+
+  describe("cross-origin redirect authority (FR-101)", () => {
+    const sourceUrl = "https://source.example/start";
+    const destinationUrl = "https://destination.example/finish";
+    const allowlist = ["source.example", "destination.example"];
+    const sensitiveRedirects: Array<{ name: string; init: RequestInit }> = [
+      {
+        name: "Authorization headers",
+        init: { headers: { Authorization: "Bearer fixture-token" } },
+      },
+      {
+        name: "Cookie headers",
+        init: { headers: { Cookie: "fixture-session=value" } },
+      },
+      {
+        name: "X-API-Key headers",
+        init: { headers: { "X-API-Key": "fixture-api-key" } },
+      },
+      {
+        name: "POST request bodies",
+        init: { method: "POST", body: "fixture-body" },
+      },
+      {
+        name: "included credentials",
+        init: { credentials: "include" },
+      },
+      {
+        name: "explicit referrer authority",
+        init: {
+          referrer: "https://source.example/path?token=fixture-secret",
+          referrerPolicy: "unsafe-url",
+        },
+      },
+    ];
+
+    it.each(sensitiveRedirects)("blocks cross-origin redirects carrying $name before contact", async ({ init }) => {
+      const contactedUrls: string[] = [];
+      const stub = vi.fn(async (url: string) => {
+        contactedUrls.push(url);
+        if (url === sourceUrl) {
+          return new Response(null, { status: 302, headers: { Location: destinationUrl } });
+        }
+        return new Response("destination-contacted", { status: 200 });
+      });
+      global.fetch = stub as unknown as typeof global.fetch;
+
+      await expect(fetchAllowlisted(sourceUrl, { allowlist, init })).rejects.toThrow(/cross-origin|blocked/i);
+      expect(contactedUrls).toEqual([sourceUrl]);
+      expect(stub).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves authentication across same-origin redirects", async () => {
+      const redirectedUrl = "https://source.example/finish";
+      const calls: Array<{ url: string; authorization: string | null }> = [];
+      const stub = vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({
+          url,
+          authorization: new Headers(init?.headers).get("authorization"),
+        });
+        if (url === sourceUrl) {
+          return new Response(null, { status: 302, headers: { Location: redirectedUrl } });
+        }
+        return new Response("same-origin-ok", { status: 200 });
+      });
+      global.fetch = stub as unknown as typeof global.fetch;
+
+      const response = await fetchAllowlisted(sourceUrl, {
+        allowlist,
+        init: { headers: { Authorization: "Bearer fixture-token" } },
+      });
+
+      expect(await response.text()).toBe("same-origin-ok");
+      expect(calls).toEqual([
+        { url: sourceUrl, authorization: "Bearer fixture-token" },
+        { url: redirectedUrl, authorization: "Bearer fixture-token" },
+      ]);
+    });
+
+    it("allows anonymous GET redirects across allowlisted origins", async () => {
+      const contactedUrls: string[] = [];
+      const stub = vi.fn(async (url: string, init?: RequestInit) => {
+        contactedUrls.push(url);
+        expect(init?.method).toBeUndefined();
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        expect(new Headers(init?.headers).get("cookie")).toBeNull();
+        expect(new Headers(init?.headers).get("x-api-key")).toBeNull();
+        expect(init?.body).toBeUndefined();
+        expect(init?.credentials).toBeUndefined();
+        if (url === sourceUrl) {
+          return new Response(null, { status: 302, headers: { Location: destinationUrl } });
+        }
+        return new Response("cross-origin-ok", { status: 200 });
+      });
+      global.fetch = stub as unknown as typeof global.fetch;
+
+      const response = await fetchAllowlisted(sourceUrl, { allowlist });
+
+      expect(await response.text()).toBe("cross-origin-ok");
+      expect(contactedUrls).toEqual([sourceUrl, destinationUrl]);
+    });
+
+    it("forces one-shot fetches to remain manual when a caller requests automatic redirect following", async () => {
+      const contactedUrls: string[] = [];
+      const stub = vi.fn(async (url: string, init?: RequestInit) => {
+        contactedUrls.push(url);
+        expect(init?.redirect).toBe("manual");
+        return new Response(null, { status: 302, headers: { Location: destinationUrl } });
+      });
+      global.fetch = stub as unknown as typeof global.fetch;
+
+      const response = await fetchAllowlistedOnce(sourceUrl, {
+        allowlist,
+        init: {
+          redirect: "follow",
+          headers: { "X-API-Key": "fixture-api-key" },
+        },
+      });
+
+      expect(response.status).toBe(302);
+      expect(contactedUrls).toEqual([sourceUrl]);
+      expect(stub).toHaveBeenCalledTimes(1);
+    });
+
+    it("enforces additional allowlists before a one-shot fetch", async () => {
+      const stub = vi.fn(async () => new Response("must-not-contact", { status: 200 }));
+      global.fetch = stub as unknown as typeof global.fetch;
+
+      await expect(
+        fetchAllowlistedOnce(sourceUrl, {
+          allowlist,
+          additionalAllowlists: [["different.example"]],
+        }),
+      ).rejects.toThrow(/allowlist|allowlisted/i);
+      expect(stub).not.toHaveBeenCalled();
+    });
   });
 
   it("bounds response text reads from allowlisted fetches", async () => {

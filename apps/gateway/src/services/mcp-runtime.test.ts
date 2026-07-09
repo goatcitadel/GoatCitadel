@@ -221,6 +221,10 @@ rl.on("line", (line) => {
         error: {
           code: -32001,
           message: "expired session",
+          data: {
+            phase: "pre_dispatch",
+            retrySafe: true,
+          },
         },
       });
       return;
@@ -228,6 +232,53 @@ rl.on("line", (line) => {
     reply(message.id, {
       result: {
         structuredContent: { ok: true },
+      },
+    });
+  }
+});
+`;
+
+const MCP_AMBIGUOUS_MUTATION_ERROR_SCRIPT = String.raw`
+const fs = require("node:fs");
+const statePath = process.argv[1];
+const failureMode = process.argv[2];
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, payload) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, ...payload }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "mutation-replay-test-mcp", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    const previousCount = fs.existsSync(statePath) ? Number(fs.readFileSync(statePath, "utf8")) : 0;
+    fs.writeFileSync(statePath, String(previousCount + 1));
+    if (failureMode === "jsonrpc-error") {
+      reply(message.id, {
+        error: {
+          code: -32001,
+          message: "expired session after mutation dispatch",
+          data: {
+            phase: "post_dispatch",
+            retrySafe: false,
+          },
+        },
+      });
+      return;
+    }
+    reply(message.id, {
+      result: {
+        isError: true,
+        content: [{ type: "text", text: "socket hang up after mutation dispatch" }],
       },
     });
   }
@@ -710,6 +761,125 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("does not replay an ambiguous remote HTTP MCP mutation", async () => {
+    let toolCallCount = 0;
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response
+            .writeHead(200, { "content-type": "application/json", "mcp-session-id": "remote-mutation-session" })
+            .end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: "2025-06-18",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "remote-mutation-test", version: "1.0.0" },
+                },
+              }),
+            );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        if (message.method === "tools/call") {
+          toolCallCount += 1;
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: -32001,
+                message: "stale session after remote mutation dispatch",
+                data: { phase: "post_dispatch", retrySafe: false },
+              },
+            }),
+          );
+        }
+      },
+      async (url) => {
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          { toolName: "external.create_record", arguments: { title: "create once" } },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          externalOutcome: "unknown_after_send",
+          manualReconciliationRequired: true,
+          retrySafe: false,
+          failurePhase: "post_dispatch",
+        });
+        expect(toolCallCount).toBe(1);
+        expect(result.retryCount).toBeUndefined();
+      },
+    );
+  });
+
+  it("preserves an explicit pre-dispatch MCP failure even when its error looks like an expired session", async () => {
+    let toolCallCount = 0;
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json", "mcp-session-id": "remote-pre-dispatch" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+                serverInfo: { name: "remote-pre-dispatch-test", version: "1.0.0" },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        if (message.method === "tools/call") {
+          toolCallCount += 1;
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: -32001,
+                message: "expired session before tool dispatch",
+                data: { phase: "pre_dispatch", retrySafe: false },
+              },
+            }),
+          );
+        }
+      },
+      async (url) => {
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          { toolName: "external.create_record", arguments: { title: "not dispatched" } },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("expired session before tool dispatch"),
+          retrySafe: false,
+          failurePhase: "pre_dispatch",
+        });
+        expect(result.externalOutcome).toBeUndefined();
+        expect(result.manualReconciliationRequired).toBeUndefined();
+        expect(result.retryCount).toBeUndefined();
+        expect(toolCallCount).toBe(1);
+      },
+    );
+  });
+
   it("rejects oversized remote MCP JSON responses without echoing response bodies", async () => {
     await withRemoteMcpHttpServer(
       ({ message, response }) => {
@@ -1018,7 +1188,7 @@ describe("mcp runtime", () => {
     expect(result.error).toContain("aborted");
   });
 
-  it("reconnects once when a stdio MCP tool reports an expired session", async () => {
+  it("reconnects once when a stdio MCP server explicitly rejects the call before dispatch", async () => {
     const statePath = path.join(os.tmpdir(), `goatcitadel-mcp-expired-${Date.now()}.txt`);
     try {
       const server = createTestServer(MCP_EXPIRED_SESSION_ONCE_SCRIPT, [statePath]);
@@ -1041,6 +1211,38 @@ describe("mcp runtime", () => {
       fs.rmSync(statePath, { force: true });
     }
   });
+
+  it.each([
+    { failureMode: "jsonrpc-error", expectedError: "expired session after mutation dispatch" },
+    { failureMode: "tool-result", expectedError: "socket hang up after mutation dispatch" },
+  ])(
+    "does not replay a mutating MCP tool when its $failureMode reports an ambiguous stale transport error",
+    async ({ failureMode, expectedError }) => {
+      const statePath = path.join(os.tmpdir(), `goatcitadel-mcp-ambiguous-mutation-${failureMode}-${Date.now()}.txt`);
+      try {
+        const server = createTestServer(MCP_AMBIGUOUS_MUTATION_ERROR_SCRIPT, [statePath, failureMode]);
+
+        const result = await invokeMcpRuntimeTool(server, {
+          toolName: "external.create_record",
+          arguments: {
+            title: "must be created at most once",
+          },
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining(expectedError),
+          externalOutcome: "unknown_after_send",
+          manualReconciliationRequired: true,
+        });
+        expect.soft(result.retryCount).toBeUndefined();
+        expect.soft(result.degraded).not.toBe(true);
+        expect.soft(fs.readFileSync(statePath, "utf8")).toBe("1");
+      } finally {
+        fs.rmSync(statePath, { force: true });
+      }
+    },
+  );
 
   it("normalizes MCP content items into model-safe text, image, and error blocks", async () => {
     const server = createTestServer(MCP_CONTENT_ITEMS_SCRIPT);

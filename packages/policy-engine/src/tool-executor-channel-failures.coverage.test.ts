@@ -3228,6 +3228,9 @@ describe("tool executor channel failure coverage", () => {
       status: "failed",
       deliveryStatus: "manual_reconciliation_required",
     });
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "https://example.com/generic-fail")).toHaveLength(
+      1,
+    );
     expect(String(genericFailure.error ?? "")).toMatch(/channel\.send failed \(503\)/i);
     expect(genericFailStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
       "delivery-generic-fail",
@@ -3279,13 +3282,19 @@ describe("tool executor channel failure coverage", () => {
       commsConfig,
       slackStorage,
     );
-    expect(slackResult).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(slackResult).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "1712345678.000100",
+    });
     expect(String(slackResult.error ?? "")).toContain("partial_channel_delivery_sent");
     expect(slackStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
       "delivery-slack-partial",
       expect.stringContaining("partial_channel_delivery_sent"),
       expect.any(String),
       "manual_reconciliation_required",
+      undefined,
+      "1712345678.000100",
     );
 
     const telegramStorage = commsStorage({
@@ -3302,13 +3311,19 @@ describe("tool executor channel failure coverage", () => {
       commsConfig,
       telegramStorage,
     );
-    expect(telegramResult).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(telegramResult).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "1001",
+    });
     expect(String(telegramResult.error ?? "")).toContain("message 1001 was sent before attachment 1 failed");
     expect(telegramStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
       "delivery-telegram-partial",
       expect.stringContaining("partial_channel_delivery_sent"),
       expect.any(String),
       "manual_reconciliation_required",
+      undefined,
+      "1001",
     );
 
     const whatsappStorage = commsStorage({
@@ -3325,13 +3340,19 @@ describe("tool executor channel failure coverage", () => {
       commsConfig,
       whatsappStorage,
     );
-    expect(whatsappResult).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(whatsappResult).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "wamid.text-1",
+    });
     expect(String(whatsappResult.error ?? "")).toContain("message wamid.text-1 was sent before attachment 1 failed");
     expect(whatsappStorage.commsDeliveries.markFailed).toHaveBeenCalledWith(
       "delivery-whatsapp-partial",
       expect.stringContaining("partial_channel_delivery_sent"),
       expect.any(String),
       "manual_reconciliation_required",
+      undefined,
+      "wamid.text-1",
     );
   });
 

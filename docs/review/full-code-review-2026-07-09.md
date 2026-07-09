@@ -3,7 +3,9 @@
 ## Review Contract
 
 - Review base: `c28b54bf1276482067f36bcfd12429ceca1f76c4` (`origin/main` at review start)
-- Review branch: `codex/review-00-proof-integrity`
+- Serial delivery:
+  - `codex/review-00-proof-integrity` merged as PR #205 at `df0b3576ac1c4ae32efb44f6d94593b0886c7949`
+  - `codex/review-01-network-side-effects` is the current security branch
 - Canonical product surface: one Chat surface backed by the Gateway runtime
 - Finding priorities: correctness, security, data durability, orchestration/agentic behavior, performance, runtime truth, and operator-facing UX behavior
 - Excluded local state: `.env`, runtime databases, transcripts, audit logs, backups, dependency trees, build output, generated verification artifacts, and ignored legacy Mission Control residue
@@ -174,7 +176,7 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: redirect destinations are network-validated, but request authority is not rebound to the new origin.
 - Fix: centralize redirect authority policy and default-deny credential-bearing or body-carrying cross-origin redirects.
 - Focused proof: two-origin policy-engine regressions; broad proof: security evals, channel/MCP/A2A tests, and fast lane.
-- Status: `open — security branch`
+- Status: `fixed and proven on review-01 — one shared redirect-authority policy now blocks cross-origin credentials, bodies, and mutation methods before contact; same-origin authenticated and anonymous allowlisted GET redirects remain supported; central and both duplicate redirect loops are covered`
 
 ### FR-102 — Retry policy can duplicate ambiguous external writes
 
@@ -184,7 +186,20 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: transport retryability is decided from status alone rather than HTTP method plus provider idempotency semantics.
 - Fix: retry safe methods only by default; allow POST retry only when a stable provider-supported idempotency key is actually sent, otherwise enter manual reconciliation.
 - Focused proof: ambiguous-success adapter tests; broad proof: external replay, channel runtime, and security eval lanes.
-- Status: `open — external-effects security branch`
+- Status: `fixed and proven on review-01 — automatic retry is limited to GET/HEAD; ambiguous mutations issue once, become manual-reconciliation-required, retain that structured state through Gateway delivery, and cannot enter durable retry`
+
+#### Review-01 closure evidence
+
+- Canonical ownership: HTTP redirect/retry authority is centralized in the policy engine; channel-delivery persistence and compare-and-swap transitions remain storage-owned; Gateway and MCP layers project the canonical structured outcome without reclassifying an unknown external write as blocked, retryable, or successful.
+- Redirect and generic HTTP proof: same-origin and cross-origin redirect matrices cover credentials, caller-derived headers, methods, bodies, allowlists, one-shot fetch behavior, response-body limits, and post-send failures. Automatic retries are limited to GET/HEAD; mutation responses and exceptions after dispatch carry `externalOutcome=unknown_after_send` and `manualReconciliationRequired=true`.
+- Channel proof: Slack, Telegram, WhatsApp, Gmail, calendar, generic channel sends, rich/multipart sends, and bounded-body failures preserve manual-reconciliation state and any known provider message ID. SQLite delivery claims and terminal transitions are lease-fenced across overlapping drains, independent runtimes, delayed losers, restarts, callbacks, and stale snapshots; no proven pre-send failure is mislabeled as externally ambiguous.
+- MCP proof: `tools/call` is replayed only for an explicit server result declaring `phase=pre_dispatch` and `retrySafe=true`. Stdio and remote-HTTP post-dispatch transport failures, JSON-RPC errors, and `isError` results issue once and retain structured unknown/manual truth through diagnostics, realtime evidence, approvals, and the public response.
+- Dual-dialect proof: the nullable lease compare-and-swap predicate uses dialect-correct PostgreSQL typing. The live disposable PostgreSQL suite passed 2/2 tests, including a null-lease CAS transition and a stale-snapshot attempt that could not overwrite a sent row/provider ID; the SQLite storage suite passed 694 tests with 2 intentional skips.
+- Owning suites: Gateway passed 5,291 Vitest tests plus 17 Node tests; policy engine passed 627 tests; contracts passed 317 tests; storage passed 694 tests with 2 skips. Contracts, storage, policy-engine, and Gateway typechecks passed, as did zero-warning lint over every changed source/test file.
+- Named proof: `verify:api:compat` (`2026-07-09T22-50-28-663Z-api-compat-08cd53f1`), `verify:channels:runtime` (`2026-07-09T23-25-22-112Z-agentic-channels-runtime-77c0f039`), `verify:runtime:truth` (`2026-07-09T23-25-22-065Z-runtime-truth-a47c084a`), `verify:mcp:conformance` (6/6), and `verify:security:evals` (`2026-07-09T23-25-22-065Z-security-evals-f5c4ada1`) passed on the final source.
+- Broad proof: `docs:check` passed; `verify:fast` passed as `2026-07-09T23-25-53-533Z-fast-9ebfbb57`. The architecture guard initially rejected 29 new facade lines; the logic was moved into the existing channel-delivery helper owner, leaving GatewayService at the verifier's authoritative 8,292 lines (43 below the 8,335 baseline), 900 typed host callbacks (zero delta), and a passing `2026-07-09T23-25-22-060Z-architecture-metrics-76332783` artifact without a baseline ratchet.
+- Hosted-review closure: automated review found three adjacent boundary errors and each was reproduced with a failing regression before correction. Safe attachment/preflight GET responses could falsely mark a later pre-dispatch failure as an ambiguous channel mutation; request tracking now accumulates mutation-started and mutation-response boundaries separately. Explicit MCP `pre_dispatch` truth could be overridden by expired-session wording; that phase is now authoritative and is not projected as unknown/manual. An already-aborted `http.post` could reach fetch and become unknown; it now exits before dispatch, while a paired abort-after-fetch regression remains `unknown_after_send`. Attachment 404s, response-stream failures, and pre-dispatch policy blocks remain `not_available`/`blocked`, while successful upload followed by a later attachment failure remains manual. The boundary suites, the 25-test channel-failure suite, and the full owning suites passed.
+- Independent closure: three adversarial passes and a post-review boundary re-review separately returned safe-to-merge verdicts after testing redirected mutation authority, delayed delivery losers, stale-runtime fencing, provider-ID retention, nullable PostgreSQL predicates, MCP replay, preflight-versus-mutation boundaries, and adjacent failure paths. Their only shared residual proof caveat was live PostgreSQL execution; the 2/2 live PostgreSQL run above closed it before publication.
 
 ### FR-103 — Inline secrets cross storage, API, approval, audit, and model boundaries
 

@@ -41,6 +41,13 @@ export interface CommsDeliveryRecord extends CommsSendResult {
 
 export class CommsDeliveryRepository {
   private readonly insertStmt;
+  private readonly claimAttemptStmt;
+  private readonly quarantineAttemptStmt;
+  private readonly markStaleIfUnchangedStmt;
+  private readonly finalizeAttemptSentStmt;
+  private readonly finalizeAttemptRetryingStmt;
+  private readonly finalizeAttemptFailedStmt;
+  private readonly recordManualProviderOutcomeStmt;
   private readonly markAttemptStmt;
   private readonly markRetryingStmt;
   private readonly markSentStmt;
@@ -51,6 +58,16 @@ export class CommsDeliveryRepository {
   private readonly listDueStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const expectedNextAttemptAtMatchesSql =
+      db.dialect === "postgres"
+        ? `(
+          (@expectedNextAttemptAt::text IS NULL AND next_attempt_at IS NULL)
+          OR next_attempt_at = @expectedNextAttemptAt::text
+        )`
+        : `(
+          (@expectedNextAttemptAt IS NULL AND next_attempt_at IS NULL)
+          OR next_attempt_at = @expectedNextAttemptAt
+        )`;
     this.insertStmt = db.prepare(`
       INSERT INTO comms_deliveries (
         delivery_id, connection_id, channel_key, target, payload_hash, payload_json,
@@ -73,6 +90,96 @@ export class CommsDeliveryRepository {
           stale_reason = NULL,
           updated_at = @updatedAt
       WHERE delivery_id = @deliveryId
+    `);
+    this.claimAttemptStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET attempts = @attempts,
+          delivery_status = 'retrying',
+          next_attempt_at = @claimExpiresAt,
+          error = NULL,
+          stale_reason = NULL,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'queued'
+        AND attempts = @expectedAttempts
+        AND (next_attempt_at IS NULL OR next_attempt_at <= @updatedAt)
+    `);
+    this.quarantineAttemptStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET status = 'failed',
+          delivery_status = 'manual_reconciliation_required',
+          error = @error,
+          stale_reason = NULL,
+          next_attempt_at = NULL,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'queued'
+        AND attempts = @expectedAttempts
+        AND ${expectedNextAttemptAtMatchesSql}
+        AND (next_attempt_at IS NULL OR next_attempt_at <= @updatedAt)
+    `);
+    this.markStaleIfUnchangedStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET status = 'failed',
+          delivery_status = 'degraded',
+          error = @error,
+          stale_reason = @error,
+          next_attempt_at = NULL,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'queued'
+        AND attempts = @expectedAttempts
+        AND ${expectedNextAttemptAtMatchesSql}
+    `);
+    this.finalizeAttemptSentStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET status = 'sent',
+          delivery_status = 'sent',
+          provider_msg_id = @providerMsgId,
+          error = NULL,
+          stale_reason = NULL,
+          next_attempt_at = NULL,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'queued'
+        AND attempts = @expectedAttempts
+        AND next_attempt_at = @expectedClaimExpiresAt
+    `);
+    this.finalizeAttemptRetryingStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET delivery_status = 'retrying',
+          error = @error,
+          stale_reason = NULL,
+          next_attempt_at = @nextAttemptAt,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'queued'
+        AND attempts = @expectedAttempts
+        AND next_attempt_at = @expectedClaimExpiresAt
+    `);
+    this.finalizeAttemptFailedStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET status = 'failed',
+          delivery_status = @deliveryStatus,
+          provider_msg_id = COALESCE(@providerMsgId, provider_msg_id),
+          error = @error,
+          stale_reason = @staleReason,
+          next_attempt_at = NULL,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'queued'
+        AND attempts = @expectedAttempts
+        AND next_attempt_at = @expectedClaimExpiresAt
+    `);
+    this.recordManualProviderOutcomeStmt = db.prepare(`
+      UPDATE comms_deliveries
+      SET provider_msg_id = COALESCE(@providerMsgId, provider_msg_id),
+          error = @error,
+          updated_at = @updatedAt
+      WHERE delivery_id = @deliveryId
+        AND status = 'failed'
+        AND delivery_status = 'manual_reconciliation_required'
+        AND attempts = @expectedAttempts
     `);
     this.markRetryingStmt = db.prepare(`
       UPDATE comms_deliveries
@@ -100,7 +207,7 @@ export class CommsDeliveryRepository {
       UPDATE comms_deliveries
       SET status = 'failed',
           delivery_status = @deliveryStatus,
-          provider_msg_id = NULL,
+          provider_msg_id = COALESCE(@providerMsgId, provider_msg_id),
           error = @error,
           stale_reason = @staleReason,
           next_attempt_at = NULL,
@@ -201,6 +308,134 @@ export class CommsDeliveryRepository {
     this.markAttemptStmt.run({ deliveryId, attempts, updatedAt });
   }
 
+  public claimAttempt(
+    deliveryId: string,
+    expectedAttempts: number,
+    attempts: number,
+    claimExpiresAt: string,
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.claimAttemptStmt.run({
+      deliveryId,
+      expectedAttempts,
+      attempts,
+      claimExpiresAt,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public quarantineAttempt(
+    deliveryId: string,
+    expectedAttempts: number,
+    expectedNextAttemptAt: string | undefined,
+    error: string,
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.quarantineAttemptStmt.run({
+      deliveryId,
+      expectedAttempts,
+      expectedNextAttemptAt: expectedNextAttemptAt ?? null,
+      error,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public markStaleIfUnchanged(
+    deliveryId: string,
+    expectedAttempts: number,
+    expectedNextAttemptAt: string | undefined,
+    error: string,
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.markStaleIfUnchangedStmt.run({
+      deliveryId,
+      expectedAttempts,
+      expectedNextAttemptAt: expectedNextAttemptAt ?? null,
+      error,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public finalizeAttemptSent(
+    deliveryId: string,
+    expectedAttempts: number,
+    expectedClaimExpiresAt: string,
+    providerMessageId: string | undefined,
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.finalizeAttemptSentStmt.run({
+      deliveryId,
+      expectedAttempts,
+      expectedClaimExpiresAt,
+      providerMsgId: providerMessageId ?? null,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public finalizeAttemptRetrying(
+    deliveryId: string,
+    expectedAttempts: number,
+    expectedClaimExpiresAt: string,
+    input: { error: string; nextAttemptAt: string },
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.finalizeAttemptRetryingStmt.run({
+      deliveryId,
+      expectedAttempts,
+      expectedClaimExpiresAt,
+      error: input.error,
+      nextAttemptAt: input.nextAttemptAt,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public finalizeAttemptFailed(
+    deliveryId: string,
+    expectedAttempts: number,
+    expectedClaimExpiresAt: string,
+    input: {
+      error: string;
+      deliveryStatus: string;
+      staleReason?: string;
+      providerMessageId?: string;
+    },
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.finalizeAttemptFailedStmt.run({
+      deliveryId,
+      expectedAttempts,
+      expectedClaimExpiresAt,
+      error: input.error,
+      deliveryStatus: input.deliveryStatus,
+      staleReason: input.staleReason ?? null,
+      providerMsgId: input.providerMessageId ?? null,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  public recordManualProviderOutcome(
+    deliveryId: string,
+    expectedAttempts: number,
+    providerMessageId: string | undefined,
+    error: string,
+    updatedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.recordManualProviderOutcomeStmt.run({
+      deliveryId,
+      expectedAttempts,
+      providerMsgId: providerMessageId ?? null,
+      error,
+      updatedAt,
+    });
+    return Number(result.changes ?? 0) > 0;
+  }
+
   public markRetrying(
     deliveryId: string,
     input: { attempts: number; error: string; nextAttemptAt: string },
@@ -229,12 +464,14 @@ export class CommsDeliveryRepository {
     updatedAt = new Date().toISOString(),
     deliveryStatus = "degraded",
     staleReason?: string,
+    providerMessageId?: string,
   ): void {
     this.markFailedStmt.run({
       deliveryId,
       deliveryStatus,
       error,
       staleReason: staleReason ?? null,
+      providerMsgId: providerMessageId ?? null,
       updatedAt,
     });
   }

@@ -2677,6 +2677,7 @@ async function fetchTextAllowlisted(
     allowlist: resolveNetworkAllowlist(config, executionContext),
     additionalAllowlists: grantAllowlist.length > 0 ? [grantAllowlist] : undefined,
     timeoutMs: 20_000,
+    trustedCrossOriginHeaders: ["accept", "user-agent"],
     init: {
       method: "GET",
       signal,

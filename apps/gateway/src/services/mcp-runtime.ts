@@ -94,6 +94,22 @@ export interface McpRuntimeInvocationResult {
   error?: string;
   degraded?: boolean;
   retryCount?: number;
+  externalOutcome?: "unknown_after_send";
+  manualReconciliationRequired?: boolean;
+  retrySafe?: boolean;
+  failurePhase?: "pre_dispatch" | "post_dispatch";
+}
+
+class McpToolOutcomeUnknownError extends Error {
+  public constructor(toolName: string, error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    super(
+      `MCP tool ${toolName} unknown_after_send: the tool call was dispatched, but its final outcome is unknown; ` +
+        `manual reconciliation is required. ${detail}`,
+      error instanceof Error ? { cause: error } : undefined,
+    );
+    this.name = "McpToolOutcomeUnknownError";
+  }
 }
 
 export function inferMcpToolsForServer(server: McpServerRecord, existingTools: McpToolRecord[]): McpToolRecord[] {
@@ -154,28 +170,33 @@ export async function invokeMcpRuntimeTool(
     }
     try {
       const first = await performHttpMcpRuntimeToolCall(server, input, timeoutMs, options);
-      if (!isExpiredMcpSessionError(first.error) || input.signal?.aborted) {
-        return first;
+      if (!isExplicitlyRetrySafeMcpSessionFailure(first) || input.signal?.aborted) {
+        return markAmbiguousMcpToolFailure(first);
       }
       const second = await performHttpMcpRuntimeToolCall(server, input, timeoutMs, options);
+      const normalizedSecond = markAmbiguousMcpToolFailure(second);
       return {
-        ...second,
+        ...normalizedSecond,
         degraded: true,
         retryCount: 1,
-        output: second.output
+        output: normalizedSecond.output
           ? {
-              ...second.output,
+              ...normalizedSecond.output,
               degradedReason: "expired_session_reconnect",
             }
-          : second.output,
-        error: second.ok ? undefined : second.error,
+          : normalizedSecond.output,
+        error: normalizedSecond.ok ? undefined : normalizedSecond.error,
       };
     } catch (error) {
       const sanitized = sanitizeMcpRuntimeError((error as Error).message);
+      const outcomeUnknown = hasMcpToolOutcomeUnknownCause(error);
       return {
         ok: false,
         error: sanitized,
         contentItems: [{ type: "error", text: sanitized }],
+        ...(outcomeUnknown
+          ? { externalOutcome: "unknown_after_send" as const, manualReconciliationRequired: true }
+          : {}),
       };
     }
   }
@@ -187,29 +208,32 @@ export async function invokeMcpRuntimeTool(
   }
   try {
     const first = await performMcpRuntimeToolCall(server, input, timeoutMs);
-    if (!isExpiredMcpSessionError(first.error) || input.signal?.aborted) {
-      return first;
+    if (!isExplicitlyRetrySafeMcpSessionFailure(first) || input.signal?.aborted) {
+      return markAmbiguousMcpToolFailure(first);
     }
     const second = await performMcpRuntimeToolCall(server, input, timeoutMs);
+    const normalizedSecond = markAmbiguousMcpToolFailure(second);
     return {
-      ...second,
+      ...normalizedSecond,
       degraded: true,
       retryCount: 1,
-      output: second.output
+      output: normalizedSecond.output
         ? {
-            ...second.output,
+            ...normalizedSecond.output,
             degradedReason: "expired_session_reconnect",
           }
-        : second.output,
-      error: second.ok ? undefined : second.error,
+        : normalizedSecond.output,
+      error: normalizedSecond.ok ? undefined : normalizedSecond.error,
     };
   } catch (error) {
     const sanitized = sanitizeMcpRuntimeError((error as Error).message);
     const message = `MCP stdio request failed: ${sanitized}`;
+    const outcomeUnknown = hasMcpToolOutcomeUnknownCause(error);
     return {
       ok: false,
       error: message,
       contentItems: [{ type: "error", text: message }],
+      ...(outcomeUnknown ? { externalOutcome: "unknown_after_send" as const, manualReconciliationRequired: true } : {}),
     };
   }
 }
@@ -244,14 +268,19 @@ async function performMcpRuntimeToolCall(
     server,
     timeoutMs,
     async (client) => {
-      const response = await client.request(
-        "tools/call",
-        {
-          name: input.toolName,
-          arguments: input.arguments ?? {},
-        },
-        input.signal,
-      );
+      let response: JsonRpcEnvelope;
+      try {
+        response = await client.request(
+          "tools/call",
+          {
+            name: input.toolName,
+            arguments: input.arguments ?? {},
+          },
+          input.signal,
+        );
+      } catch (error) {
+        throw new McpToolOutcomeUnknownError(input.toolName, error);
+      }
       if (response.error) {
         const detail = stringifyUnknown(response.error.data);
         const error = sanitizeMcpRuntimeError(
@@ -263,6 +292,7 @@ async function performMcpRuntimeToolCall(
           ok: false,
           error,
           contentItems: [{ type: "error", text: error }],
+          ...readMcpRetrySafety(response.error.data),
         };
       }
       const result = response.result ?? {};
@@ -304,14 +334,19 @@ async function performHttpMcpRuntimeToolCall(
     timeoutMs,
     options,
     async (client) => {
-      const response = await client.request(
-        "tools/call",
-        {
-          name: input.toolName,
-          arguments: input.arguments ?? {},
-        },
-        input.signal,
-      );
+      let response: JsonRpcEnvelope;
+      try {
+        response = await client.request(
+          "tools/call",
+          {
+            name: input.toolName,
+            arguments: input.arguments ?? {},
+          },
+          input.signal,
+        );
+      } catch (error) {
+        throw new McpToolOutcomeUnknownError(input.toolName, error);
+      }
       if (response.error) {
         const detail = stringifyUnknown(response.error.data);
         const error = sanitizeMcpRuntimeError(
@@ -323,6 +358,7 @@ async function performHttpMcpRuntimeToolCall(
           ok: false,
           error,
           contentItems: [{ type: "error", text: error }],
+          ...readMcpRetrySafety(response.error.data),
         };
       }
       const result = response.result ?? {};
@@ -359,6 +395,54 @@ function isExpiredMcpSessionError(error?: string): boolean {
     (/\b(expired|stale|invalid)\s+(session|connection|transport)\b/i.test(error) ||
       /\b(closed|reset|econnreset|socket hang up|terminated)\b/i.test(error)),
   );
+}
+
+function isExplicitlyRetrySafeMcpSessionFailure(result: McpRuntimeInvocationResult): boolean {
+  return (
+    result.ok === false &&
+    result.retrySafe === true &&
+    result.failurePhase === "pre_dispatch" &&
+    isExpiredMcpSessionError(result.error)
+  );
+}
+
+function markAmbiguousMcpToolFailure(result: McpRuntimeInvocationResult): McpRuntimeInvocationResult {
+  if (
+    result.ok ||
+    result.failurePhase === "pre_dispatch" ||
+    (result.failurePhase !== "post_dispatch" && !isExpiredMcpSessionError(result.error))
+  ) {
+    return result;
+  }
+  return {
+    ...result,
+    externalOutcome: "unknown_after_send",
+    manualReconciliationRequired: true,
+  };
+}
+
+function readMcpRetrySafety(data: unknown): Pick<McpRuntimeInvocationResult, "failurePhase" | "retrySafe"> {
+  if (!isRecord(data)) {
+    return {};
+  }
+  const failurePhase = data.phase === "pre_dispatch" || data.phase === "post_dispatch" ? data.phase : undefined;
+  return {
+    ...(failurePhase ? { failurePhase } : {}),
+    ...(typeof data.retrySafe === "boolean" ? { retrySafe: data.retrySafe } : {}),
+  };
+}
+
+function hasMcpToolOutcomeUnknownCause(error: unknown): boolean {
+  let current = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    if (current instanceof McpToolOutcomeUnknownError) {
+      return true;
+    }
+    seen.add(current);
+    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return false;
 }
 
 export function collectMcpBrowserFallbackTargets(

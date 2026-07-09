@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { CommsSendResult } from "@goatcitadel/contracts";
+import { CommsDeliveryRepository, createDatabase } from "@goatcitadel/storage";
 import {
   ChannelDeliveryRuntimeService,
   classifyChannelDeliveryFailure,
@@ -246,6 +250,353 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.markSent).toHaveBeenCalledWith(queued.deliveryId, "provider-2", "2026-05-05T00:00:01.000Z");
   });
 
+  it("claims a delivery once when concurrent drains overlap", async () => {
+    const repository = createRepository();
+    let releaseSend: (() => void) | undefined;
+    let reportSendStarted: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendStarted = new Promise<void>((resolve) => {
+      reportSendStarted = resolve;
+    });
+    const send = vi.fn(async () => {
+      const callNumber = send.mock.calls.length;
+      reportSendStarted?.();
+      await sendGate;
+      return { providerMessageId: `provider-${callNumber}` };
+    });
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send,
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "send exactly once" },
+    });
+
+    const firstDrain = service.drainDue();
+    await sendStarted;
+    const overlappingDrain = service.drainDue();
+    await Promise.resolve();
+    releaseSend?.();
+    await Promise.all([firstDrain, overlappingDrain]);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(repository.markAttempt).toHaveBeenCalledTimes(1);
+    expect(service.get(queued.deliveryId)).toMatchObject({
+      status: "sent",
+      deliveryStatus: "sent",
+      attempts: 1,
+      providerMessageId: "provider-1",
+    });
+  });
+
+  it("executes exactly one provider send across two runtimes sharing one SQLite delivery queue", async () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-channel-runtime-race-${randomUUID()}.db`);
+    const firstDb = createDatabase({ dbPath });
+    const secondDb = createDatabase({ dbPath });
+    try {
+      const firstRepository = new CommsDeliveryRepository(firstDb);
+      const secondRepository = new CommsDeliveryRepository(secondDb);
+      const firstSend = vi.fn(async () => ({ providerMessageId: "provider-first-runtime" }));
+      const secondSend = vi.fn(async () => ({ providerMessageId: "provider-second-runtime" }));
+      const now = () => new Date("2026-05-05T00:00:00.000Z");
+      const firstService = new ChannelDeliveryRuntimeService({ repository: firstRepository, send: firstSend, now });
+      const secondService = new ChannelDeliveryRuntimeService({ repository: secondRepository, send: secondSend, now });
+      const input = {
+        connectionId: "conn-shared-runtime",
+        channelKey: "slack",
+        target: "C123",
+        payload: { message: "claim once across runtimes" },
+        idempotencyKey: "shared-runtime-claim-key",
+      };
+      const queued = firstService.enqueue(input);
+      expect(secondService.enqueue(input).deliveryId).toBe(queued.deliveryId);
+
+      await Promise.all([firstService.drainDue(), secondService.drainDue()]);
+
+      expect(firstSend.mock.calls.length + secondSend.mock.calls.length).toBe(1);
+      const persisted = firstRepository.list("conn-shared-runtime", 1)[0];
+      expect(persisted).toMatchObject({
+        deliveryId: queued.deliveryId,
+        status: "sent",
+        deliveryStatus: "sent",
+      });
+      expect(["provider-first-runtime", "provider-second-runtime"]).toContain(persisted?.providerMessageId);
+    } finally {
+      firstDb.close();
+      secondDb.close();
+      for (const suffix of ["", "-shm", "-wal"]) {
+        rmSync(`${dbPath}${suffix}`, { force: true });
+      }
+    }
+  }, 15_000);
+
+  it("does not let a delayed runtime's stale queued snapshot overwrite a completed send", async () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-channel-runtime-stale-race-${randomUUID()}.db`);
+    const ownerDb = createDatabase({ dbPath });
+    const delayedDb = createDatabase({ dbPath });
+    try {
+      const ownerRepository = new CommsDeliveryRepository(ownerDb);
+      const delayedRepository = new CommsDeliveryRepository(delayedDb);
+      let now = new Date("2026-05-05T00:00:00.000Z");
+      const ownerSend = vi.fn(async () => ({ providerMessageId: "provider-stale-race" }));
+      const delayedSend = vi.fn();
+      const ownerService = new ChannelDeliveryRuntimeService({
+        repository: ownerRepository,
+        send: ownerSend,
+        now: () => now,
+      });
+      const delayedService = new ChannelDeliveryRuntimeService({
+        repository: delayedRepository,
+        send: delayedSend,
+        now: () => now,
+      });
+      const input = {
+        connectionId: "conn-stale-race",
+        channelKey: "slack",
+        target: "C123",
+        payload: { message: "winner must remain sent" },
+        idempotencyKey: "stale-runtime-snapshot-key",
+        staleAfterMs: 10,
+      };
+      const queued = ownerService.enqueue(input);
+      delayedService.enqueue(input);
+
+      await ownerService.drainDue();
+      now = new Date("2026-05-05T00:00:00.020Z");
+      expect(await delayedService.drainDue()).toEqual([]);
+
+      expect(ownerSend).toHaveBeenCalledTimes(1);
+      expect(delayedSend).not.toHaveBeenCalled();
+      expect(ownerRepository.list("conn-stale-race", 1)[0]).toMatchObject({
+        deliveryId: queued.deliveryId,
+        status: "sent",
+        deliveryStatus: "sent",
+        providerMessageId: "provider-stale-race",
+      });
+    } finally {
+      ownerDb.close();
+      delayedDb.close();
+      for (const suffix of ["", "-shm", "-wal"]) {
+        rmSync(`${dbPath}${suffix}`, { force: true });
+      }
+    }
+  }, 15_000);
+
+  it("quarantines a provider success when persisting the sent result fails", async () => {
+    const repository = createRepository();
+    repository.markSent.mockImplementation(() => {
+      throw new Error("delivery ledger write failed after provider success");
+    });
+    let now = new Date("2026-05-05T00:00:00.000Z");
+    const send = vi.fn(async () => ({ providerMessageId: "provider-persist-failure" }));
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send,
+      now: () => now,
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "hello" },
+      baseBackoffMs: 1,
+    });
+
+    await service.drainDue();
+    now = new Date("2026-05-05T00:00:01.000Z");
+    await service.drainDue();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(service.get(queued.deliveryId)).toMatchObject({
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      attempts: 1,
+      providerMessageId: "provider-persist-failure",
+    });
+    expect(repository.markRetrying).not.toHaveBeenCalled();
+    expect(repository.markFailed).toHaveBeenCalledWith(
+      queued.deliveryId,
+      expect.any(String),
+      expect.any(String),
+      "manual_reconciliation_required",
+      undefined,
+      "provider-persist-failure",
+    );
+  });
+
+  it("quarantines a provider success when the sent callback fails", async () => {
+    const repository = createRepository();
+    let now = new Date("2026-05-05T00:00:00.000Z");
+    const send = vi.fn(async () => ({ providerMessageId: "provider-callback-failure" }));
+    const onDeliverySent = vi.fn(() => {
+      throw new Error("commitment callback failed after provider success");
+    });
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send,
+      onDeliverySent,
+      now: () => now,
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "hello", commitmentId: "commitment-callback-failure" },
+      baseBackoffMs: 1,
+    });
+
+    await service.drainDue();
+    now = new Date("2026-05-05T00:00:01.000Z");
+    await service.drainDue();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onDeliverySent).toHaveBeenCalledTimes(1);
+    expect(service.get(queued.deliveryId)).toMatchObject({
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      attempts: 1,
+      providerMessageId: "provider-callback-failure",
+    });
+    expect(repository.markRetrying).not.toHaveBeenCalled();
+    expect(repository.markFailed).toHaveBeenCalledWith(
+      queued.deliveryId,
+      expect.any(String),
+      expect.any(String),
+      "manual_reconciliation_required",
+      undefined,
+      "provider-callback-failure",
+    );
+  });
+
+  it("keeps a late provider success manual when its durable claim was already quarantined", async () => {
+    const repository = createRepository();
+    const finalizeAttemptSent = vi.fn(() => false);
+    const recordManualProviderOutcome = vi.fn(() => true);
+    const onDeliverySent = vi.fn();
+    const onDeliveryFailed = vi.fn();
+    const service = new ChannelDeliveryRuntimeService({
+      repository: {
+        ...repository,
+        claimAttempt: vi.fn(() => true),
+        finalizeAttemptSent,
+        recordManualProviderOutcome,
+      },
+      send: vi.fn(async () => ({ providerMessageId: "provider-after-claim-loss" })),
+      onDeliverySent,
+      onDeliveryFailed,
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "slow provider", commitmentId: "commitment-late-provider" },
+    });
+
+    const [result] = await service.drainDue();
+
+    expect(finalizeAttemptSent).toHaveBeenCalledWith(
+      queued.deliveryId,
+      1,
+      "2026-05-05T00:15:00.000Z",
+      "provider-after-claim-loss",
+      "2026-05-05T00:00:00.000Z",
+    );
+    expect(recordManualProviderOutcome).toHaveBeenCalledWith(
+      queued.deliveryId,
+      1,
+      "provider-after-claim-loss",
+      expect.stringContaining("post_send_claim_lost"),
+      "2026-05-05T00:00:00.000Z",
+    );
+    expect(result).toMatchObject({
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "provider-after-claim-loss",
+    });
+    expect(repository.markSent).not.toHaveBeenCalled();
+    expect(onDeliverySent).not.toHaveBeenCalled();
+    expect(onDeliveryFailed).not.toHaveBeenCalled();
+  });
+
+  it("retains a provider id when a late manual failure loses its durable claim", async () => {
+    const repository = createRepository();
+    const recordManualProviderOutcome = vi.fn(() => true);
+    const structuredFailure = Object.assign(new Error("provider bookkeeping remained ambiguous"), {
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "provider-failed-after-claim-loss",
+    });
+    const service = new ChannelDeliveryRuntimeService({
+      repository: {
+        ...repository,
+        claimAttempt: vi.fn(() => true),
+        finalizeAttemptFailed: vi.fn(() => false),
+        recordManualProviderOutcome,
+      },
+      send: vi.fn(async () => {
+        throw structuredFailure;
+      }),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "slow failed provider" },
+    });
+
+    expect(await service.drainDue()).toEqual([]);
+    expect(recordManualProviderOutcome).toHaveBeenCalledWith(
+      "delivery-1",
+      1,
+      "provider-failed-after-claim-loss",
+      "provider bookkeeping remained ambiguous",
+      "2026-05-05T00:00:00.000Z",
+    );
+    expect(service.get("delivery-1")).toBeUndefined();
+  });
+
+  it("never retries a failed provider result that already carries a provider message id", async () => {
+    const repository = createRepository();
+    const failure = Object.assign(new Error("compatibility host reported degraded"), {
+      deliveryStatus: "degraded",
+      providerMessageId: "provider-already-accepted",
+    });
+    const send = vi.fn(async () => {
+      throw failure;
+    });
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send,
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "must not replay" },
+      maxAttempts: 3,
+    });
+
+    const [result] = await service.drainDue();
+    await service.drainDue();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      deliveryId: queued.deliveryId,
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "provider-already-accepted",
+    });
+    expect(repository.markRetrying).not.toHaveBeenCalled();
+  });
+
   it("notifies linked commitments only after channel delivery is sent", async () => {
     const repository = createRepository();
     const onDeliverySent = vi.fn();
@@ -304,7 +655,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(onDeliveryFailed).not.toHaveBeenCalled();
   });
 
-  it("hydrates due persisted deliveries for restart drains", async () => {
+  it("hydrates never-attempted persisted deliveries for restart drains", async () => {
     const repository = createRepository();
     const send = vi.fn(async () => ({ providerMessageId: "provider-after-restart" }));
     const service = new ChannelDeliveryRuntimeService({
@@ -324,7 +675,7 @@ describe("ChannelDeliveryRuntimeService", () => {
               message: "hello after restart",
             },
             payloadHash: "persisted-hash",
-            attempts: 1,
+            attempts: 0,
             maxAttempts: 3,
             createdAt: "2026-05-05T00:00:00.000Z",
             updatedAt: "2026-05-05T00:00:00.000Z",
@@ -340,7 +691,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
         deliveryId: "persisted-1",
-        attempts: 2,
+        attempts: 1,
         payload: expect.objectContaining({ message: "hello after restart" }),
       }),
     );
@@ -348,8 +699,161 @@ describe("ChannelDeliveryRuntimeService", () => {
       deliveryId: "persisted-1",
       status: "sent",
       providerMessageId: "provider-after-restart",
-      attempts: 2,
+      attempts: 1,
     });
+  });
+
+  it("quarantines an already-attempted persisted delivery after restart without resending", async () => {
+    const repository = createRepository();
+    const send = vi.fn(async () => ({ providerMessageId: "must-not-send-after-restart" }));
+    const service = new ChannelDeliveryRuntimeService({
+      repository: {
+        ...repository,
+        listDue: vi.fn(() => [
+          {
+            deliveryId: "persisted-ambiguous-1",
+            connectionId: "conn-1",
+            channelKey: "telegram",
+            target: "chat-1",
+            status: "queued",
+            deliveryStatus: "retrying",
+            payload: {
+              connectionId: "conn-1",
+              target: "chat-1",
+              message: "outcome unknown after restart",
+            },
+            payloadHash: "persisted-ambiguous-hash",
+            attempts: 1,
+            maxAttempts: 3,
+            nextAttemptAt: "2026-05-05T00:00:00.500Z",
+            createdAt: "2026-05-05T00:00:00.000Z",
+            updatedAt: "2026-05-05T00:00:00.500Z",
+          },
+        ]),
+      },
+      send,
+      now: () => new Date("2026-05-05T00:00:01.000Z"),
+    });
+
+    await service.drainDue();
+    await service.drainDue();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(service.get("persisted-ambiguous-1")).toMatchObject({
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      attempts: 1,
+    });
+    expect(repository.markRetrying).not.toHaveBeenCalled();
+    expect(repository.markFailed).toHaveBeenCalledWith(
+      "persisted-ambiguous-1",
+      expect.any(String),
+      expect.any(String),
+      "manual_reconciliation_required",
+      undefined,
+    );
+  });
+
+  it("does not quarantine another instance's unexpired attempt or resend it after the lease expires", async () => {
+    const repository = createRepository();
+    const quarantineAttempt = vi.fn(() => false);
+    const send = vi.fn();
+    let now = new Date("2026-05-05T00:00:02.000Z");
+    const service = new ChannelDeliveryRuntimeService({
+      repository: {
+        ...repository,
+        quarantineAttempt,
+        findByIdempotencyKey: vi.fn(() => ({
+          deliveryId: "persisted-active-claim-1",
+          connectionId: "conn-1",
+          channelKey: "slack",
+          target: "C123",
+          status: "queued" as const,
+          deliveryStatus: "retrying" as const,
+          idempotencyKey: "active-claim-idempotency-key",
+          attempts: 1,
+          maxAttempts: 3,
+          nextAttemptAt: "2026-05-05T00:15:01.000Z",
+          createdAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:01.000Z",
+        })),
+      },
+      send,
+      now: () => now,
+    });
+
+    const existing = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "already in flight elsewhere" },
+      idempotencyKey: "active-claim-idempotency-key",
+    });
+
+    expect(existing).toMatchObject({
+      deliveryId: "persisted-active-claim-1",
+      status: "retrying",
+      deliveryStatus: "retrying",
+      attempts: 1,
+      nextAttemptAt: "2026-05-05T00:15:01.000Z",
+    });
+    expect(repository.markFailed).not.toHaveBeenCalled();
+
+    now = new Date("2026-05-05T00:15:01.000Z");
+    await service.drainDue();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(quarantineAttempt).toHaveBeenCalledWith(
+      "persisted-active-claim-1",
+      1,
+      "2026-05-05T00:15:01.000Z",
+      expect.stringContaining("another runtime"),
+      "2026-05-05T00:15:01.000Z",
+    );
+    expect(repository.markFailed).not.toHaveBeenCalled();
+    expect(service.get("persisted-active-claim-1")).toBeUndefined();
+  });
+
+  it("uses the same conditional quarantine for an expired recovered lease during a stale sweep", () => {
+    const repository = createRepository();
+    const quarantineAttempt = vi.fn(() => false);
+    let now = new Date("2026-05-05T00:00:02.000Z");
+    const service = new ChannelDeliveryRuntimeService({
+      repository: {
+        ...repository,
+        quarantineAttempt,
+        findByIdempotencyKey: vi.fn(() => ({
+          deliveryId: "persisted-sweep-claim-1",
+          connectionId: "conn-1",
+          channelKey: "slack",
+          target: "C123",
+          status: "queued" as const,
+          deliveryStatus: "retrying" as const,
+          idempotencyKey: "sweep-claim-idempotency-key",
+          attempts: 1,
+          maxAttempts: 3,
+          nextAttemptAt: "2026-05-05T00:15:01.000Z",
+          createdAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:01.000Z",
+        })),
+      },
+      send: vi.fn(),
+      now: () => now,
+    });
+
+    service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "already completed elsewhere" },
+      idempotencyKey: "sweep-claim-idempotency-key",
+    });
+    now = new Date("2026-05-05T00:15:01.000Z");
+
+    expect(service.markStaleDeliveries()).toEqual([]);
+    expect(quarantineAttempt).toHaveBeenCalledTimes(1);
+    expect(repository.markFailed).not.toHaveBeenCalled();
+    expect(service.get("persisted-sweep-claim-1")).toBeUndefined();
   });
 
   it("skips duplicate or payload-less persisted due records during drain hydration", async () => {
@@ -460,6 +964,50 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.markFailed).toHaveBeenCalledWith(
       queued.deliveryId,
       "partial_channel_delivery_sent: 1 of 2 chunks were sent before failure; manual retry required. network timeout",
+      "2026-05-05T00:00:00.000Z",
+      "manual_reconciliation_required",
+      undefined,
+    );
+  });
+
+  it("preserves structured manual-reconciliation failures without scheduling a durable retry", async () => {
+    const repository = createRepository();
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error("provider timed out after dispatch"), {
+        deliveryStatus: "manual_reconciliation_required" as const,
+      });
+    });
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send,
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "slack",
+      target: "C123",
+      payload: { message: "hello" },
+      maxAttempts: 3,
+    });
+
+    const [failed] = await service.drainDue();
+    await service.drainDue();
+
+    expect(failed).toMatchObject({
+      deliveryId: queued.deliveryId,
+      status: "manual_reconciliation_required",
+      deliveryStatus: "manual_reconciliation_required",
+      attempts: 1,
+      error: "provider timed out after dispatch",
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(repository.markAttempt).toHaveBeenCalledTimes(1);
+    expect(repository.markAttempt).toHaveBeenCalledWith(queued.deliveryId, 1, "2026-05-05T00:00:00.000Z");
+    expect(repository.markRetrying).not.toHaveBeenCalled();
+    expect(repository.markFailed).toHaveBeenCalledTimes(1);
+    expect(repository.markFailed).toHaveBeenCalledWith(
+      queued.deliveryId,
+      "provider timed out after dispatch",
       "2026-05-05T00:00:00.000Z",
       "manual_reconciliation_required",
       undefined,

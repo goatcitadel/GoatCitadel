@@ -1108,6 +1108,35 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves manual-reconciliation truth from an ambiguous MCP mutation", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({
+      ok: false,
+      error: "MCP tool tool.echo unknown_after_send: the tool call was dispatched, but its final outcome is unknown.",
+      externalOutcome: "unknown_after_send" as const,
+      manualReconciliationRequired: true,
+    }));
+    const coordinator = new ToolInvocationCoordinatorService(createHost({ invokeMcpRuntimeTool }));
+
+    const response = await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-ambiguous-mcp",
+      arguments: { title: "create at most once" },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+      diagnostics: {
+        externalOutcome: "unknown_after_send",
+        manualReconciliationRequired: true,
+      },
+    });
+    expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       label: "executed",

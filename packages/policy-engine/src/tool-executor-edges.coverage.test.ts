@@ -669,7 +669,7 @@ describe("tool executor edge coverage", () => {
         config: { webhookUrl: "https://hooks.slack.com/services/T/B/C" },
       }),
     );
-    expect(inlineSlack).toMatchObject({ status: "failed", deliveryStatus: "degraded" });
+    expect(inlineSlack).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
 
     const teamsInline = await executeTool(
       request("teams.send", {
@@ -684,7 +684,7 @@ describe("tool executor edge coverage", () => {
         config: { webhookUrl: "https://outlook.office.com/webhook/example" },
       }),
     );
-    expect(teamsInline).toMatchObject({ status: "failed", deliveryStatus: "degraded" });
+    expect(teamsInline).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
 
     const googleChatInline = await executeTool(
       request("google-chat.send", {
@@ -699,7 +699,7 @@ describe("tool executor edge coverage", () => {
         config: { webhookUrl: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=test&token=test" },
       }),
     );
-    expect(googleChatInline).toMatchObject({ status: "failed", deliveryStatus: "degraded" });
+    expect(googleChatInline).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
 
     const unsupportedReact = await executeTool(
       request("channel.react", { connectionId: "webhook-react", messageId: "msg-1", reaction: "seen" }),
@@ -724,13 +724,24 @@ describe("tool executor edge coverage", () => {
     expect(unsupportedUnsend).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
   });
 
-  it("covers HTTP redirect, retry-after, and abort retry branches", async () => {
-    let mode: "missing-location" | "too-many" | "retry-date" | "retry-invalid" | "abort-retry" | "abort-event" =
-      "missing-location";
+  it("retries safe HTTP reads but never retries ambiguous HTTP mutations", async () => {
+    let mode:
+      | "missing-location"
+      | "too-many"
+      | "retry-date"
+      | "retry-invalid"
+      | "mutation-status"
+      | "cross-origin-post"
+      | "same-origin-post"
+      | "abort-retry"
+      | "abort-event" = "missing-location";
     let calls = 0;
+    let mutationStatus = 503;
+    let contactedUrls: string[] = [];
     const eventAbortController = new AbortController();
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       calls += 1;
+      contactedUrls.push(String(input));
       if (mode === "missing-location") {
         return new Response("", { status: 302 });
       }
@@ -745,6 +756,21 @@ describe("tool executor edge coverage", () => {
       }
       if (mode === "retry-invalid" && calls === 1) {
         return new Response("retry", { status: 503, headers: { "retry-after": "not-a-date" } });
+      }
+      if (mode === "mutation-status") {
+        return new Response("retry", { status: mutationStatus });
+      }
+      if (mode === "cross-origin-post") {
+        return new Response("", {
+          status: 302,
+          headers: { location: "https://other.example/mutate" },
+        });
+      }
+      if (mode === "same-origin-post" && String(input) === "https://example.com/mutate") {
+        return new Response("", {
+          status: 302,
+          headers: { location: "https://example.com/second-mutate" },
+        });
       }
       if (mode === "abort-retry") {
         return new Response("retry", { status: 503, headers: { "retry-after": "1" } });
@@ -773,12 +799,58 @@ describe("tool executor edge coverage", () => {
     await expect(
       executeTool(request("http.get", { url: "https://example.com/retry" }), httpConfig, storageStub()),
     ).resolves.toMatchObject({ status: 200, body: "ok" });
+    expect(calls).toBe(2);
 
     mode = "retry-invalid";
     calls = 0;
     await expect(
       executeTool(request("http.get", { url: "https://example.com/retry-invalid" }), httpConfig, storageStub()),
     ).resolves.toMatchObject({ status: 200, body: "ok" });
+
+    mode = "mutation-status";
+    for (const status of [408, 429, 500, 502, 503, 504]) {
+      mutationStatus = status;
+      calls = 0;
+      await expect(
+        executeTool(
+          request("http.post", { url: "https://example.com/mutate", body: { action: "create" } }),
+          httpConfig,
+          storageStub(),
+        ),
+      ).resolves.toMatchObject({
+        status,
+        body: "retry",
+        externalOutcome: "unknown_after_send",
+        manualReconciliationRequired: true,
+      });
+      expect(calls).toBe(1);
+    }
+
+    mode = "cross-origin-post";
+    calls = 0;
+    contactedUrls = [];
+    await expect(
+      executeTool(
+        request("http.post", { url: "https://example.com/mutate", body: { action: "create" } }),
+        withAllowlist(config, "example.com", "other.example"),
+        storageStub(),
+      ),
+    ).rejects.toThrow(/unknown_after_send.*manual reconciliation/i);
+    expect(calls).toBe(1);
+    expect(contactedUrls).toEqual(["https://example.com/mutate"]);
+
+    mode = "same-origin-post";
+    calls = 0;
+    contactedUrls = [];
+    await expect(
+      executeTool(
+        request("http.post", { url: "https://example.com/mutate", body: { action: "create" } }),
+        httpConfig,
+        storageStub(),
+      ),
+    ).rejects.toThrow(/unknown_after_send.*manual reconciliation/i);
+    expect(calls).toBe(1);
+    expect(contactedUrls).toEqual(["https://example.com/mutate"]);
 
     mode = "abort-retry";
     calls = 0;

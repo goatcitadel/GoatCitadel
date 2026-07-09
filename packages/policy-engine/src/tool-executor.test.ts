@@ -1435,13 +1435,13 @@ describe("executeTool", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://allowed.example/hook", expect.any(Object));
     expect(markFailed).toHaveBeenCalledWith(
       "delivery-webhook",
-      expect.stringMatching(/allowlisted/i),
+      expect.stringMatching(/unknown_after_send|manual reconciliation/i),
       expect.any(String),
-      "blocked",
+      "manual_reconciliation_required",
     );
     expect(result).toMatchObject({
       status: "failed",
-      deliveryStatus: "blocked",
+      deliveryStatus: "manual_reconciliation_required",
     });
   });
 
@@ -1520,7 +1520,7 @@ describe("executeTool", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("https://other.example/file.txt", expect.any(Object));
     expect(markFailed).toHaveBeenCalledWith(
       "delivery-attachment",
-      expect.stringMatching(/allowlisted/i),
+      expect.not.stringMatching(/unknown_after_send|manual reconciliation/i),
       expect.any(String),
       "blocked",
     );
@@ -1663,6 +1663,130 @@ describe("executeTool", () => {
     });
   });
 
+  it("marks a direct mutation adapter redirect as unknown after send without contacting hop two", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example/reactions.add" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: { botToken: "xoxb-test", defaultChannel: "C0123456789" },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-react-redirect",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "slack.react",
+        args: {
+          connectionId: "conn-slack",
+          messageId: "1712345678.000100",
+          reaction: "white_check_mark",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-react-redirect",
+        policyContext: {
+          matchedGrantAllowedHosts: ["slack.com", "other.example"],
+        } as ToolInvokeRequest["policyContext"],
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com", "other.example"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-slack-react-redirect",
+      expect.stringMatching(/unknown_after_send|manual reconciliation/i),
+      expect.any(String),
+      "manual_reconciliation_required",
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      error: expect.stringContaining("unknown_after_send"),
+    });
+  });
+
+  it("marks a mutation response-body limit failure as unknown after send", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("x".repeat(2 * 1024 * 1024 + 1), { status: 200 })),
+    );
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: { botToken: "xoxb-test", defaultChannel: "C0123456789" },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-react-large-response",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "slack.react",
+        args: {
+          connectionId: "conn-slack",
+          messageId: "1712345678.000100",
+          reaction: "white_check_mark",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-react-large-response",
+      },
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["slack.com"] } },
+      commsStorage,
+    );
+
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-slack-react-large-response",
+      expect.stringMatching(/unknown_after_send|manual reconciliation/i),
+      expect.any(String),
+      "manual_reconciliation_required",
+    );
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+  });
+
   it("blocks Gmail side-effect calls outside the matched grant host boundary", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "gmail-1" }), { status: 200 }));
@@ -1730,7 +1854,7 @@ describe("executeTool", () => {
     });
   });
 
-  it("retries retryable channel delivery failures before reporting success", async () => {
+  it("does not retry ambiguous Slack mutations and requires manual reconciliation", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
     const fetchMock = vi
@@ -1791,12 +1915,74 @@ describe("executeTool", () => {
       commsStorage,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
-      status: "sent",
-      deliveryStatus: "sent",
-      providerMessageId: "1712345678.000200",
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
     });
+  });
+
+  it("quarantines a sent mutation when delivery-ledger finalization fails", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, ts: "1712345678.000300", channel: "C123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack-ledger-failure",
+          key: "slack",
+          config: { botTokenEnv: "SLACK_BOT_TOKEN", defaultChannel: "#build-alerts" },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn(() => ({
+          deliveryId: "delivery-ledger-failure",
+          status: "queued",
+          channelKey: "slack",
+          target: "#build-alerts",
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(() => {
+          throw new Error("delivery ledger unavailable");
+        }),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: { connectionId: "conn-slack-ledger-failure", message: "Send exactly once." },
+        agentId: "operator",
+        sessionId: "sess-slack-ledger-failure",
+      },
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["slack.com"] } },
+      commsStorage,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "1712345678.000300",
+    });
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-ledger-failure",
+      expect.stringMatching(/post_send_bookkeeping_failed/i),
+      expect.any(String),
+      "manual_reconciliation_required",
+      undefined,
+      "1712345678.000300",
+    );
   });
 
   it("sends Discord webhook messages with inline uploads and URL embeds", async () => {
@@ -2022,6 +2208,65 @@ describe("executeTool", () => {
       status: "sent",
       providerMessageId: "321",
     });
+  });
+
+  it("reports a Telegram mutation redirect as unknown after send without contacting hop two", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    const contactedUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      contactedUrls.push(String(url));
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://other.example/telegram-result" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram-redirect",
+          key: "telegram",
+          config: { botTokenEnv: "TELEGRAM_BOT_TOKEN", defaultChatId: "-1001234567890" },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-telegram-redirect",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: { connectionId: "conn-telegram-redirect", message: "send once" },
+        agentId: "operator",
+        sessionId: "sess-telegram-redirect",
+      },
+      {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.telegram.org", "other.example"] },
+      },
+      commsStorage,
+    );
+
+    expect(contactedUrls).toEqual(["https://api.telegram.org/bottg-token/sendMessage"]);
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-telegram-redirect",
+      expect.stringMatching(/unknown_after_send|manual reconciliation/i),
+      expect.any(String),
+      "manual_reconciliation_required",
+    );
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
   });
 
   it("sends Telegram replies with reply parameters", async () => {
@@ -5433,6 +5678,55 @@ describe("executeTool", () => {
         leakDetections: ["bearer_token"],
       },
     });
+  });
+
+  it("keeps an already-aborted HTTP mutation local and undispatched", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response("should not be reached", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+    const reason = controller.signal.reason as Error;
+
+    expect(reason.name).toBe("AbortError");
+
+    await expect(
+      executeTool(
+        {
+          ...toolRequest("http.post", { url: "https://example.com/api", body: { ok: true } }),
+          signal: controller.signal,
+        },
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toBe(reason);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an HTTP mutation abort unknown once fetch dispatch has started", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      controller.abort();
+      throw init?.signal?.reason ?? controller.signal.reason;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      executeTool(
+        {
+          ...toolRequest("http.post", { url: "https://example.com/api", body: { ok: true } }),
+          signal: controller.signal,
+        },
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toMatchObject({
+      name: "HttpMutationOutcomeUnknownError",
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("covers memory write, read, search, and embeddings tools", async () => {

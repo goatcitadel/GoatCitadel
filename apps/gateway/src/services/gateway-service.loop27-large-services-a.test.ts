@@ -546,6 +546,52 @@ describe("GatewayService loop 27 large service coverage", () => {
     });
   });
 
+  it("reports an idempotent manual-reconciliation delivery replay as failed", async () => {
+    const enqueue = vi.fn((input: Record<string, unknown>) => ({
+      channelKey: input.channelKey,
+      connectionId: input.connectionId,
+      createdAt: "2026-05-15T00:00:00.000Z",
+      deliveryId: "delivery-manual-replay",
+      deliveryStatus: "manual_reconciliation_required",
+      error: "The prior dispatch outcome is unknown.",
+      idempotencyKey: input.idempotencyKey,
+      maxAttempts: 3,
+      status: "manual_reconciliation_required",
+      target: input.target,
+      updatedAt: "2026-05-15T00:01:00.000Z",
+    }));
+    const drainDue = vi.fn(async () => []);
+    const { gateway } = createGatewayHarness({
+      channelDeliveryRuntimeService: {
+        drainDue,
+        enqueue,
+        list: vi.fn(() => []),
+      },
+      storage: {
+        integrationConnections: {
+          get: vi.fn(() => ({ connectionId: "conn-1", key: "slack" })),
+        },
+      },
+    });
+
+    await expect(
+      GatewayService.prototype.commsSend.call(gateway, {
+        connectionId: "conn-1",
+        message: "Send this once.",
+        target: "C123",
+        taskId: "task-idempotent-replay",
+      } as never),
+    ).resolves.toMatchObject({
+      deliveryId: "delivery-manual-replay",
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      error: "The prior dispatch outcome is unknown.",
+    });
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: expect.stringContaining("task-idempotent-replay") }),
+    );
+  });
+
   it("sends chunked channel deliveries without duplicating attachments or interactive actions", async () => {
     const sentArgs: Array<Record<string, unknown>> = [];
     const invokeAndUnwrap = vi.fn(async (request: { args: Record<string, unknown> }) => {
@@ -670,6 +716,235 @@ describe("GatewayService loop 27 large service coverage", () => {
     });
 
     expect(sentArgs.map((args) => args.message)).toEqual(["part one", "part two"]);
+  });
+
+  it.each(["throws", "returns a blocked tool outcome"])(
+    "marks a chunked partial delivery for manual reconciliation when the second chunk %s",
+    async (failureMode) => {
+      const invokeAndUnwrap = vi.fn(async () => {
+        if (invokeAndUnwrap.mock.calls.length === 1) {
+          return {
+            channelKey: "discord",
+            createdAt: "2026-05-15T00:00:00.000Z",
+            deliveryId: "part-1",
+            providerMessageId: "provider-1",
+            status: "sent",
+            target: "channel-1",
+            updatedAt: "2026-05-15T00:00:00.000Z",
+          };
+        }
+        if (failureMode === "throws") {
+          throw new Error("second chunk transport failed");
+        }
+        return {
+          auditEventId: "audit-second-chunk-blocked",
+          outcome: "blocked",
+          policyReason: "second chunk blocked by policy",
+        };
+      });
+      const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+      Object.assign(gateway, {
+        buildCommsHost: vi.fn(() => ({
+          emitChannelActivity: vi.fn(),
+          emitDiscordTyping: vi.fn(),
+          getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "discord" })),
+          invokeAndUnwrap,
+          readChatAttachmentContent: vi.fn(),
+        })),
+      });
+      const sendQueuedChannelDelivery = (
+        GatewayService.prototype as unknown as {
+          sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
+        }
+      ).sendQueuedChannelDelivery;
+
+      const send = sendQueuedChannelDelivery.call(gateway, {
+        attempts: 1,
+        channelKey: "discord",
+        connectionId: "conn-1",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        deliveryId: `delivery-partial-${failureMode}`,
+        maxAttempts: 3,
+        payload: {
+          connectionId: "conn-1",
+          message: "part one",
+          messageParts: ["part one", "part two"],
+          target: "channel-1",
+        },
+        status: "running",
+        target: "channel-1",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      });
+
+      await expect(send).rejects.toMatchObject({
+        message: expect.stringContaining("partial_channel_delivery_sent: 1 of 2"),
+        deliveryStatus: "manual_reconciliation_required",
+        providerMessageId: "provider-1",
+      });
+      expect(invokeAndUnwrap).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("reports every accepted chunk when the second chunk fails only during sent-state bookkeeping", async () => {
+    const invokeAndUnwrap = vi.fn(async () =>
+      invokeAndUnwrap.mock.calls.length === 1
+        ? {
+            channelKey: "discord",
+            createdAt: "2026-05-15T00:00:00.000Z",
+            deliveryId: "part-1",
+            providerMessageId: "provider-1",
+            status: "sent",
+            target: "channel-1",
+            updatedAt: "2026-05-15T00:00:00.000Z",
+          }
+        : {
+            channelKey: "discord",
+            createdAt: "2026-05-15T00:00:01.000Z",
+            deliveryId: "part-2",
+            deliveryStatus: "manual_reconciliation_required",
+            error: "post_send_bookkeeping_failed: provider dispatch completed as provider-2, but finalization failed",
+            providerMessageId: "provider-2",
+            status: "failed",
+            target: "channel-1",
+            updatedAt: "2026-05-15T00:00:01.000Z",
+          },
+    );
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    Object.assign(gateway, {
+      buildCommsHost: vi.fn(() => ({
+        emitChannelActivity: vi.fn(),
+        emitDiscordTyping: vi.fn(),
+        getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "discord" })),
+        invokeAndUnwrap,
+        readChatAttachmentContent: vi.fn(),
+      })),
+    });
+    const sendQueuedChannelDelivery = (
+      GatewayService.prototype as unknown as {
+        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
+      }
+    ).sendQueuedChannelDelivery;
+
+    const send = sendQueuedChannelDelivery.call(gateway, {
+      attempts: 1,
+      channelKey: "discord",
+      connectionId: "conn-1",
+      createdAt: "2026-05-15T00:00:00.000Z",
+      deliveryId: "delivery-partial-post-send-bookkeeping",
+      maxAttempts: 3,
+      payload: {
+        connectionId: "conn-1",
+        message: "part one",
+        messageParts: ["part one", "part two"],
+        target: "channel-1",
+      },
+      status: "running",
+      target: "channel-1",
+      updatedAt: "2026-05-15T00:00:00.000Z",
+    });
+
+    await expect(send).rejects.toMatchObject({
+      message: expect.stringContaining("partial_channel_delivery_sent: 2 of 2"),
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "provider-2",
+    });
+    expect(invokeAndUnwrap).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves manual-reconciliation status from a failed underlying channel send", async () => {
+    const invokeAndUnwrap = vi.fn(async () => ({
+      channelKey: "slack",
+      createdAt: "2026-05-15T00:00:00.000Z",
+      deliveryId: "provider-delivery-1",
+      deliveryStatus: "manual_reconciliation_required",
+      error: "provider timed out after dispatch",
+      status: "failed",
+      target: "C123",
+      updatedAt: "2026-05-15T00:00:01.000Z",
+    }));
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    Object.assign(gateway, {
+      buildCommsHost: vi.fn(() => ({
+        emitChannelActivity: vi.fn(),
+        emitDiscordTyping: vi.fn(),
+        emitTelegramTyping: vi.fn(),
+        getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "slack" })),
+        invokeAndUnwrap,
+        readChatAttachmentContent: vi.fn(),
+      })),
+    });
+    const sendQueuedChannelDelivery = (
+      GatewayService.prototype as unknown as {
+        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
+      }
+    ).sendQueuedChannelDelivery;
+
+    await expect(
+      sendQueuedChannelDelivery.call(gateway, {
+        attempts: 1,
+        channelKey: "slack",
+        connectionId: "conn-1",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        deliveryId: "delivery-1",
+        maxAttempts: 3,
+        payload: {
+          connectionId: "conn-1",
+          message: "hello",
+          target: "C123",
+        },
+        status: "running",
+        target: "C123",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({
+      message: "provider timed out after dispatch",
+      deliveryStatus: "manual_reconciliation_required",
+    });
+    expect(invokeAndUnwrap).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a failed tool outcome instead of accepting the durable delivery as sent", async () => {
+    const invokeAndUnwrap = vi.fn(async () => ({
+      auditEventId: "audit-failed-send-1",
+      outcome: "failed",
+      policyReason: "execution error: synthetic channel tool failure",
+    }));
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    Object.assign(gateway, {
+      buildCommsHost: vi.fn(() => ({
+        emitChannelActivity: vi.fn(),
+        emitDiscordTyping: vi.fn(),
+        emitTelegramTyping: vi.fn(),
+        getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "slack" })),
+        invokeAndUnwrap,
+        readChatAttachmentContent: vi.fn(),
+      })),
+    });
+    const sendQueuedChannelDelivery = (
+      GatewayService.prototype as unknown as {
+        sendQueuedChannelDelivery(this: typeof gateway, input: Record<string, any>): Promise<Record<string, unknown>>;
+      }
+    ).sendQueuedChannelDelivery;
+
+    await expect(
+      sendQueuedChannelDelivery.call(gateway, {
+        attempts: 1,
+        channelKey: "slack",
+        connectionId: "conn-1",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        deliveryId: "delivery-tool-failed",
+        maxAttempts: 3,
+        payload: {
+          connectionId: "conn-1",
+          message: "must not be marked sent",
+          target: "C123",
+        },
+        status: "running",
+        target: "C123",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
+    ).rejects.toThrow("execution error: synthetic channel tool failure");
+    expect(invokeAndUnwrap).toHaveBeenCalledTimes(1);
   });
 
   it("creates internal tool grants, respects deny-wins, and reports failed tool payloads precisely", async () => {

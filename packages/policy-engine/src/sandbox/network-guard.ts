@@ -4,6 +4,11 @@ import { isIP } from "node:net";
 import { redactSecretText, type EgressDecision } from "@goatcitadel/contracts";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { Dispatcher } from "undici";
+import {
+  assertSafeRedirectTransition,
+  HttpMutationOutcomeUnknownError,
+  isHttpRequestSafeToRetry,
+} from "./http-request-policy.js";
 
 const DISALLOWED_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
 const DEFAULT_GLOBAL_FETCH = globalThis.fetch;
@@ -151,6 +156,7 @@ export interface FetchAllowlistedOptions {
   bodyReadTimeoutMs?: number;
   maxResponseBytes?: number;
   maxRedirects?: number;
+  trustedCrossOriginHeaders?: string[];
   init?: RequestInit;
   dnsLookup?: DnsLookupFunction;
 }
@@ -231,26 +237,47 @@ export async function fetchAllowlisted(url: string, options: FetchAllowlistedOpt
     if (!location) {
       return lastResponse;
     }
-    hops += 1;
-    if (hops > maxRedirects) {
-      throw new Error(`fetchAllowlisted blocked: too many redirects (${hops}) from ${redactUrlForError(url)}`);
-    }
     try {
-      currentUrl = new URL(location, currentUrl).toString();
-    } catch {
-      throw new Error(`fetchAllowlisted blocked: malformed redirect Location from ${redactUrlForError(url)}`);
+      hops += 1;
+      if (hops > maxRedirects) {
+        throw new Error(`fetchAllowlisted blocked: too many redirects (${hops}) from ${redactUrlForError(url)}`);
+      }
+      let nextUrl: string;
+      try {
+        nextUrl = new URL(location, currentUrl).toString();
+      } catch {
+        throw new Error(`fetchAllowlisted blocked: malformed redirect Location from ${redactUrlForError(url)}`);
+      }
+      assertSafeRedirectTransition(currentUrl, nextUrl, options.init ?? {}, options.trustedCrossOriginHeaders);
+      assertHostAllowed(nextUrl, allowlist);
+      for (const additionalAllowlist of options.additionalAllowlists ?? []) {
+        if (additionalAllowlist.length > 0) {
+          assertHostAllowed(nextUrl, additionalAllowlist);
+        }
+      }
+      currentUrl = nextUrl;
+    } catch (error) {
+      if (!isHttpRequestSafeToRetry(options.init)) {
+        throw new HttpMutationOutcomeUnknownError("fetchAllowlisted", error);
+      }
+      throw error;
     }
   }
 }
 
 export async function fetchAllowlistedOnce(url: string, options: FetchAllowlistedOptions): Promise<Response> {
   assertHostAllowed(url, options.allowlist);
+  for (const additionalAllowlist of options.additionalAllowlists ?? []) {
+    if (additionalAllowlist.length > 0) {
+      assertHostAllowed(url, additionalAllowlist);
+    }
+  }
   return fetchGuardedOnce(
     url,
     options.allowlist,
     {
       ...options.init,
-      redirect: options.init?.redirect ?? "manual",
+      redirect: "manual",
       dnsLookup: options.dnsLookup,
     },
     resolveFetchBodyReadLimits(options),
