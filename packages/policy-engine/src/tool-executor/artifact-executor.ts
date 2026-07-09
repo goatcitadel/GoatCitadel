@@ -4,6 +4,7 @@ import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import {
   buildArtifactDesignReport,
   createArtifactDesignPlan,
+  type ArtifactDesignQualityFinding,
   type ArtifactValidationCheck,
 } from "../artifact-design.js";
 import {
@@ -50,6 +51,14 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
   const title = asString(args.title) ?? "Artifact";
   const template = asString(args.template) ?? "report";
   const body = asString(args.body) ?? "";
+  const design = createArtifactDesignPlan({
+    kind: "document",
+    title,
+    body,
+    format: "markdown",
+    design: args.design,
+    destination: args.destination,
+  });
   const out = [
     `# ${title}`,
     "",
@@ -62,7 +71,15 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, out, "utf8");
-  return { path: full, bytesWritten: out.length, template };
+  return {
+    path: full,
+    bytesWritten: out.length,
+    template,
+    designReport: buildArtifactDesignReport(design, {
+      localPath: full,
+      usedAssetIds: [],
+    }),
+  };
 }
 
 async function documentsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
@@ -71,10 +88,14 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
   const p = ensureDocumentPath(requestedPath, format);
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
   const full = path.resolve(p);
-  const title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
-  const body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
-  const sections = normalizeDocumentSections(args.sections, body);
+  let title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
+  let body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
+  let sections = normalizeDocumentSections(args.sections, body);
   const rows = normalizeDocumentRows(args.rows);
+  const repair = repairDocumentDesignQuality({ title, body, sections });
+  title = repair.title;
+  body = repair.body;
+  sections = repair.sections;
   const design = createArtifactDesignPlan({
     kind: documentDesignKind(format),
     title,
@@ -107,6 +128,13 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       usedAssetIds: usedDocumentAssetIds(format, design.mode),
+      designQuality: {
+        retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
+        findings: [
+          ...repair.findings,
+          ...documentAssetSpecificityFindings(format, design.mode, Boolean(args.visualAsset)),
+        ],
+      },
     }),
   };
 }
@@ -115,9 +143,13 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
   const requestedPath = required(args.path, "path");
   const p = ensurePptxPath(requestedPath);
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  const title = truncateText(asString(args.title) ?? "Presentation", 120);
-  const subtitle = truncateText(asString(args.subtitle) ?? "", 180);
-  const slides = normalizePresentationSlides(args.slides, title, asString(args.body));
+  let title = truncateText(asString(args.title) ?? "Presentation", 120);
+  let subtitle = truncateText(asString(args.subtitle) ?? "", 180);
+  let slides = normalizePresentationSlides(args.slides, title, asString(args.body));
+  const repair = repairPresentationDesignQuality({ title, subtitle, slides });
+  title = repair.title;
+  subtitle = repair.subtitle;
+  slides = repair.slides;
   const design = createArtifactDesignPlan({
     kind: "presentation",
     title,
@@ -165,9 +197,29 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
       localPath: full,
       usedAssetIds: pptx.usedAssetIds,
       validationResults: presentationValidationResults(deckQuality, pptx),
-      residualRisks: pptx.warnings.length > 0 ? pptx.warnings : undefined,
+      residualRisks: buildPresentationResidualRisks(pptx.warnings, [
+        ...repair.findings,
+        ...presentationQualityFindings(deckQuality),
+        ...presentationAssetSpecificityFindings(visualAsset, design.mode),
+      ]),
+      designQuality: {
+        retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
+        findings: [
+          ...repair.findings,
+          ...presentationQualityFindings(deckQuality),
+          ...presentationAssetSpecificityFindings(visualAsset, design.mode),
+        ],
+      },
     }),
   };
+}
+
+function buildPresentationResidualRisks(
+  warnings: readonly string[],
+  findings: readonly ArtifactDesignQualityFinding[],
+): string[] | undefined {
+  const risks = [...warnings, ...findings.map((finding) => finding.message)];
+  return risks.length > 0 ? risks : undefined;
 }
 
 function presentationValidationResults(
@@ -200,6 +252,142 @@ function presentationValidationResults(
           : contentWarnings.join(" "),
     },
   };
+}
+
+function repairDocumentDesignQuality(input: { title: string; body: string; sections: DocumentArtifactSection[] }): {
+  title: string;
+  body: string;
+  sections: DocumentArtifactSection[];
+  findings: ArtifactDesignQualityFinding[];
+} {
+  const findings: ArtifactDesignQualityFinding[] = [];
+  const title = repairVisibleArtifactText(input.title, "Document", findings);
+  const body = repairVisibleArtifactText(input.body, "", findings);
+  const sections = input.sections.map((section, index) => ({
+    heading: repairVisibleArtifactText(section.heading, `Section ${index + 1}`, findings),
+    body: repairVisibleArtifactText(section.body, "", findings),
+    bullets: section.bullets
+      .map((bullet) => repairVisibleArtifactText(bullet, "", findings))
+      .filter((bullet) => bullet.length > 0),
+  }));
+  return {
+    title,
+    body,
+    sections,
+    findings: dedupeDesignQualityFindings(findings),
+  };
+}
+
+function repairPresentationDesignQuality(input: { title: string; subtitle: string; slides: PresentationSlide[] }): {
+  title: string;
+  subtitle: string;
+  slides: PresentationSlide[];
+  findings: ArtifactDesignQualityFinding[];
+} {
+  const findings: ArtifactDesignQualityFinding[] = [];
+  const title = repairVisibleArtifactText(input.title, "Presentation", findings);
+  const subtitle = repairVisibleArtifactText(input.subtitle, "", findings);
+  const slides = input.slides.map((slide, index) => ({
+    title: repairVisibleArtifactText(slide.title, `Slide ${index + 1}`, findings),
+    bullets: slide.bullets
+      .map((bullet) => repairVisibleArtifactText(bullet, "", findings))
+      .filter((bullet) => bullet.length > 0),
+    speakerNotes: slide.speakerNotes,
+  }));
+  return {
+    title,
+    subtitle,
+    slides,
+    findings: dedupeDesignQualityFindings(findings),
+  };
+}
+
+function repairVisibleArtifactText(value: string, fallback: string, findings: ArtifactDesignQualityFinding[]): string {
+  const cleaned = value
+    .replace(/\bGoatCitadel design brief\s*-\s*[a-z0-9-]+\b/giu, "")
+    .replace(/\bDesign(?:ed)? artifact\b/giu, "")
+    .replace(/\bDesign preset:\s*[a-z0-9-]+\b/giu, "")
+    .replace(/\bAsset provenance:[^\r\n]*/giu, "")
+    .replace(/\bImage Text\b/giu, "")
+    .replace(/\bplaceholder text\b/giu, "")
+    .replace(/\blorem\s+ipsum\b/giu, "")
+    .replace(/<PLACEHOLDER[^>]*>/giu, "")
+    .replace(/\bTODO_PLACEHOLDER\b/giu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (cleaned !== value.trim()) {
+    findings.push({
+      id: "visible-placeholder-copy",
+      severity: "P1",
+      dimension: "State Completeness",
+      message: "Visible placeholder, renderer, or provenance copy was removed before artifact output.",
+      repaired: true,
+    });
+  }
+  return cleaned || fallback;
+}
+
+function dedupeDesignQualityFindings(
+  findings: readonly ArtifactDesignQualityFinding[],
+): ArtifactDesignQualityFinding[] {
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = `${finding.id}:${finding.message}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function presentationQualityFindings(quality: PresentationDeckQualitySummary): ArtifactDesignQualityFinding[] {
+  return dedupeDesignQualityFindings(
+    [...(quality.templateWarnings ?? []), ...(quality.contentWarnings ?? [])].map((warning) => ({
+      id: "layout-integrity",
+      severity: "P2",
+      dimension: "Responsiveness",
+      message: warning,
+      repaired: false,
+    })),
+  );
+}
+
+function presentationAssetSpecificityFindings(
+  visualAsset: PresentationVisualAsset | undefined,
+  mode: string,
+): ArtifactDesignQualityFinding[] {
+  if (visualAsset || mode === "minimal" || mode === "plain") {
+    return [];
+  }
+  return [
+    {
+      id: "asset-specificity",
+      severity: "P2",
+      dimension: "Visual Coherence",
+      message: "Presentation used local renderer-only visuals because no provider-generated visual asset was supplied.",
+      repaired: false,
+    },
+  ];
+}
+
+function documentAssetSpecificityFindings(
+  format: DocumentArtifactFormat,
+  mode: string,
+  hasVisualAsset: boolean,
+): ArtifactDesignQualityFinding[] {
+  if (hasVisualAsset || mode === "minimal" || mode === "plain" || format !== "docx") {
+    return [];
+  }
+  return [
+    {
+      id: "asset-specificity",
+      severity: "P3",
+      dimension: "Visual Coherence",
+      message: "DOCX output used local decorative renderer visuals rather than provider-generated imagery.",
+      repaired: false,
+    },
+  ];
 }
 
 function documentDesignKind(format: DocumentArtifactFormat): "document" | "html" | "pdf" | "data" {

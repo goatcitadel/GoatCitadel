@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LoadedSkill } from "@goatcitadel/contracts";
 import { resolveSkillActivation } from "./activation.js";
+import { GENERATED_SKILL_ROUTING_HINTS } from "./routing-hints.generated.js";
 
 function skill(name: string, requires: string[] = [], keywords: string[] = []): LoadedSkill {
   return {
@@ -55,5 +56,25 @@ describe("resolveSkillActivation", () => {
     expect(result.selected.map((item) => item.name)).toEqual(["auditor"]);
     expect(result.reasons.auditor).toEqual(["explicit"]);
     expect(result.reasons.planner).toBeUndefined();
+  });
+
+  it("activates design-intelligence for artifact, deck, and document terms in chat", () => {
+    const design = {
+      ...skill("design-intelligence"),
+      routingHints: GENERATED_SKILL_ROUTING_HINTS["design-intelligence"],
+    };
+
+    const result = resolveSkillActivation(
+      {
+        text: "Create a real PowerPoint slide deck and a PDF brief with good document design.",
+      },
+      [design],
+    );
+
+    expect(result.selected.map((item) => item.name)).toEqual(["design-intelligence"]);
+    expect(result.reasons["design-intelligence"]).toEqual(
+      expect.arrayContaining(["routing_keyword", "routing_phrase"]),
+    );
+    expect(result.selected[0]?.confidence).toBeGreaterThan(0.85);
   });
 });

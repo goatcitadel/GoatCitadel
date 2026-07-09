@@ -165,6 +165,10 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       ([input]) => input.toolName === "presentations.create",
     )?.[0];
     expect(presentationProbe?.args?.path).toBe("./workspace/goatcitadel_out/tool-access-probe.pptx");
+    expect(presentationProbe?.args?.design).toMatchObject({
+      mode: "polished",
+      skillId: "design-intelligence",
+    });
     expect(extractRequestToolNames(capturedRequest)).toContain("presentations_create");
     expect(invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -172,6 +176,10 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         args: expect.objectContaining({
           path: expect.stringContaining("top-10-things-to-do-in-free-time"),
           title: "Top 10 Things To Do In Free Time",
+          design: expect.objectContaining({
+            mode: "polished",
+            skillId: "design-intelligence",
+          }),
         }),
       }),
     );
@@ -242,6 +250,10 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
             bytesBase64: "generated-image-base64",
             source: "openai",
             sourceModel: "gpt-image-2",
+          }),
+          design: expect.objectContaining({
+            mode: "polished",
+            skillId: "design-intelligence",
           }),
         }),
       }),
@@ -345,6 +357,17 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         placeholder: expect.stringContaining(safeWriteFallbackDir),
       }),
     });
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "presentations.create",
+        args: expect.objectContaining({
+          design: expect.objectContaining({
+            mode: "polished",
+            skillId: "design-intelligence",
+          }),
+        }),
+      }),
+    );
     expect(traceChunk).toMatchObject({
       trace: expect.objectContaining({
         status: "waiting_for_user_input",
@@ -396,6 +419,10 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
 
     const documentProbe = evaluateToolAccess.mock.calls.find(([input]) => input.toolName === "documents.create")?.[0];
     expect(documentProbe?.args?.path).toBe("./workspace/goatcitadel_out/tool-access-probe.docx");
+    expect(documentProbe?.args?.design).toMatchObject({
+      mode: "polished",
+      skillId: "design-intelligence",
+    });
     expect(extractRequestToolNames(capturedRequest)).toContain("documents_create");
     expect(invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -404,6 +431,10 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
           path: expect.stringContaining("top-10-things-to-do-in-free-time"),
           format: "pdf",
           title: "Top 10 Things To Do In Free Time",
+          design: expect.objectContaining({
+            mode: "polished",
+            skillId: "design-intelligence",
+          }),
         }),
       }),
     );

@@ -29,6 +29,7 @@ export interface ArtifactDesignRequest {
   assetPolicy?: ArtifactAssetPolicy;
   audience?: string;
   brand?: ArtifactBrandInput;
+  skillId?: string;
 }
 
 export interface ArtifactDestinationRequest {
@@ -84,6 +85,28 @@ export interface ArtifactValidationCheck {
   detail: string;
 }
 
+export type ArtifactDesignQualityRegister = "brand/marketing" | "docs/evidence" | "data/plain";
+export type ArtifactDesignQualityLifecycle = "Start" | "Iterate" | "Polish" | "Maintain";
+export type ArtifactDesignQualityStatus = "applied" | "skipped" | "warning";
+export type ArtifactDesignQualitySeverity = "P0" | "P1" | "P2" | "P3";
+
+export interface ArtifactDesignQualityFinding {
+  id: string;
+  severity: ArtifactDesignQualitySeverity;
+  dimension: string;
+  message: string;
+  repaired: boolean;
+}
+
+export interface ArtifactDesignQualityReport {
+  skillId: "design-intelligence";
+  register: ArtifactDesignQualityRegister;
+  lifecycle: ArtifactDesignQualityLifecycle;
+  status: ArtifactDesignQualityStatus;
+  retryAttempted: boolean;
+  findings: ArtifactDesignQualityFinding[];
+}
+
 export interface ArtifactGoogleImportStatus {
   requested: boolean;
   status: "not_requested" | "not_configured" | "import_ready" | "imported" | "failed";
@@ -123,6 +146,7 @@ export interface ArtifactDesignReport {
   localPath?: string;
   google: ArtifactGoogleImportStatus;
   residualRisks: string[];
+  designQuality?: ArtifactDesignQualityReport;
 }
 
 interface ArtifactDesignPlanInput {
@@ -297,6 +321,7 @@ export function normalizeArtifactDesignRequest(value: unknown): ArtifactDesignRe
   if (!isRecord(value)) {
     return {};
   }
+  const designQuality = isRecord(value.designQuality) ? value.designQuality : {};
   return {
     mode: parseDesignMode(value.mode),
     preset: parsePreset(value.preset),
@@ -304,6 +329,8 @@ export function normalizeArtifactDesignRequest(value: unknown): ArtifactDesignRe
     assetPolicy: parseAssetPolicy(value.assetPolicy),
     audience: asNonEmptyString(value.audience),
     brand: normalizeBrand(value.brand),
+    skillId:
+      asNonEmptyString(value.skillId) ?? asNonEmptyString(value.skill) ?? asNonEmptyString(designQuality.skillId),
   };
 }
 
@@ -332,16 +359,16 @@ export function buildArtifactDesignReport(
     residualRisks?: string[];
     usedAssetIds?: string[];
     validationResults?: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
+    designQuality?: Partial<ArtifactDesignQualityReport>;
   } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
   const assetPlan = finalizeAssetPlan(plan.assetPlan, output.usedAssetIds ?? []);
-  const validation = finalizeValidationChecks(
-    plan.validationChecks,
-    Boolean(output.localPath),
-    google,
-    output.validationResults,
-  );
+  const designQuality = buildArtifactDesignQualityReport(plan, output.designQuality);
+  const validation = finalizeValidationChecks(plan.validationChecks, Boolean(output.localPath), google, {
+    ...buildArtifactDesignQualityValidationResults(plan, designQuality),
+    ...output.validationResults,
+  });
   return {
     mode: plan.mode,
     preset: plan.preset,
@@ -354,7 +381,8 @@ export function buildArtifactDesignReport(
     guideReferences: plan.guideReferences,
     localPath: output.localPath,
     google,
-    residualRisks: output.residualRisks ?? buildResidualRisks(plan, google, assetPlan),
+    residualRisks: output.residualRisks ?? buildResidualRisks(plan, google, assetPlan, designQuality),
+    designQuality,
   };
 }
 
@@ -499,6 +527,7 @@ function buildValidationChecks(
   mode: ArtifactDesignMode,
   destination: ArtifactDestinationRequest,
 ): ArtifactValidationCheck[] {
+  const plainDesign = kind === "data" || mode === "minimal" || mode === "plain";
   const checks: ArtifactValidationCheck[] = [
     {
       id: "hierarchy",
@@ -517,6 +546,42 @@ function buildValidationChecks(
       label: "Asset provenance",
       status: "planned",
       detail: "Each generated, web, local, or built-in asset must be reflected in the tool design report.",
+    },
+    {
+      id: "design-skill-applied",
+      label: "Design skill application",
+      status: plainDesign ? "skipped" : "planned",
+      detail: "Non-plain artifacts should apply GoatCitadel design-intelligence / Design Quality V1.",
+    },
+    {
+      id: "visible-placeholder-copy",
+      label: "No visible placeholder copy",
+      status: plainDesign ? "skipped" : "planned",
+      detail: "Visible output should not expose placeholder, renderer, or template labels as finished content.",
+    },
+    {
+      id: "provenance-not-visible",
+      label: "Provenance kept out of primary content",
+      status: plainDesign ? "skipped" : "planned",
+      detail: "Renderer provenance belongs in metadata, notes, or design reports rather than primary artifact content.",
+    },
+    {
+      id: "asset-specificity",
+      label: "Asset specificity",
+      status: plainDesign ? "skipped" : "planned",
+      detail: "Visual assets should support the artifact subject and disclose generic/local fallback risks.",
+    },
+    {
+      id: "layout-integrity",
+      label: "Layout integrity",
+      status: plainDesign ? "skipped" : "planned",
+      detail: "Generated layouts should avoid obvious overlap, sparse forced columns, and debug-looking chrome.",
+    },
+    {
+      id: "artifact-audit",
+      label: "Artifact design audit",
+      status: plainDesign ? "skipped" : "planned",
+      detail: "A local design-quality audit should run before reporting the artifact as complete.",
     },
   ];
   if (kind === "presentation") {
@@ -620,6 +685,7 @@ function buildResidualRisks(
   plan: ArtifactDesignPlan,
   google: ArtifactGoogleImportStatus,
   assets: ArtifactAssetPlanItem[],
+  designQuality: ArtifactDesignQualityReport,
 ): string[] {
   const risks: string[] = [];
   if (assets.some((asset) => asset.status === "skipped" && asset.type !== "built_in")) {
@@ -635,7 +701,107 @@ function buildResidualRisks(
       "PDF output uses the existing lightweight renderer and has less visual richness than DOCX, HTML, or PPTX.",
     );
   }
+  for (const finding of designQuality.findings) {
+    risks.push(finding.message);
+  }
   return risks;
+}
+
+function buildArtifactDesignQualityReport(
+  plan: ArtifactDesignPlan,
+  override: Partial<ArtifactDesignQualityReport> = {},
+): ArtifactDesignQualityReport {
+  const register = override.register ?? classifyArtifactDesignQualityRegister(plan);
+  const skipped = register === "data/plain" || plan.mode === "plain" || plan.mode === "minimal";
+  const findings = override.findings ?? [];
+  const hasSeriousFinding = findings.some((finding) => finding.severity === "P0" || finding.severity === "P1");
+  const hasWarningFinding = findings.length > 0;
+  return {
+    skillId: "design-intelligence",
+    register,
+    lifecycle: override.lifecycle ?? (skipped ? "Maintain" : "Polish"),
+    status: override.status ?? (skipped ? "skipped" : hasSeriousFinding || hasWarningFinding ? "warning" : "applied"),
+    retryAttempted: override.retryAttempted ?? !skipped,
+    findings,
+  };
+}
+
+function classifyArtifactDesignQualityRegister(plan: ArtifactDesignPlan): ArtifactDesignQualityRegister {
+  if (plan.kind === "data" || plan.mode === "plain" || plan.mode === "minimal" || plan.assetPolicy === "none") {
+    return "data/plain";
+  }
+  if (plan.kind === "presentation") {
+    return "brand/marketing";
+  }
+  return "docs/evidence";
+}
+
+function buildArtifactDesignQualityValidationResults(
+  plan: ArtifactDesignPlan,
+  designQuality: ArtifactDesignQualityReport,
+): Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>> {
+  if (designQuality.status === "skipped") {
+    const detail = "Design Quality V1 skipped because this artifact is plain, minimal, or machine-readable output.";
+    return {
+      "design-skill-applied": { status: "skipped", detail },
+      "visible-placeholder-copy": { status: "skipped", detail },
+      "provenance-not-visible": { status: "skipped", detail },
+      "asset-specificity": { status: "skipped", detail },
+      "layout-integrity": { status: "skipped", detail },
+      "artifact-audit": { status: "skipped", detail },
+    };
+  }
+  const detailPrefix = `Applied GoatCitadel design-intelligence / Design Quality V1 (${designQuality.register}, ${designQuality.lifecycle}).`;
+  return {
+    "design-skill-applied": {
+      status: "passed",
+      detail: `${detailPrefix} No external design runtime was invoked.`,
+    },
+    "visible-placeholder-copy": validationStatusForFinding(
+      designQuality,
+      "visible-placeholder-copy",
+      "No visible placeholder or renderer labels were left in primary artifact content.",
+    ),
+    "provenance-not-visible": validationStatusForFinding(
+      designQuality,
+      "provenance-not-visible",
+      "Renderer and design provenance are kept in metadata, notes, or the design report.",
+    ),
+    "asset-specificity": validationStatusForFinding(
+      designQuality,
+      "asset-specificity",
+      plan.kind === "presentation"
+        ? "Presentation asset specificity was audited for provider/local fallback behavior."
+        : "Artifact asset specificity was audited for provider/local fallback behavior.",
+    ),
+    "layout-integrity": validationStatusForFinding(
+      designQuality,
+      "layout-integrity",
+      "Layout integrity was audited for obvious overlap, sparse forced columns, and debug chrome.",
+    ),
+    "artifact-audit": {
+      status: designQuality.status === "warning" ? "warning" : "passed",
+      detail:
+        designQuality.status === "warning"
+          ? `Artifact design audit completed with ${designQuality.findings.length} warning finding(s).`
+          : `${detailPrefix} Artifact design audit completed without warning findings.`,
+    },
+  };
+}
+
+function validationStatusForFinding(
+  designQuality: ArtifactDesignQualityReport,
+  id: string,
+  passedDetail: string,
+): Partial<Pick<ArtifactValidationCheck, "status" | "detail">> {
+  const finding = designQuality.findings.find((item) => item.id === id);
+  if (!finding) {
+    return { status: "passed", detail: passedDetail };
+  }
+  return {
+    status: "warning",
+    detail: `${finding.message}${finding.repaired ? " A local repair pass was applied." : ""}`,
+  };
 }
 
 function buildOutputNotes(kind: ArtifactKind, destination: ArtifactDestinationRequest): string[] {

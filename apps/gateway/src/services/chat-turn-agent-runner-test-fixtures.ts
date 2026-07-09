@@ -149,6 +149,13 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
             path: { type: "string" },
             title: { type: "string" },
             subtitle: { type: "string" },
+            design: {
+              type: "object",
+              properties: {
+                mode: { type: "string" },
+                skillId: { type: "string" },
+              },
+            },
             slides: {
               type: "array",
               items: {
@@ -183,6 +190,13 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
             format: { type: "string" },
             title: { type: "string" },
             body: { type: "string" },
+            design: {
+              type: "object",
+              properties: {
+                mode: { type: "string" },
+                skillId: { type: "string" },
+              },
+            },
             sections: {
               type: "array",
               items: {

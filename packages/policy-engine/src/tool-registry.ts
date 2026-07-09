@@ -39,6 +39,11 @@ const ARTIFACT_DESIGN_ARG_SCHEMA = {
     visualLevel: { type: "string", enum: ["minimal", "polished", "rich"] },
     assetPolicy: { type: "string", enum: ["auto", "generated-first", "web-first", "built-in-only", "none"] },
     audience: { type: "string" },
+    skillId: {
+      type: "string",
+      enum: ["design-intelligence"],
+      description: "Use GoatCitadel Design Quality V1 for non-plain artifact output.",
+    },
     brand: {
       type: "object",
       properties: {
@@ -1096,6 +1101,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Use when the user asks for a real document file such as DOCX, PDF, HTML, Markdown, text, JSON, or CSV.",
       "Do not satisfy a requested document artifact with text-only prose when this tool is available.",
       "Use design.mode minimal or plain for raw data, logs, JSON, CSV, code, or explicitly plain outputs.",
+      "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to design-intelligence so Design Quality V1 is reflected in the artifact design report.",
+      "Keep renderer provenance in the design report rather than visible document body copy unless the user explicitly asks for an evidence appendix.",
     ],
   },
   {
@@ -1172,6 +1179,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Use when the user asks for PowerPoint, PPTX, slides, a slide deck, or a presentation file.",
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
+      "Set design.skillId to design-intelligence for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
+      "Prefer provider-generated visuals with provenance when available; otherwise the design report must disclose local-renderer fallback visuals.",
     ],
   },
   {

@@ -117,7 +117,7 @@ function buildHtml(input: DocumentArtifactInput): string {
   const sections = normalizedSections(input);
   const design = resolveDocumentDesign(input, "html");
   const body = [
-    `<header class="cover"><span class="eyebrow">${escapeHtml(design.preset)}</span><h1>${escapeHtml(input.title)}</h1>${
+    `<header class="cover"><h1>${escapeHtml(input.title)}</h1>${
       input.body?.trim() ? `<p>${escapeHtml(input.body.trim())}</p>` : ""
     }</header>`,
     ...sections.map((section) => {
@@ -181,7 +181,7 @@ async function buildDocx(input: DocumentArtifactInput): Promise<Buffer> {
 
 async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
   const design = resolveDocumentDesign(input, "docx");
-  const heroImage = await buildDocxVisualBuffer(input.title, design);
+  const heroImage = await buildDocxVisualBuffer(design);
   const children: Array<Paragraph | Table> = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
@@ -193,18 +193,6 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
           size: 44,
           color: design.tokens.text,
           font: design.typography.headingFont,
-        }),
-      ],
-    }),
-    new Paragraph({
-      spacing: { after: 180 },
-      children: [
-        new TextRun({
-          text: `Design preset: ${design.preset}`,
-          bold: true,
-          color: design.tokens.accent,
-          size: 18,
-          font: design.typography.bodyFont,
         }),
       ],
     }),
@@ -272,19 +260,6 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
       children.push(calloutTable(section.bullets[0], design));
     }
   });
-  children.push(
-    new Paragraph({
-      spacing: { before: 240 },
-      children: [
-        new TextRun({
-          text: "Asset provenance: renderer-generated visual and built-in document styling; external web assets require source/license metadata.",
-          color: design.tokens.mutedText,
-          size: 16,
-          font: design.typography.bodyFont,
-        }),
-      ],
-    }),
-  );
   const doc = new Document({
     title: input.title,
     creator: "GoatCitadel",
@@ -336,7 +311,6 @@ function buildHtmlCss(design: ArtifactDesignPlan): string {
     `:root{--bg:${cssColor(design.tokens.background)};--surface:${cssColor(design.tokens.surface)};--text:${cssColor(design.tokens.text)};--muted:${cssColor(design.tokens.mutedText)};--accent:${cssColor(design.tokens.accent)};--accent2:${cssColor(design.tokens.accent2)};--border:${cssColor(design.tokens.border)}}`,
     `body{font-family:${cssFont(design.typography.bodyFont)},Arial,sans-serif;line-height:1.55;max-width:960px;margin:0 auto;padding:40px 24px 64px;background:var(--bg);color:var(--text)}`,
     `.cover{background:var(--surface);border:1px solid var(--border);border-left:8px solid var(--accent);padding:36px 40px;margin-bottom:28px;box-shadow:0 18px 40px rgba(15,23,42,.08)}`,
-    `.eyebrow{display:block;color:var(--accent);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}`,
     `h1{font-family:${cssFont(design.typography.headingFont)},Arial,sans-serif;font-size:44px;line-height:1.05;margin:0 0 16px;color:var(--text)}`,
     `h2{font-family:${cssFont(design.typography.headingFont)},Arial,sans-serif;font-size:24px;margin:0 0 10px;color:var(--text)}`,
     `p{color:var(--muted);font-size:16px;margin:0 0 14px}`,
@@ -397,7 +371,7 @@ function calloutTable(text: string, design: ArtifactDesignPlan): Table {
   });
 }
 
-async function buildDocxVisualBuffer(title: string, design: ArtifactDesignPlan): Promise<Buffer> {
+async function buildDocxVisualBuffer(design: ArtifactDesignPlan): Promise<Buffer> {
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">`,
     `<rect width="1200" height="420" rx="40" fill="#${design.tokens.surface}"/>`,
@@ -407,7 +381,6 @@ async function buildDocxVisualBuffer(title: string, design: ArtifactDesignPlan):
     `<rect x="88" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent}" opacity="0.9"/>`,
     `<rect x="292" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
     `<rect x="496" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
-    `<text x="88" y="115" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="38" font-weight="700">${escapeSvgText(title.slice(0, 46))}</text>`,
     `</svg>`,
   ].join("");
   return sharp(Buffer.from(svg, "utf8")).png().toBuffer();
@@ -593,30 +566,28 @@ function xmlDocument(body: string): string {
 }
 
 function escapeXml(value: string): string {
-  return value
-    // eslint-disable-next-line no-control-regex -- strip C0 control chars illegal in XML 1.0 (tab/newline/CR preserved)
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
-    .replace(/[<>&"']/g, (char) => {
-    switch (char) {
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case "&":
-        return "&amp;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&apos;";
-    }
-  });
+  return (
+    value
+      // eslint-disable-next-line no-control-regex -- strip C0 control chars illegal in XML 1.0 (tab/newline/CR preserved)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .replace(/[<>&"']/g, (char) => {
+        switch (char) {
+          case "<":
+            return "&lt;";
+          case ">":
+            return "&gt;";
+          case "&":
+            return "&amp;";
+          case '"':
+            return "&quot;";
+          default:
+            return "&apos;";
+        }
+      })
+  );
 }
 
 function escapeHtml(value: string): string {
-  return escapeXml(value);
-}
-
-function escapeSvgText(value: string): string {
   return escapeXml(value);
 }
 

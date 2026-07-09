@@ -86,7 +86,15 @@ describe("tool registry", () => {
     expect(tool?.preferredForIntents).toContain("powerpoint");
     expect(tool?.argSchema).toMatchObject({
       required: ["path", "title", "slides"],
+      properties: {
+        design: {
+          properties: {
+            skillId: { enum: ["design-intelligence"] },
+          },
+        },
+      },
     });
+    expect(tool?.usageHints?.join("\n")).toContain("Design Quality V1");
   });
 
   it("exposes document creation as a governed artifact tool", () => {
@@ -102,7 +110,15 @@ describe("tool registry", () => {
     expect(tool?.preferredForIntents).toContain("document_generation");
     expect(tool?.argSchema).toMatchObject({
       required: ["path", "title"],
+      properties: {
+        design: {
+          properties: {
+            skillId: { enum: ["design-intelligence"] },
+          },
+        },
+      },
     });
+    expect(tool?.usageHints?.join("\n")).toContain("Design Quality V1");
   });
 
   it("registers session.search as a safe, read-only recall tool (P2-S4a)", () => {

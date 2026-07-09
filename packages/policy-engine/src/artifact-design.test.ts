@@ -94,6 +94,16 @@ describe("artifact design brief selection", () => {
     expect(report.validation.filter((check) => check.status === "planned")).toHaveLength(0);
     expect(report.validation.find((check) => check.id === "pptx-package")?.status).toBe("passed");
     expect(report.validation.find((check) => check.id === "presentation-template")?.status).toBe("passed");
+    expect(report.validation.find((check) => check.id === "design-skill-applied")?.status).toBe("passed");
+    expect(report.validation.find((check) => check.id === "artifact-audit")?.status).toBe("passed");
+    expect(report.designQuality).toMatchObject({
+      skillId: "design-intelligence",
+      register: "brand/marketing",
+      lifecycle: "Polish",
+      status: "applied",
+      retryAttempted: true,
+      findings: [],
+    });
   });
 
   it("allows renderer-specific validation details in design reports", () => {
@@ -118,5 +128,52 @@ describe("artifact design brief selection", () => {
       detail: "One content slide had no supporting bullets.",
     });
     expect(report.validation.find((check) => check.id === "presentation-template")?.status).toBe("passed");
+  });
+
+  it("skips design-quality visual checks for raw data reports", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "data",
+      format: "csv",
+      title: "Raw Export",
+    });
+
+    const report = buildArtifactDesignReport(plan, { localPath: "out.csv" });
+
+    expect(report.designQuality).toMatchObject({
+      skillId: "design-intelligence",
+      register: "data/plain",
+      status: "skipped",
+      retryAttempted: false,
+    });
+    expect(report.validation.find((check) => check.id === "design-skill-applied")?.status).toBe("skipped");
+    expect(report.validation.find((check) => check.id === "asset-specificity")?.status).toBe("skipped");
+  });
+
+  it("surfaces artifact design-quality findings as warnings and residual risks", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Weekend Fun",
+    });
+
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      designQuality: {
+        findings: [
+          {
+            id: "asset-specificity",
+            severity: "P2",
+            dimension: "Visual Coherence",
+            message: "Presentation used local renderer-only visuals.",
+            repaired: false,
+          },
+        ],
+      },
+    });
+
+    expect(report.designQuality?.status).toBe("warning");
+    expect(report.validation.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
+    expect(report.validation.find((check) => check.id === "artifact-audit")?.status).toBe("warning");
+    expect(report.residualRisks).toContain("Presentation used local renderer-only visuals.");
   });
 });

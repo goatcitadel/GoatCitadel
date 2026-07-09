@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- Presentation packaging, fallback OOXML, and visual diagnostics share local helpers in this module. */
 import { createArtifactDesignPlan, type ArtifactDesignPlan } from "./artifact-design.js";
 import {
   resolveContentSlideRenderer,
@@ -241,16 +240,6 @@ function drawSlideFrame(
     fill: { color: design.tokens.border, transparency: 40 },
     line: { color: design.tokens.border, transparency: 100 },
   });
-  slide.addText(`GoatCitadel design brief - ${design.preset}`, {
-    x: 0.54,
-    y: 7.03,
-    w: 6,
-    h: 0.18,
-    fontFace: design.typography.bodyFont,
-    fontSize: 6.5,
-    color: design.tokens.mutedText,
-    margin: 0,
-  });
   slide.addText(String(index + 1).padStart(2, "0"), {
     x: 12.0,
     y: 6.96,
@@ -316,17 +305,6 @@ function drawHeroSlide(
     fill: { color: design.tokens.accent },
     line: { color: design.tokens.accent, transparency: 100 },
   });
-  slide.addText("Designed artifact", {
-    x: 1.04,
-    y: 4.35,
-    w: 2.2,
-    h: 0.26,
-    fontFace: design.typography.bodyFont,
-    fontSize: 9,
-    bold: true,
-    color: design.tokens.accent,
-    margin: 0,
-  });
   slide.addImage({
     data: visualData,
     x: 8.05,
@@ -362,7 +340,7 @@ function drawContentSlide(
   const renderer = layoutDecision?.renderer === "hero" ? "image-text" : layoutDecision?.renderer;
   const resolvedRenderer = renderer ?? resolveContentSlideRenderer(design, index, content);
   if (resolvedRenderer === "two-column") {
-    drawTwoColumnSlide(pptx, slide, content, design, visualData);
+    drawTwoColumnSlide(pptx, slide, content, design);
     return;
   }
   if (resolvedRenderer === "stat-callout") {
@@ -407,7 +385,6 @@ function drawTwoColumnSlide(
   slide: PptxSlideLike,
   content: PresentationSlide,
   design: ArtifactDesignPlan,
-  visualData: string,
 ): void {
   const left = content.bullets.slice(0, Math.ceil(content.bullets.length / 2));
   const right = content.bullets.slice(left.length);
@@ -429,16 +406,6 @@ function drawTwoColumnSlide(
   addBulletRows(pptx, slide, right, design, 6.74, 1.82, 4.45, 3.95, {
     compact: true,
     startIndex: left.length + 1,
-  });
-  slide.addImage({
-    data: visualData,
-    x: 10.95,
-    y: 5.25,
-    w: 1.25,
-    h: 0.75,
-    transparency: 12,
-    altText: `Small generated accent visual for ${content.title}`,
-    objectName: "GoatCitadel accent visual",
   });
 }
 
@@ -676,9 +643,6 @@ async function buildAbstractVisualDataUri(seed: AbstractVisualSeed, design: Arti
     const y = 1105 + ((hash >>> (index + 2)) % 70);
     return `<circle cx="${x}" cy="${y}" r="${34 - Math.min(index, 3) * 3}" fill="#${colors[index % colors.length]}" opacity="0.82"/>`;
   }).join("");
-  const rendererLabel = titleCaseLabel(seed.renderer.replace(/[-_]+/g, " "));
-  const slideTitle = truncateSvgText(seed.slideTitle ?? seed.deckTitle ?? "", 34);
-  const subtitle = truncateSvgText(seed.bullets[0] ?? seed.deckTitle ?? "", 46);
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 1200 1500">`,
     `<rect width="1200" height="1500" rx="48" fill="#${design.tokens.surface}"/>`,
@@ -688,9 +652,6 @@ async function buildAbstractVisualDataUri(seed: AbstractVisualSeed, design: Arti
     `<path d="M155 720 H1030" stroke="#${design.tokens.border}" stroke-width="8" opacity="0.75"/>`,
     bars,
     markers,
-    `<text x="155" y="1238" fill="#${design.tokens.text}" font-family="Arial, sans-serif" font-size="50" font-weight="700">${escapeSvgText(slideTitle)}</text>`,
-    `<text x="155" y="1312" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="32" font-weight="600">${escapeSvgText(rendererLabel)}</text>`,
-    `<text x="155" y="1370" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="28">${escapeSvgText(subtitle)}</text>`,
     `</svg>`,
   ].join("");
   const sharp = (await import("sharp")).default;
@@ -728,14 +689,6 @@ function summarizePresentationRenderError(error: unknown): string {
   return "unknown renderer failure";
 }
 
-function titleCaseLabel(value: string): string {
-  return value
-    .split(" ")
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1).toLowerCase()}`)
-    .join(" ");
-}
-
 async function loadPptxGen(): Promise<PptxGenConstructor> {
   const module = (await import("pptxgenjs")) as unknown as { default?: PptxGenConstructor } & PptxGenConstructor;
   return module.default ?? module;
@@ -759,23 +712,6 @@ function toBuffer(value: PptxOutput): Buffer {
     throw new Error("Unexpected browser Blob output from pptxgenjs nodebuffer writer");
   }
   return Buffer.from(value as Uint8Array);
-}
-
-function escapeSvgText(value: string): string {
-  return value.replace(/[<>&"']/g, (char) => {
-    switch (char) {
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case "&":
-        return "&amp;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&apos;";
-    }
-  });
 }
 
 function xmlEntry(name: string, xml: string): ZipEntry {
@@ -1024,23 +960,25 @@ function xmlDocument(body: string): string {
 }
 
 function escapeXml(value: string): string {
-  return value
-    // eslint-disable-next-line no-control-regex -- strip C0 control chars illegal in XML 1.0 (tab/newline/CR preserved)
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
-    .replace(/[<>&"']/g, (char) => {
-    switch (char) {
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case "&":
-        return "&amp;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&apos;";
-    }
-  });
+  return (
+    value
+      // eslint-disable-next-line no-control-regex -- strip C0 control chars illegal in XML 1.0 (tab/newline/CR preserved)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .replace(/[<>&"']/g, (char) => {
+        switch (char) {
+          case "<":
+            return "&lt;";
+          case ">":
+            return "&gt;";
+          case "&":
+            return "&amp;";
+          case '"':
+            return "&quot;";
+          default:
+            return "&apos;";
+        }
+      })
+  );
 }
 
 export function createStoredZip(entries: ZipEntry[]): Buffer {

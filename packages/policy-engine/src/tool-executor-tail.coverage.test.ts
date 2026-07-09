@@ -328,11 +328,18 @@ describe("tool executor tail coverage", () => {
     const designReport = created.designReport as {
       assetSources?: Array<{ id: string; status: string }>;
       validation?: Array<{ id: string; status: string }>;
+      designQuality?: { skillId: string; status: string; retryAttempted: boolean };
     };
     expect(designReport.assetSources?.find((asset) => asset.id === "renderer-generated-visual")?.status).toBe("used");
     expect(designReport.validation?.find((check) => check.id === "pptx-package")?.status).toBe("passed");
     expect(designReport.validation?.find((check) => check.id === "presentation-template")?.status).toBe("passed");
     expect(designReport.validation?.find((check) => check.id === "content-density")?.status).toBe("passed");
+    expect(designReport.validation?.find((check) => check.id === "design-skill-applied")?.status).toBe("passed");
+    expect(designReport.designQuality).toMatchObject({
+      skillId: "design-intelligence",
+      status: "applied",
+      retryAttempted: true,
+    });
     expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(deck.includes("ppt/presentation.xml")).toBe(true);
     expect(deck.includes("ppt/slides/slide1.xml")).toBe(true);
@@ -398,6 +405,123 @@ describe("tool executor tail coverage", () => {
     expect(docxBytes.includes("word/media/")).toBe(true);
     expect(pdfBytes.subarray(0, 5).toString("utf8")).toBe("%PDF-");
     expect(pdfBytes.includes("/Type /Catalog")).toBe(true);
+  });
+
+  it("warns when a media-dependent deck falls back to local-only visuals", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const deckPath = path.join(root, "local-visual-deck.pptx");
+
+    const created = await executeTool(
+      request("presentations.create", {
+        path: deckPath,
+        title: "Weekend Fun",
+        slides: [{ title: "Pick A Plan", bullets: ["Choose one active option", "Choose one restful option"] }],
+      }),
+      config,
+      storage,
+    );
+
+    const designReport = created.designReport as {
+      validation?: Array<{ id: string; status: string; detail: string }>;
+      designQuality?: { status: string; retryAttempted: boolean; findings: Array<{ id: string }> };
+      residualRisks?: string[];
+    };
+    expect(designReport.designQuality).toMatchObject({
+      status: "warning",
+      retryAttempted: true,
+      findings: expect.arrayContaining([expect.objectContaining({ id: "asset-specificity" })]),
+    });
+    expect(designReport.validation?.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
+    expect(designReport.residualRisks?.join("\n")).toContain("local renderer-only visuals");
+  }, 20_000);
+
+  it("keeps renderer provenance out of visible HTML and PDF document content", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const htmlPath = path.join(root, "free-time-report.html");
+    const pdfPath = path.join(root, "free-time-report.pdf");
+
+    await executeTool(
+      request("documents.create", {
+        path: htmlPath,
+        format: "html",
+        title: "Free Time Report",
+        body: "Choose one active, one creative, and one restful option.",
+      }),
+      config,
+      storage,
+    );
+    await executeTool(
+      request("documents.create", {
+        path: pdfPath,
+        format: "pdf",
+        title: "Free Time Report",
+        body: "Choose one active, one creative, and one restful option.",
+      }),
+      config,
+      storage,
+    );
+
+    const html = fs.readFileSync(htmlPath, "utf8");
+    const pdf = fs.readFileSync(pdfPath, "utf8");
+    expect(html).not.toMatch(/Design preset|Asset provenance|clean-professional|wellness/u);
+    expect(pdf).not.toMatch(/Design preset|Asset provenance/u);
+  });
+
+  it("keeps raw document artifacts minimal and skips design-quality visual checks", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const jsonPath = path.join(root, "raw-export.json");
+    const csvPath = path.join(root, "raw-export.csv");
+    const txtPath = path.join(root, "raw-export.txt");
+
+    const json = await executeTool(
+      request("documents.create", {
+        path: jsonPath,
+        format: "json",
+        title: "Raw Export",
+        rows: [{ name: "a", value: 1 }],
+      }),
+      config,
+      storage,
+    );
+    const csv = await executeTool(
+      request("documents.create", {
+        path: csvPath,
+        format: "csv",
+        title: "Raw Export",
+        rows: [{ name: "a", value: 1 }],
+      }),
+      config,
+      storage,
+    );
+    const txt = await executeTool(
+      request("documents.create", {
+        path: txtPath,
+        format: "txt",
+        title: "Raw Export",
+        body: "plain text export",
+      }),
+      config,
+      storage,
+    );
+
+    for (const result of [json, csv, txt]) {
+      const designReport = result.designReport as {
+        mode?: string;
+        assetPolicy?: string;
+        validation?: Array<{ id: string; status: string }>;
+        designQuality?: { status: string; retryAttempted: boolean };
+      };
+      expect(designReport.mode).toBe("minimal");
+      expect(designReport.assetPolicy).toBe("none");
+      expect(designReport.designQuality).toMatchObject({ status: "skipped", retryAttempted: false });
+      expect(designReport.validation?.find((check) => check.id === "asset-specificity")?.status).toBe("skipped");
+    }
   });
 
   it("reports Google destination fallback while preserving local artifacts", async () => {

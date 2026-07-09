@@ -4997,6 +4997,10 @@ export class ChatTurnAgentRunner {
       };
     }
 
+    if (!input.evalIntegrityTurn) {
+      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent);
+    }
+
     if (LOCAL_PATH_TOOL_NAMES.has(input.toolName) && typeof args.path === "string") {
       const blockedPathReason = describeInvalidLocalToolPath(args.path);
       if (blockedPathReason) {
@@ -5552,6 +5556,7 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
       path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),
       title: "Tool access probe",
       slides: [{ title: "Probe", bullets: ["Verifies the tool can write inside the workspace jail."] }],
+      design: { mode: "polished", skillId: "design-intelligence" },
     };
   }
   if (toolName === "documents.create") {
@@ -5560,6 +5565,7 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
       format: "docx",
       title: "Tool access probe",
       body: "Verifies the tool can write inside the workspace jail.",
+      design: { mode: "polished", skillId: "design-intelligence" },
     };
   }
   if (toolName === "artifacts.create") {
@@ -5586,6 +5592,63 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
     };
   }
   return {};
+}
+
+function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, unknown>, userContent: string): void {
+  if (toolName !== "presentations.create" && toolName !== "documents.create" && toolName !== "artifacts.create") {
+    return;
+  }
+  const rawDesign = coerceArtifactDesignRecord(args.design);
+  const existingMode = typeof rawDesign.mode === "string" ? rawDesign.mode.toLowerCase() : undefined;
+  const format = inferArtifactDesignFormat(toolName, args, userContent);
+  if (existingMode === "plain" || existingMode === "minimal" || isPlainArtifactDesignFormat(format, userContent)) {
+    args.design = {
+      ...rawDesign,
+      mode: existingMode === "plain" ? "plain" : "minimal",
+    };
+    return;
+  }
+  args.design = {
+    ...rawDesign,
+    mode: existingMode ?? "polished",
+    skillId: "design-intelligence",
+  };
+}
+
+function inferArtifactDesignFormat(toolName: string, args: Record<string, unknown>, userContent: string): string {
+  if (typeof args.format === "string" && args.format.trim()) {
+    return args.format.trim().toLowerCase();
+  }
+  if (typeof args.path === "string") {
+    const extension = args.path.match(/\.([a-z0-9_-]{1,12})(?:$|[?#])/iu)?.[1];
+    if (extension) {
+      return extension.toLowerCase();
+    }
+  }
+  if (toolName === "presentations.create") {
+    return "pptx";
+  }
+  if (/\bjson\b/iu.test(userContent)) {
+    return "json";
+  }
+  if (/\bcsv\b/iu.test(userContent)) {
+    return "csv";
+  }
+  if (/\b(?:txt|plain text|text file|logs?)\b/iu.test(userContent)) {
+    return "txt";
+  }
+  return toolName === "documents.create" ? "docx" : "md";
+}
+
+function isPlainArtifactDesignFormat(format: string, userContent: string): boolean {
+  return (
+    /^(?:json|csv|txt|text|log|logs|code)$/iu.test(format) ||
+    /\b(?:plain|raw|machine-readable|json|csv|logs?|code block)\b/iu.test(userContent)
+  );
+}
+
+function coerceArtifactDesignRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function scoreToolForTurn(input: {

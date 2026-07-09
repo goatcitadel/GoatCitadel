@@ -241,6 +241,84 @@ describe("presentation PPTX layout selection", () => {
     expect(visuals[1]?.dataUri).not.toBe(visuals[0]?.dataUri);
   });
 
+  it("keeps renderer provenance and local visual labels out of visible slide content", async () => {
+    const visibleText: string[] = [];
+    const notesText: string[] = [];
+    const imageObjects: Array<Record<string, unknown>> = [];
+    const localVisualSvg: string[] = [];
+
+    vi.doMock("sharp", () => ({
+      default: (input: Buffer) => {
+        localVisualSvg.push(input.toString("utf8"));
+        return {
+          png: () => ({
+            toBuffer: async () => Buffer.from("mock-png"),
+          }),
+        };
+      },
+    }));
+    vi.doMock("pptxgenjs", () => ({
+      default: class MockPptxGen {
+        public layout = "";
+        public author = "";
+        public company = "";
+        public subject = "";
+        public title = "";
+        public theme = {};
+        public ShapeType = { rect: "rect", roundRect: "roundRect" };
+
+        public addSlide() {
+          const slide: Record<string, unknown> = {};
+          slide.addShape = () => slide;
+          slide.addImage = (options: Record<string, unknown>) => {
+            imageObjects.push(options);
+            return slide;
+          };
+          slide.addText = (text: string) => {
+            visibleText.push(String(text));
+            return slide;
+          };
+          slide.addNotes = (notes: string) => {
+            notesText.push(notes);
+            return slide;
+          };
+          return slide;
+        }
+
+        public async write() {
+          return Buffer.from("PKmock");
+        }
+      },
+    }));
+
+    const result = await createPresentationPptxWithDiagnostics({
+      title: "Weekend Fun",
+      subtitle: "Simple activities",
+      slides: [
+        {
+          title: "Choose The Mood",
+          bullets: ["Go outside", "Cook something relaxed", "Try a local event"],
+        },
+        {
+          title: "Keep It Easy",
+          bullets: [
+            "Pick one active option",
+            "Pick one creative option",
+            "Pick one restful option",
+            "Keep the budget low",
+            "Leave room for spontaneity",
+          ],
+        },
+      ],
+    });
+
+    expect(result.renderer).toBe("pptxgenjs");
+    expect(visibleText.join("\n")).not.toMatch(/GoatCitadel design brief|Designed artifact|Image Text/u);
+    expect(notesText.join("\n")).toContain("GoatCitadel design provenance");
+    expect(localVisualSvg.join("\n")).not.toContain("<text");
+    expect(imageObjects.some((image) => image.objectName === "GoatCitadel accent visual")).toBe(false);
+  });
+
   it("keeps generated visuals safe when raw callers omit display strings", async () => {
     const design = createArtifactDesignPlan({
       kind: "presentation",

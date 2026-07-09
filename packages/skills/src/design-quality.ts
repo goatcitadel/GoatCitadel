@@ -32,7 +32,16 @@ const REQUIRED_SKILL_PHRASES = [
   "five-dimension critique",
 ] as const;
 
-const REQUIRED_ROUTING_PHRASES = ["design quality", "anti-slop", "visual polish", "design-system audit"] as const;
+const REQUIRED_ROUTING_PHRASES = [
+  "design quality",
+  "anti-slop",
+  "visual polish",
+  "design-system audit",
+  "document design",
+  "presentation design",
+  "pptx",
+  "artifact",
+] as const;
 
 const REQUIRED_PROOF_SCRIPTS = [
   "verify:design:quality",
