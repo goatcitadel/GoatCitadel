@@ -304,6 +304,11 @@ async function httpPost(request: ToolInvokeRequest, config: ToolPolicyConfig, st
   if (grantAllowlist && grantAllowlist.length > 0) {
     assertHostAllowed(url, grantAllowlist);
   }
+  if (request.signal?.aborted) {
+    throw request.signal.reason instanceof Error
+      ? request.signal.reason
+      : new Error("http.post aborted before dispatch");
+  }
   try {
     const res = await fetchAllowlisted(
       url,

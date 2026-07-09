@@ -5680,6 +5680,55 @@ describe("executeTool", () => {
     });
   });
 
+  it("keeps an already-aborted HTTP mutation local and undispatched", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response("should not be reached", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+    const reason = controller.signal.reason as Error;
+
+    expect(reason.name).toBe("AbortError");
+
+    await expect(
+      executeTool(
+        {
+          ...toolRequest("http.post", { url: "https://example.com/api", body: { ok: true } }),
+          signal: controller.signal,
+        },
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toBe(reason);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an HTTP mutation abort unknown once fetch dispatch has started", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      controller.abort();
+      throw init?.signal?.reason ?? controller.signal.reason;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      executeTool(
+        {
+          ...toolRequest("http.post", { url: "https://example.com/api", body: { ok: true } }),
+          signal: controller.signal,
+        },
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toMatchObject({
+      name: "HttpMutationOutcomeUnknownError",
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("covers memory write, read, search, and embeddings tools", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const harness = createExecutorKnowledgeHarness();

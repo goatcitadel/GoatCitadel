@@ -407,7 +407,11 @@ function isExplicitlyRetrySafeMcpSessionFailure(result: McpRuntimeInvocationResu
 }
 
 function markAmbiguousMcpToolFailure(result: McpRuntimeInvocationResult): McpRuntimeInvocationResult {
-  if (result.ok || (result.failurePhase !== "post_dispatch" && !isExpiredMcpSessionError(result.error))) {
+  if (
+    result.ok ||
+    result.failurePhase === "pre_dispatch" ||
+    (result.failurePhase !== "post_dispatch" && !isExpiredMcpSessionError(result.error))
+  ) {
     return result;
   }
   return {

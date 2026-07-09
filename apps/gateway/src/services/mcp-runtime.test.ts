@@ -821,6 +821,65 @@ describe("mcp runtime", () => {
     );
   });
 
+  it("preserves an explicit pre-dispatch MCP failure even when its error looks like an expired session", async () => {
+    let toolCallCount = 0;
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response.writeHead(200, { "content-type": "application/json", "mcp-session-id": "remote-pre-dispatch" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: {} },
+                serverInfo: { name: "remote-pre-dispatch-test", version: "1.0.0" },
+              },
+            }),
+          );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        if (message.method === "tools/call") {
+          toolCallCount += 1;
+          response.writeHead(200, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: -32001,
+                message: "expired session before tool dispatch",
+                data: { phase: "pre_dispatch", retrySafe: false },
+              },
+            }),
+          );
+        }
+      },
+      async (url) => {
+        const result = await invokeMcpRuntimeTool(
+          createRemoteTestServer(url),
+          { toolName: "external.create_record", arguments: { title: "not dispatched" } },
+          1000,
+          { networkAllowlist: [new URL(url).host] },
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("expired session before tool dispatch"),
+          retrySafe: false,
+          failurePhase: "pre_dispatch",
+        });
+        expect(result.externalOutcome).toBeUndefined();
+        expect(result.manualReconciliationRequired).toBeUndefined();
+        expect(result.retryCount).toBeUndefined();
+        expect(toolCallCount).toBe(1);
+      },
+    );
+  });
+
   it("rejects oversized remote MCP JSON responses without echoing response bodies", async () => {
     await withRemoteMcpHttpServer(
       ({ message, response }) => {
