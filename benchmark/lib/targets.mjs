@@ -45,7 +45,9 @@ function readJsonIfExists(filePath) {
   try {
     return JSON.parse(text);
   } catch (error) {
-    throw new Error(`Failed to parse ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Failed to parse ${filePath}: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
   }
 }
 

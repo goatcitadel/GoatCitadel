@@ -1,4 +1,4 @@
-export async function runRuntimeTruthLane(context, options = {}, deps) {
+export async function runRuntimeTruthLane(context, _options = {}, deps) {
   const {
     NEXT_UI_PACKAGE,
     assertBrowserConsoleHealthy,

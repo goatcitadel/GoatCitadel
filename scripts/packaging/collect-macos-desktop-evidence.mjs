@@ -251,7 +251,7 @@ function tail(content, lineCount) {
   return lines.slice(Math.max(0, lines.length - lineCount)).join("\n");
 }
 
-function renderReport({ logFiles, logSummaries, sseReceivedReady, statusJson }) {
+function renderReport({ logSummaries, sseReceivedReady, statusJson }) {
   const checkedAt = new Date().toISOString();
   const commandRows = commands
     .map((entry) => {

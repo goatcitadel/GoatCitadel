@@ -1,4 +1,4 @@
-export async function runMeshReadinessLane(context, options = {}, deps) {
+export async function runMeshReadinessLane(context, _options = {}, deps) {
   const {
     assertOk,
     emptyArtifacts,

@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { A2A_FULL_LANE_COMMANDS, FAST_LANE_COMMANDS, deriveProviderStatus, runFastLane } from "./scenarios.mjs";
+import {
+  A2A_FULL_LANE_COMMANDS,
+  FAST_LANE_COMMANDS,
+  buildOrchestrationPerformanceScenarioResult,
+  deriveProviderStatus,
+  runFastLane,
+} from "./scenarios.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
 
 test("fast verification lane keeps required fast commands", () => {
@@ -100,6 +106,54 @@ test("fast lane perf budget reports passed, warn, and failed status", () => {
     "warn",
   );
   assert.equal(buildFastLanePerfPayload({ ...base, durationMs: 301_000 }).status, "failed");
+});
+
+test("failing orchestration performance gates retain their structured report", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-perf-failure-"));
+  const reportPath = path.join(artifactRoot, "perf", "orchestration-performance.json");
+  const diagnosticsRoot = path.join(artifactRoot, "diagnostics");
+  try {
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    await fs.mkdir(diagnosticsRoot, { recursive: true });
+    await fs.writeFile(
+      reportPath,
+      JSON.stringify({
+        passed: false,
+        aggregate: { measuredRunCount: 11, totalRetries: 2, totalDuplicateDispatches: 1 },
+        comparisons: {
+          serialVsParallel: {
+            serialMedianEndToEndMs: 100,
+            parallelMedianEndToEndMs: 80,
+            medianSpeedupRatio: 1.25,
+          },
+        },
+        performanceGate: { thresholdFailures: ["parallel p95 exceeded 100ms"] },
+      }),
+      "utf8",
+    );
+
+    const result = await buildOrchestrationPerformanceScenarioResult(
+      { artifactRoot },
+      {
+        code: 1,
+        durationMs: 123,
+        stdout: "raw stdout",
+        stderr: "raw stderr",
+        stdoutPath: path.join(diagnosticsRoot, "perf.stdout.log"),
+        stderrPath: path.join(diagnosticsRoot, "perf.stderr.log"),
+      },
+      reportPath,
+    );
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "parallel p95 exceeded 100ms");
+    assert.equal(result.metrics.measuredRunCount, 11);
+    assert.equal(result.metrics.totalRetries, 2);
+    assert.equal(result.metrics.totalDuplicateDispatches, 1);
+    assert.deepEqual(result.artifacts.perf, ["perf/orchestration-performance.json"]);
+  } finally {
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
 });
 
 test("fail-fast finalization still writes manifest, summary, junit, and timing artifact", async () => {

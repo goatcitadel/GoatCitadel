@@ -117,6 +117,20 @@ test("release certificate treats verify:fast as direct-only proof", () => {
   assert.match(writer, /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/);
 });
 
+test("release proof requires measured orchestration performance", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const workflow = fs.readFileSync(
+    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(writer, /"verify:orchestration:perf"/);
+  assert.match(
+    writer,
+    /\{ name: "verify:orchestration:perf", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true \}/,
+  );
+  assert.match(workflow, /laneScript:\s*verify:orchestration:perf/);
+});
+
 test("release certificate records additive exact-SHA summary fields", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
   assert.match(writer, /targetCommit:\s*commit/);
@@ -156,6 +170,41 @@ test("release certificate records parity closure gates for top 1.0 parity gaps",
   assert.match(workflow, /laneScript:\s*verify:desktop/);
   assert.match(workflow, /laneScript:\s*verify:channels:runtime/);
   assert.match(workflow, /laneScript:\s*verify:extensions:package/);
+});
+
+test("every release-proof matrix lane produces verification-context artifacts", () => {
+  const workflow = fs.readFileSync(
+    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
+    "utf8",
+  );
+  const packageJson = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  const laneScripts = [...workflow.matchAll(/laneScript:\s*([^\s#]+)/g)].map((match) => match[1]);
+
+  assert.ok(laneScripts.length > 0, "release-proof matrix should declare lane scripts");
+  for (const laneScript of laneScripts) {
+    const command = packageJson.scripts?.[laneScript];
+    assert.equal(typeof command, "string", `${laneScript} should exist in package.json`);
+    assert.match(
+      command,
+      /scripts\/verification\/run\.mjs/,
+      `${laneScript} must create a verification manifest before review and artifact upload`,
+    );
+  }
+});
+
+test("repository hygiene discovers every tracked script test", () => {
+  const packageJson = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.match(packageJson.scripts["verify:repo:hygiene"], /scripts\/\*\*\/\*\.test\.mjs/);
+});
+
+test("eslint audits verification, packaging, and release modules", () => {
+  const config = fs.readFileSync(new URL("../../eslint.config.mjs", import.meta.url), "utf8");
+  const ignores = config.match(/ignores:\s*\[([\s\S]*?)\]/)?.[1] ?? "";
+  assert.doesNotMatch(ignores, /"\*\*\/\*\.mjs"/);
+  assert.doesNotMatch(ignores, /"\*\*\/\*\.cjs"/);
+  assert.match(config, /files:\s*\["\*\*\/\*\.mjs", "\*\*\/\*\.cjs"\]/);
+  assert.match(config, /"@typescript-eslint\/no-unused-vars": \[\s*"error"/);
+  assert.match(config, /"scripts\/verification\/lib\/scenarios\/\*\*\/\*\.mjs"/);
 });
 
 test("release certificate records operator truth proof and provider metadata gaps", () => {

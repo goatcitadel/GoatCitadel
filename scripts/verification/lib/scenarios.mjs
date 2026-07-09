@@ -208,6 +208,109 @@ export async function runSkillsCatalogLane(context) {
   );
 }
 
+export async function runDesktopLane(context) {
+  return await runRawVerificationCommandLane(context, {
+    id: "desktop.platform-proof",
+    lane: "desktop",
+    title: "Native desktop build, test, and launcher proof",
+    subsystem: "desktop",
+    script: "verify:desktop:raw",
+  });
+}
+
+export async function runExtensionsPackageLane(context) {
+  return await runRawVerificationCommandLane(context, {
+    id: "extensions.package-proof",
+    lane: "extensions-package",
+    title: "Extensions SDK package artifact proof",
+    subsystem: "extensions",
+    script: "verify:extensions:package:raw",
+  });
+}
+
+export async function runOrchestrationPerformanceLane(context) {
+  await runScenario(
+    context,
+    {
+      id: "orchestration.performance.runtime-benchmark",
+      lane: "orchestration-performance",
+      title: "Deterministic routed orchestration runtime benchmark",
+      subsystem: "orchestration",
+    },
+    async () => {
+      const reportPath = path.join(context.artifactRoot, "perf", "orchestration-performance.json");
+      const result = await runCommand(
+        pnpmCommand(),
+        ["verify:orchestration:perf:raw", "--output", reportPath],
+        {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: "orchestration.performance.runtime-benchmark",
+        },
+      );
+      return await buildOrchestrationPerformanceScenarioResult(context, result, reportPath);
+    },
+  );
+}
+
+export async function buildOrchestrationPerformanceScenarioResult(context, result, reportPath) {
+  // The performance CLI writes its report before setting a failing exit code.
+  // Preserve that structured failure evidence instead of replacing it with raw
+  // process output when a threshold is exceeded.
+  const report = await readJson(reportPath).catch(() => undefined);
+  const passed = result.code === 0 && report?.passed === true;
+  return {
+    status: passed ? "passed" : "failed",
+    error: passed
+      ? undefined
+      : clampString(report?.performanceGate?.thresholdFailures?.join("; ") || result.stderr || result.stdout, 1200),
+    metrics: {
+      exitCode: result.code,
+      durationMs: result.durationMs,
+      measuredRunCount: report?.aggregate?.measuredRunCount ?? 0,
+      serialMedianEndToEndMs: report?.comparisons?.serialVsParallel?.serialMedianEndToEndMs,
+      parallelMedianEndToEndMs: report?.comparisons?.serialVsParallel?.parallelMedianEndToEndMs,
+      medianSpeedupRatio: report?.comparisons?.serialVsParallel?.medianSpeedupRatio,
+      totalRetries: report?.aggregate?.totalRetries ?? 0,
+      totalDuplicateDispatches: report?.aggregate?.totalDuplicateDispatches ?? 0,
+    },
+    artifacts: {
+      diagnostics: [],
+      screenshots: [],
+      traces: [],
+      logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+      perf: report ? [relativeToRun(context, reportPath)] : [],
+      playwright: [],
+    },
+  };
+}
+
+async function runRawVerificationCommandLane(context, definition) {
+  await runScenario(context, definition, async () => {
+    const result = await runCommand(pnpmCommand(), [definition.script], {
+      cwd: repoRoot,
+      artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+      logName: definition.id,
+    });
+    return {
+      status: result.code === 0 ? "passed" : "failed",
+      error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+      metrics: {
+        exitCode: result.code,
+        durationMs: result.durationMs,
+      },
+      artifacts: {
+        diagnostics: [],
+        screenshots: [],
+        traces: [],
+        logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+        perf: [],
+        playwright: [],
+      },
+    };
+  });
+}
+
 export async function runSecurityEvalsLane(context) {
   return await runSecurityEvalsLaneImpl(context, verificationLaneDeps());
 }
@@ -663,7 +766,7 @@ async function runAgenticProofScenario(context, definition) {
   );
 }
 
-export async function runDeepCoreLane(context, options = {}) {
+export async function runDeepCoreLane(context, _options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: true,
     gatewayEnv: {
@@ -1431,7 +1534,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
   );
 }
 
-export async function runOperatorProofLane(context, options = {}) {
+export async function runOperatorProofLane(context, _options = {}) {
   await runScenario(
     context,
     {
@@ -2037,7 +2140,7 @@ export async function runMeshReadinessLane(context, options = {}) {
   return await runMeshReadinessLaneImpl(context, options, verificationLaneDeps());
 }
 
-export async function runBackupRoundtripLane(context, options = {}) {
+export async function runBackupRoundtripLane(context, _options = {}) {
   const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-backup-roundtrip`);
   const backupRoot = path.join(runtimeRoot, ".GoatCitadel", "backups");
   let stack = await startVerificationStack(context, {
@@ -2427,7 +2530,7 @@ function filterVisualItemsBySlug(items, rawSlugs, label) {
   return selected;
 }
 
-export async function runDeepEcosystemLane(context, options = {}) {
+export async function runDeepEcosystemLane(context, _options = {}) {
   const verificationTarget = resolveVerificationTargetContext();
   const verificationPackageName = verificationTarget.packageName;
   const stack = await startVerificationStack(context, {
@@ -2895,7 +2998,7 @@ async function assertHighRiskRouteFamiliesAreOperatorGated(gatewayUrl, manifestI
   }
 }
 
-export async function runUiParityLane(context, options = {}) {
+export async function runUiParityLane(context, _options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: false,
     gatewayEnv: {
@@ -3065,7 +3168,7 @@ export async function runUiParityLane(context, options = {}) {
   }
 }
 
-export async function runMemoryTruthLane(context, options = {}) {
+export async function runMemoryTruthLane(context, _options = {}) {
   let stack;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   try {
@@ -3220,7 +3323,7 @@ export async function runMemoryTruthLane(context, options = {}) {
   }
 }
 
-export async function runRealtimeTruthLane(context, options = {}) {
+export async function runRealtimeTruthLane(context, _options = {}) {
   let stack;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   try {

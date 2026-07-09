@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,7 +37,7 @@ describe("coverage tooling", () => {
     }
   });
 
-  it("enforces strict100 across file, line, branch, and function coverage", () => {
+  it("enforces strict100 across file, line, branch, and function coverage", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-gate-"));
     try {
       fs.mkdirSync(path.join(tempDir, "artifacts", "coverage"), { recursive: true });
@@ -60,6 +61,7 @@ describe("coverage tooling", () => {
         path.join(tempDir, "artifacts", "coverage", "coverage-summary.json"),
         JSON.stringify({
           status: "success",
+          sourceFingerprint: await buildCoverageSourceFingerprint(tempDir),
           sourceFiles: 2,
           executableSourceFiles: 1,
           nonExecutableSourceFiles: 1,
@@ -88,6 +90,77 @@ describe("coverage tooling", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects a successful coverage summary from different source content", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-stale-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "apps", "demo", "src"), { recursive: true });
+      fs.mkdirSync(path.join(tempDir, "artifacts", "coverage"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "apps", "demo", "src", "index.ts"), "export const current = true;\n");
+      fs.writeFileSync(
+        path.join(tempDir, "artifacts", "coverage", "coverage-summary.json"),
+        JSON.stringify({
+          status: "success",
+          sourceFingerprint: "sha256:stale",
+          linePercent: 100,
+          branchPercent: 100,
+          functionPercent: 100,
+        }),
+      );
+
+      const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-gate.mjs")], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}\n${result.stdout}`, /does not match current source content/);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes generated coverage directories from source provenance", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-fingerprint-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "apps", "demo", "src"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "apps", "demo", "src", "index.ts"), "export const stable = true;\n");
+      const before = await buildCoverageSourceFingerprint(tempDir);
+      fs.mkdirSync(path.join(tempDir, "apps", "demo", "coverage-smoke", "tmp"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempDir, "apps", "demo", "coverage-smoke", "tmp", "coverage.json"),
+        JSON.stringify({ generated: Math.random() }),
+      );
+      const after = await buildCoverageSourceFingerprint(tempDir);
+
+      assert.equal(after, before);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes shared test discovery configuration in source provenance", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-config-fingerprint-"));
+    try {
+      fs.writeFileSync(path.join(tempDir, "vitest.shared.ts"), "export const restoredTestExclude = [];\n");
+      const before = await buildCoverageSourceFingerprint(tempDir);
+      fs.writeFileSync(path.join(tempDir, "vitest.shared.ts"), "export const restoredTestExclude = ['**/*.test.ts'];\n");
+      const after = await buildCoverageSourceFingerprint(tempDir);
+
+      assert.notEqual(after, before);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ratchets fresh gateway and shared coverage with a stability margin", () => {
+    const source = fs.readFileSync(path.join(scriptsDir, "coverage-collect.mjs"), "utf8");
+    const tier = source.match(/id: "gateway-shared-contracts",[\s\S]*?sourcePrefixes:/)?.[0] ?? "";
+    assert.match(tier, /lineThreshold:\s*58/);
+    assert.match(tier, /currentLinePercent:\s*60\.6/);
+    assert.match(tier, /enforcedLineThreshold:\s*58/);
+    assert.match(tier, /nextLineThreshold:\s*60/);
   });
 
   it("reports uncovered branch and function locations", () => {

@@ -1,4 +1,4 @@
-export async function runSurfaceRegressionLane(context, options = {}, deps) {
+export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   const {
     assertBrowserConsoleHealthy,
     assertLegacyRedirectResolution,

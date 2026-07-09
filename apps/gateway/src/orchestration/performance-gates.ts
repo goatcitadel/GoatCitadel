@@ -60,13 +60,36 @@ export function buildOrchestrationPerformanceReport(input: {
   generatedAt?: string;
 }): OrchestrationPerformanceReport {
   const thresholds = { ...DEFAULT_ORCHESTRATION_PERFORMANCE_THRESHOLDS, ...input.thresholds };
-  const latencies = input.samples
-    .map((sample) => Math.max(0, Date.parse(sample.finishedAt) - Date.parse(sample.startedAt)))
-    .sort((left, right) => left - right);
-  const totalCostUsd = sum(input.samples.map((sample) => sample.costUsd ?? 0));
-  const totalRetries = sum(input.samples.map((sample) => sample.retryCount ?? 0));
-  const totalWaits = sum(input.samples.map((sample) => sample.waitCount ?? 0));
-  const duplicateDispatches = sum(input.samples.map((sample) => sample.duplicateDispatchCount ?? 0));
+  const validationFailures: string[] = [];
+  const latencies: number[] = [];
+  const costs: number[] = [];
+  const retries: number[] = [];
+  const waits: number[] = [];
+  const duplicates: number[] = [];
+
+  if (input.samples.length === 0) {
+    validationFailures.push("at least one performance sample is required");
+  }
+  for (const sample of input.samples) {
+    const startedAt = Date.parse(sample.startedAt);
+    const finishedAt = Date.parse(sample.finishedAt);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) {
+      validationFailures.push(`sample ${sample.sampleId} has invalid timestamps`);
+    } else if (finishedAt < startedAt) {
+      validationFailures.push(`sample ${sample.sampleId} finished before it started`);
+    } else {
+      latencies.push(finishedAt - startedAt);
+    }
+    costs.push(validateNonNegativeNumber(sample, "costUsd", validationFailures));
+    retries.push(validateNonNegativeInteger(sample, "retryCount", validationFailures));
+    waits.push(validateNonNegativeInteger(sample, "waitCount", validationFailures));
+    duplicates.push(validateNonNegativeInteger(sample, "duplicateDispatchCount", validationFailures));
+  }
+  latencies.sort((left, right) => left - right);
+  const totalCostUsd = sum(costs);
+  const totalRetries = sum(retries);
+  const totalWaits = sum(waits);
+  const duplicateDispatches = sum(duplicates);
   const latencyMs = {
     total: sum(latencies),
     p50: percentile(latencies, 0.5),
@@ -75,6 +98,7 @@ export function buildOrchestrationPerformanceReport(input: {
     max: latencies.at(-1) ?? 0,
   };
   const thresholdFailures = [
+    ...validationFailures,
     latencyMs.p95 > thresholds.maxP95LatencyMs
       ? `p95 latency ${latencyMs.p95}ms exceeded ${thresholds.maxP95LatencyMs}ms`
       : undefined,
@@ -117,4 +141,36 @@ function percentile(values: number[], percentileValue: number): number {
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function validateNonNegativeNumber(
+  sample: OrchestrationPerformanceSample,
+  field: "costUsd",
+  failures: string[],
+): number {
+  const value = sample[field];
+  if (value === undefined) {
+    return 0;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    failures.push(`sample ${sample.sampleId} has invalid ${field}`);
+    return 0;
+  }
+  return value;
+}
+
+function validateNonNegativeInteger(
+  sample: OrchestrationPerformanceSample,
+  field: "retryCount" | "waitCount" | "duplicateDispatchCount",
+  failures: string[],
+): number {
+  const value = sample[field];
+  if (value === undefined) {
+    return 0;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    failures.push(`sample ${sample.sampleId} has invalid ${field}`);
+    return 0;
+  }
+  return value;
 }

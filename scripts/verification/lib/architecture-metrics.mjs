@@ -68,6 +68,69 @@ function createMetricsSourceFile(source) {
   return ts.createSourceFile("architecture-metrics-source.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
+/**
+ * Counts member reads rooted at a symbol named `host` whose declaration has an
+ * explicit host/port object type. This intentionally ignores text, comments,
+ * URL.host, and untyped callback variables that the previous regex counted.
+ */
+export function countHostMemberAccesses(source, fileName = "architecture-metrics-source.ts") {
+  const normalizedFileName = path.resolve(fileName);
+  const compilerOptions = {
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest,
+  };
+  const sourceFile = ts.createSourceFile(normalizedFileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const compilerHost = ts.createCompilerHost(compilerOptions, true);
+  compilerHost.fileExists = (requestedFileName) => path.resolve(requestedFileName) === normalizedFileName;
+  compilerHost.readFile = (requestedFileName) =>
+    path.resolve(requestedFileName) === normalizedFileName ? source : undefined;
+  compilerHost.getSourceFile = (requestedFileName) =>
+    path.resolve(requestedFileName) === normalizedFileName ? sourceFile : undefined;
+  const program = ts.createProgram([normalizedFileName], compilerOptions, compilerHost);
+  const checker = program.getTypeChecker();
+  const boundSourceFile = program.getSourceFile(normalizedFileName) ?? sourceFile;
+  let count = 0;
+
+  const visit = (node) => {
+    if (ts.isPropertyAccessExpression(node)) {
+      const rootHost = resolveHostIdentifier(node.expression);
+      if (rootHost && isTypedHostSymbol(checker.getSymbolAtLocation(rootHost), boundSourceFile)) {
+        count += 1;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(boundSourceFile);
+  return count;
+}
+
+function resolveHostIdentifier(expression) {
+  if (ts.isIdentifier(expression) && expression.text === "host") {
+    return expression;
+  }
+  if (
+    ts.isPropertyAccessExpression(expression) &&
+    expression.name.text === "host" &&
+    expression.expression.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    return expression.name;
+  }
+  return undefined;
+}
+
+function isTypedHostSymbol(symbol, sourceFile) {
+  return Boolean(
+    symbol?.declarations?.some((declaration) => {
+      if (!declaration.type) {
+        return false;
+      }
+      const typeText = declaration.type.getText(sourceFile);
+      return /\b[$A-Z_a-z][$\w]*Host[$\w]*\b/.test(typeText) || ts.isTypeLiteralNode(declaration.type);
+    }),
+  );
+}
+
 function hasExportModifier(node) {
   return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
 }
@@ -126,7 +189,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
-    const count = countMatches(content, /\bhost\./g);
+    const count = countHostMemberAccesses(content, filePath);
     if (count > 0) {
       hostCallbacksByFile[path.relative(rootDir, filePath).replaceAll("\\", "/")] = count;
       totalHostCallbacks += count;
@@ -535,7 +598,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
     metrics,
     baseline,
     key: "settingsHostCallbackCount",
-    label: "settings/auth host.* callback count",
+    label: "settings/auth typed host callback count",
     regressions,
     improvements,
   });
@@ -543,7 +606,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
     metrics,
     baseline,
     key: "chatHostCallbackCount",
-    label: "chat host.* callback count",
+    label: "chat typed host callback count",
     regressions,
     improvements,
   });
@@ -551,7 +614,7 @@ export function compareArchitectureMetrics(metrics, baseline) {
     metrics,
     baseline,
     key: "totalHostCallbacks",
-    label: "Extracted-service host.* callbacks",
+    label: "Extracted-service typed host callbacks",
     regressions,
     improvements,
   });

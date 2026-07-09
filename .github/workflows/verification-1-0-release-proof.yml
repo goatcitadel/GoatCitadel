@@ -54,6 +54,9 @@ jobs:
           - laneScript: verify:agentic:proof
             artifactSlug: agentic-proof
             runner: ubuntu-latest
+          - laneScript: verify:orchestration:perf
+            artifactSlug: orchestration-performance
+            runner: ubuntu-latest
           - laneScript: verify:channels:runtime
             artifactSlug: channels-runtime
             runner: ubuntu-latest

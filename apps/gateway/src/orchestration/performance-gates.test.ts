@@ -5,6 +5,54 @@ import { buildOrchestrationPerformanceReport } from "./performance-gates.js";
 import type { OrchestrationPlan, OrchestrationTaskInput } from "./types.js";
 
 describe("orchestration performance gates", () => {
+  it("fails closed when no runtime samples are present", () => {
+    const report = buildOrchestrationPerformanceReport({
+      samples: [],
+      qualityGates: [],
+      generatedAt: "2026-07-09T00:00:00.000Z",
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.thresholdFailures).toContain("at least one performance sample is required");
+  });
+
+  it("fails closed on invalid sample timing and counters", () => {
+    const report = buildOrchestrationPerformanceReport({
+      samples: [
+        {
+          sampleId: "invalid-sample",
+          startedAt: "not-a-date",
+          finishedAt: "2026-07-09T00:00:00.000Z",
+          costUsd: Number.NaN,
+          retryCount: -1,
+          waitCount: Number.POSITIVE_INFINITY,
+          duplicateDispatchCount: -1,
+        },
+        {
+          sampleId: "backwards-sample",
+          startedAt: "2026-07-09T00:00:01.000Z",
+          finishedAt: "2026-07-09T00:00:00.000Z",
+        },
+      ],
+      qualityGates: [],
+      generatedAt: "2026-07-09T00:00:00.000Z",
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.thresholdFailures).toEqual(
+      expect.arrayContaining([
+        "sample invalid-sample has invalid timestamps",
+        "sample invalid-sample has invalid costUsd",
+        "sample invalid-sample has invalid retryCount",
+        "sample invalid-sample has invalid waitCount",
+        "sample invalid-sample has invalid duplicateDispatchCount",
+        "sample backwards-sample finished before it started",
+      ]),
+    );
+    expect(Object.values(report.latencyMs).every(Number.isFinite)).toBe(true);
+    expect(Number.isFinite(report.totalCostUsd)).toBe(true);
+  });
+
   it("reports latency percentiles, cost, retries, waits, and duplicate dispatch failures", () => {
     const report = buildOrchestrationPerformanceReport({
       generatedAt: "2026-06-17T00:00:00.000Z",
