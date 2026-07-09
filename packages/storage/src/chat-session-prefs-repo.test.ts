@@ -80,7 +80,9 @@ describe("ChatSessionPrefsRepository", () => {
       "2026-03-07T00:00:00.000Z",
     );
 
-    assert.equal(patched.mode, "cowork");
+    // The unified chat surface pins prefs.mode to "chat"; the live surface mode
+    // is resolved by the auto-router (surfaceMode), not persisted per session.
+    assert.equal(patched.mode, "chat");
     assert.equal(patched.planningMode, "advisory");
     assert.equal(patched.providerId, "glm");
     assert.equal(patched.model, "glm-5");
@@ -122,8 +124,10 @@ describe("ChatSessionPrefsRepository", () => {
     const listed = repo.listBySessionIds(["sess-2", "missing", "sess-1", "sess-1"]);
 
     assert.equal(listed.size, 2);
-    assert.equal(listed.get("sess-1")?.mode, "cowork");
-    assert.equal(listed.get("sess-2")?.mode, "code");
+    // Both sessions resolve to the unified "chat" surface regardless of the mode
+    // passed to patch; the batch lookup itself is what this case exercises.
+    assert.equal(listed.get("sess-1")?.mode, "chat");
+    assert.equal(listed.get("sess-2")?.mode, "chat");
     assert.equal(repo.listBySessionIds([]).size, 0);
   });
 

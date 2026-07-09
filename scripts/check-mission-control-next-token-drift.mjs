@@ -82,7 +82,10 @@ function buildGrandfatheredDeclarationMap(root) {
           "--mc-shadow-strong",
         ],
       ],
-      ["apps/mission-control-next/src/features/native-routes/native-routes.css", ["--mc-area-color"]],
+      // The area-accent local property. Decomposition of native-routes.css moved
+      // these per-[data-area] declarations into the split stylesheet below; the
+      // grandfather entry follows them. Phase B retires --mc-area-color everywhere.
+      ["apps/mission-control-next/src/features/native-routes/styles/01-shared-primitives.css", ["--mc-area-color"]],
       // The theme bridge re-declares --mc-area-color on the bare .theme-* class
       // so body-portaled content (e.g. the composer "+" popover) keeps its area
       // accent; every other bridge token is sourced canonically. Phase B retires
