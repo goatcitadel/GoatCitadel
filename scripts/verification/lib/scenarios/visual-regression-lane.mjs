@@ -1,0 +1,193 @@
+export async function runVisualRegressionLane(context, options = {}, deps) {
+  const {
+    VISUAL_DIFF_RATIO_THRESHOLD,
+    VISUAL_ROUTE_READY_TIMEOUT_MS,
+    assertBrowserConsoleHealthy,
+    assertNextVisualScenarioChrome,
+    assertNoFooterStatusCollision,
+    assertVisualBaselineCoverage,
+    attachBrowserLogging,
+    buildVerificationUiUrl,
+    captureBrowserArtifacts,
+    captureRouteReadyFailure,
+    chromium,
+    compareVisualBaseline,
+    ensureOnboardingComplete,
+    filterVisualItemsBySlug,
+    installMissionControlNextBrowserState,
+    maybeParseBool,
+    pinVisualRegressionProvider,
+    resolveVerificationTargetContext,
+    resolveVisualRouteHref,
+    runScenario,
+    seedMissionControlNextFixture,
+    setBrowserCorrelation,
+    stabilizeVisualRegressionSnapshot,
+    startVerificationStack,
+    stopVerificationStack,
+    waitForVerificationRouteReady,
+    writeMissionControlNextManualProofChecklist,
+  } = deps;
+  const verificationTarget = resolveVerificationTargetContext();
+  const updateBaselines = maybeParseBool(options.updateBaselines, false);
+  const scenarioLane = updateBaselines ? "visual-rebaseline" : "visual-regression";
+  const scenarioTitleSuffix = updateBaselines ? "baseline refresh" : "baseline renders";
+  const visualRoutes = filterVisualItemsBySlug(
+    verificationTarget.visualRoutes,
+    process.env.GOATCITADEL_VERIFY_VISUAL_ROUTE_SLUGS,
+    "visual route",
+  );
+  const visualVariants = filterVisualItemsBySlug(
+    verificationTarget.visualVariants,
+    process.env.GOATCITADEL_VERIFY_VISUAL_VARIANT_SLUGS,
+    "visual variant",
+  );
+  if (!updateBaselines) {
+    await assertVisualBaselineCoverage(context, { packageName: verificationTarget.packageName });
+  }
+  const stack = await startVerificationStack(context, {
+    includeUi: true,
+    gatewayMode: "built",
+    uiMode: "preview",
+    gatewayEnv: {
+      GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+      GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+      GOATCITADEL_MESH_NODE_ID: "build-main",
+      OPENAI_API_KEY: "sk-visual-regression",
+    },
+    uiEnv: {
+      VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
+    },
+  });
+  try {
+    await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
+    await pinVisualRegressionProvider(stack.gatewayUrl);
+    const fixture = verificationTarget.isNext
+      ? await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot })
+      : null;
+    const manualProofArtifacts = [];
+    const browser = await chromium.launch({ headless: true });
+    try {
+      for (const variant of visualVariants) {
+        const browserContext = await browser.newContext({
+          viewport: variant.viewport,
+          colorScheme: variant.colorScheme,
+          timezoneId: "UTC",
+        });
+        if (fixture && verificationTarget.isNext) {
+          await installMissionControlNextBrowserState(browserContext, fixture.workspaceId, fixture.citadelId);
+        }
+        try {
+          const page = await browserContext.newPage();
+          const browserLog = attachBrowserLogging(page);
+          for (const route of visualRoutes) {
+            const scenarioRecord = await runScenario(
+              context,
+              {
+                id: `${scenarioLane}.${route.slug}.${variant.slug}`,
+                lane: scenarioLane,
+                title: `${route.slug} ${variant.slug} ${scenarioTitleSuffix}`,
+                subsystem: "mission-control",
+              },
+              async ({ correlationId }) => {
+                const browserLogCursor = browserLog.mark();
+                await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)), {
+                  waitUntil: "domcontentloaded",
+                });
+                try {
+                  await waitForVerificationRouteReady(
+                    page,
+                    route,
+                    verificationTarget.packageName,
+                    VISUAL_ROUTE_READY_TIMEOUT_MS,
+                  );
+                  await assertNextVisualScenarioChrome(page, route);
+                } catch (readyError) {
+                  return await captureRouteReadyFailure(context, {
+                    page,
+                    browserLog,
+                    browserLogCursor,
+                    route,
+                    variant,
+                    scenarioLane,
+                    timeoutMs: VISUAL_ROUTE_READY_TIMEOUT_MS,
+                    readyError,
+                  });
+                }
+                const correlationSessionId =
+                  (route?.fixtureSessionKey && fixture?.sessions?.[route.fixtureSessionKey]) || fixture?.sessionId;
+                await setBrowserCorrelation(page, correlationId, correlationSessionId);
+                const browserSanity = assertBrowserConsoleHealthy(
+                  browserLog,
+                  browserLogCursor,
+                  verificationTarget.packageName,
+                );
+                await page.evaluate(async () => {
+                  if (document.fonts?.ready) {
+                    await document.fonts.ready;
+                  }
+                });
+                await page.waitForTimeout(1000);
+                await stabilizeVisualRegressionSnapshot(page);
+                await assertNoFooterStatusCollision(page, { route, variant });
+                const baselineSlug = `visual-regression-${route.slug}-${variant.slug}`;
+                const artifactSlug = `${scenarioLane}-${route.slug}-${variant.slug}`;
+                const artifacts = await captureBrowserArtifacts(context, {
+                  slug: artifactSlug,
+                  page,
+                  browserLog,
+                  gatewayUrl: stack.gatewayUrl,
+                  correlationId,
+                  logCursor: browserLogCursor,
+                });
+                const comparison = await compareVisualBaseline(context, baselineSlug, {
+                  artifactSlug,
+                  updateBaselines,
+                  packageName: verificationTarget.packageName,
+                });
+                const failed = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
+                return {
+                  status: failed ? "failed" : "passed",
+                  error: failed
+                    ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
+                    : undefined,
+                  metrics: {
+                    route: route.href,
+                    variant: variant.slug,
+                    diffRatio: comparison.diffRatio,
+                    changedPixels: comparison.changedPixels,
+                    consoleErrors: browserSanity.consoleErrors.length,
+                    pageErrors: browserSanity.pageErrors.length,
+                  },
+                  artifacts: {
+                    ...artifacts,
+                    screenshots: [...artifacts.screenshots, ...comparison.screenshots],
+                    diagnostics: [...artifacts.diagnostics, ...comparison.diagnostics],
+                  },
+                };
+              },
+            );
+            if (verificationTarget.isNext && scenarioRecord?.artifacts?.screenshots?.length) {
+              manualProofArtifacts.push({
+                routeSlug: route.slug,
+                variantSlug: variant.slug,
+                screenshots: scenarioRecord.artifacts.screenshots,
+              });
+            }
+          }
+        } finally {
+          await browserContext.close();
+        }
+      }
+    } finally {
+      await browser.close();
+    }
+
+    if (verificationTarget.isNext) {
+      await writeMissionControlNextManualProofChecklist(context, manualProofArtifacts);
+    }
+  } finally {
+    await stopVerificationStack(stack);
+  }
+
+}

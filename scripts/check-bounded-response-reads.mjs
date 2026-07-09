@@ -29,6 +29,8 @@ export const approvedRawResponseReads = new Map(
 // .blob()/.formData()/.body.getReader() — those stay flagged even here.
 export const boundedByConstructionFiles = new Set([
   "packages/policy-engine/src/tool-executor.ts",
+  "packages/policy-engine/src/tool-executor/comms-executor.ts",
+  "packages/policy-engine/src/tool-executor/knowledge-executor.ts",
   "packages/policy-engine/src/browser-tools.ts",
   "packages/policy-engine/src/ingestion-backends.ts",
 ]);

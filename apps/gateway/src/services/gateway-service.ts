@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
 import { EventIngestService, logger } from "@goatcitadel/gateway-core";
-import type { LogContext } from "@goatcitadel/gateway-core";
+import { traceInitStep, toLogContext } from "./gateway/bootstrap-tracing.js";
 
 const log = logger.child("gateway-service");
 const durableRunLogger: DurableRunServiceLogger = {
@@ -16,51 +16,6 @@ const durableRunLogger: DurableRunServiceLogger = {
   error: (data: unknown, msg: string) => log.error(msg, toLogContext(data)),
 };
 
-const INIT_STEP_SLOW_WARNING_MS = 10_000;
-
-function toLogContext(data: unknown): LogContext {
-  if (data && typeof data === "object" && !Array.isArray(data)) {
-    return data as LogContext;
-  }
-  return { value: data };
-}
-
-/**
- * Wrap a step inside the gateway's critical-init path so a hung step is
- * visible in real time instead of presenting as 120s of silence followed by
- * a supervisor health-timeout restart.
- *
- * Behaviour:
- * - Silent in the happy path (steps complete within 10s).
- * - After 10s of a single step still running, logs a `warn` so the operator
- *   can see *which* step is stuck, even if the supervisor eventually kills
- *   the process before initCritical returns.
- * - On completion, always logs the elapsed ms when a slow warning fired, and
- *   always logs in verbose mode for full-step timing.
- *
- * This is intentionally lightweight (one setTimeout per step, cleared on
- * resolve) and has no behavioural side effects on the underlying work.
- */
-async function traceInitStep<T>(stepName: string, fn: () => Promise<T> | T): Promise<T> {
-  const startedAt = Date.now();
-  let warned = false;
-  const warningTimer = setTimeout(() => {
-    warned = true;
-    log.warn(`initCritical step "${stepName}" still running after ${Math.round(INIT_STEP_SLOW_WARNING_MS / 1000)}s`);
-  }, INIT_STEP_SLOW_WARNING_MS);
-  warningTimer.unref();
-  try {
-    return await fn();
-  } finally {
-    clearTimeout(warningTimer);
-    const elapsedMs = Date.now() - startedAt;
-    if (warned) {
-      log.warn(`initCritical step "${stepName}" completed in ${elapsedMs}ms`);
-    } else if (isVerboseLoggingEnabled()) {
-      log.info(`initCritical step "${stepName}" completed in ${elapsedMs}ms`);
-    }
-  }
-}
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
@@ -84,11 +39,9 @@ import {
   NotFoundError,
   PolicyViolationError,
   providerAllowsForeignModelIds,
-  sanitizeChannelOutboundMessage,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
-import { isLoopbackDevOrigin } from "../cors-origin-guard.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
@@ -169,7 +122,6 @@ import type {
   ChatMode,
   ChatMessageRecord,
   ChatProactiveMode,
-  ChatProjectRecord,
   ChatReflectionMode,
   ChatRetrievalMode,
   ChatSendMessageRequest,
@@ -447,11 +399,7 @@ import {
 } from "./memory-consolidation-service.js";
 import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
-import {
-  type AutonomousTurnKind,
-  HEARTBEAT_PERMISSION_PROFILE_ID,
-  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
-} from "./gateway/autonomous-turn-policy.js";
+import { type AutonomousTurnKind } from "./gateway/autonomous-turn-policy.js";
 import {
   type ChatAutonomousTurnDeps,
   enqueueAutonomousChatTurn,
@@ -556,6 +504,45 @@ import {
   resolveProjectRootForToolContext,
   resolveToolRequestPaths as resolveToolRequestPathsForContext,
 } from "./tool-path-resolution.js";
+import {
+  buildUpdatedFeatureFlags,
+  didDisengageAutonomyKillSwitch,
+  resolveGatewayFeatureFlags,
+} from "./gateway/feature-flags.js";
+import {
+  buildChannelDeliveryIdempotencyKey,
+  buildChannelDeliveryPayload,
+  channelDeliveryPayloadToSendInput,
+  extractCommsSendResult,
+  mapPersistedChannelDeliveryRuntimeStatus,
+  readChannelDeliveryMessageParts,
+  readDeliveryDiagnostics,
+  readOptionalString,
+} from "./gateway/channel-delivery-helpers.js";
+import {
+  assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
+  assertFirecrawlRuntimeUpdate as assertGatewayFirecrawlRuntimeUpdate,
+} from "./gateway/runtime-settings-guards.js";
+import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
+import {
+  approvedExternalRuntimeRequestMatches,
+  isApprovedExternalRuntimePendingAction,
+  readAuthActorSource,
+  readPermissionSurfaceValue,
+  toApprovedMcpInvokeRequest,
+  toolInvokeResultFromMcpApproval,
+  toolInvokeResultRecord,
+  toToolInvokeRequest,
+  withExternalRuntimePolicyContext,
+} from "./gateway/external-runtime-approval-adapter.js";
+import {
+  canMutatePermissionProfile,
+  grantPatternMatches,
+  isActiveToolGrant,
+  isSystemOwnedRestrictedPermissionProfileRequest,
+} from "./gateway/tool-grant-policy.js";
+import { durableChatTurnPayloadToRecord } from "./gateway/chat-stream-codecs.js";
+import { GatewayChatStreamRuntime } from "./gateway/chat-stream-runtime.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type {
   ApprovalReplayResult,
@@ -578,7 +565,6 @@ import {
   collectSpecialistCandidateSuggestions,
   mergeSpecialistEvidence,
   mergeSpecialistRoutingHints,
-  normalizeDelegationRoles,
   normalizeSpecialistCandidateFingerprint,
   type ResolvedRuntimeGuidance,
 } from "./chat-turn-planning-helpers.js";
@@ -591,6 +577,7 @@ import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
+import { toChatSessionRecord } from "./chat-session-utils.js";
 import { ImprovementService } from "./improvement-service.js";
 import {
   readBlockerTemplateStrictness,
@@ -656,6 +643,10 @@ export interface MemoryFileEntry {
   modifiedAt: string;
 }
 
+export { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
+export { splitChatPrefsPatch, toChatSessionRecord } from "./chat-session-utils.js";
+export { isPermittedIntegrationSecretEnvVarName as __isPermittedIntegrationSecretEnvVarNameForTests } from "./gateway/integration-secret-envvar-guard.js";
+
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // Perf (Finding 6): the resolved feature-flag set is read 5-15x per chat turn, each
@@ -664,8 +655,6 @@ const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
 // hypothetical out-of-band settings write.
 const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
-const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
-const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { DeviceTokenVault } from "./device-token-vault.js";
 
@@ -702,12 +691,6 @@ const maintenanceSchedulerDisabled =
 // via its own active-run + min-age (~1h) + path-jail guards.
 const ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS = 60 * 60 * 1000;
 const ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS = 30_000;
-const PIPELINE_TEMPLATES: Record<string, string[]> = {
-  prd: ["product", "architect"],
-  build: ["architect", "coder", "qa"],
-  triage: ["qa", "ops", "product"],
-  release: ["qa", "ops", "product"],
-};
 export const DEFAULT_WORKSPACE_ID = "default";
 const SYNTHETIC_PERMISSION_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const SYNTHETIC_PERMISSION_PROFILE_MAX_ENTRIES = 500;
@@ -734,60 +717,6 @@ const VALID_TOOL_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/;
 function isValidToolName(name: string): boolean {
   return VALID_TOOL_NAME_PATTERN.test(name);
 }
-
-// SECURITY (codex finding #13, #23): Env-var names that an integration
-// connection is allowed to reference via `authTokenEnv`/`accessTokenEnv`/
-// `tokenEnv`. We restrict to names that match the conventional integration
-// secret naming pattern and that are NOT on the LLM-provider blocklist.
-// This is a defence-in-depth check; the long-term fix is per-catalog zod
-// schemas listing allowed env-var names explicitly.
-const PERMITTED_INTEGRATION_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/;
-const FORBIDDEN_INTEGRATION_ENV_NAMES = new Set<string>([
-  // LLM provider keys — never resolvable as an integration secret because
-  // an attacker-controlled connection config could otherwise exfiltrate
-  // them in the Authorization header to the attacker's bridge URL.
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "GOOGLE_API_KEY",
-  "GEMINI_API_KEY",
-  "COHERE_API_KEY",
-  "MISTRAL_API_KEY",
-  "GROQ_API_KEY",
-  "GROK_API_KEY",
-  "XAI_API_KEY",
-  "TOGETHER_API_KEY",
-  "REPLICATE_API_TOKEN",
-  "DEEPSEEK_API_KEY",
-  "OPENROUTER_API_KEY",
-  "PERPLEXITY_API_KEY",
-  "VOYAGE_API_KEY",
-  "FIRECRAWL_API_KEY",
-  // Gateway/infra secrets — broadly scoped, never an integration credential.
-  "GOATCITADEL_AUTH_TOKEN",
-  "GOATCITADEL_POSTGRES_PASSWORD",
-  "POSTGRES_PASSWORD",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
-  "GITHUB_TOKEN",
-  "GH_TOKEN",
-]);
-
-function isPermittedIntegrationSecretEnvVarName(envName: string): boolean {
-  const normalized = envName.trim();
-  if (!normalized || normalized.length > 128) {
-    return false;
-  }
-  if (!PERMITTED_INTEGRATION_ENV_NAME_PATTERN.test(normalized)) {
-    return false;
-  }
-  if (FORBIDDEN_INTEGRATION_ENV_NAMES.has(normalized.toUpperCase())) {
-    return false;
-  }
-  return true;
-}
-
-// Test-only export for integration-secret-envvar-allowlist.security.test.ts.
-export const __isPermittedIntegrationSecretEnvVarNameForTests = isPermittedIntegrationSecretEnvVarName;
 
 function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): GatewayRuntimeConfig {
   return {
@@ -909,7 +838,7 @@ export class GatewayService {
   private readonly syntheticPermissionProfiles = new Map<string, PermissionProfileRecord>();
   public readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   public readonly deviceTokenVault = new DeviceTokenVault();
-  private lastChatStreamPurgeAt = 0;
+  private chatStreamRuntime?: GatewayChatStreamRuntime;
   public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   public readonly onboardingMarkerPath: string;
   private maintenanceScheduler?: BackgroundIntervalHandle;
@@ -3372,69 +3301,67 @@ export class GatewayService {
     return status === "completed" || status === "failed" || status === "cancelled";
   }
 
+  private getChatStreamRuntime(): GatewayChatStreamRuntime {
+    if (!this.chatStreamRuntime) {
+      const legacyInitialPurgeAt = (this as { lastChatStreamPurgeAt?: unknown }).lastChatStreamPurgeAt;
+      this.chatStreamRuntime = new GatewayChatStreamRuntime({
+        storage: this.storage,
+        chatTurnExecutionRegistry: this.chatTurnExecutionRegistry,
+        createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
+        persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
+        initialLastChatStreamPurgeAt: typeof legacyInitialPurgeAt === "number" ? legacyInitialPurgeAt : undefined,
+      });
+    }
+    return this.chatStreamRuntime;
+  }
+
+  private syncLegacyChatStreamPurgeState(runtime: GatewayChatStreamRuntime): void {
+    const legacyPurgeAt = (this as { lastChatStreamPurgeAt?: unknown }).lastChatStreamPurgeAt;
+    if (typeof legacyPurgeAt === "number") {
+      runtime.setLastChatStreamPurgeAt(legacyPurgeAt);
+    }
+  }
+
+  private writeBackLegacyChatStreamPurgeState(runtime: GatewayChatStreamRuntime): void {
+    const legacyHolder = this as { lastChatStreamPurgeAt?: unknown };
+    if ("lastChatStreamPurgeAt" in legacyHolder) {
+      legacyHolder.lastChatStreamPurgeAt = runtime.getLastChatStreamPurgeAt();
+    }
+  }
+
   public registerActiveChatTurnStream(
     sessionId: string,
     turnId: string,
     runId?: string,
   ): ActiveChatTurnStreamExecution {
-    return this.chatTurnExecutionRegistry.registerActiveStream(
-      sessionId,
-      turnId,
-      this.storage.chatStreamEvents.getLatestSequence(turnId),
-      runId,
-    );
+    return this.getChatStreamRuntime().registerActiveChatTurnStream(sessionId, turnId, runId);
   }
 
   public getActiveChatTurnStream(turnId: string): ActiveChatTurnStreamExecution | undefined {
-    return this.chatTurnExecutionRegistry.getActiveStream(turnId);
+    return this.getChatStreamRuntime().getActiveChatTurnStream(turnId);
   }
 
   public completeActiveChatTurnStream(turnId: string): void {
-    this.chatTurnExecutionRegistry.completeActiveStream(turnId);
+    this.getChatStreamRuntime().completeActiveChatTurnStream(turnId);
   }
 
   public closeActiveChatTurnStream(turnId: string): void {
-    this.chatTurnExecutionRegistry.closeActiveStream(turnId);
+    this.getChatStreamRuntime().closeActiveChatTurnStream(turnId);
   }
 
   public persistChatStreamChunk(chunk: PersistableChatStreamChunk, runId?: string): ChatStreamChunk {
-    const active = this.chatTurnExecutionRegistry.getActiveStream(chunk.turnId);
-    const sequence = active?.nextSequence ?? this.storage.chatStreamEvents.getLatestSequence(chunk.turnId) + 1;
-    if (active) {
-      active.nextSequence = sequence + 1;
-    }
-    const eventId = randomUUID();
-    const enriched = {
-      ...chunk,
-      eventId,
-      sequence,
-      ...(runId ? { runId } : {}),
-    } as ChatStreamChunk;
-    this.storage.chatStreamEvents.append({
-      eventId,
-      sessionId: chunk.sessionId,
-      turnId: chunk.turnId,
-      sequence,
-      runId,
-      chunkType: enriched.type,
-      payload: chatStreamChunkToRecord(enriched),
-      createdAt: new Date().toISOString(),
-    });
-    // Wake any live-tail reader immediately so it doesn't wait out the poll
-    // interval before forwarding this chunk to the client (P0-#1).
-    this.signalChatStreamEvent(chunk.turnId);
-    this.purgeExpiredChatStreamEventsIfNeeded();
-    return enriched;
+    const runtime = this.getChatStreamRuntime();
+    this.syncLegacyChatStreamPurgeState(runtime);
+    const persisted = runtime.persistChatStreamChunk(chunk, runId);
+    this.writeBackLegacyChatStreamPurgeState(runtime);
+    return persisted;
   }
 
   private purgeExpiredChatStreamEventsIfNeeded(): void {
-    const now = Date.now();
-    if (now - this.lastChatStreamPurgeAt < 60_000) {
-      return;
-    }
-    this.lastChatStreamPurgeAt = now;
-    const cutoffIso = new Date(now - CHAT_STREAM_EVENT_RETENTION_MS).toISOString();
-    this.storage.chatStreamEvents.purgeBefore(cutoffIso);
+    const runtime = this.getChatStreamRuntime();
+    this.syncLegacyChatStreamPurgeState(runtime);
+    runtime.purgeExpiredChatStreamEventsIfNeeded();
+    this.writeBackLegacyChatStreamPurgeState(runtime);
   }
 
   public async *streamPersistedChatTurnEvents(
@@ -3447,150 +3374,19 @@ export class GatewayService {
       signal?: AbortSignal;
     },
   ): AsyncGenerator<ChatStreamChunk> {
-    let afterSequence = 0;
-    if (options?.sinceEventId) {
-      const priorEvent = this.storage.chatStreamEvents.getByEventId(options.sinceEventId);
-      if (priorEvent?.turnId === turnId) {
-        afterSequence = priorEvent.sequence;
-      } else {
-        yield* this.streamTurnStateFallback(sessionId, turnId);
-        afterSequence = this.storage.chatStreamEvents.getLatestSequence(turnId);
-        if (!options?.liveTail) {
-          return;
-        }
-      }
-    }
-
-    while (true) {
-      if (options?.signal?.aborted) {
-        return;
-      }
-      const events = this.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
-      if (events.length > 0) {
-        for (const event of events) {
-          afterSequence = event.sequence;
-          const payload = toChatStreamChunk(event.payload);
-          if (!payload) {
-            continue;
-          }
-          yield payload;
-          if (payload.type === "done") {
-            return;
-          }
-        }
-        continue;
-      }
-
-      const active = this.chatTurnExecutionRegistry.getActiveStream(turnId);
-      const durablePending = options?.liveTail
-        ? this.isDurableTurnStillStreaming(turnId, {
-            includeInterrupts: options.returnOnDurableInterrupt !== true,
-          })
-        : false;
-      if (!options?.liveTail || ((!active || active.completed) && !durablePending)) {
-        return;
-      }
-      await this.waitForChatStreamEvent(turnId, CHAT_STREAM_EVENT_POLL_INTERVAL_MS, options?.signal);
-    }
+    yield* this.getChatStreamRuntime().streamPersistedChatTurnEvents(sessionId, turnId, options);
   }
 
-  /**
-   * Live-tail token delivery (P0-#1). Historically the reader above polled SQLite
-   * every CHAT_STREAM_EVENT_POLL_INTERVAL_MS, adding up to that interval of latency
-   * to every token (including the first) before it reached the client. These two
-   * helpers let the producer (persistChatStreamChunk) wake a waiting reader the
-   * instant a chunk is appended. The timeout inside waitForChatStreamEvent preserves
-   * the old polling cadence as a liveness floor — covering cross-process producers
-   * and the rare register-after-append race — so worst-case behaviour is unchanged.
-   *
-   * The waiter map is created lazily (not a field initialiser) so it also works on
-   * instances built via Object.create(prototype) in tests.
-   */
-  private chatStreamEventWaiters?: Map<string, Set<() => void>>;
-
   private signalChatStreamEvent(turnId: string): void {
-    const waiters = this.chatStreamEventWaiters?.get(turnId);
-    if (!waiters || waiters.size === 0) {
-      return;
-    }
-    // Each notify() removes itself from the set, so iterate a snapshot.
-    for (const notify of [...waiters]) {
-      notify();
-    }
+    this.getChatStreamRuntime().signalChatStreamEvent(turnId);
   }
 
   private waitForChatStreamEvent(turnId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) {
-      return Promise.resolve();
-    }
-    if (!this.chatStreamEventWaiters) {
-      this.chatStreamEventWaiters = new Map();
-    }
-    const waiters = this.chatStreamEventWaiters;
-    return new Promise<void>((resolve) => {
-      let settled = false;
-      let registeredSet = waiters.get(turnId);
-      if (!registeredSet) {
-        registeredSet = new Set<() => void>();
-        waiters.set(turnId, registeredSet);
-      }
-      const ownSet = registeredSet;
-      const settle = (): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        ownSet.delete(notify);
-        if (ownSet.size === 0 && waiters.get(turnId) === ownSet) {
-          waiters.delete(turnId);
-        }
-        clearTimeout(timer);
-        if (signal) {
-          signal.removeEventListener("abort", settle);
-        }
-        resolve();
-      };
-      const notify = settle;
-      const timer = setTimeout(settle, timeoutMs);
-      ownSet.add(notify);
-      if (signal) {
-        signal.addEventListener("abort", settle, { once: true });
-      }
-    });
+    return this.getChatStreamRuntime().waitForChatStreamEvent(turnId, timeoutMs, signal);
   }
 
   private isDurableTurnStillStreaming(turnId: string, options?: { includeInterrupts?: boolean }): boolean {
-    const eventRow = this.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM chat_stream_events
-      WHERE turn_id = ?
-      ORDER BY sequence DESC
-      LIMIT 1
-    `,
-      )
-      .get(turnId) as { run_id: string | null } | undefined;
-    let runId = eventRow?.run_id ?? null;
-    if (!runId) {
-      try {
-        runId = this.storage.chatTurnTraces.get(turnId).durable?.runId ?? null;
-      } catch {
-        runId = null;
-      }
-    }
-    if (!runId) {
-      return false;
-    }
-    try {
-      const run = this.storage.durableRuns.getRun(runId);
-      if (run.status === "queued" || run.status === "running") {
-        return true;
-      }
-      return options?.includeInterrupts !== false && (run.status === "waiting" || run.status === "paused");
-    } catch {
-      return false;
-    }
+    return this.getChatStreamRuntime().isDurableTurnStillStreaming(turnId, options);
   }
 
   public async *withEphemeralStreamEnvelope(
@@ -3610,45 +3406,7 @@ export class GatewayService {
   }
 
   private async *streamTurnStateFallback(sessionId: string, turnId: string): AsyncGenerator<ChatStreamChunk> {
-    const trace = this.storage.chatTurnTraces.get(turnId);
-    if (trace.sessionId !== sessionId) {
-      return;
-    }
-    const hydratedTrace = this.createHydratedChatTurnTrace(turnId, trace);
-    yield this.persistChatStreamChunk(
-      {
-        type: "trace_update",
-        sessionId,
-        turnId,
-        trace: hydratedTrace,
-      },
-      hydratedTrace.durable?.runId,
-    );
-    if (trace.assistantMessageId) {
-      const assistantMessage = this.storage.chatMessages.get(trace.assistantMessageId);
-      if (assistantMessage) {
-        yield this.persistChatStreamChunk(
-          {
-            type: "message_done",
-            sessionId,
-            turnId,
-            messageId: assistantMessage.messageId,
-            content: assistantMessage.content,
-            repaired: Boolean(hydratedTrace.completion?.repaired),
-          },
-          hydratedTrace.durable?.runId,
-        );
-        yield this.persistChatStreamChunk(
-          {
-            type: "done",
-            sessionId,
-            turnId,
-            messageId: assistantMessage.messageId,
-          },
-          hydratedTrace.durable?.runId,
-        );
-      }
-    }
+    yield* this.getChatStreamRuntime().streamTurnStateFallback(sessionId, turnId);
   }
 
   public createHydratedChatTurnTrace(
@@ -6673,54 +6431,17 @@ export class GatewayService {
     toolApprovalMode?: ToolApprovalMode;
     defaultToolProfile?: string;
   }): void {
-    const nextProfile = input.deploymentProfile ?? this.config.assistant.deploymentProfile;
-    if (nextProfile !== "remote_hardened") {
-      return;
-    }
-
-    const nextAuthMode = input.auth?.mode ?? this.config.assistant.auth.mode;
-    const nextAllowLoopbackBypass = input.auth?.allowLoopbackBypass ?? this.config.assistant.auth.allowLoopbackBypass;
-    const nextDefaultToolProfile = input.defaultToolProfile ?? this.config.assistant.defaultToolProfile;
-    const nextToolPolicyProfile = this.config.toolPolicy.tools?.profile;
-    const nextToolApprovalMode =
-      input.toolApprovalMode ??
-      (input.defaultToolProfile ? legacyToolProfileToApprovalMode(input.defaultToolProfile) : undefined) ??
-      this.config.toolPolicy.tools?.approvalMode ??
-      this.config.assistant.toolApprovalMode ??
-      legacyToolProfileToApprovalMode(
-        this.config.toolPolicy.tools?.profile ?? this.config.assistant.defaultToolProfile,
-      ) ??
-      "approve_risky";
-    const nextAllowlist = (input.networkAllowlist ?? this.config.toolPolicy.sandbox.networkAllowlist)
-      .map((host) => host.trim())
-      .filter(Boolean);
-
-    const errors: string[] = [];
-    if (nextAuthMode === "none") {
-      errors.push("remote_hardened requires token or basic auth.");
-    }
-    if (nextAllowLoopbackBypass) {
-      errors.push("remote_hardened disables loopback bypass.");
-    }
-    if (nextToolApprovalMode === "bypass") {
-      errors.push("remote_hardened disables approval bypass.");
-    }
-    if (nextDefaultToolProfile === "danger" || nextToolPolicyProfile === "danger") {
-      errors.push("remote_hardened disables danger tool profiles.");
-    }
-    if (!hasExplicitNonLoopbackAllowedOrigin(process.env.GOATCITADEL_ALLOWED_ORIGINS)) {
-      errors.push("remote_hardened requires explicit non-loopback GOATCITADEL_ALLOWED_ORIGINS.");
-    }
-    if (nextAllowlist.length === 0) {
-      errors.push("remote_hardened requires a non-empty outbound host allowlist.");
-    }
-    if (nextAllowlist.some((host) => host === "*")) {
-      errors.push("remote_hardened forbids wildcard outbound host allowlists.");
-    }
-
-    if (errors.length > 0) {
-      throw new Error(errors.join(" "));
-    }
+    assertGatewayDeploymentProfileUpdate(input, {
+      currentDeploymentProfile: this.config.assistant.deploymentProfile,
+      currentAuthMode: this.config.assistant.auth.mode,
+      currentAllowLoopbackBypass: this.config.assistant.auth.allowLoopbackBypass,
+      currentDefaultToolProfile: this.config.assistant.defaultToolProfile,
+      currentToolPolicyProfile: this.config.toolPolicy.tools?.profile,
+      currentToolPolicyApprovalMode: this.config.toolPolicy.tools?.approvalMode,
+      currentAssistantToolApprovalMode: this.config.assistant.toolApprovalMode,
+      currentNetworkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
+      allowedOriginsEnv: process.env.GOATCITADEL_ALLOWED_ORIGINS,
+    });
   }
 
   private assertPermissionProfileApprovalModeAllowed(approvalMode?: ToolApprovalMode): void {
@@ -6756,20 +6477,11 @@ export class GatewayService {
       };
     };
   }): void {
-    const nextAllowlist = (input.networkAllowlist ?? this.config.toolPolicy.sandbox.networkAllowlist)
-      .map((host) => host.trim())
-      .filter(Boolean);
-    const nextEnabled = input.web?.firecrawl?.enabled ?? this.config.assistant.web.firecrawl.enabled;
-    const nextBaseUrl = input.web?.firecrawl?.baseUrl?.trim() || this.config.assistant.web.firecrawl.baseUrl;
-
-    if (!nextEnabled) {
-      return;
-    }
-    if (!this.isUrlAllowlistedInList(nextBaseUrl, nextAllowlist)) {
-      throw new Error(
-        `web.firecrawl.baseUrl must be present in the outbound allowlist before Firecrawl can be enabled: ${nextBaseUrl}`,
-      );
-    }
+    assertGatewayFirecrawlRuntimeUpdate(input, {
+      currentNetworkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
+      currentFirecrawlEnabled: this.config.assistant.web.firecrawl.enabled,
+      currentFirecrawlBaseUrl: this.config.assistant.web.firecrawl.baseUrl,
+    });
   }
 
   public getAuthRuntimeSettings(): AuthRuntimeSettings {
@@ -7467,46 +7179,8 @@ export class GatewayService {
       });
     }
     const current = this.readFeatureFlags();
-    const next: RuntimeSettings["features"] = {
-      durableKernelV1Enabled: true,
-      replayOverridesV1Enabled: patch.replayOverridesV1Enabled ?? current.replayOverridesV1Enabled,
-      memoryLifecycleAdminV1Enabled: patch.memoryLifecycleAdminV1Enabled ?? current.memoryLifecycleAdminV1Enabled,
-      memoryLifecycleAutoForgetEnabled:
-        patch.memoryLifecycleAutoForgetEnabled ?? current.memoryLifecycleAutoForgetEnabled,
-      memoryMaintenanceV1Enabled: patch.memoryMaintenanceV1Enabled ?? current.memoryMaintenanceV1Enabled,
-      connectorDiagnosticsV1Enabled: patch.connectorDiagnosticsV1Enabled ?? current.connectorDiagnosticsV1Enabled,
-      computerUseGuardrailsV1Enabled: patch.computerUseGuardrailsV1Enabled ?? current.computerUseGuardrailsV1Enabled,
-      cronReviewQueueV1Enabled: patch.cronReviewQueueV1Enabled ?? current.cronReviewQueueV1Enabled,
-      replayRegressionV1Enabled: patch.replayRegressionV1Enabled ?? current.replayRegressionV1Enabled,
-      codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
-      improvementLedgerV1Enabled: patch.improvementLedgerV1Enabled ?? current.improvementLedgerV1Enabled,
-      improvementActivationV1Enabled: patch.improvementActivationV1Enabled ?? current.improvementActivationV1Enabled,
-      // These two optional flags must be carried through: `updateFeatureFlags`
-      // does a FULL `set(... next)` (not a merge), so omitting them would silently
-      // wipe a previously-stored value. The autonomy kill switch is toggled this
-      // way, so its persistence depends on this line.
-      coworkRuntimeQualityV1Disabled: patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
-      orchestrationFinalStreamingV1Disabled:
-        patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
-      autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
-      chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
-      channelVoiceInboundV1Enabled: patch.channelVoiceInboundV1Enabled ?? current.channelVoiceInboundV1Enabled,
-      signalInboundV1Enabled: patch.signalInboundV1Enabled ?? current.signalInboundV1Enabled,
-      plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
-      parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
-      streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
-      plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
-      subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
-      channelVoiceReplyV1Enabled: patch.channelVoiceReplyV1Enabled ?? current.channelVoiceReplyV1Enabled,
-      memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
-      cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
-      utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
-      chatTurnInterruptionRecoveryV1Disabled:
-        patch.chatTurnInterruptionRecoveryV1Disabled ?? current.chatTurnInterruptionRecoveryV1Disabled,
-      externalSideEffectReplayJobsV1Disabled:
-        patch.externalSideEffectReplayJobsV1Disabled ?? current.externalSideEffectReplayJobsV1Disabled,
-    };
-    const autonomyKillSwitchDisengaged = current.autonomyV1Disabled === true && next.autonomyV1Disabled !== true;
+    const next = buildUpdatedFeatureFlags(current, patch);
+    const autonomyKillSwitchDisengaged = didDisengageAutonomyKillSwitch(current, next);
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
     // Prime the read cache so the new flags are visible immediately (Finding 6);
@@ -7541,45 +7215,7 @@ export class GatewayService {
     const stored =
       this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
     const fromConfig = this.config.assistant.features;
-    const resolved: RuntimeSettings["features"] = {
-      durableKernelV1Enabled: true,
-      replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
-      memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
-      memoryLifecycleAutoForgetEnabled:
-        stored?.memoryLifecycleAutoForgetEnabled ?? fromConfig.memoryLifecycleAutoForgetEnabled ?? true,
-      memoryMaintenanceV1Enabled: stored?.memoryMaintenanceV1Enabled ?? fromConfig.memoryMaintenanceV1Enabled,
-      connectorDiagnosticsV1Enabled: stored?.connectorDiagnosticsV1Enabled ?? fromConfig.connectorDiagnosticsV1Enabled,
-      computerUseGuardrailsV1Enabled:
-        stored?.computerUseGuardrailsV1Enabled ?? fromConfig.computerUseGuardrailsV1Enabled,
-      cronReviewQueueV1Enabled: stored?.cronReviewQueueV1Enabled ?? fromConfig.cronReviewQueueV1Enabled,
-      replayRegressionV1Enabled: stored?.replayRegressionV1Enabled ?? fromConfig.replayRegressionV1Enabled,
-      codeModeV1Enabled: stored?.codeModeV1Enabled ?? fromConfig.codeModeV1Enabled,
-      improvementLedgerV1Enabled: stored?.improvementLedgerV1Enabled ?? fromConfig.improvementLedgerV1Enabled,
-      improvementActivationV1Enabled:
-        stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
-      coworkRuntimeQualityV1Disabled:
-        stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
-      orchestrationFinalStreamingV1Disabled:
-        stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
-      autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
-      chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
-      channelVoiceInboundV1Enabled: stored?.channelVoiceInboundV1Enabled ?? fromConfig.channelVoiceInboundV1Enabled,
-      signalInboundV1Enabled: stored?.signalInboundV1Enabled ?? fromConfig.signalInboundV1Enabled,
-      plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
-      parallelToolExecutionV1Disabled:
-        stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
-      streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
-      plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
-      subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
-      channelVoiceReplyV1Enabled: stored?.channelVoiceReplyV1Enabled ?? fromConfig.channelVoiceReplyV1Enabled,
-      memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
-      cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
-      utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
-      chatTurnInterruptionRecoveryV1Disabled:
-        stored?.chatTurnInterruptionRecoveryV1Disabled ?? fromConfig.chatTurnInterruptionRecoveryV1Disabled,
-      externalSideEffectReplayJobsV1Disabled:
-        stored?.externalSideEffectReplayJobsV1Disabled ?? fromConfig.externalSideEffectReplayJobsV1Disabled,
-    };
+    const resolved = resolveGatewayFeatureFlags(stored, fromConfig);
     this.featureFlagsCache = resolved;
     this.featureFlagsCacheAtMs = nowMs;
     return resolved;
@@ -8635,62 +8271,6 @@ export function findPlanPhase(plan: OrchestrationPlan, phaseId: string) {
   return undefined;
 }
 
-export function toChatSessionRecord(
-  session: SessionMeta,
-  meta: {
-    workspaceId?: string;
-    mode?: ChatMode;
-    title?: string;
-    origin?: "operator" | "prompt_pack" | "system";
-    includeInHistory: boolean;
-    pinned: boolean;
-    lifecycleStatus: "active" | "archived";
-    archivedAt?: string;
-    folderId?: string;
-    folderName?: string;
-    tags?: string[];
-    pinnedGoal?: string;
-    goalTurnBudget?: number;
-    goalTurnsUsed?: number;
-    goalSetAt?: string;
-  },
-  project?: ChatProjectRecord,
-  extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts">>,
-): ChatSessionRecord {
-  return {
-    sessionId: session.sessionId,
-    sessionKey: session.sessionKey,
-    workspaceId: meta.workspaceId ?? project?.workspaceId,
-    scope: session.channel === "mission" ? "mission" : "external",
-    mode: meta.mode,
-    origin: meta.origin,
-    includeInHistory: meta.includeInHistory,
-    title: meta.title ?? session.displayName,
-    pinned: meta.pinned,
-    lifecycleStatus: meta.lifecycleStatus,
-    archivedAt: meta.archivedAt,
-    folderId: meta.folderId,
-    folderName: meta.folderName,
-    tags: meta.tags ?? [],
-    projectId: project?.projectId,
-    projectName: project?.name,
-    searchHits: extras?.searchHits,
-    lastHandoff: extras?.lastHandoff,
-    delegationParent: extras?.delegationParent,
-    generatedArtifacts: extras?.generatedArtifacts,
-    channel: session.channel,
-    account: session.account,
-    updatedAt: session.updatedAt,
-    lastActivityAt: session.lastActivityAt,
-    tokenTotal: session.tokenTotal,
-    costUsdTotal: session.costUsdTotal,
-    pinnedGoal: meta.pinnedGoal,
-    goalTurnBudget: meta.goalTurnBudget,
-    goalTurnsUsed: meta.goalTurnsUsed,
-    goalSetAt: meta.goalSetAt,
-  };
-}
-
 function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord | undefined {
   const payload = event.payload as {
     message?: {
@@ -8750,62 +8330,6 @@ function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean
   return 0.5;
 }
 
-export function parseSlashCommand(input: string): string[] | undefined {
-  const trimmed = input.trim();
-  if (!trimmed.startsWith("/")) {
-    return undefined;
-  }
-  const parts = trimmed.split(/\s+/g).filter(Boolean);
-  return parts.length > 0 ? parts : undefined;
-}
-
-export function parseDelegateCommand(input: string): { roles: string[]; objective?: string; error?: string } {
-  const body = input
-    .trim()
-    .replace(/^\/delegate/i, "")
-    .trim();
-  const delimiterIndex = body.indexOf("::");
-  if (delimiterIndex < 0) {
-    return { roles: [], error: "missing delimiter" };
-  }
-  const rolesRaw = body.slice(0, delimiterIndex).trim();
-  const objective = body.slice(delimiterIndex + 2).trim();
-  const roles = normalizeDelegationRoles(
-    rolesRaw
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
-  );
-  if (roles.length === 0 || !objective) {
-    return { roles, objective, error: "invalid delegate payload" };
-  }
-  return { roles, objective };
-}
-
-export function parsePipelineCommand(
-  input: string,
-): { template: string; roles: string[]; objective: string } | undefined {
-  const body = input
-    .trim()
-    .replace(/^\/pipeline/i, "")
-    .trim();
-  const delimiterIndex = body.indexOf("::");
-  if (delimiterIndex < 0) {
-    return undefined;
-  }
-  const template = body.slice(0, delimiterIndex).trim().toLowerCase();
-  const objective = body.slice(delimiterIndex + 2).trim();
-  const roles = PIPELINE_TEMPLATES[template];
-  if (!roles || !objective) {
-    return undefined;
-  }
-  return {
-    template,
-    roles,
-    objective,
-  };
-}
-
 function dedupeStrings(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -8820,911 +8344,11 @@ function dedupeStrings(values: readonly string[]): string[] {
   return out;
 }
 
-export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
-  basePatch: Pick<
-    ChatSessionPrefsPatch,
-    | "mode"
-    | "planningMode"
-    | "providerId"
-    | "model"
-    | "imageProviderId"
-    | "imageModel"
-    | "webMode"
-    | "memoryMode"
-    | "thinkingLevel"
-    | "speedMode"
-    | "subagentPolicy"
-    | "toolAutonomy"
-    | "visionFallbackModel"
-    | "orchestrationEnabled"
-    | "orchestrationIntensity"
-    | "orchestrationVisibility"
-    | "orchestrationProviderPreference"
-    | "orchestrationReviewDepth"
-    | "orchestrationParallelism"
-    | "codeAutoApply"
-  >;
-  autonomyPatch: Partial<{
-    proactiveMode: ChatProactiveMode;
-    maxActionsPerHour: number;
-    maxActionsPerTurn: number;
-    cooldownSeconds: number;
-    retrievalMode: ChatRetrievalMode;
-    reflectionMode: ChatReflectionMode;
-  }>;
-} {
-  const basePatch: Pick<
-    ChatSessionPrefsPatch,
-    | "mode"
-    | "planningMode"
-    | "providerId"
-    | "model"
-    | "imageProviderId"
-    | "imageModel"
-    | "webMode"
-    | "memoryMode"
-    | "thinkingLevel"
-    | "speedMode"
-    | "subagentPolicy"
-    | "toolAutonomy"
-    | "visionFallbackModel"
-    | "orchestrationEnabled"
-    | "orchestrationIntensity"
-    | "orchestrationVisibility"
-    | "orchestrationProviderPreference"
-    | "orchestrationReviewDepth"
-    | "orchestrationParallelism"
-    | "codeAutoApply"
-  > = {
-    mode: input.mode,
-    planningMode: input.planningMode,
-    providerId: input.providerId,
-    model: input.model,
-    imageProviderId: input.imageProviderId,
-    imageModel: input.imageModel,
-    webMode: input.webMode,
-    memoryMode: input.memoryMode,
-    thinkingLevel: input.thinkingLevel,
-    speedMode: input.speedMode,
-    subagentPolicy: input.subagentPolicy,
-    toolAutonomy: input.toolAutonomy,
-    visionFallbackModel: input.visionFallbackModel,
-    orchestrationEnabled: input.orchestrationEnabled,
-    orchestrationIntensity: input.orchestrationIntensity,
-    orchestrationVisibility: input.orchestrationVisibility,
-    orchestrationProviderPreference: input.orchestrationProviderPreference,
-    orchestrationReviewDepth: input.orchestrationReviewDepth,
-    orchestrationParallelism: input.orchestrationParallelism,
-    codeAutoApply: input.codeAutoApply,
-  };
-  return {
-    basePatch,
-    autonomyPatch: {
-      proactiveMode: input.proactiveMode,
-      maxActionsPerHour: input.autonomyBudget?.maxActionsPerHour,
-      maxActionsPerTurn: input.autonomyBudget?.maxActionsPerTurn,
-      cooldownSeconds: input.autonomyBudget?.cooldownSeconds,
-      retrievalMode: input.retrievalMode,
-      reflectionMode: input.reflectionMode,
-    },
-  };
-}
-
-function isActiveToolGrant(grant: ToolGrantRecord): boolean {
-  if (grant.revokedAt) {
-    return false;
-  }
-  if (grant.expiresAt) {
-    const expiry = Date.parse(grant.expiresAt);
-    if (Number.isFinite(expiry) && expiry <= Date.now()) {
-      return false;
-    }
-  }
-  if (grant.grantType === "one_time") {
-    return (grant.usesRemaining ?? 0) > 0;
-  }
-  return true;
-}
-
-function canMutatePermissionProfile(profile: PermissionProfileRecord, actorId: string): boolean {
-  if (profile.builtin) {
-    return false;
-  }
-  if (profile.scope === "operator") {
-    return profile.scopeRef === actorId && profile.createdBy === actorId;
-  }
-  if (profile.scope === "workspace") {
-    return profile.createdBy === actorId;
-  }
-  return false;
-}
-
 function readRecordString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readOptionalRecordString(record: Record<string, unknown>, key: string): string | undefined {
-  return readRecordString(record, key);
-}
-
-function stableRecordStringify(value: unknown): string {
-  return JSON.stringify(sortRecordValue(value));
-}
-
-function sortRecordValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortRecordValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>)
-      .sort((left, right) => left.localeCompare(right))
-      .reduce<Record<string, unknown>>((acc, key) => {
-        acc[key] = sortRecordValue((value as Record<string, unknown>)[key]);
-        return acc;
-      }, {});
-  }
-  return value;
-}
-
-function readPermissionSurfaceValue(value: unknown): PermissionSurface | undefined {
-  return value === "chat" ||
-    value === "cowork" ||
-    value === "code" ||
-    value === "tools" ||
-    value === "mcp" ||
-    value === "all"
-    ? value
-    : undefined;
-}
-
-function readAuthActorSource(value: unknown): ToolPolicyActorContext["authActorSource"] | undefined {
-  return value === "none" ||
-    value === "token" ||
-    value === "basic" ||
-    value === "loopback" ||
-    value === "sse" ||
-    value === "device" ||
-    value === "companion"
-    ? value
-    : undefined;
-}
-
-function isApprovedExternalRuntimePendingAction(
-  pending: PendingApprovalAction | undefined,
-): pending is PendingApprovalAction {
-  if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
-    return false;
-  }
-  if (pending.request.externalRuntime === true) {
-    return true;
-  }
-  return readRecordString(pending.request, "toolName") === "mcp.invoke";
-}
-
-function approvedExternalRuntimeRequestMatches(
-  storedRequest: Record<string, unknown>,
-  request: ToolInvokeRequest,
-): boolean {
-  return (
-    readRecordString(storedRequest, "toolName") === request.toolName &&
-    stableRecordStringify(isRecord(storedRequest.args) ? storedRequest.args : {}) ===
-      stableRecordStringify(request.args ?? {}) &&
-    readRecordString(storedRequest, "agentId") === request.agentId &&
-    readRecordString(storedRequest, "sessionId") === request.sessionId &&
-    readOptionalRecordString(storedRequest, "workspaceId") === (request.workspaceId ?? undefined) &&
-    readOptionalRecordString(storedRequest, "taskId") === (request.taskId ?? undefined) &&
-    readOptionalRecordString(storedRequest, "runId") === (request.runId ?? undefined) &&
-    readOptionalRecordString(storedRequest, "permissionProfileId") === (request.permissionProfileId ?? undefined) &&
-    readOptionalRecordString(storedRequest, "localOperatorOverrideId") ===
-      (request.localOperatorOverrideId ?? undefined) &&
-    readPermissionSurfaceValue(storedRequest.surface) === request.surface &&
-    stableRecordStringify(isRecord(storedRequest.policyContext) ? storedRequest.policyContext : {}) ===
-      stableRecordStringify(request.policyContext ?? {})
-  );
-}
-
-function toToolInvokeRequest(record: Record<string, unknown>, signal?: AbortSignal): ToolInvokeRequest {
-  const toolName = readRecordString(record, "toolName");
-  const agentId = readRecordString(record, "agentId");
-  const sessionId = readRecordString(record, "sessionId");
-  if (!toolName || !agentId || !sessionId) {
-    throw new Error("Invalid pending tool approval request payload.");
-  }
-  const consentContext = isRecord(record.consentContext) ? record.consentContext : undefined;
-  return {
-    toolName,
-    args: isRecord(record.args) ? record.args : {},
-    agentId,
-    sessionId,
-    workspaceId: readRecordString(record, "workspaceId"),
-    taskId: readRecordString(record, "taskId"),
-    runId: readRecordString(record, "runId"),
-    signal,
-    permissionProfileId: readRecordString(record, "permissionProfileId"),
-    localOperatorOverrideId: readRecordString(record, "localOperatorOverrideId"),
-    surface: readPermissionSurfaceValue(record.surface),
-    policyContext: isRecord(record.policyContext) ? (record.policyContext as ToolPolicyActorContext) : undefined,
-    consentContext: consentContext
-      ? {
-          operatorId: readRecordString(consentContext, "operatorId"),
-          source:
-            consentContext.source === "ui" || consentContext.source === "tui" || consentContext.source === "agent"
-              ? consentContext.source
-              : undefined,
-          reason: readRecordString(consentContext, "reason"),
-        }
-      : undefined,
-    externalRuntime: record.externalRuntime === true ? true : undefined,
-  };
-}
-
-function withExternalRuntimePolicyContext(
-  request: ToolInvokeRequest,
-  policyResult: ToolInvokeResult,
-): ToolInvokeRequest {
-  const rawPolicyContext = policyResult.result?.policyContext;
-  if (!isRecord(rawPolicyContext)) {
-    return request;
-  }
-  const evaluated = rawPolicyContext as ToolPolicyActorContext;
-  return {
-    ...request,
-    policyContext: {
-      ...(request.policyContext ?? {}),
-      ...evaluated,
-      matchedGrantAllowedHosts:
-        evaluated.matchedGrantAllowedHosts && evaluated.matchedGrantAllowedHosts.length > 0
-          ? evaluated.matchedGrantAllowedHosts
-          : request.policyContext?.matchedGrantAllowedHosts,
-    },
-  };
-}
-
-function toApprovedMcpInvokeRequest(request: ToolInvokeRequest, signal?: AbortSignal): McpInvokeRequest {
-  const serverId = typeof request.args.serverId === "string" ? request.args.serverId.trim() : "";
-  const toolName = typeof request.args.toolName === "string" ? request.args.toolName.trim() : "";
-  if (!serverId || !toolName) {
-    throw new Error("Invalid approved MCP invocation payload.");
-  }
-  return {
-    serverId,
-    toolName,
-    arguments: isRecord(request.args.arguments) ? request.args.arguments : {},
-    agentId: request.agentId,
-    sessionId: request.sessionId,
-    workspaceId: request.workspaceId,
-    taskId: request.taskId,
-    runId: request.runId,
-    permissionProfileId: request.permissionProfileId,
-    localOperatorOverrideId: request.localOperatorOverrideId,
-    surface: request.surface,
-    policyContext: request.policyContext,
-    consentContext: request.consentContext,
-    signal,
-  };
-}
-
-function toolInvokeResultFromMcpApproval(
-  policyResult: ToolInvokeResult,
-  mcpResult: McpInvokeResponse,
-): ToolInvokeResult {
-  const result = {
-    externalRuntime: true,
-    toolName: "mcp.invoke",
-    ok: mcpResult.ok,
-    output: mcpResult.output,
-    contentItems: mcpResult.contentItems,
-    diagnostics: mcpResult.diagnostics,
-    error: mcpResult.ok ? undefined : mcpResult.error,
-  };
-  if (!mcpResult.ok) {
-    return {
-      ...policyResult,
-      outcome: "blocked",
-      policyReason: `MCP runtime failed after approval: ${mcpResult.error ?? "unknown error"}`,
-      result,
-    };
-  }
-  return {
-    ...policyResult,
-    outcome: "executed",
-    policyReason: `${policyResult.policyReason}; MCP runtime executed after approval`,
-    result,
-  };
-}
-
-function toolInvokeResultRecord(result: ToolInvokeResult): Record<string, unknown> {
-  return {
-    outcome: result.outcome,
-    policyReason: result.policyReason,
-    auditEventId: result.auditEventId,
-    result: result.result,
-  };
-}
-
-function grantPatternMatches(pattern: string, toolName: string): boolean {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  const regex = new RegExp(`^${escaped}$`);
-  return regex.test(toolName);
-}
-
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
   return isRecord(value) ? { ...value } : undefined;
-}
-
-function isChatTurnBranchKind(value: unknown): value is ChatTurnBranchKind {
-  return value === "append" || value === "retry" || value === "edit";
-}
-
-function isChatStreamUsageRecord(value: unknown): value is ChatStreamUsageRecord {
-  return (
-    isRecord(value) &&
-    (value.inputTokens === undefined || typeof value.inputTokens === "number") &&
-    (value.outputTokens === undefined || typeof value.outputTokens === "number") &&
-    (value.cachedInputTokens === undefined || typeof value.cachedInputTokens === "number") &&
-    (value.costUsd === undefined || typeof value.costUsd === "number")
-  );
-}
-
-function isChatToolRunRecord(value: unknown): value is ChatToolRunRecord {
-  return (
-    isRecord(value) &&
-    typeof value.toolRunId === "string" &&
-    typeof value.turnId === "string" &&
-    typeof value.sessionId === "string" &&
-    typeof value.toolName === "string" &&
-    (value.status === "started" ||
-      value.status === "executed" ||
-      value.status === "blocked" ||
-      value.status === "approval_required" ||
-      value.status === "failed") &&
-    typeof value.startedAt === "string" &&
-    (value.finishedAt === undefined || typeof value.finishedAt === "string") &&
-    (value.approvalId === undefined || typeof value.approvalId === "string") &&
-    (value.args === undefined || isRecord(value.args)) &&
-    (value.result === undefined || isRecord(value.result)) &&
-    (value.reused === undefined || typeof value.reused === "boolean") &&
-    (value.reusedFromToolRunId === undefined || typeof value.reusedFromToolRunId === "string") &&
-    (value.reuseReason === undefined || typeof value.reuseReason === "string") &&
-    (value.error === undefined || typeof value.error === "string") &&
-    (value.failureGuidance === undefined || typeof value.failureGuidance === "string")
-  );
-}
-
-function isChatTurnRepairRecord(value: unknown): value is ChatTurnRepairRecord {
-  return (
-    isRecord(value) &&
-    typeof value.applied === "boolean" &&
-    (value.kind === undefined || typeof value.kind === "string") &&
-    (value.source === undefined || typeof value.source === "string") &&
-    (value.preRepairContent === undefined || typeof value.preRepairContent === "string") &&
-    (value.postRepairContent === undefined || typeof value.postRepairContent === "string")
-  );
-}
-
-function isChatTurnDegradedRecord(value: unknown): boolean {
-  return isRecord(value) && typeof value.reason === "string" && typeof value.recoveredByModel === "boolean";
-}
-
-function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
-  return (
-    isRecord(value) &&
-    typeof value.citationId === "string" &&
-    typeof value.url === "string" &&
-    (value.title === undefined || typeof value.title === "string") &&
-    (value.snippet === undefined || typeof value.snippet === "string") &&
-    (value.knowledge === undefined ||
-      (isRecord(value.knowledge) &&
-        typeof value.knowledge.attachmentId === "string" &&
-        typeof value.knowledge.sourceRef === "string" &&
-        typeof value.knowledge.title === "string" &&
-        (value.knowledge.sectionLabel === undefined || typeof value.knowledge.sectionLabel === "string") &&
-        (value.knowledge.chunkId === undefined || typeof value.knowledge.chunkId === "string") &&
-        (value.knowledge.excerpt === undefined || typeof value.knowledge.excerpt === "string") &&
-        (value.knowledge.retrievalMode === "full_text" || value.knowledge.retrievalMode === "retrieval"))) &&
-    (value.provenance === undefined || isMemoryCitationProvenanceRecord(value.provenance)) &&
-    (value.sourceType === undefined ||
-      value.sourceType === "web" ||
-      value.sourceType === "file" ||
-      value.sourceType === "tool" ||
-      value.sourceType === "memory")
-  );
-}
-
-function isMemoryCitationProvenanceRecord(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value.relationScope === "self" || value.relationScope === "peer" || value.relationScope === "project") &&
-    (value.freshness === "fresh" ||
-      value.freshness === "recent" ||
-      value.freshness === "stale" ||
-      value.freshness === "unknown") &&
-    typeof value.selectionReason === "string" &&
-    (value.retrievalStrategy === undefined ||
-      value.retrievalStrategy === "lexical_recency" ||
-      value.retrievalStrategy === "semantic_hints" ||
-      value.retrievalStrategy === "semantic_vector") &&
-    (value.matchSignals === undefined || isMemoryRetrievalMatchSignalsRecord(value.matchSignals)) &&
-    (value.sourceTimestamp === undefined || typeof value.sourceTimestamp === "string")
-  );
-}
-
-function isMemoryRetrievalMatchSignalsRecord(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.lexicalScore === "number" &&
-    Number.isFinite(value.lexicalScore) &&
-    typeof value.semanticHintScore === "number" &&
-    Number.isFinite(value.semanticHintScore) &&
-    (value.semanticVectorScore === undefined ||
-      (typeof value.semanticVectorScore === "number" && Number.isFinite(value.semanticVectorScore))) &&
-    typeof value.recencyScore === "number" &&
-    Number.isFinite(value.recencyScore) &&
-    typeof value.diversityScore === "number" &&
-    Number.isFinite(value.diversityScore) &&
-    typeof value.totalScore === "number" &&
-    Number.isFinite(value.totalScore)
-  );
-}
-
-function isChatTurnTraceRecord(value: unknown): value is ChatTurnTraceRecord {
-  return (
-    isRecord(value) &&
-    typeof value.turnId === "string" &&
-    typeof value.sessionId === "string" &&
-    typeof value.userMessageId === "string" &&
-    (value.branchKind === "append" || value.branchKind === "retry" || value.branchKind === "edit") &&
-    typeof value.status === "string" &&
-    typeof value.mode === "string" &&
-    typeof value.webMode === "string" &&
-    typeof value.memoryMode === "string" &&
-    typeof value.thinkingLevel === "string" &&
-    typeof value.startedAt === "string" &&
-    Array.isArray(value.toolRuns) &&
-    value.toolRuns.every(isChatToolRunRecord) &&
-    Array.isArray(value.citations) &&
-    value.citations.every(isChatCitationRecord) &&
-    isRecord(value.routing)
-  );
-}
-
-function chatStreamChunkToRecord(chunk: ChatStreamChunk): Record<string, unknown> {
-  return { ...chunk };
-}
-
-function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
-  if (!isRecord(value) || typeof value.type !== "string" || typeof value.sessionId !== "string") {
-    return undefined;
-  }
-  const common = {
-    type: value.type,
-    sessionId: value.sessionId,
-    eventId: typeof value.eventId === "string" ? value.eventId : "",
-    sequence: typeof value.sequence === "number" && Number.isFinite(value.sequence) ? value.sequence : 0,
-    ...(typeof value.runId === "string" ? { runId: value.runId } : {}),
-  };
-  switch (value.type) {
-    case "message_start":
-      if (
-        typeof value.turnId !== "string" ||
-        typeof value.messageId !== "string" ||
-        !isChatTurnBranchKind(value.branchKind)
-      ) {
-        return undefined;
-      }
-      return {
-        ...common,
-        type: "message_start",
-        turnId: value.turnId,
-        messageId: value.messageId,
-        branchKind: value.branchKind,
-        ...(typeof value.parentTurnId === "string" ? { parentTurnId: value.parentTurnId } : {}),
-        ...(typeof value.sourceTurnId === "string" ? { sourceTurnId: value.sourceTurnId } : {}),
-      };
-    case "delta":
-      return typeof value.turnId === "string" && typeof value.delta === "string"
-        ? {
-            ...common,
-            type: "delta",
-            turnId: value.turnId,
-            delta: value.delta,
-            ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
-          }
-        : undefined;
-    case "usage":
-      return typeof value.turnId === "string" && isChatStreamUsageRecord(value.usage)
-        ? {
-            ...common,
-            type: "usage",
-            turnId: value.turnId,
-            usage: value.usage,
-            ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
-          }
-        : undefined;
-    case "message_done":
-      return typeof value.turnId === "string" &&
-        typeof value.messageId === "string" &&
-        typeof value.content === "string"
-        ? {
-            ...common,
-            type: "message_done",
-            turnId: value.turnId,
-            messageId: value.messageId,
-            content: value.content,
-            ...(typeof value.repaired === "boolean" ? { repaired: value.repaired } : {}),
-            ...(isChatTurnRepairRecord(value.repair) ? { repair: value.repair } : {}),
-            ...(isChatTurnDegradedRecord(value.degraded)
-              ? { degraded: value.degraded as { reason: string; recoveredByModel: boolean } }
-              : {}),
-          }
-        : undefined;
-    case "tool_start":
-    case "tool_result":
-      return typeof value.turnId === "string" && isChatToolRunRecord(value.toolRun)
-        ? {
-            ...common,
-            type: value.type,
-            turnId: value.turnId,
-            toolRun: value.toolRun,
-          }
-        : undefined;
-    case "approval_required":
-      return typeof value.turnId === "string" &&
-        isRecord(value.approval) &&
-        typeof value.approval.approvalId === "string"
-        ? {
-            ...common,
-            type: "approval_required",
-            turnId: value.turnId,
-            approval: {
-              approvalId: value.approval.approvalId,
-              ...(typeof value.approval.toolName === "string" ? { toolName: value.approval.toolName } : {}),
-              ...(typeof value.approval.reason === "string" ? { reason: value.approval.reason } : {}),
-              ...(typeof value.approval.expiresAt === "string" ? { expiresAt: value.approval.expiresAt } : {}),
-            },
-          }
-        : undefined;
-    case "trace_update":
-      return typeof value.turnId === "string" && isChatTurnTraceRecord(value.trace)
-        ? {
-            ...common,
-            type: "trace_update",
-            turnId: value.turnId,
-            trace: value.trace,
-          }
-        : undefined;
-    case "citation":
-      return typeof value.turnId === "string" && isChatCitationRecord(value.citation)
-        ? {
-            ...common,
-            type: "citation",
-            turnId: value.turnId,
-            citation: value.citation,
-          }
-        : undefined;
-    case "capability_upgrade_suggestion":
-      return typeof value.turnId === "string" && Array.isArray(value.capabilityUpgradeSuggestions)
-        ? {
-            ...common,
-            type: "capability_upgrade_suggestion",
-            turnId: value.turnId,
-            capabilityUpgradeSuggestions: value.capabilityUpgradeSuggestions as ChatCapabilityUpgradeSuggestion[],
-          }
-        : undefined;
-    case "error":
-      return typeof value.error === "string"
-        ? {
-            ...common,
-            type: "error",
-            error: value.error,
-            ...(typeof value.turnId === "string" ? { turnId: value.turnId } : {}),
-          }
-        : undefined;
-    case "done":
-      return typeof value.turnId === "string" && typeof value.messageId === "string"
-        ? {
-            ...common,
-            type: "done",
-            turnId: value.turnId,
-            messageId: value.messageId,
-          }
-        : undefined;
-    default:
-      return undefined;
-  }
-}
-
-function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload): Record<string, unknown> {
-  return { ...payload };
-}
-
-const CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT = 3_900;
-const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
-  discord: 1_900,
-  telegram: 3_900,
-  whatsapp: 3_500,
-  line: 4_500,
-  "nextcloud-talk": 3_900,
-  slack: 32_000,
-};
-
-function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string): Record<string, unknown> {
-  const sanitized = sanitizeChannelOutboundMessage(input.message ?? "");
-  const chunkLimit = getChannelDeliveryChunkLimit(channelKey);
-  const messageParts = splitChannelOutboundMessage(sanitized.message, chunkLimit);
-  const deliveryDiagnostics = buildChannelDeliveryDiagnostics(sanitized.message, messageParts, chunkLimit);
-  return {
-    connectionId: input.connectionId,
-    target: input.target,
-    message: messageParts[0] ?? "",
-    messageParts: messageParts.length > 1 ? messageParts : undefined,
-    deliveryDiagnostics,
-    attachments: input.attachments,
-    attachmentIds: input.attachmentIds,
-    interactiveActions: input.interactiveActions,
-    replyToMessageId: input.replyToMessageId,
-    replyToPartIndex: input.replyToPartIndex,
-    effectId: input.effectId,
-    subject: input.subject,
-    commitmentId: input.commitmentId,
-    workspaceId: input.workspaceId,
-    sessionId: input.sessionId,
-    agentId: input.agentId,
-    taskId: input.taskId,
-    runId: input.runId,
-    operatorId: input.operatorId,
-    authActorId: input.authActorId,
-    authActorSource: input.authActorSource,
-    permissionProfileId: input.permissionProfileId,
-    localOperatorOverrideId: input.localOperatorOverrideId,
-    surface: input.surface,
-  };
-}
-
-function isSystemOwnedRestrictedPermissionProfileRequest(
-  profileId: string,
-  input: {
-    operatorId?: string;
-    authActorId?: string;
-    authActorSource?: ToolPolicyActorContext["authActorSource"];
-  },
-): boolean {
-  if (profileId !== SCHEDULED_TURN_PERMISSION_PROFILE_ID && profileId !== HEARTBEAT_PERMISSION_PROFILE_ID) {
-    return false;
-  }
-  if (input.authActorSource !== "none") {
-    return false;
-  }
-  const operatorId = input.operatorId?.trim();
-  const authActorId = input.authActorId?.trim();
-  return Boolean(
-    operatorId &&
-    authActorId &&
-    operatorId === authActorId &&
-    (operatorId === "system-cron" || operatorId === "system"),
-  );
-}
-
-function getChannelDeliveryChunkLimit(channelKey: string): number {
-  return CHANNEL_DELIVERY_CHUNK_LIMITS[channelKey.toLowerCase()] ?? CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT;
-}
-
-function splitChannelOutboundMessage(message: string, maxPartUtf16Length: number): string[] {
-  if (!message) {
-    return [""];
-  }
-  if (message.length <= maxPartUtf16Length) {
-    return [message];
-  }
-  const parts = splitUnicodeGraphemes(message);
-  const chunks: string[] = [];
-  let current = "";
-  for (const part of parts) {
-    if (current && current.length + part.length > maxPartUtf16Length) {
-      chunks.push(current);
-      current = "";
-    }
-    current += part;
-  }
-  if (current) {
-    chunks.push(current);
-  }
-  return chunks;
-}
-
-function splitUnicodeGraphemes(message: string): string[] {
-  const SegmenterCtor = Intl.Segmenter;
-  if (typeof SegmenterCtor === "function") {
-    const segmenter = new SegmenterCtor(undefined, { granularity: "grapheme" });
-    return [...segmenter.segment(message)].map((item) => item.segment);
-  }
-  return Array.from(message);
-}
-
-function buildChannelDeliveryDiagnostics(
-  message: string,
-  messageParts: string[],
-  maxPartUtf16Length: number,
-): ChannelDeliveryDiagnostics | undefined {
-  if (messageParts.length <= 1) {
-    return undefined;
-  }
-  return {
-    chunking: {
-      mode: "unicode_safe",
-      originalCodePointLength: splitUnicodeGraphemes(message).length,
-      partCount: messageParts.length,
-      maxPartUtf16Length,
-      parts: messageParts.map((part, index) => ({
-        partIndex: index,
-        codePointLength: splitUnicodeGraphemes(part).length,
-        utf16Length: part.length,
-      })),
-    },
-  };
-}
-
-function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeSendInput): ChannelSendInput {
-  const payload = input.payload;
-  return {
-    connectionId: readRequiredString(payload.connectionId, "connectionId"),
-    target: readRequiredString(payload.target, "target"),
-    message: typeof payload.message === "string" ? payload.message : "",
-    attachments: Array.isArray(payload.attachments)
-      ? (payload.attachments as ChannelSendInput["attachments"])
-      : undefined,
-    attachmentIds: Array.isArray(payload.attachmentIds) ? (payload.attachmentIds as string[]) : undefined,
-    interactiveActions:
-      typeof payload.interactiveActions === "object" && payload.interactiveActions !== null
-        ? (payload.interactiveActions as ChannelSendInput["interactiveActions"])
-        : undefined,
-    replyToMessageId: typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : undefined,
-    replyToPartIndex: typeof payload.replyToPartIndex === "number" ? payload.replyToPartIndex : undefined,
-    effectId: typeof payload.effectId === "string" ? payload.effectId : undefined,
-    subject: typeof payload.subject === "string" ? payload.subject : undefined,
-    commitmentId: typeof payload.commitmentId === "string" ? payload.commitmentId : undefined,
-    workspaceId: typeof payload.workspaceId === "string" ? payload.workspaceId : undefined,
-    sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
-    agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
-    taskId: typeof payload.taskId === "string" ? payload.taskId : undefined,
-    runId: typeof payload.runId === "string" ? payload.runId : undefined,
-    operatorId: typeof payload.operatorId === "string" ? payload.operatorId : undefined,
-    authActorId: typeof payload.authActorId === "string" ? payload.authActorId : undefined,
-    authActorSource: readAuthActorSource(payload.authActorSource),
-    permissionProfileId: typeof payload.permissionProfileId === "string" ? payload.permissionProfileId : undefined,
-    localOperatorOverrideId:
-      typeof payload.localOperatorOverrideId === "string" ? payload.localOperatorOverrideId : undefined,
-    surface: readPermissionSurface(payload.surface),
-  };
-}
-
-function readChannelDeliveryMessageParts(payload: Record<string, unknown>): string[] {
-  const parts = Array.isArray(payload.messageParts)
-    ? payload.messageParts
-    : Array.isArray(payload.deliveryChunks)
-      ? payload.deliveryChunks
-      : undefined;
-  if (!parts) {
-    return [];
-  }
-  return parts.filter((item): item is string => typeof item === "string");
-}
-
-function readDeliveryDiagnostics(value: unknown): ChannelDeliveryDiagnostics | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return value as ChannelDeliveryDiagnostics;
-}
-
-function readPermissionSurface(value: unknown): ChannelSendInput["surface"] | undefined {
-  return value === "chat" ||
-    value === "cowork" ||
-    value === "code" ||
-    value === "tools" ||
-    value === "mcp" ||
-    value === "all"
-    ? value
-    : undefined;
-}
-
-function legacyToolProfileToApprovalMode(profile: string | undefined): ToolApprovalMode | undefined {
-  if (!profile) {
-    return undefined;
-  }
-  return profile === "danger" ? "bypass" : "approve_risky";
-}
-
-function hasExplicitNonLoopbackAllowedOrigin(rawOrigins: string | undefined): boolean {
-  if (!rawOrigins?.trim()) {
-    return false;
-  }
-  return rawOrigins
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean)
-    .some((origin) => {
-      try {
-        const parsed = new URL(origin);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-          return false;
-        }
-        return !isLoopbackDevOrigin(parsed.origin);
-      } catch {
-        return false;
-      }
-    });
-}
-
-function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput, channelKey: string): string | undefined {
-  const explicit = (input as ChannelSendInput & { idempotencyKey?: string }).idempotencyKey?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  if (input.effectId?.trim()) {
-    return `channel-delivery:effect:${input.effectId.trim()}`;
-  }
-  if (input.sessionId?.trim() && input.replyToMessageId?.trim()) {
-    const hash = createHash("sha256")
-      .update(JSON.stringify(buildChannelDeliveryPayload(input, channelKey)))
-      .digest("hex");
-    return `channel-delivery:session:${input.sessionId.trim()}:${input.replyToMessageId.trim()}:${hash}`;
-  }
-  if (input.taskId?.trim()) {
-    const hash = createHash("sha256")
-      .update(JSON.stringify(buildChannelDeliveryPayload(input, channelKey)))
-      .digest("hex");
-    return `channel-delivery:task:${input.taskId.trim()}:${hash}`;
-  }
-  return undefined;
-}
-
-function mapPersistedChannelDeliveryRuntimeStatus(
-  status: "queued" | "sent" | "failed",
-  deliveryStatus: string | undefined,
-  staleReason: string | undefined,
-): ChannelDeliveryRuntimeRecord["status"] {
-  if (staleReason) {
-    return "stale";
-  }
-  if (status === "sent") {
-    return "sent";
-  }
-  if (status === "failed") {
-    if (deliveryStatus === "manual_reconciliation_required") {
-      return "manual_reconciliation_required";
-    }
-    return "failed";
-  }
-  return deliveryStatus === "retrying" ? "retrying" : "queued";
-}
-
-function extractCommsSendResult(result: ToolInvokeResult | Record<string, unknown>): Record<string, unknown> {
-  if (isToolInvokeResultLike(result)) {
-    if (result.outcome !== "executed") {
-      throw new Error(result.policyReason || `channel.send returned ${result.outcome}`);
-    }
-    return result.result ?? {};
-  }
-  return result;
-}
-
-function isToolInvokeResultLike(value: unknown): value is ToolInvokeResult {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const outcome = (value as { outcome?: unknown }).outcome;
-  return outcome === "executed" || outcome === "blocked" || outcome === "approval_required";
-}
-
-function readRequiredString(value: unknown, label: string): string {
-  if (typeof value === "string" && value.trim().length > 0) {
-    return value;
-  }
-  throw new Error(`Channel delivery payload is missing ${label}.`);
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
