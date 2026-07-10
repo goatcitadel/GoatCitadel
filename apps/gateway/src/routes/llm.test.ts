@@ -68,6 +68,50 @@ describe("llm routes", () => {
     );
   });
 
+  it("projects direct model completions without mutating provider results", async () => {
+    const rawResult = {
+      id: "cmpl-secret",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "Authorization: Bearer direct-model-secret" },
+        },
+      ],
+      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+    };
+    const createChatCompletion = vi.fn(async () => rawResult);
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion,
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/chat-completions",
+      payload: {
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain("direct-model-secret");
+    expect(response.json()).toMatchObject({
+      choices: [{ message: { content: "Authorization: [REDACTED]" } }],
+      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+    });
+    expect(rawResult.choices[0]!.message.content).toContain("direct-model-secret");
+  });
+
   it("rejects invalid reasoning controls", async () => {
     app = Fastify();
     app.decorate("services", {
@@ -494,12 +538,20 @@ describe("llm routes", () => {
   });
 
   it("accepts image generation requests", async () => {
-    const generateImage = vi.fn(async (request) => ({
+    const generatedBytes =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const rawResult = {
       operation: "edit",
-      providerId: request.providerId,
-      model: request.model,
-      data: [],
-    }));
+      providerId: "openai",
+      model: "gpt-image-2",
+      data: [
+        {
+          b64Json: generatedBytes,
+          revisedPrompt: "Authorization: Bearer generated-image-secret",
+        },
+      ],
+    };
+    const generateImage = vi.fn(async () => rawResult);
 
     app = Fastify();
     app.decorate("services", {
@@ -536,6 +588,11 @@ describe("llm routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain("generated-image-secret");
+    expect(response.json()).toMatchObject({
+      data: [{ b64Json: generatedBytes, revisedPrompt: "Authorization: [REDACTED]" }],
+    });
+    expect(rawResult.data[0]!.revisedPrompt).toContain("generated-image-secret");
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
         providerId: "openai",
@@ -547,6 +604,147 @@ describe("llm routes", () => {
         ],
       }),
     );
+  });
+
+  it("projects provider config, discovery, and runtime diagnostics without hiding safe metadata", async () => {
+    const rawProvider = {
+      providerId: "custom-provider",
+      label: "Custom Provider",
+      baseUrl: "https://provider.example.test/access-token/provider-path?token=provider-query",
+      apiStyle: "openai-chat-completions",
+      defaultModel: "custom-model",
+      hasApiKey: true,
+      apiKeySource: "env",
+      diagnostic: {
+        authorization: "Bearer provider-short",
+        tokenId: "provider-token-id",
+        requestCount: 17,
+      },
+    };
+    const rawConfig = {
+      activeProviderId: "custom-provider",
+      activeModel: "custom-model",
+      providers: [rawProvider],
+      providerConfigs: [
+        {
+          providerId: "custom-provider",
+          label: "Custom Provider",
+          baseUrl: "https://provider.example.test/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "custom-model",
+          request: {
+            auth: {
+              type: "bearer",
+              token: "provider-inline-short",
+              tokenEnv: "CUSTOM_PROVIDER_TOKEN",
+              headerName: "Authorization",
+            },
+            proxy: {
+              url: "https://proxy.example.test/client-secret/proxy-path?token=proxy-query",
+              auth: {
+                type: "header",
+                headerName: "Proxy-Authorization",
+                value: "proxy-inline-short",
+                valueEnv: "CUSTOM_PROXY_AUTH",
+                scheme: "Bearer",
+              },
+            },
+          },
+        },
+      ],
+    };
+    const rawModels = {
+      items: [{ id: "custom-model" }],
+      source: "error_fallback",
+      warning:
+        "Discovery https://provider.example.test/api-key/model-path?token=model-query failed with Bearer model-short",
+      metadata: {
+        tokenId: "model-token-id",
+        retryCount: 2,
+      },
+    };
+    const rawMeasurements = {
+      generatedAt: "2026-07-09T00:00:00.000Z",
+      items: [
+        {
+          measurementId: "measurement-1",
+          providerId: "custom-provider",
+          model: "custom-model",
+          metrics: { promptTokens: 11, completionTokens: 7 },
+          error: "Authorization: Bearer measurement-short",
+        },
+      ],
+      warnings: ["Retry https://provider.example.test/token/measurement-path?token=measurement-query"],
+    };
+
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        listLlmProviders: vi.fn(() => [rawProvider]),
+        getLlmConfigWithDetails: vi.fn(() => rawConfig),
+        listLlmModels: vi.fn(async () => rawModels),
+        listLlmRuntimeMeasurements: vi.fn(() => rawMeasurements),
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const providers = await app.inject({ method: "GET", url: "/api/v1/llm/providers" });
+    const config = await app.inject({ method: "GET", url: "/api/v1/llm/config" });
+    const models = await app.inject({ method: "GET", url: "/api/v1/llm/models?providerId=custom-provider" });
+    const measurements = await app.inject({ method: "GET", url: "/api/v1/llm/runtime-measurements" });
+
+    expect(providers.statusCode).toBe(200);
+    expect(providers.json().items[0]).toMatchObject({
+      providerId: "custom-provider",
+      baseUrl: "https://provider.example.test/access-token/[REDACTED]?token=[REDACTED]",
+      hasApiKey: true,
+      apiKeySource: "env",
+      diagnostic: {
+        authorization: "[REDACTED]",
+        tokenId: "provider-token-id",
+        requestCount: 17,
+      },
+    });
+    expect(config.statusCode).toBe(200);
+    expect(config.json().providerConfigs[0].request).toMatchObject({
+      auth: {
+        type: "bearer",
+        tokenEnv: "CUSTOM_PROVIDER_TOKEN",
+        headerName: "Authorization",
+      },
+      proxy: {
+        url: "https://proxy.example.test/client-secret/[REDACTED]?token=[REDACTED]",
+        auth: {
+          type: "header",
+          headerName: "Proxy-Authorization",
+          valueEnv: "CUSTOM_PROXY_AUTH",
+          scheme: "Bearer",
+        },
+      },
+    });
+    expect(JSON.stringify(config.json())).not.toContain("provider-inline-short");
+    expect(JSON.stringify(config.json())).not.toContain("proxy-inline-short");
+    expect(models.statusCode).toBe(200);
+    expect(models.json()).toMatchObject({
+      warning:
+        "Discovery https://provider.example.test/api-key/[REDACTED]?token=[REDACTED] failed with Bearer [REDACTED]",
+      metadata: { tokenId: "model-token-id", retryCount: 2 },
+    });
+    expect(measurements.statusCode).toBe(200);
+    expect(measurements.json()).toMatchObject({
+      items: [
+        expect.objectContaining({
+          measurementId: "measurement-1",
+          metrics: { promptTokens: 11, completionTokens: 7 },
+          error: "Authorization: [REDACTED]",
+        }),
+      ],
+      warnings: ["Retry https://provider.example.test/token/[REDACTED]?token=[REDACTED]"],
+    });
+    expect(rawProvider.diagnostic.authorization).toBe("Bearer provider-short");
+    expect(rawConfig.providerConfigs[0]!.request.auth.token).toBe("provider-inline-short");
+    expect(rawModels.warning).toContain("model-path");
+    expect(rawMeasurements.items[0]!.error).toContain("measurement-short");
   });
 
   it("exposes OpenAI Codex OAuth status, start, poll, and disconnect routes", async () => {

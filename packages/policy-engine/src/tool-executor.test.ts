@@ -5334,6 +5334,7 @@ describe("executeTool", () => {
             args: { url: "https://example.com/api/bot-secret-token?password=hunter2" },
             agentId: "agent",
             sessionId: "sess-http-redirect-redact",
+            authContext: { secretRefs: ["secret://test/redirect-url"] },
           },
           policyConfig,
           storageStub,

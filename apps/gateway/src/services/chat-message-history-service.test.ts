@@ -63,6 +63,34 @@ describe("chat-message-history-service", () => {
     ]);
   });
 
+  it("projects legacy assistant and system secrets before rebuilding provider history", async () => {
+    const deps = createDeps({
+      transcript: [
+        createTranscriptEvent("event-user-secret", "message.user", {
+          message: { role: "user", content: "My own password is intentionally visible to me." },
+        }),
+        createTranscriptEvent("event-assistant-secret", "message.assistant", {
+          message: {
+            role: "assistant",
+            content:
+              '{\\"DATABASE_PASSWORD\\":\\"legacy-db-secret\\",\\"webhookUrl\\":\\"https://hooks.example.test/services/team/legacy-hook-secret\\"}',
+          },
+        }),
+        createTranscriptEvent("event-system-secret", "message.system", {
+          message: { role: "system", content: "Authorization: Bearer legacy-system-secret" },
+        }),
+      ],
+    });
+
+    const messages = await buildLlmMessagesFromTranscript(deps, "session-1");
+    const serialized = JSON.stringify(messages);
+
+    expect(serialized).toContain("My own password is intentionally visible to me.");
+    expect(serialized).not.toContain("legacy-db-secret");
+    expect(serialized).not.toContain("legacy-hook-secret");
+    expect(serialized).not.toContain("legacy-system-secret");
+  });
+
   it("compacts long transcripts while preserving recent turns", async () => {
     const transcript = Array.from({ length: 48 }, (_, index) =>
       createTranscriptEvent(`event-${index}`, index % 2 === 0 ? "message.user" : "message.assistant", {

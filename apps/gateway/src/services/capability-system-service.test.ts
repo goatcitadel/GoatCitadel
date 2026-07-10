@@ -1681,6 +1681,17 @@ describe("CapabilitySystemService", () => {
       }
       throw new Error(`Missing approval ${approvalId}`);
     });
+    const liveInlineDetails = {
+      request: {
+        authorization: "Bearer short",
+        webhookUrl: "https://hooks.example.test/services/team/path-secret?token=query-secret",
+        DATABASE_PASSWORD: "tiny-secret",
+      },
+      tokenEnv: "CODE_MODE_TOKEN",
+      secretRef: "keychain:code-mode-token",
+      tokenBudget: 2_048,
+      tokenId: "code-mode-token-id",
+    };
     vi.mocked(harness.storage.chatInlineApprovals.listBySession).mockReturnValue([
       {
         approvalId: "approval-live",
@@ -1688,7 +1699,7 @@ describe("CapabilitySystemService", () => {
         turnId: "turn-1",
         status: "pending",
         createdAt: "2026-04-10T00:00:01.000Z",
-        details: {},
+        details: liveInlineDetails,
       },
       {
         approvalId: "approval-resolved",
@@ -1708,11 +1719,23 @@ describe("CapabilitySystemService", () => {
       },
     ] as never);
 
-    expect(harness.service.listChatPendingApprovals("session-1")).toEqual([
+    const pendingApprovals = harness.service.listChatPendingApprovals("session-1");
+    expect(pendingApprovals).toEqual([
       expect.objectContaining({
         approvalId: "approval-live",
         toolName: "fs.write",
         reason: "Write the generated candidate.",
+        details: {
+          request: {
+            authorization: "[REDACTED]",
+            webhookUrl: "[REDACTED]",
+            DATABASE_PASSWORD: "[REDACTED]",
+          },
+          tokenEnv: "CODE_MODE_TOKEN",
+          secretRef: "keychain:code-mode-token",
+          tokenBudget: 2_048,
+          tokenId: "code-mode-token-id",
+        },
         stale: false,
       }),
       expect.objectContaining({
@@ -1728,6 +1751,9 @@ describe("CapabilitySystemService", () => {
         staleReason: "failed",
       }),
     ]);
+    expect(liveInlineDetails.request.authorization).toBe("Bearer short");
+    expect(liveInlineDetails.request.webhookUrl).toContain("path-secret");
+    expect(liveInlineDetails.request.DATABASE_PASSWORD).toBe("tiny-secret");
   });
 
   it("builds compact prompt-facing tool directories from callable tools only", async () => {

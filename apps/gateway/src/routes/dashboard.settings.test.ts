@@ -180,6 +180,160 @@ describe("dashboard settings routes", () => {
     expect(updateSettings).not.toHaveBeenCalled();
   });
 
+  it("projects executable settings and runtime diagnostics while preserving auth readiness metadata", async () => {
+    const rawSettings = {
+      deploymentProfile: "trusted_local",
+      auth: {
+        mode: "token",
+        allowLoopbackBypass: false,
+        tokenConfigured: true,
+        basicConfigured: false,
+        plan: {
+          mode: "token",
+          warnings: [],
+          token: { configured: true, source: "env" },
+          basicUsername: { configured: false, source: "none" },
+          basicPassword: { configured: false, source: "none" },
+        },
+      },
+      llm: {
+        activeProviderId: "custom-provider",
+        activeModel: "custom-model",
+        providers: [
+          {
+            providerId: "custom-provider",
+            label: "Custom Provider",
+            baseUrl: "https://provider.example.test/token/settings-path?token=settings-query",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "custom-model",
+            hasApiKey: true,
+            apiKeySource: "env",
+          },
+        ],
+      },
+      llamaCpp: {
+        enabled: true,
+        autoStart: true,
+        baseUrl: "http://127.0.0.1:8080/v1",
+        command: "llama-server",
+        extraArgs: ["--api-key", "llama-inline-short", "--threads", "8"],
+        status: {
+          healthy: false,
+          lastError: "Authorization: Bearer llama-status-short",
+          launchCommandPreview: "llama-server --api-key llama-preview-short --threads 8",
+        },
+      },
+      npu: {
+        enabled: true,
+        autoStart: false,
+        sidecarUrl: "https://npu.example.test/access-token/npu-path?token=npu-query",
+        status: {
+          healthy: false,
+          lastError: "NPU failed with Bearer npu-status-short",
+        },
+      },
+      requestCount: 23,
+    };
+    const getSettings = vi.fn(() => rawSettings);
+
+    app = Fastify();
+    app.decorate("services", { settings: { getSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/settings" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      deploymentProfile: "trusted_local",
+      auth: {
+        mode: "token",
+        tokenConfigured: true,
+        basicConfigured: false,
+        plan: {
+          mode: "token",
+          token: { configured: true, source: "env" },
+          basicUsername: { configured: false, source: "none" },
+          basicPassword: { configured: false, source: "none" },
+        },
+      },
+      llm: {
+        providers: [
+          expect.objectContaining({
+            providerId: "custom-provider",
+            baseUrl: "https://provider.example.test/token/[REDACTED]?token=[REDACTED]",
+            hasApiKey: true,
+            apiKeySource: "env",
+          }),
+        ],
+      },
+      llamaCpp: {
+        extraArgs: ["--api-key", "[REDACTED]", "--threads", "8"],
+        status: {
+          lastError: "Authorization: [REDACTED]",
+          launchCommandPreview: "llama-server --api-key [REDACTED] --threads 8",
+        },
+      },
+      npu: {
+        sidecarUrl: "https://npu.example.test/access-token/[REDACTED]?token=[REDACTED]",
+        status: { lastError: "NPU failed with Bearer [REDACTED]" },
+      },
+      requestCount: 23,
+    });
+    expect(rawSettings.llamaCpp.extraArgs[1]).toBe("llama-inline-short");
+    expect(rawSettings.llamaCpp.status.launchCommandPreview).toContain("llama-preview-short");
+    expect(rawSettings.auth.plan.token).toEqual({ configured: true, source: "env" });
+  });
+
+  it("accepts a GET-projected settings payload for the editable secret-bearing runtime fields", async () => {
+    const rawSettings = {
+      web: {
+        firecrawl: {
+          baseUrl: "https://firecrawl.example.test/token/firecrawl-secret?token=firecrawl-query",
+        },
+      },
+      mesh: {
+        staticPeers: ["https://peer.example.test/password/peer-secret?token=peer-query"],
+      },
+      npu: {
+        sidecarUrl: "https://npu.example.test/access-token/npu-secret?token=npu-query",
+      },
+      llamaCpp: {
+        baseUrl: "https://llama.example.test/access-token/llama-secret?token=llama-query",
+        command: "llama-server --api-key command-secret",
+        extraArgs: ["--api-key", "argument-secret"],
+      },
+    };
+    const getSettings = vi.fn(() => rawSettings);
+    const updateSettings = vi.fn(() => rawSettings);
+
+    app = Fastify();
+    app.decorate("services", { settings: { getSettings, updateSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const getResponse = await app.inject({ method: "GET", url: "/api/v1/settings" });
+    const displayed = getResponse.json();
+    const patch = {
+      web: { firecrawl: { baseUrl: displayed.web.firecrawl.baseUrl, timeoutMs: 21_000 } },
+      mesh: { staticPeers: displayed.mesh.staticPeers, mdns: false },
+      npu: { sidecarUrl: displayed.npu.sidecarUrl, autoStart: true },
+      llamaCpp: {
+        baseUrl: displayed.llamaCpp.baseUrl,
+        command: displayed.llamaCpp.command,
+        extraArgs: displayed.llamaCpp.extraArgs,
+        threads: 8,
+      },
+    };
+    const patchResponse = await app.inject({ method: "PATCH", url: "/api/v1/settings", payload: patch });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(patchResponse.statusCode).toBe(200);
+    expect(updateSettings).toHaveBeenCalledWith(patch);
+    expect(JSON.stringify(patchResponse.json())).not.toContain("firecrawl-secret");
+    expect(JSON.stringify(patchResponse.json())).not.toContain("peer-secret");
+    expect(JSON.stringify(patchResponse.json())).not.toContain("npu-secret");
+    expect(JSON.stringify(patchResponse.json())).not.toContain("llama-secret");
+  });
+
   it("routes canonical personality catalog APIs to settings services", async () => {
     const catalog = {
       defaultPersonalityId: "operator",

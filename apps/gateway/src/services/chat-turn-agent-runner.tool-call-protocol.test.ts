@@ -32,6 +32,72 @@ function findToolResultMessages(messages: RequestMessage[]): RequestMessage[] {
 }
 
 describe("ChatTurnAgentRunner tool-call message protocol", () => {
+  it("projects deterministic prefetch tool results before they enter the model request", async () => {
+    const completionRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      completionRequests.push(request);
+      return {
+        model: "gpt-5.4",
+        choices: [{ index: 0, message: { role: "assistant", content: "It is noon UTC." } }],
+      };
+    });
+    const invokeTool = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: randomUUID(),
+        result: {
+          iso: "2026-07-09T12:00:00.000Z",
+          webhookUrl: "https://hooks.example.test/time?token=prefetch-short",
+          authorization: "Bearer prefetch",
+          DATABASE_PASSWORD: "prefetch-db-secret",
+          tokenEnv: "TIME_TOOL_TOKEN",
+        },
+      }),
+    );
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["time.now"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-prefetch-secret-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-prefetch-secret-1",
+      content: "What time is it right now?",
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "assistant",
+          content: '{\\"DATABASE_PASSWORD\\":\\"legacy-history-secret\\"}',
+        },
+        { role: "user", content: "What time is it right now?" },
+      ],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledOnce();
+    const serializedModelMessages = JSON.stringify(completionRequests[0]?.messages);
+    expect(serializedModelMessages).toContain("TIME_TOOL_TOKEN");
+    expect(serializedModelMessages).not.toContain("prefetch-short");
+    expect(serializedModelMessages).not.toContain("Bearer prefetch");
+    expect(serializedModelMessages).not.toContain("prefetch-db-secret");
+    expect(serializedModelMessages).not.toContain("legacy-history-secret");
+    expect(result.turnTrace.toolRuns[0]?.result).toMatchObject({
+      webhookUrl: "https://hooks.example.test/time?token=prefetch-short",
+      authorization: "Bearer prefetch",
+      DATABASE_PASSWORD: "prefetch-db-secret",
+      tokenEnv: "TIME_TOOL_TOKEN",
+    });
+  });
+
   it("replays assistant prose and provider-native content alongside tool calls in the follow-up request", async () => {
     const providerNativeContent = [
       {
@@ -82,7 +148,18 @@ describe("ChatTurnAgentRunner tool-call message protocol", () => {
       outcome: "executed",
       policyReason: "allowed",
       auditEventId: randomUUID(),
-      result: { matches: [{ title: "Onboarding checklist", snippet: "Accounts, hardware, first-week plan." }] },
+      result: {
+        matches: [{ title: "Onboarding checklist", snippet: "Accounts, hardware, first-week plan." }],
+        diagnostics: {
+          webhookUrl: "https://hooks.example.test/send?token=short-token",
+          authorization: "Bearer short",
+          DATABASE_PASSWORD: "tiny-secret",
+          tokenEnv: "DOCS_SEARCH_TOKEN",
+          secretRef: "vault:docs-search",
+          tokenBudget: 2048,
+          tokenId: "token-record-1",
+        },
+      },
     });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
@@ -117,6 +194,21 @@ describe("ChatTurnAgentRunner tool-call message protocol", () => {
     expect(assistantMessage?.tool_calls?.map((toolCall) => toolCall.id)).toEqual([toolCallId]);
     const toolResults = findToolResultMessages(secondRequestMessages);
     expect(toolResults.map((message) => message.tool_call_id)).toEqual([toolCallId]);
+    const modelToolResult = JSON.parse(String(toolResults[0]?.content)) as {
+      diagnostics: Record<string, unknown>;
+    };
+    expect(JSON.stringify(modelToolResult)).not.toContain("short-token");
+    expect(JSON.stringify(modelToolResult)).not.toContain("Bearer short");
+    expect(JSON.stringify(modelToolResult)).not.toContain("tiny-secret");
+    expect(modelToolResult.diagnostics).toMatchObject({
+      tokenEnv: "DOCS_SEARCH_TOKEN",
+      secretRef: "vault:docs-search",
+      tokenBudget: 2048,
+      tokenId: "token-record-1",
+    });
+    expect(String(modelToolResult.diagnostics.webhookUrl)).toContain("[REDACTED]");
+    expect(String(modelToolResult.diagnostics.authorization)).toContain("[REDACTED]");
+    expect(modelToolResult.diagnostics.DATABASE_PASSWORD).toBe("[REDACTED]");
   });
 
   it("hard-fails an unrepairable malformed batch (no valid sibling, no recoverable body)", async () => {

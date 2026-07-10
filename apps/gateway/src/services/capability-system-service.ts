@@ -50,7 +50,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { CapabilityRuntimeConfig, CodeModeDockerBackendConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
@@ -692,7 +692,7 @@ export class CapabilitySystemService {
               : item.status !== "pending"
                 ? item.status
                 : undefined;
-        return {
+        const queueItem = {
           approvalId: item.approvalId,
           sessionId: item.sessionId,
           kind: item.kind ?? approval?.kind,
@@ -713,6 +713,7 @@ export class CapabilitySystemService {
           stale: Boolean(staleReason),
           staleReason,
         } satisfies CodeModeApprovalQueueItem;
+        return redactStructuredSecrets(queueItem).value;
       })
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }

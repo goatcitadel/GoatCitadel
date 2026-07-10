@@ -1,9 +1,10 @@
-import type {
-  RuntimeLifecycleQuery,
-  RuntimeLifecycleResponse,
-  RuntimeLifecycleLink,
-  SessionTimelineItem,
-  TranscriptEvent,
+import {
+  redactStructuredSecrets,
+  type RuntimeLifecycleQuery,
+  type RuntimeLifecycleResponse,
+  type RuntimeLifecycleLink,
+  type SessionTimelineItem,
+  type TranscriptEvent,
 } from "@goatcitadel/contracts";
 import {
   RuntimeLifecycleExportService,
@@ -21,14 +22,18 @@ export class RuntimeLifecycleRouteService {
 
   public constructor(private readonly lifecycle: RuntimeLifecycleRoutePort) {
     this.exportService = new RuntimeLifecycleExportService({
-      getRuntimeLifecycle: (input) => this.lifecycle.getRuntimeLifecycle(input).then(withRuntimeLifecycleLinks),
+      getRuntimeLifecycle: (input) =>
+        this.lifecycle.getRuntimeLifecycle(input).then(withRuntimeLifecycleLinks).then(projectRuntimeLifecyclePublic),
       getTranscript: (sessionId) => this.lifecycle.getTranscript(sessionId),
       listSessionTimeline: (sessionId, limit) => this.lifecycle.listSessionTimeline(sessionId, limit),
     });
   }
 
   public getLifecycle(input: RuntimeLifecycleQuery) {
-    return this.lifecycle.getRuntimeLifecycle(input).then(withRuntimeLifecycleLinks);
+    return this.lifecycle
+      .getRuntimeLifecycle(input)
+      .then(withRuntimeLifecycleLinks)
+      .then(projectRuntimeLifecyclePublic);
   }
 
   public exportLifecycle(input: RuntimeLifecycleExportQueryWithSiem) {
@@ -38,6 +43,10 @@ export class RuntimeLifecycleRouteService {
   public exportLifecycleSiemNdjson(input: RuntimeLifecycleExportQueryWithSiem) {
     return this.exportService.exportSiemNdjson(input);
   }
+}
+
+function projectRuntimeLifecyclePublic(response: RuntimeLifecycleResponse): RuntimeLifecycleResponse {
+  return redactStructuredSecrets(response).value;
 }
 
 function withRuntimeLifecycleLinks(response: RuntimeLifecycleResponse): RuntimeLifecycleResponse {

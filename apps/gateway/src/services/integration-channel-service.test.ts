@@ -98,6 +98,31 @@ function createDeps(): IntegrationChannelPort {
 }
 
 describe("integration-channel-service inbound access defaults", () => {
+  it("keeps repository and runtime connection configs raw for secret resolution", () => {
+    const deps = createDeps();
+
+    const connection = createIntegrationConnection(deps, {
+      catalogId: "channel.slack",
+      label: "Slack",
+      config: {
+        botToken: "bot-short",
+        webhookUrl: "https://hooks.example.test/events?token=hook-short",
+        botTokenEnv: "SLACK_BOT_TOKEN",
+      },
+    });
+
+    expect(connection.config).toMatchObject({
+      botToken: "bot-short",
+      webhookUrl: "https://hooks.example.test/events?token=hook-short",
+      botTokenEnv: "SLACK_BOT_TOKEN",
+    });
+    expect(deps.storage.integrationConnections.get(connection.connectionId).config).toMatchObject({
+      botToken: "bot-short",
+      webhookUrl: "https://hooks.example.test/events?token=hook-short",
+      botTokenEnv: "SLACK_BOT_TOKEN",
+    });
+  });
+
   it("defaults new generic webhook channel connections to allowlist mode", () => {
     const deps = createDeps();
 

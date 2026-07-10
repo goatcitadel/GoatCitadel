@@ -1,6 +1,10 @@
-import type { HookRecord } from "@goatcitadel/contracts";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  projectHookRecordForPublicResponse,
+  projectHookRecordsForPublicResponse,
+  projectHookRunsForPublicResponse,
+} from "../services/hooks-public-projection.js";
 
 const workspaceParamsSchema = z.object({
   workspaceId: z.string().min(1),
@@ -79,7 +83,9 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     return reply.send({
-      items: fastify.services.hooks.listWorkspaceHooks(params.data.workspaceId, query.data.limit).map(redactHookRecord),
+      items: projectHookRecordsForPublicResponse(
+        fastify.services.hooks.listWorkspaceHooks(params.data.workspaceId, query.data.limit),
+      ),
     });
   });
 
@@ -95,7 +101,9 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     return reply.send({
-      items: fastify.services.hooks.listWorkspaceHookRuns(params.data.workspaceId, query.data.limit),
+      items: projectHookRunsForPublicResponse(
+        fastify.services.hooks.listWorkspaceHookRuns(params.data.workspaceId, query.data.limit),
+      ),
     });
   });
 
@@ -115,7 +123,7 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
         ...body.data,
         workspaceId: params.data.workspaceId,
       });
-      return reply.code(201).send(redactHookRecord(created));
+      return reply.code(201).send(projectHookRecordForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -133,11 +141,12 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        redactHookRecord(
-          fastify.services.hooks.updateWorkspaceHook(params.data.workspaceId, params.data.hookId, body.data),
-        ),
+      const updated = fastify.services.hooks.updateWorkspaceHook(
+        params.data.workspaceId,
+        params.data.hookId,
+        body.data,
       );
+      return reply.send(projectHookRecordForPublicResponse(updated));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -153,15 +162,3 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 };
-
-function redactHookRecord(record: HookRecord): HookRecord {
-  return {
-    ...record,
-    action: {
-      ...record.action,
-      webhook: {
-        url: record.action.webhook.url,
-      },
-    },
-  };
-}

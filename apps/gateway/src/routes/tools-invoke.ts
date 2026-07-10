@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
+import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 
 const bodySchema = z.object({
   toolName: z.string().min(1),
@@ -122,6 +123,6 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
       },
       policyContext,
     });
-    return reply.send(result);
+    return reply.send(projectPublicSecretValue(result));
   });
 };

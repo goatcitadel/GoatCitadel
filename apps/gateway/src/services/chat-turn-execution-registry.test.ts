@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
+import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 
 describe("ChatTurnExecutionRegistry", () => {
   it("serializes chat turn writes by session and clears stale session leases", async () => {
@@ -47,18 +47,61 @@ describe("ChatTurnExecutionRegistry", () => {
   it("tracks live stream sequence and completion state", () => {
     const registry = new ChatTurnExecutionRegistry();
 
-    const state = registry.registerActiveStream("session-1", "turn-1", 7, "run-1");
+    const lease = registry.registerActiveStream("session-1", "turn-1", 7, "run-1");
 
-    expect(state.nextSequence).toBe(8);
+    expect(Object.isFrozen(lease)).toBe(true);
+    expect(lease.nextSequence).toBe(8);
     expect(registry.getActiveStream("turn-1")?.completed).toBe(false);
 
-    registry.getActiveStream("turn-1")!.nextSequence += 1;
+    expect(lease.claimNextSequence()).toBe(8);
     expect(registry.getActiveStream("turn-1")?.nextSequence).toBe(9);
 
-    registry.completeActiveStream("turn-1");
+    expect(lease.complete()).toBe(true);
     expect(registry.getActiveStream("turn-1")?.completed).toBe(true);
 
-    registry.closeActiveStream("turn-1");
+    expect(lease.close()).toBe(true);
+    expect(registry.getActiveStream("turn-1")).toBeUndefined();
+  });
+
+  it("rejects cross-turn use of a bound stream lease", () => {
+    const registry = new ChatTurnExecutionRegistry();
+    const lease = registry.registerActiveStream("session-1", "turn-1", 0, "run-1");
+
+    expect(() => lease.requireActive("turn-2")).toThrow(ChatTurnStreamRegistrationMismatchError);
+    expect(() => lease.claimNextSequence("turn-2")).toThrow(ChatTurnStreamRegistrationMismatchError);
+    expect(lease.nextSequence).toBe(1);
+    expect(lease.isActive()).toBe(true);
+  });
+
+  it("ignores stale durable-attempt completion and close callbacks after the turn is re-registered", () => {
+    const registry = new ChatTurnExecutionRegistry();
+
+    const pausedAttempt = registry.registerActiveStream("session-1", "turn-1", 4, "run-1");
+    const resumedAttempt = registry.registerActiveStream("session-1", "turn-1", 7, "run-1");
+
+    expect(resumedAttempt.registrationId).not.toBe(pausedAttempt.registrationId);
+    expect(pausedAttempt.isActive()).toBe(false);
+    expect(resumedAttempt.isActive()).toBe(true);
+    expect(() => registry.requireActiveStreamRegistration("turn-1", pausedAttempt.registrationId)).toThrow(
+      ChatTurnStreamRegistrationMismatchError,
+    );
+    expect(registry.requireActiveStreamRegistration("turn-1", resumedAttempt.registrationId)).toBe(resumedAttempt);
+    expect(registry.completeActiveStream("turn-1", pausedAttempt.registrationId)).toBe(false);
+    expect(registry.getActiveStream("turn-1")).toBe(resumedAttempt);
+    expect(resumedAttempt.completed).toBe(false);
+
+    expect(registry.closeActiveStream("turn-1", pausedAttempt.registrationId)).toBe(false);
+    expect(registry.getActiveStream("turn-1")).toBe(resumedAttempt);
+
+    expect(resumedAttempt.complete()).toBe(true);
+    expect(resumedAttempt.completed).toBe(true);
+    expect(resumedAttempt.isActive()).toBe(false);
+    expect(() => registry.requireActiveStreamRegistration("turn-1", resumedAttempt.registrationId)).toThrow(
+      ChatTurnStreamRegistrationMismatchError,
+    );
+    // A completed registration remains closeable so delayed cancellation cleanup
+    // retains its historical compatibility behavior.
+    expect(resumedAttempt.close()).toBe(true);
     expect(registry.getActiveStream("turn-1")).toBeUndefined();
   });
 

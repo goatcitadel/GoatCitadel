@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
+import { projectIntegrationConnectionForPublicResponse } from "./integration-connection-public-projection.js";
 
 const DEFAULT_SLACK_SCOPES = [
   "chat:write",
@@ -204,14 +205,7 @@ export function buildSlackOAuthConnectionInput(payload: SlackOAuthTokenPayload):
 }
 
 export function redactSlackOAuthConnection(connection: IntegrationConnection): IntegrationConnection {
-  return {
-    ...connection,
-    config: {
-      ...connection.config,
-      botToken: connection.config.botToken ? "[redacted]" : undefined,
-      webhookUrl: connection.config.webhookUrl ? "[redacted]" : undefined,
-    },
-  };
+  return projectIntegrationConnectionForPublicResponse(connection);
 }
 
 export function summarizeSlackOAuthInstall(connection: IntegrationConnection): SlackOAuthInstallResult["install"] {

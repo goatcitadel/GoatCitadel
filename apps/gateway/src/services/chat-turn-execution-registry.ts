@@ -7,6 +7,20 @@ export class ChatTurnWriteConflictError extends ConflictError {
   }
 }
 
+export class ChatTurnStreamRegistrationMismatchError extends ConflictError {
+  public readonly turnId: string;
+  public readonly registrationId: string;
+
+  constructor(turnId: string, registrationId: string) {
+    super({
+      code: "STATE_CONFLICT",
+      message: `Chat turn stream registration ${registrationId} is no longer active for turn ${turnId}.`,
+    });
+    this.turnId = turnId;
+    this.registrationId = registrationId;
+  }
+}
+
 export interface ActiveChatTurnExecution {
   sessionId: string;
   turnId: string;
@@ -15,7 +29,8 @@ export interface ActiveChatTurnExecution {
   controller: AbortController;
 }
 
-export interface ActiveChatTurnStreamExecution {
+interface ActiveChatTurnStreamState {
+  readonly registrationId: string;
   sessionId: string;
   turnId: string;
   runId?: string;
@@ -24,10 +39,35 @@ export interface ActiveChatTurnStreamExecution {
   completed: boolean;
 }
 
+/**
+ * Immutable producer capability for one exact stream registration.
+ *
+ * The bound methods deliberately keep registration identity inside the
+ * registry. Producers can fence writes and finalization without asking a broad
+ * Gateway host which registration happens to be current.
+ */
+export interface ActiveChatTurnStreamExecution {
+  readonly registrationId: string;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly runId?: string;
+  readonly startedAt: string;
+  readonly nextSequence: number;
+  readonly completed: boolean;
+  isActive(): boolean;
+  requireActive(targetTurnId?: string): void;
+  claimNextSequence(targetTurnId?: string): number;
+  complete(): boolean;
+  close(): boolean;
+}
+
 export class ChatTurnExecutionRegistry {
   private readonly activeWriteLeases = new Map<string, string>();
   private readonly activeExecutions = new Map<string, ActiveChatTurnExecution>();
-  private readonly activeStreams = new Map<string, ActiveChatTurnStreamExecution>();
+  private readonly activeStreams = new Map<
+    string,
+    { state: ActiveChatTurnStreamState; lease: ActiveChatTurnStreamExecution }
+  >();
 
   public acquireWriteLease(sessionId: string, operation: string): string {
     const existing = this.activeWriteLeases.get(sessionId);
@@ -116,8 +156,10 @@ export class ChatTurnExecutionRegistry {
     turnId: string,
     latestSequence: number,
     runId?: string,
+    options?: { onClose?: () => void },
   ): ActiveChatTurnStreamExecution {
-    const state: ActiveChatTurnStreamExecution = {
+    const state: ActiveChatTurnStreamState = {
+      registrationId: randomUUID(),
       sessionId,
       turnId,
       runId,
@@ -125,28 +167,88 @@ export class ChatTurnExecutionRegistry {
       nextSequence: latestSequence + 1,
       completed: false,
     };
-    this.activeStreams.set(turnId, state);
-    return state;
+    const requireActive = (targetTurnId = turnId): ActiveChatTurnStreamState => {
+      if (targetTurnId !== turnId) {
+        throw new ChatTurnStreamRegistrationMismatchError(targetTurnId, state.registrationId);
+      }
+      const active = this.activeStreams.get(turnId);
+      if (!active || active.state !== state || state.completed) {
+        throw new ChatTurnStreamRegistrationMismatchError(turnId, state.registrationId);
+      }
+      return state;
+    };
+    const lease = Object.freeze({
+      registrationId: state.registrationId,
+      sessionId: state.sessionId,
+      turnId: state.turnId,
+      runId: state.runId,
+      startedAt: state.startedAt,
+      get nextSequence(): number {
+        return state.nextSequence;
+      },
+      get completed(): boolean {
+        return state.completed;
+      },
+      isActive: (): boolean => {
+        const active = this.activeStreams.get(turnId);
+        return active?.state === state && !state.completed;
+      },
+      requireActive: (targetTurnId?: string): void => {
+        requireActive(targetTurnId);
+      },
+      claimNextSequence: (targetTurnId?: string): number => {
+        const active = requireActive(targetTurnId);
+        const sequence = active.nextSequence;
+        active.nextSequence += 1;
+        return sequence;
+      },
+      complete: (): boolean => this.completeActiveStream(turnId, state.registrationId),
+      close: (): boolean => {
+        const closed = this.closeActiveStream(turnId, state.registrationId);
+        if (closed) {
+          options?.onClose?.();
+        }
+        return closed;
+      },
+    }) satisfies ActiveChatTurnStreamExecution;
+    this.activeStreams.set(turnId, { state, lease });
+    return lease;
   }
 
-  public completeActiveStream(turnId: string): void {
+  public completeActiveStream(turnId: string, registrationId: string): boolean {
     const active = this.activeStreams.get(turnId);
-    if (!active) {
-      return;
+    if (!active || active.state.registrationId !== registrationId) {
+      return false;
     }
-    active.completed = true;
+    active.state.completed = true;
+    return true;
   }
 
-  public closeActiveStream(turnId: string): void {
+  public requireActiveStreamRegistration(turnId: string, registrationId: string): ActiveChatTurnStreamExecution {
+    const active = this.activeStreams.get(turnId);
+    if (!active || active.state.completed || active.state.registrationId !== registrationId) {
+      throw new ChatTurnStreamRegistrationMismatchError(turnId, registrationId);
+    }
+    return active.lease;
+  }
+
+  public closeActiveStream(turnId: string, registrationId: string): boolean {
+    const active = this.activeStreams.get(turnId);
+    if (!active || active.state.registrationId !== registrationId) {
+      return false;
+    }
     this.activeStreams.delete(turnId);
+    return true;
   }
 
   public getActiveStream(turnId: string): ActiveChatTurnStreamExecution | undefined {
-    return this.activeStreams.get(turnId);
+    return this.activeStreams.get(turnId)?.lease;
   }
 
   public listActiveStreamsForSession(sessionId: string): ActiveChatTurnStreamExecution[] {
-    return [...this.activeStreams.values()].filter((stream) => stream.sessionId === sessionId && !stream.completed);
+    return [...this.activeStreams.values()]
+      .map(({ lease }) => lease)
+      .filter((stream) => stream.sessionId === sessionId && !stream.completed);
   }
 
   public close(reason = "Chat turn execution registry closed."): void {

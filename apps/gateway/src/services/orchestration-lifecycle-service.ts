@@ -8,6 +8,7 @@
 
 import {
   ConflictError,
+  redactStructuredSecrets,
   type DurableRunCreateRequest,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
@@ -1894,11 +1895,7 @@ export function getRunTrace(
   workspaceId?: string,
 ): OrchestrationDecisionTrace {
   const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-  // `lastError` is free-form text that can be large or echo upstream provider errors; bound it
-  // to the same cap as every other trace string. Remaining run fields are ids, numbers, or
-  // closed-enum statuses (e.g. executionState), so there is nothing secret-shaped left to redact.
-  const sanitizedRun: OrchestrationRun =
-    run.lastError === undefined ? run : { ...run, lastError: capTraceString(run.lastError) };
+  const sanitizedRun = projectOrchestrationPublicValue(run) as OrchestrationRun;
   const checkpoints = host.storage.orchestration.listCheckpoints(runId).map((checkpoint) => ({
     ...checkpoint,
     details: sanitizeTraceDetails(checkpoint.details),
@@ -1912,7 +1909,9 @@ export function getRunTrace(
   if (!host.storage.orchestration.listRunEvents) {
     warnings.push("Run event storage does not expose listRunEvents; trace is checkpoint-only.");
   }
-  const runtimeDecisions = host.storage.runtimeDecisionTraces?.list({ runId, limit: 300 }) ?? [];
+  const runtimeDecisions = (host.storage.runtimeDecisionTraces?.list({ runId, limit: 300 }) ?? []).map(
+    (decision) => projectOrchestrationPublicValue(decision) as RuntimeDecisionTraceRecord,
+  );
 
   const decisions = [
     ...checkpoints.map((checkpoint): OrchestrationDecisionEvent => {
@@ -2128,10 +2127,19 @@ function summarizeDecision(
 }
 
 function sanitizeTraceDetails(value: Record<string, unknown>): Record<string, unknown> {
-  return sanitizeTraceValue(value, 0) as Record<string, unknown>;
+  return projectOrchestrationPublicValue(value) as Record<string, unknown>;
 }
 
-function sanitizeTraceValue(value: unknown, depth: number): unknown {
+/**
+ * Projects operator-visible orchestration state without mutating canonical storage.
+ * The bounded pass runs first so hostile retained payloads cannot expand the public
+ * response, then the canonical structured projector handles keyed and embedded secrets.
+ */
+export function projectOrchestrationPublicValue(value: unknown): unknown {
+  return redactStructuredSecrets(boundTraceValue(value, 0), { marker: "[redacted]" }).value;
+}
+
+function boundTraceValue(value: unknown, depth: number): unknown {
   if (depth > 3) {
     return "[Max depth]";
   }
@@ -2142,19 +2150,15 @@ function sanitizeTraceValue(value: unknown, depth: number): unknown {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.slice(0, 20).map((item) => sanitizeTraceValue(item, depth + 1));
+    return value.slice(0, 20).map((item) => boundTraceValue(item, depth + 1));
   }
   const sanitized: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value).slice(0, 50)) {
-    sanitized[key] = shouldRedactTraceKey(key) ? "[redacted]" : sanitizeTraceValue(child, depth + 1);
+    sanitized[key] = boundTraceValue(child, depth + 1);
   }
   return sanitized;
 }
 
 function capTraceString(value: string): string {
   return value.length > 500 ? `${value.slice(0, 500)}... [truncated]` : value;
-}
-
-function shouldRedactTraceKey(key: string): boolean {
-  return /secret|token|api[-_]?key|authorization|password|credential|cookie/i.test(key);
 }

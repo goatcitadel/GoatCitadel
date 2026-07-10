@@ -15,6 +15,7 @@ import type { DurableRunService } from "./durable-run-service.js";
 import { parseDurableChatTurnPayload } from "./durable-execution-service.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
+import { projectChatMessageForPublic, projectChatTurnTraceForPublic } from "./chat-secret-projection.js";
 
 export interface ChatThreadLoadOptions {
   includeDecisionTrace?: boolean;
@@ -283,9 +284,11 @@ function buildChatThreadFromState(
     sessionId,
     activeLeafTurnId: state.activeLeafTurnId,
     turns: renderableTraces.map((trace) => ({
-      trace,
+      trace: projectChatTurnTraceForPublic(trace),
       userMessage: state.messagesById.get(trace.userMessageId),
-      assistantMessage: trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
+      assistantMessage: projectChatMessageForPublic(
+        trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
+      ),
       generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
         chatGeneratedArtifactService.buildGeneratedArtifactReference,
       ),

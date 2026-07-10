@@ -243,6 +243,38 @@ describe("dashboard route service", () => {
     });
   });
 
+  it("projects secret-bearing retained realtime events without mutating dashboard storage truth", async () => {
+    const deps = createDeps();
+    const rawEvent = {
+      eventId: "recent-secret-1",
+      eventType: "tool_result",
+      source: "runtime",
+      payload: {
+        authorization: "Bearer dashboard-secret",
+        tokenEnv: "DASHBOARD_TOKEN",
+        tokenId: "dashboard-token-id",
+      },
+      createdAt: "2026-05-30T00:00:00.000Z",
+    };
+    deps.storage.realtimeEvents.list.mockReturnValue([rawEvent]);
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const state = await service.getDashboardState();
+
+    expect(state.recentEvents).toEqual([
+      expect.objectContaining({
+        eventId: "recent-secret-1",
+        payload: {
+          authorization: "[REDACTED]",
+          tokenEnv: "DASHBOARD_TOKEN",
+          tokenId: "dashboard-token-id",
+        },
+      }),
+    ]);
+    expect(JSON.stringify(state)).not.toContain("dashboard-secret");
+    expect(rawEvent.payload.authorization).toBe("Bearer dashboard-secret");
+  });
+
   it("builds a universal run trace projection from durable, lifecycle, memory, provider, approval, and artifact truth", async () => {
     const deps = createDeps();
     deps.durableOperatorService.getRun.mockReturnValue({
@@ -376,6 +408,211 @@ describe("dashboard route service", () => {
       },
     });
     expect(trace.artifacts.items[0]).not.toHaveProperty("content");
+  });
+
+  it("projects the fully assembled Observe trace and export while preserving every canonical backing record", async () => {
+    const deps = createDeps();
+    const rawRun = {
+      runId: "run-secret-projection",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 1,
+      payload: {
+        sessionId: "session-secret-projection",
+        turnId: "turn-secret-projection",
+        DATABASE_PASSWORD: "run-db-secret",
+        tokenEnv: "RUN_DATABASE_PASSWORD",
+      },
+      metadata: { authorization: "Bearer run-metadata-secret" },
+      lastError: "password: run-error-secret",
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:01:00.000Z",
+    };
+    const rawCheckpoint = {
+      checkpointId: "checkpoint-secret-projection",
+      runId: rawRun.runId,
+      checkpointKind: "manual_replay_requested",
+      state: {
+        webhookUrl: "https://hooks.example.test/checkpoint/secret",
+        secretRef: "vault:checkpoint",
+      },
+      createdAt: "2026-05-30T00:00:10.000Z",
+    };
+    const rawTimeline = {
+      eventId: "timeline-secret-projection",
+      runId: rawRun.runId,
+      eventType: "run_failed",
+      payload: { DATABASE_PASSWORD: "timeline-db-secret", tokenId: "timeline-token-id" },
+      createdAt: "2026-05-30T00:00:20.000Z",
+    };
+    const rawLifecycle = {
+      query: { runId: rawRun.runId },
+      canonical: {
+        runId: rawRun.runId,
+        sessionId: "session-secret-projection",
+        turnId: "turn-secret-projection",
+        approvalId: "approval-secret-projection",
+      },
+      linked: {
+        sessionIds: ["session-secret-projection"],
+        turnIds: ["turn-secret-projection"],
+        runIds: [rawRun.runId],
+        proactiveRunIds: [],
+        approvalIds: ["approval-secret-projection"],
+        taskIds: [],
+        workspaceIds: ["workspace-secret-projection"],
+      },
+      turns: [],
+      toolRuns: [
+        {
+          toolRunId: "tool-secret-projection",
+          turnId: "turn-secret-projection",
+          sessionId: "session-secret-projection",
+          toolName: "http.get",
+          status: "executed",
+          args: {
+            webhookUrl: "https://hooks.example.test/tool/secret",
+            tokenEnv: "TOOL_TOKEN",
+          },
+          result: {
+            authorization: "Bearer tool-result-secret",
+            tokenId: "tool-token-id",
+          },
+          startedAt: "2026-05-30T00:00:05.000Z",
+        },
+      ],
+    };
+    const rawApproval = {
+      approvalId: "approval-secret-projection",
+      kind: "tool.invoke",
+      riskLevel: "danger",
+      reason: "Inspect the tool request.",
+      status: "pending",
+      payload: {
+        DATABASE_PASSWORD: "approval-db-secret",
+        secretRef: "vault:approval",
+      },
+      createdAt: "2026-05-30T00:00:02.000Z",
+      expiresAt: "2026-05-30T01:00:02.000Z",
+    };
+    const rawMemory = {
+      contextId: "memory-secret-projection",
+      runId: rawRun.runId,
+      context: {
+        authorization: "Bearer memory-context-secret",
+        tokenId: "memory-token-id",
+      },
+    };
+    const rawArtifact = {
+      artifactId: "artifact-secret-projection",
+      sessionId: "session-secret-projection",
+      turnId: "turn-secret-projection",
+      title: "password: artifact-title-secret",
+      kind: "markdown",
+      content: "DATABASE_PASSWORD=artifact-content-secret",
+      sourceSurface: "chat",
+      version: 1,
+      contentHash: "sha256:artifact",
+      createdAt: "2026-05-30T00:00:30.000Z",
+      updatedAt: "2026-05-30T00:00:30.000Z",
+    };
+    deps.durableOperatorService.getRun.mockReturnValue(rawRun);
+    deps.durableOperatorService.listRunCheckpoints.mockReturnValue([rawCheckpoint]);
+    deps.durableOperatorService.listRunTimeline.mockReturnValue([rawTimeline]);
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockResolvedValue(rawLifecycle);
+    deps.storage.approvals.get.mockReturnValue(rawApproval);
+    deps.storage.memoryContexts.listByRun.mockReturnValue([rawMemory]);
+    deps.storage.chatGeneratedArtifacts.listByTurnIds.mockReturnValue(
+      new Map([["turn-secret-projection", [rawArtifact]]]),
+    );
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const trace = await service.getObserveRunTrace(rawRun.runId);
+    const exported = await service.getObserveRunTraceExport(rawRun.runId);
+    const exportContent = JSON.parse(exported.content);
+    const secretValues = [
+      "run-db-secret",
+      "run-metadata-secret",
+      "run-error-secret",
+      "https://hooks.example.test/checkpoint/secret",
+      "timeline-db-secret",
+      "https://hooks.example.test/tool/secret",
+      "tool-result-secret",
+      "approval-db-secret",
+      "memory-context-secret",
+      "artifact-title-secret",
+      "artifact-content-secret",
+    ];
+    for (const value of secretValues) {
+      expect(JSON.stringify(trace)).not.toContain(value);
+      expect(JSON.stringify(exported)).not.toContain(value);
+      expect(JSON.stringify(exportContent)).not.toContain(value);
+    }
+    expect(trace).toMatchObject({
+      run: {
+        runId: rawRun.runId,
+        status: "failed",
+        payload: { DATABASE_PASSWORD: "[REDACTED]", tokenEnv: "RUN_DATABASE_PASSWORD" },
+      },
+      durable: {
+        checkpoints: {
+          items: [
+            {
+              checkpointId: rawCheckpoint.checkpointId,
+              state: { webhookUrl: "[REDACTED]", secretRef: "vault:checkpoint" },
+            },
+          ],
+        },
+        timeline: {
+          items: [
+            {
+              eventId: rawTimeline.eventId,
+              payload: { DATABASE_PASSWORD: "[REDACTED]", tokenId: "timeline-token-id" },
+            },
+          ],
+        },
+      },
+      approvals: {
+        items: [
+          {
+            approvalId: rawApproval.approvalId,
+            status: "pending",
+            payload: { DATABASE_PASSWORD: "[REDACTED]", secretRef: "vault:approval" },
+          },
+        ],
+      },
+      toolCalls: {
+        items: [
+          {
+            toolRunId: "tool-secret-projection",
+            args: { webhookUrl: "[REDACTED]", tokenEnv: "TOOL_TOKEN" },
+            result: { authorization: "[REDACTED]", tokenId: "tool-token-id" },
+          },
+        ],
+      },
+      memoryContext: {
+        items: [
+          {
+            contextId: rawMemory.contextId,
+            context: { authorization: "[REDACTED]", tokenId: "memory-token-id" },
+          },
+        ],
+      },
+      artifacts: {
+        items: [{ artifactId: rawArtifact.artifactId, title: "password: [REDACTED]" }],
+      },
+    });
+    expect(exportContent.trace).toEqual(exported.trace);
+    expect(rawRun.payload.DATABASE_PASSWORD).toBe("run-db-secret");
+    expect(rawCheckpoint.state.webhookUrl).toBe("https://hooks.example.test/checkpoint/secret");
+    expect(rawTimeline.payload.DATABASE_PASSWORD).toBe("timeline-db-secret");
+    expect(rawLifecycle.toolRuns[0]?.result.authorization).toBe("Bearer tool-result-secret");
+    expect(rawApproval.payload.DATABASE_PASSWORD).toBe("approval-db-secret");
+    expect(rawMemory.context.authorization).toBe("Bearer memory-context-secret");
+    expect(rawArtifact.title).toBe("password: artifact-title-secret");
+    expect(rawArtifact.content).toBe("DATABASE_PASSWORD=artifact-content-secret");
   });
 
   it.each([

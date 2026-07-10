@@ -16,7 +16,29 @@ describe("RuntimeLifecycleRouteService", () => {
         workspaceIds: [],
       },
       turns: [],
-      toolRuns: [],
+      toolRuns: [
+        {
+          toolRunId: "tool-1",
+          args: {
+            webhookUrl: "https://hooks.example.test/send?token=short-token",
+            tokenEnv: "WEBHOOK_TOKEN",
+          },
+          result: {
+            authorization: "Bearer short",
+            DATABASE_PASSWORD: "tiny-secret",
+            tokenBudget: 2048,
+          },
+        },
+      ],
+      approval: {
+        approvalId: "approval-1",
+        status: "pending",
+        payload: {
+          authorization: "Bearer short",
+          secretRef: "vault:approval-1",
+          tokenId: "remote-token-id-1",
+        },
+      },
     }));
     const service = new RuntimeLifecycleRouteService({
       getRuntimeLifecycle,
@@ -42,5 +64,16 @@ describe("RuntimeLifecycleRouteService", () => {
       ]),
     );
     expect(bundle.links).toEqual(lifecycle.links);
+    for (const projection of [lifecycle, bundle]) {
+      expect(JSON.stringify(projection)).not.toContain("short-token");
+      expect(JSON.stringify(projection)).not.toContain("Bearer short");
+      expect(JSON.stringify(projection)).not.toContain("tiny-secret");
+      expect(projection).toMatchObject({
+        toolRuns: [{ args: { tokenEnv: "WEBHOOK_TOKEN" }, result: { tokenBudget: 2048 } }],
+        approval: {
+          payload: { secretRef: "vault:approval-1", tokenId: "remote-token-id-1" },
+        },
+      });
+    }
   });
 });

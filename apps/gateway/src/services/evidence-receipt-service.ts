@@ -14,6 +14,7 @@ import type {
   DurableRunRecord,
   ExternalSideEffectRunRecord,
 } from "@goatcitadel/contracts";
+import { projectPublicSecretValue } from "./public-secret-projection.js";
 
 /**
  * Evidence Receipts — signed, portable, third-party-verifiable proof bundles for any run.
@@ -202,7 +203,7 @@ export class EvidenceReceiptService {
       attemptCount: run.attemptCount,
       maxAttempts: run.maxAttempts,
       outcome: deriveOutcome(run.status),
-      lastError: run.lastError,
+      lastError: projectReceiptLastError(run.lastError),
       createdAt: run.createdAt,
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
@@ -236,17 +237,13 @@ export class EvidenceReceiptService {
       pushArtifact(artifacts, "code_mode.stdout", codeModeRun.stdoutArtifact);
       pushArtifact(artifacts, "code_mode.stderr", codeModeRun.stderrArtifact);
     } else {
-      notes.push(
-        "No Code Mode run is associated with this runId; artifact hash lineage is unavailable for this run.",
-      );
+      notes.push("No Code Mode run is associated with this runId; artifact hash lineage is unavailable for this run.");
     }
 
     // Approval effects: the explicit follow-on effect records tied to the run's approval.
     let approvalEffects: EvidenceReceiptApprovalEffect[] = [];
     if (lineage.approvalId) {
-      approvalEffects = this.data
-        .listApprovalEffects(lineage.approvalId)
-        .map(toReceiptApprovalEffect);
+      approvalEffects = this.data.listApprovalEffects(lineage.approvalId).map(toReceiptApprovalEffect);
       if (approvalEffects.length === 0) {
         notes.push(`No approval effects were recorded for approval ${lineage.approvalId}.`);
       }
@@ -261,16 +258,12 @@ export class EvidenceReceiptService {
     // ledger when a workspaceId is known, and document that the correlation is workspace-scoped.
     let sideEffects: EvidenceReceiptSideEffect[] = [];
     if (lineage.workspaceId) {
-      sideEffects = this.data
-        .listSideEffectsForWorkspace(lineage.workspaceId)
-        .map(toReceiptSideEffect);
+      sideEffects = this.data.listSideEffectsForWorkspace(lineage.workspaceId).map(toReceiptSideEffect);
       notes.push(
         `Side-effects are workspace-scoped (workspace ${lineage.workspaceId}); the external side-effect ledger is not keyed by durable runId, so entries reflect the run's workspace rather than this run alone.`,
       );
     } else {
-      notes.push(
-        "No workspaceId resolved for the run; external side-effect ledger lineage omitted.",
-      );
+      notes.push("No workspaceId resolved for the run; external side-effect ledger lineage omitted.");
     }
 
     return {
@@ -287,10 +280,7 @@ export class EvidenceReceiptService {
 }
 
 /** Sign an already-assembled manifest. Exposed for callers that build manifests out-of-band. */
-export function signManifest(
-  manifest: EvidenceReceiptManifest,
-  keyPair: EvidenceReceiptKeyPair,
-): EvidenceReceipt {
+export function signManifest(manifest: EvidenceReceiptManifest, keyPair: EvidenceReceiptKeyPair): EvidenceReceipt {
   const canonicalBytes = canonicalJsonBytes(manifest);
   const contentHash = createHash(EVIDENCE_RECEIPT_HASH_ALGORITHM).update(canonicalBytes).digest("hex");
   // Ed25519: the algorithm argument to sign()/verify() MUST be null (the digest is implied).
@@ -363,12 +353,7 @@ export function verifyEvidenceReceipt(receipt: unknown): EvidenceReceiptVerifica
   if (publicKeyObject) {
     let signatureValid = false;
     try {
-      signatureValid = cryptoVerify(
-        null,
-        canonicalBytes,
-        publicKeyObject,
-        Buffer.from(signature as string, "base64"),
-      );
+      signatureValid = cryptoVerify(null, canonicalBytes, publicKeyObject, Buffer.from(signature as string, "base64"));
     } catch (error) {
       reasons.push(`Signature verification raised an error: ${errorMessage(error)}.`);
     }
@@ -520,11 +505,26 @@ function toReceiptSideEffect(record: ExternalSideEffectRunRecord): EvidenceRecei
     status: record.status,
     idempotencyKey: record.idempotencyKey,
     payloadHash: record.payloadHash,
-    externalReferenceId: record.externalReferenceId,
+    externalReferenceId: projectReceiptExternalReference(record.externalReferenceId),
     attemptCount: record.attemptCount,
     externalCallStartedAt: record.externalCallStartedAt,
     completedAt: record.completedAt,
   };
+}
+
+function projectReceiptLastError(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : projectPublicSecretValue({ lastError: value }).lastError;
+}
+
+function projectReceiptExternalReference(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  // External references may be ordinary opaque IDs or credential-bearing URLs
+  // prefixed with their provider field name. Project through a URL-labelled
+  // leaf so userinfo and query/path credentials are contained while safe IDs
+  // retain their exact value in the signed manifest.
+  return projectPublicSecretValue({ url: value }).url;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

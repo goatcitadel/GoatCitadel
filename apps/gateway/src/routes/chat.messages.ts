@@ -2,6 +2,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { MOBILE_NATIVE_CAPABILITY_IDS, type ChatSendMessageRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
+  projectChatContextManifestForPublic,
+  projectChatMessageForPublic,
+} from "../services/chat-secret-projection.js";
+import {
   sessionParamsSchema,
   turnParamsSchema,
   streamResumeQuerySchema,
@@ -227,7 +231,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         query.data.limit,
         query.data.cursor,
       );
-      return reply.send({ items });
+      return reply.send({ items: items.map(projectChatMessageForPublic) });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -404,7 +408,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       if (!detail) {
         return reply.code(404).send({ error: "Context manifest not found" });
       }
-      return reply.send(detail);
+      return reply.send(projectChatContextManifestForPublic(detail));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

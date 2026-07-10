@@ -254,6 +254,162 @@ describe("skills routes", () => {
     });
   });
 
+  it("projects import provenance URLs across source and import responses while preserving raw inputs and prose", async () => {
+    const rawSourceUrl =
+      "https://skill-user:skill-provenance-secret@example.test/private-skill.git?token=skill-provenance-secret";
+    const skillMarkdown = [
+      "---",
+      "name: Private Skill",
+      "---",
+      "",
+      "Operator-authored example: Authorization: Bearer prose-must-remain-byte-identical",
+    ].join("\n");
+    const candidate = {
+      canonicalKey: "example.test/private-skill",
+      sourceProvider: "github",
+      sourceType: "git_url",
+      sourceRef: rawSourceUrl,
+      sourceUrl: rawSourceUrl,
+      repositoryUrl: rawSourceUrl,
+      skillMarkdown,
+    };
+    const sourceItem = {
+      sourceProvider: "github",
+      sourceUrl: rawSourceUrl,
+      repositoryUrl: rawSourceUrl,
+      upstreamUrl: rawSourceUrl,
+      name: "Private Skill",
+      description: skillMarkdown,
+      tags: ["private"],
+      sourceKind: "upstream_repo",
+      installability: "direct",
+      matchReason: "Direct source match",
+      matchedTerms: [rawSourceUrl],
+    };
+    const sourcesResult = {
+      query: rawSourceUrl,
+      generatedAt: "2026-07-09T12:00:00.000Z",
+      providers: [],
+      items: [sourceItem],
+    };
+    const lookupResult = {
+      query: rawSourceUrl,
+      generatedAt: "2026-07-09T12:00:00.000Z",
+      providers: [],
+      parsedSource: {
+        sourceProvider: "github",
+        sourceKind: "upstream_repo",
+        sourceUrl: rawSourceUrl,
+        repositoryUrl: rawSourceUrl,
+        installability: "direct",
+      },
+      bestMatch: sourceItem,
+      items: [sourceItem],
+    };
+    const validationResult = {
+      valid: true,
+      candidate,
+      provenance: {
+        sourceProvider: "github",
+        sourceType: "git_url",
+        sourceRef: rawSourceUrl,
+        sourceUrl: rawSourceUrl,
+        repositoryUrl: rawSourceUrl,
+        capturedAt: "2026-07-09T12:00:00.000Z",
+        nonCallableUntilActivated: true,
+      },
+      instructionPreview: skillMarkdown,
+    };
+    const installResult = {
+      validation: validationResult,
+      installedPath: "skills/extra/private-skill",
+      sourceManifestPath: "skills/extra/private-skill/source.json",
+    };
+    const historyRecord = {
+      importId: "history-private",
+      action: "install",
+      outcome: "accepted",
+      sourceProvider: "github",
+      sourceRef: rawSourceUrl,
+      sourceType: "git_url",
+      canonicalKey: "example.test/private-skill",
+      details: {
+        provenance: validationResult.provenance,
+        operatorNote: skillMarkdown,
+      },
+      createdAt: "2026-07-09T12:00:00.000Z",
+    };
+    const listSkillSources = vi.fn(async () => sourcesResult);
+    const lookupSkillSources = vi.fn(async () => lookupResult);
+    const validateSkillImport = vi.fn(async () => validationResult);
+    const installSkillImport = vi.fn(async () => installResult);
+    const listSkillImportHistory = vi.fn(() => [historyRecord]);
+    app = Fastify();
+    app.decorate("services", {
+      skills: {
+        listSkillSources,
+        lookupSkillSources,
+        validateSkillImport,
+        installSkillImport,
+        listSkillImportHistory,
+      },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const encodedSourceUrl = encodeURIComponent(rawSourceUrl);
+    const sourcesResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/skills/sources?q=${encodedSourceUrl}`,
+    });
+    const lookupResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/skills/lookup?q=${encodedSourceUrl}`,
+    });
+    const validateResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/import/validate",
+      payload: { sourceRef: rawSourceUrl, sourceType: "git_url" },
+    });
+    const installResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/import/install",
+      payload: { sourceRef: rawSourceUrl, sourceType: "git_url" },
+    });
+    const historyResponse = await app.inject({ method: "GET", url: "/api/v1/skills/import/history" });
+
+    expect(listSkillSources).toHaveBeenCalledWith(rawSourceUrl, undefined);
+    expect(lookupSkillSources).toHaveBeenCalledWith(rawSourceUrl, undefined);
+    expect(validateSkillImport).toHaveBeenCalledWith({ sourceRef: rawSourceUrl, sourceType: "git_url" });
+    expect(installSkillImport).toHaveBeenCalledWith({ sourceRef: rawSourceUrl, sourceType: "git_url" });
+    expect([
+      sourcesResponse.statusCode,
+      lookupResponse.statusCode,
+      validateResponse.statusCode,
+      installResponse.statusCode,
+      historyResponse.statusCode,
+    ]).toEqual([200, 200, 200, 201, 200]);
+    const publicBodies = [
+      sourcesResponse.json(),
+      lookupResponse.json(),
+      validateResponse.json(),
+      installResponse.json(),
+      historyResponse.json(),
+    ];
+    for (const body of publicBodies) {
+      expect(JSON.stringify(body)).not.toContain("skill-provenance-secret");
+      expect(JSON.stringify(body)).toContain("[REDACTED]");
+    }
+    expect(sourcesResponse.json().items[0].description).toBe(skillMarkdown);
+    expect(validateResponse.json().instructionPreview).toBe(skillMarkdown);
+    expect(installResponse.json().validation.instructionPreview).toBe(skillMarkdown);
+    expect(historyResponse.json().items[0].details.operatorNote).toBe(skillMarkdown);
+
+    expect(candidate.sourceRef).toBe(rawSourceUrl);
+    expect(validationResult.provenance.sourceRef).toBe(rawSourceUrl);
+    expect(historyRecord.sourceRef).toBe(rawSourceUrl);
+    expect(skillMarkdown).toContain("prose-must-remain-byte-identical");
+  });
+
   it("returns all skills when no workspaceId is provided (non-breaking default)", async () => {
     const listSkills = vi.fn(() => [
       { skillId: "skill-a", name: "Skill A" },

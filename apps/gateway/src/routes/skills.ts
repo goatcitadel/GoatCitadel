@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { projectImportProvenanceReferencesForPublic } from "../services/import-provenance-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const skillsListQuerySchema = z.object({
@@ -129,7 +130,9 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await skills.listSkillSources(parsed.data.q, parsed.data.limit));
+    return reply.send(
+      projectImportProvenanceReferencesForPublic(await skills.listSkillSources(parsed.data.q, parsed.data.limit)),
+    );
   });
 
   fastify.get("/api/v1/skills/export/targets", async (_request, reply) => {
@@ -169,7 +172,9 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await skills.lookupSkillSources(parsed.data.q, parsed.data.limit));
+    return reply.send(
+      projectImportProvenanceReferencesForPublic(await skills.lookupSkillSources(parsed.data.q, parsed.data.limit)),
+    );
   });
 
   fastify.post("/api/v1/skills/import/validate", async (request, reply) => {
@@ -178,7 +183,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await skills.validateSkillImport(parsed.data));
+      return reply.send(projectImportProvenanceReferencesForPublic(await skills.validateSkillImport(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -190,7 +195,9 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await skills.installSkillImport(parsed.data));
+      return reply
+        .code(201)
+        .send(projectImportProvenanceReferencesForPublic(await skills.installSkillImport(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -201,9 +208,11 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({
-      items: skills.listSkillImportHistory(parsed.data.limit),
-    });
+    return reply.send(
+      projectImportProvenanceReferencesForPublic({
+        items: skills.listSkillImportHistory(parsed.data.limit),
+      }),
+    );
   });
 
   fastify.get("/api/v1/skills/evaluations/:runId", async (request, reply) => {

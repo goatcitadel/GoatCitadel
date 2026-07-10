@@ -423,6 +423,10 @@ export interface CodeModeRunArtifactPreview {
   sha256: string;
   verifiedAt: string;
   truncated: boolean;
+  publicProjection?: {
+    contentRedacted: boolean;
+    canonicalSha256RefersToStoredArtifact: true;
+  };
 }
 
 export interface CodeModeRunComparisonRecord {

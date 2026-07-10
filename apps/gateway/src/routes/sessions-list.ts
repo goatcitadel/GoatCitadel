@@ -1,5 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  projectSessionMetaForPublic,
+  projectSessionSummaryForPublic,
+  projectSessionTimelineItemForPublic,
+  projectTranscriptEventForPublic,
+} from "../services/session-operational-public-projection.js";
 
 const querySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(50),
@@ -58,8 +64,7 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const runtimeLifecycleExporter =
-      fastify.services.runtimeLifecycle as unknown as RuntimeLifecycleExporterRouteShape;
+    const runtimeLifecycleExporter = fastify.services.runtimeLifecycle as unknown as RuntimeLifecycleExporterRouteShape;
     if (parsed.data.format === "siem_ndjson") {
       return reply
         .type("application/x-ndjson")
@@ -78,23 +83,23 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
 
-    return reply.send({ items, nextCursor });
+    return reply.send({ items: items.map(projectSessionMetaForPublic), nextCursor });
   });
 
   fastify.get("/api/v1/sessions/:sessionId", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
-    return reply.send(fastify.services.sessionsList.getSession(sessionId));
+    return reply.send(projectSessionMetaForPublic(fastify.services.sessionsList.getSession(sessionId)));
   });
 
   fastify.get("/api/v1/sessions/:sessionId/transcript", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
     const events = await fastify.services.sessionsList.getTranscript(sessionId);
-    return reply.send({ items: events });
+    return reply.send({ items: events.map(projectTranscriptEventForPublic) });
   });
 
   fastify.get("/api/v1/sessions/:sessionId/summary", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
-    return reply.send(await fastify.services.sessionsList.getSessionSummary(sessionId));
+    return reply.send(projectSessionSummaryForPublic(await fastify.services.sessionsList.getSessionSummary(sessionId)));
   });
 
   fastify.get("/api/v1/sessions/:sessionId/timeline", async (request, reply) => {
@@ -103,6 +108,7 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: await fastify.services.sessionsList.listSessionTimeline(sessionId, parsed.data.limit) });
+    const items = await fastify.services.sessionsList.listSessionTimeline(sessionId, parsed.data.limit);
+    return reply.send({ items: items.map(projectSessionTimelineItemForPublic) });
   });
 };

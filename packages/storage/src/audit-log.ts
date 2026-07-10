@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { redactSecretText } from "@goatcitadel/contracts";
+import { redactSecretText, redactStructuredSecrets } from "@goatcitadel/contracts";
 import { getRequestAttribution } from "./request-attribution.js";
 
-const SECRET_KEY_PATTERN =
-  /^(?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|client[-_]?secret|secret|password|passwd|token|signature)$/i;
 const ARGV_LIKE_KEY_PATTERN = /^(?:argv|args|execArgv|commandArgs|command_argv)$/i;
 const SECRET_ARG_FLAG_PATTERN =
   /^--?(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|secret|password|authorization|proxy-authorization)(?:=|$)/i;
@@ -284,34 +282,28 @@ function getConfiguredRetentionDays(): number | undefined {
 }
 
 export function sanitizeForAudit<T>(value: T): T {
-  return sanitizeForAuditInternal(value, new WeakSet<object>());
+  const projected = redactStructuredSecrets(value, { redactEnvAssignmentsAsWhole: true }).value;
+  return sanitizeAuditArgv(projected) as T;
 }
 
-function sanitizeForAuditInternal<T>(value: T, seen: WeakSet<object>, key?: string): T {
-  if (typeof value === "string") {
-    return sanitizeString(value) as T;
-  }
+function sanitizeAuditArgv(value: unknown, key?: string): unknown {
   if (Array.isArray(value)) {
-    return sanitizeArrayForAudit(value, seen, key) as T;
+    return sanitizeArrayForAudit(value, key);
   }
   if (!value || typeof value !== "object") {
     return value;
   }
-  if (seen.has(value)) {
-    return "[Circular]" as T;
-  }
-  seen.add(value);
 
   const output: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    output[key] = shouldRedactAuditKey(key) ? "[REDACTED]" : sanitizeForAuditInternal(entry, seen, key);
+  for (const [childKey, entry] of Object.entries(value as Record<string, unknown>)) {
+    output[childKey] = sanitizeAuditArgv(entry, childKey);
   }
-  return output as T;
+  return output;
 }
 
-function sanitizeArrayForAudit(value: unknown[], seen: WeakSet<object>, key?: string): unknown[] {
+function sanitizeArrayForAudit(value: unknown[], key?: string): unknown[] {
   if (!key || !ARGV_LIKE_KEY_PATTERN.test(key)) {
-    return value.map((entry) => sanitizeForAuditInternal(entry, seen));
+    return value.map((entry) => sanitizeAuditArgv(entry));
   }
 
   let redactNext = false;
@@ -321,7 +313,7 @@ function sanitizeArrayForAudit(value: unknown[], seen: WeakSet<object>, key?: st
       return "[REDACTED]";
     }
     if (typeof entry !== "string") {
-      return sanitizeForAuditInternal(entry, seen);
+      return sanitizeAuditArgv(entry);
     }
     if (SECRET_ARG_FLAG_PATTERN.test(entry)) {
       const equalsIndex = entry.indexOf("=");
@@ -333,13 +325,6 @@ function sanitizeArrayForAudit(value: unknown[], seen: WeakSet<object>, key?: st
     }
     return sanitizeString(entry);
   });
-}
-
-function shouldRedactAuditKey(key: string): boolean {
-  if (/env$/i.test(key)) {
-    return false;
-  }
-  return SECRET_KEY_PATTERN.test(key);
 }
 
 function sanitizeString(value: string): string {

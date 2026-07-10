@@ -64,7 +64,18 @@ describe("comms routes", () => {
   });
 
   it("allows attachment-only channel sends", async () => {
-    const commsSend = vi.fn(async () => ({ deliveryId: "delivery-1", status: "sent" }));
+    const rawSendResult = {
+      deliveryId: "delivery-1",
+      status: "sent",
+      providerMessageId: "provider-message-1",
+      providerPayload: {
+        authorization: "Bearer send-short",
+        receiptUrl: "https://provider.example.test/token/send-path?token=send-query",
+        tokenId: "send-token-id",
+        requestCount: 4,
+      },
+    };
+    const commsSend = vi.fn(async () => rawSendResult);
     app = Fastify();
     decorateComms(app, { commsSend });
     await app.register(commsRoutes);
@@ -87,6 +98,18 @@ describe("comms routes", () => {
         message: "",
       }),
     );
+    expect(response.json()).toMatchObject({
+      deliveryId: "delivery-1",
+      providerMessageId: "provider-message-1",
+      providerPayload: {
+        authorization: "[REDACTED]",
+        receiptUrl: "https://provider.example.test/token/[REDACTED]?token=[REDACTED]",
+        tokenId: "send-token-id",
+        requestCount: 4,
+      },
+    });
+    expect(rawSendResult.providerPayload.authorization).toBe("Bearer send-short");
+    expect(rawSendResult.providerPayload.receiptUrl).toContain("send-path");
   });
 
   it("forwards explicit channel replies to the gateway", async () => {
@@ -258,6 +281,12 @@ describe("comms routes", () => {
               { partIndex: 2, codePointLength: 300, utf16Length: 300 },
             ],
           },
+          provider: {
+            authorization: "Bearer delivery-short",
+            statusUrl: "https://provider.example.test/access-token/delivery-path?token=delivery-query",
+            tokenId: "delivery-token-id",
+            requestCount: 7,
+          },
         },
         createdAt: "2026-05-05T11:00:00.000Z",
         updatedAt: "2026-05-05T11:30:00.000Z",
@@ -306,6 +335,12 @@ describe("comms routes", () => {
               mode: "unicode_safe",
               partCount: 3,
             }),
+            provider: {
+              authorization: "[REDACTED]",
+              statusUrl: "https://provider.example.test/access-token/[REDACTED]?token=[REDACTED]",
+              tokenId: "delivery-token-id",
+              requestCount: 7,
+            },
           }),
         }),
         expect.objectContaining({
@@ -442,7 +477,7 @@ describe("comms routes", () => {
   });
 
   it("returns normalized channel runtime status from the gateway", async () => {
-    const getIntegrationConnectionChannelRuntimeStatus = vi.fn(() => ({
+    const rawRuntime = {
       connectionId: "11111111-1111-4111-8111-111111111111",
       channelKey: "discord",
       enabled: true,
@@ -465,8 +500,15 @@ describe("comms routes", () => {
           "Persistent gateway runtime keeps Discord inbound messages, typing, and presence synchronized in-process.",
       },
       lastReadyAt: "2026-03-31T00:00:00.000Z",
-      metadata: { setupReady: true },
-    }));
+      lastError: "Authorization: Bearer runtime-short",
+      metadata: {
+        setupReady: true,
+        providerEndpoint: "https://discord.example.test/client-secret/runtime-path?token=runtime-query",
+        tokenId: "runtime-token-id",
+        reconnectCount: 3,
+      },
+    };
+    const getIntegrationConnectionChannelRuntimeStatus = vi.fn(() => rawRuntime);
     app = Fastify();
     decorateComms(app, { getIntegrationConnectionChannelRuntimeStatus });
     await app.register(commsRoutes);
@@ -478,16 +520,39 @@ describe("comms routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(getIntegrationConnectionChannelRuntimeStatus).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(response.json()).toMatchObject({
+      connectionId: "11111111-1111-4111-8111-111111111111",
+      lastError: "Authorization: [REDACTED]",
+      metadata: {
+        providerEndpoint: "https://discord.example.test/client-secret/[REDACTED]?token=[REDACTED]",
+        tokenId: "runtime-token-id",
+        reconnectCount: 3,
+      },
+    });
+    expect(rawRuntime.lastError).toContain("runtime-short");
+    expect(rawRuntime.metadata.providerEndpoint).toContain("runtime-path");
   });
 
   it("proxies channel diagnostics through the comms route", async () => {
-    const runIntegrationConnectionDiagnostics = vi.fn(async () => ({
+    const rawDiagnostics = {
       connectorType: "integration_connection",
       connectorId: "11111111-1111-4111-8111-111111111111",
       status: "ok",
-      checks: [],
+      checks: [
+        {
+          key: "provider",
+          status: "warn",
+          message: "Probe https://discord.example.test/api-key/diagnostic-path?token=diagnostic-query failed.",
+          metadata: {
+            authorization: "Bearer diagnostic-short",
+            tokenId: "diagnostic-token-id",
+            latencyMs: 42,
+          },
+        },
+      ],
       checkedAt: "2026-03-29T00:00:00.000Z",
-    }));
+    };
+    const runIntegrationConnectionDiagnostics = vi.fn(async () => rawDiagnostics);
     app = Fastify();
     decorateComms(app, { runIntegrationConnectionDiagnostics });
     await app.register(commsRoutes);
@@ -499,6 +564,21 @@ describe("comms routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(runIntegrationConnectionDiagnostics).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(response.json()).toMatchObject({
+      connectorId: "11111111-1111-4111-8111-111111111111",
+      checks: [
+        {
+          message: "Probe https://discord.example.test/api-key/[REDACTED]?token=[REDACTED] failed.",
+          metadata: {
+            authorization: "[REDACTED]",
+            tokenId: "diagnostic-token-id",
+            latencyMs: 42,
+          },
+        },
+      ],
+    });
+    expect(rawDiagnostics.checks[0]!.message).toContain("diagnostic-path");
+    expect(rawDiagnostics.checks[0]!.metadata.authorization).toBe("Bearer diagnostic-short");
   });
 
   it("rejects malformed comms payloads before invoking channel services", async () => {
@@ -585,6 +665,10 @@ describe("comms routes", () => {
   });
 
   it("normalizes comms lookup failures into not-found and conflict responses", async () => {
+    const capabilityError =
+      "Capability probe https://provider.example.test/token/capability-error-path?token=capability-error-query failed with Bearer capability-error-short";
+    const runtimeError =
+      "Runtime probe https://provider.example.test/client-secret/runtime-error-path?token=runtime-error-query failed";
     app = Fastify();
     decorateComms(app, {
       getIntegrationConnectionChannelCapabilities: vi
@@ -593,10 +677,10 @@ describe("comms routes", () => {
           throw new Error("unknown integration connection conn-1");
         })
         .mockImplementationOnce(() => {
-          throw new Error("capability probe failed");
+          throw new Error(capabilityError);
         }),
       getIntegrationConnectionChannelRuntimeStatus: vi.fn(() => {
-        throw new Error("runtime probe failed");
+        throw new Error(runtimeError);
       }),
       runIntegrationConnectionDiagnostics: vi.fn(async () => {
         throw new Error("unknown integration connection conn-1");
@@ -621,12 +705,19 @@ describe("comms routes", () => {
       url: "/api/v1/comms/capabilities/11111111-1111-4111-8111-111111111111",
     });
     expect(conflict.statusCode).toBe(409);
+    expect(conflict.body).not.toContain("capability-error-path");
+    expect(conflict.body).not.toContain("capability-error-query");
+    expect(conflict.body).not.toContain("capability-error-short");
 
     const runtimeConflict = await app.inject({
       method: "GET",
       url: "/api/v1/comms/runtime/11111111-1111-4111-8111-111111111111",
     });
     expect(runtimeConflict.statusCode).toBe(409);
+    expect(runtimeConflict.body).not.toContain("runtime-error-path");
+    expect(runtimeConflict.body).not.toContain("runtime-error-query");
+    expect(capabilityError).toContain("capability-error-path");
+    expect(runtimeError).toContain("runtime-error-path");
 
     const diagnosticsNotFound = await app.inject({
       method: "GET",

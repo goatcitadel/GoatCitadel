@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { projectImportProvenanceReferencesForPublic } from "../services/import-provenance-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const listQuerySchema = z.object({
@@ -92,7 +93,9 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.agents.listImportedAgentCatalog(parsed.data));
+      return reply.send(
+        projectImportProvenanceReferencesForPublic(fastify.services.agents.listImportedAgentCatalog(parsed.data)),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -101,7 +104,9 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/agents/catalog/:entryId", async (request, reply) => {
     const entryId = (request.params as { entryId: string }).entryId;
     try {
-      return reply.send(fastify.services.agents.getImportedAgentCatalogEntry(entryId));
+      return reply.send(
+        projectImportProvenanceReferencesForPublic(fastify.services.agents.getImportedAgentCatalogEntry(entryId)),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -114,7 +119,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const imported = await fastify.services.agents.importAgencyAgentCatalog(parsed.data ?? {});
-      return reply.code(201).send(imported);
+      return reply.code(201).send(projectImportProvenanceReferencesForPublic(imported));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -127,7 +132,11 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.agents.patchImportedAgentCatalogEntryState(entryId, parsed.data));
+      return reply.send(
+        projectImportProvenanceReferencesForPublic(
+          fastify.services.agents.patchImportedAgentCatalogEntryState(entryId, parsed.data),
+        ),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -141,7 +150,9 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.agents.activateImportedAgentCatalogEntryForSession(parsed.data.sessionId, entryId),
+        projectImportProvenanceReferencesForPublic(
+          fastify.services.agents.activateImportedAgentCatalogEntryForSession(parsed.data.sessionId, entryId),
+        ),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);

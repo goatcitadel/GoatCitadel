@@ -33,7 +33,7 @@ describe("slack oauth service", () => {
     expect(authorizationUrl.searchParams.get("redirect_uri")).toBe("https://goatcitadel.test/slack/callback");
   });
 
-  it("exchanges an OAuth code and stores install metadata while redacting secrets", async () => {
+  it("exchanges an OAuth code and stores install metadata while projecting every public secret", async () => {
     const fetcher = vi.fn(async () => {
       return new Response(
         JSON.stringify({
@@ -77,7 +77,7 @@ describe("slack oauth service", () => {
     );
     expect(input.config.targets).toEqual([expect.objectContaining({ channel: "C123", default: true, label: "#ops" })]);
 
-    const redacted = redactSlackOAuthConnection({
+    const connection = {
       connectionId: "11111111-1111-1111-1111-111111111111",
       catalogId: "channel.slack",
       kind: "channel",
@@ -85,11 +85,36 @@ describe("slack oauth service", () => {
       label: "Slack",
       enabled: true,
       status: "connected",
-      config: input.config,
+      config: {
+        ...input.config,
+        webhookUrl: "https://hooks.slack.test/services/team/path-secret?token=query-secret",
+        nested: {
+          authorization: "Bearer short",
+          DATABASE_PASSWORD: "tiny-secret",
+          tokenEnv: "SLACK_BOT_TOKEN",
+          secretRef: "keychain:slack-bot-token",
+          tokenBudget: 4_096,
+          tokenId: "slack-install-token-id",
+        },
+      },
       createdAt: "2026-05-02T00:00:00.000Z",
       updatedAt: "2026-05-02T00:00:00.000Z",
+    } as const;
+    const redacted = redactSlackOAuthConnection(connection);
+
+    expect(redacted.config.botToken).toBe("[REDACTED]");
+    expect(redacted.config.webhookUrl).toBe("[REDACTED]");
+    expect(redacted.config.nested).toEqual({
+      authorization: "[REDACTED]",
+      DATABASE_PASSWORD: "[REDACTED]",
+      tokenEnv: "SLACK_BOT_TOKEN",
+      secretRef: "keychain:slack-bot-token",
+      tokenBudget: 4_096,
+      tokenId: "slack-install-token-id",
     });
-    expect(redacted.config.botToken).toBe("[redacted]");
+    expect(connection.config.botToken).toBe("xoxb-secret");
+    expect(connection.config.webhookUrl).toContain("path-secret");
+    expect(connection.config.nested.authorization).toBe("Bearer short");
     expect(summarizeSlackOAuthInstall(redacted).scopes).toEqual(["chat:write", "channels:read"]);
   });
 

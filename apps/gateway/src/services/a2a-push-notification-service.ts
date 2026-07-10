@@ -17,7 +17,9 @@ import {
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
+import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
+import { projectPublicSecretValue } from "./public-secret-projection.js";
 
 export interface A2APeerAuthContext {
   peerId: string;
@@ -170,8 +172,14 @@ export class A2APushNotificationService {
   private sanitizePushConfig(
     config: A2ATaskPushNotificationConfig & { authToken?: string },
   ): A2ATaskPushNotificationConfig {
-    const { authToken: _authToken, ...publicConfig } = config;
-    return publicConfig;
+    const { authToken: _authToken, url, auth, ...publicConfig } = config;
+    const projected = projectA2AExternalValue(publicConfig);
+    const publicUrl = projectPublicSecretValue({ webhookUrl: url }).webhookUrl;
+    return {
+      ...projected,
+      url: publicUrl,
+      ...(auth ? { auth: structuredClone(auth) } : {}),
+    };
   }
 
   private async deliverPushEvent(
@@ -208,7 +216,7 @@ export class A2APushNotificationService {
         },
         checkedAt,
       );
-      return {
+      return projectPushDeliveryResult({
         taskId: task.id,
         peerId: binding.peerId,
         url: updated.url,
@@ -218,7 +226,7 @@ export class A2APushNotificationService {
         attemptCount: updated.attemptCount,
         checkedAt,
         error: wardError,
-      };
+      });
     }
 
     const payload = buildPushPayload(task, event, binding.peerId, attemptCount, checkedAt);
@@ -256,7 +264,7 @@ export class A2APushNotificationService {
         },
         checkedAt,
       );
-      return {
+      return projectPushDeliveryResult({
         taskId: task.id,
         peerId: binding.peerId,
         url: updated.url,
@@ -267,7 +275,7 @@ export class A2APushNotificationService {
         checkedAt,
         deliveredAt: checkedAt,
         auditRef: run.claim.sideEffectRunId,
-      };
+      });
     }
 
     const error =
@@ -298,7 +306,7 @@ export class A2APushNotificationService {
       },
       checkedAt,
     );
-    return {
+    return projectPushDeliveryResult({
       taskId: task.id,
       peerId: binding.peerId,
       url: updated.url,
@@ -310,7 +318,7 @@ export class A2APushNotificationService {
       nextRetryAt,
       error,
       auditRef: run.claim.sideEffectRunId,
-    };
+    });
   }
 
   private async sendPushRequest(
@@ -342,7 +350,7 @@ function buildPushPayload(
   attemptCount: number,
   checkedAt: string,
 ): Record<string, unknown> {
-  return {
+  return projectA2AExternalValue({
     protocolVersion: "1.0",
     boundary: "goatcitadel_a2a_task_push",
     checkedAt,
@@ -354,6 +362,14 @@ function buildPushPayload(
       attemptCount,
       eventSequence: event.sequence,
     },
+  });
+}
+
+function projectPushDeliveryResult(result: A2ATaskPushDeliveryResult): A2ATaskPushDeliveryResult {
+  const projected = projectA2AExternalValue(result);
+  return {
+    ...projected,
+    url: projectPublicSecretValue({ webhookUrl: result.url }).webhookUrl,
   };
 }
 

@@ -13,7 +13,7 @@ describe("hooks routes", () => {
     app = null;
   });
 
-  it("lists hooks and runs while redacting webhook secrets", async () => {
+  it("lists hooks and runs through structured public projection without mutating raw records", async () => {
     const hooks = createHooksService();
     app = buildApp(hooks);
 
@@ -27,13 +27,40 @@ describe("hooks routes", () => {
           hookId: "hook-1",
           workspaceId: "workspace-1",
           label: "Notify",
-          action: { type: "webhook", webhook: { url: "https://hooks.example.test/notify" } },
+          action: {
+            type: "webhook",
+            webhook: {
+              url: "[REDACTED]",
+              secret: "[REDACTED]",
+            },
+          },
         },
       ],
     });
-    expect(runs.json()).toEqual({ items: [{ runId: "run-1" }] });
+    expect(runs.json()).toEqual({
+      items: [
+        {
+          runId: "run-1",
+          requestPayload: {
+            authorization: "[REDACTED]",
+            callbackUrl: "https://callback.example.test/result?token=[REDACTED]",
+            tokenId: "token-id-safe",
+          },
+          responsePayload: {
+            DATABASE_PASSWORD: "[REDACTED]",
+            requestCount: 3,
+          },
+        },
+      ],
+    });
     expect(hooks.listWorkspaceHooks).toHaveBeenCalledWith("workspace-1", 2);
     expect(hooks.listWorkspaceHookRuns).toHaveBeenCalledWith("workspace-1", 3);
+    expect(hooks.rawHookRecord.action.webhook).toEqual({
+      url: "https://hooks.example.test/services/team/legacy-hook-secret",
+      secret: "super-secret",
+    });
+    expect(hooks.rawHookRun.requestPayload.authorization).toBe("Bearer tiny");
+    expect(hooks.rawHookRun.responsePayload.DATABASE_PASSWORD).toBe("db-short");
   });
 
   it("creates, updates, and deletes workspace hooks through the route service", async () => {
@@ -54,7 +81,7 @@ describe("hooks routes", () => {
         action: {
           type: "webhook",
           webhook: {
-            url: "https://hooks.example.test/tool",
+            url: "https://hooks.example.test/tool?token=create-short&mode=events",
             secret: "secret-value",
           },
         },
@@ -72,7 +99,7 @@ describe("hooks routes", () => {
         action: {
           type: "webhook",
           webhook: {
-            url: "https://hooks.example.test/after",
+            url: "https://hooks.example.test/after?token=update-short&mode=events",
             secret: "new-secret",
           },
         },
@@ -83,7 +110,12 @@ describe("hooks routes", () => {
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({
       hookId: "hook-created",
-      action: { webhook: { url: "https://hooks.example.test/tool" } },
+      action: {
+        webhook: {
+          url: "[REDACTED]",
+          secret: "[REDACTED]",
+        },
+      },
     });
     expect(created.body).not.toContain("secret-value");
     expect(hooks.createWorkspaceHook).toHaveBeenCalledWith(
@@ -96,6 +128,10 @@ describe("hooks routes", () => {
 
     expect(updated.statusCode).toBe(200);
     expect(updated.body).not.toContain("new-secret");
+    expect(updated.json().action.webhook).toEqual({
+      url: "[REDACTED]",
+      secret: "[REDACTED]",
+    });
     expect(hooks.updateWorkspaceHook).toHaveBeenCalledWith(
       "workspace-1",
       "hook-1",
@@ -183,14 +219,28 @@ function createHooksService(overrides: Record<string, unknown> = {}) {
     action: {
       type: "webhook",
       webhook: {
-        url: "https://hooks.example.test/notify",
+        url: "https://hooks.example.test/services/team/legacy-hook-secret",
         secret: "super-secret",
       },
     },
   };
+  const hookRun = {
+    runId: "run-1",
+    requestPayload: {
+      authorization: "Bearer tiny",
+      callbackUrl: "https://callback.example.test/result?token=callback-short",
+      tokenId: "token-id-safe",
+    },
+    responsePayload: {
+      DATABASE_PASSWORD: "db-short",
+      requestCount: 3,
+    },
+  };
   return {
+    rawHookRecord: hookRecord,
+    rawHookRun: hookRun,
     listWorkspaceHooks: vi.fn(() => [hookRecord]),
-    listWorkspaceHookRuns: vi.fn(() => [{ runId: "run-1" }]),
+    listWorkspaceHookRuns: vi.fn(() => [hookRun]),
     createWorkspaceHook: vi.fn((input) => ({
       ...hookRecord,
       ...input,

@@ -1,10 +1,11 @@
-import type {
-  RuntimeLifecycleResponse,
-  RuntimeLifecycleExportBundle,
-  RuntimeLifecycleQuery,
-  RuntimeLifecycleTrustReport,
-  SessionTimelineItem,
-  TranscriptEvent,
+import {
+  redactStructuredSecrets,
+  type RuntimeLifecycleResponse,
+  type RuntimeLifecycleExportBundle,
+  type RuntimeLifecycleQuery,
+  type RuntimeLifecycleTrustReport,
+  type SessionTimelineItem,
+  type TranscriptEvent,
 } from "@goatcitadel/contracts";
 
 export interface RuntimeLifecycleExportHost {
@@ -64,7 +65,7 @@ export class RuntimeLifecycleExportService {
       ...(bundle.transcript ?? []).map((event) => buildSiemEvent("runtime.transcript", event.timestamp, source, event)),
       ...(bundle.timeline ?? []).map((event) => buildSiemEvent("runtime.timeline", event.timestamp, source, event)),
     ];
-    return `${events.map((event) => JSON.stringify(redactSiemValue(event))).join("\n")}\n`;
+    return `${events.map((event) => JSON.stringify(projectSiemValue(event))).join("\n")}\n`;
   }
 
   public async exportBundle(input: RuntimeLifecycleExportQueryWithSiem): Promise<RuntimeLifecycleExportBundle> {
@@ -115,7 +116,7 @@ export class RuntimeLifecycleExportService {
       bundle.trustReport = buildTrustReport(bundle);
     }
 
-    return bundle;
+    return redactStructuredSecrets(bundle).value;
   }
 }
 
@@ -148,25 +149,25 @@ function buildSiemEvent(
   };
 }
 
-function redactSiemValue(value: unknown): unknown {
+function projectSiemValue(value: unknown): unknown {
+  return truncateSiemValue(redactStructuredSecrets(value, { marker: "[redacted]" }).value);
+}
+
+function truncateSiemValue(value: unknown): unknown {
   if (typeof value === "string") {
     return value.length > 4096 ? `${value.slice(0, 4096)}...[truncated]` : value;
   }
   if (Array.isArray(value)) {
-    return value.map(redactSiemValue);
+    return value.map(truncateSiemValue);
   }
   if (!value || typeof value !== "object") {
     return value;
   }
   const output: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    output[key] = isSecretLikeSiemKey(key) ? "[redacted]" : redactSiemValue(child);
+    output[key] = truncateSiemValue(child);
   }
   return output;
-}
-
-function isSecretLikeSiemKey(key: string): boolean {
-  return /(?:api[_-]?key|authorization|bearer|cookie|password|secret|token)/i.test(key);
 }
 
 function buildTrustReport(bundle: RuntimeLifecycleExportBundle): RuntimeLifecycleTrustReport {

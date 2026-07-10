@@ -212,4 +212,49 @@ describe("llama.cpp runtime routes", () => {
     });
     expect(invalidAdvisorResponse.statusCode).toBe(400);
   });
+
+  it("projects runtime status command previews and degraded discovery warnings", async () => {
+    const rawStatus = {
+      enabled: true,
+      desiredState: "running",
+      processState: "error",
+      baseUrl: "https://llama.example.test/api-key/status-path?token=status-query",
+      healthy: false,
+      lastError: "Authorization: Bearer llama-runtime-short",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      launchCommandPreview: "llama-server --api-key llama-preview-short --threads 8",
+    };
+    const rawWarning =
+      "Discovery https://llama.example.test/client-secret/discovery-path?token=discovery-query failed with Bearer discovery-short";
+    app = Fastify();
+    app.decorate("services", {
+      llamaCpp: {
+        refreshLlamaCppRuntime: vi.fn(async () => rawStatus),
+        listLlamaCppModels: vi.fn(async () => {
+          throw new Error(rawWarning);
+        }),
+      },
+    } as never);
+    await app.register(llamaCppRoutes);
+
+    const status = await app.inject({ method: "GET", url: "/api/v1/llamacpp/status" });
+    const models = await app.inject({ method: "GET", url: "/api/v1/llamacpp/models" });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({
+      baseUrl: "https://llama.example.test/api-key/[REDACTED]?token=[REDACTED]",
+      lastError: "Authorization: [REDACTED]",
+      launchCommandPreview: "llama-server --api-key [REDACTED] --threads 8",
+      healthy: false,
+    });
+    expect(models.statusCode).toBe(200);
+    expect(models.json()).toEqual({
+      items: [],
+      degraded: true,
+      warning:
+        "Discovery https://llama.example.test/client-secret/[REDACTED]?token=[REDACTED] failed with Bearer [REDACTED]",
+    });
+    expect(rawStatus.launchCommandPreview).toContain("llama-preview-short");
+    expect(rawWarning).toContain("discovery-path");
+  });
 });

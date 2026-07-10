@@ -6,7 +6,7 @@ import {
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
-import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
+import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -556,7 +556,9 @@ describe("GatewayService retained stream facade behavior", () => {
       },
     });
 
-    const active = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
+    const active = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1", {
+      continuation: false,
+    });
     expect(active).toMatchObject({
       sessionId: "session-1",
       turnId: "turn-1",
@@ -571,15 +573,16 @@ describe("GatewayService retained stream facade behavior", () => {
         type: "delta",
         sessionId: "session-1",
         turnId: "turn-1",
-        delta: "hello",
+        delta: "hello ",
       },
       "run-1",
+      active,
     );
     expect(persisted).toMatchObject({
       type: "delta",
       sessionId: "session-1",
       turnId: "turn-1",
-      delta: "hello",
+      delta: "",
       sequence: 8,
       runId: "run-1",
     });
@@ -591,14 +594,31 @@ describe("GatewayService retained stream facade behavior", () => {
         sequence: 8,
         runId: "run-1",
         chunkType: "delta",
-        payload: expect.objectContaining({ delta: "hello", sequence: 8 }),
+        payload: expect.objectContaining({ delta: "", sequence: 8 }),
       }),
     );
     expect(purgeBefore).not.toHaveBeenCalled();
 
-    GatewayService.prototype.completeActiveChatTurnStream.call(gateway, "turn-1");
-    expect(active.completed).toBe(true);
-    GatewayService.prototype.closeActiveChatTurnStream.call(gateway, "turn-1");
+    const resumed = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
+    expect(() =>
+      GatewayService.prototype.persistChatStreamChunk.call(
+        gateway,
+        {
+          type: "done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+        },
+        "run-1",
+        active,
+      ),
+    ).toThrow(ChatTurnStreamRegistrationMismatchError);
+    expect(append).toHaveBeenCalledTimes(1);
+
+    GatewayService.prototype.completeActiveChatTurnStream.call(gateway, "turn-1", active.registrationId);
+    expect(active.completed).toBe(false);
+    GatewayService.prototype.completeActiveChatTurnStream.call(gateway, "turn-1", resumed.registrationId);
+    expect(resumed.completed).toBe(true);
+    GatewayService.prototype.closeActiveChatTurnStream.call(gateway, "turn-1", resumed.registrationId);
     expect((gateway.chatTurnExecutionRegistry as ChatTurnExecutionRegistry).getActiveStream("turn-1")).toBeUndefined();
 
     gateway.lastChatStreamPurgeAt = 0;
@@ -681,9 +701,7 @@ describe("GatewayService retained stream facade behavior", () => {
         },
       },
     });
-    const active = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
-    active.startedAt = "2026-05-14T00:00:00.000Z";
-
+    GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
     const trace = GatewayService.prototype.markChatTurnCancelled.call(gateway, "session-1", "turn-1", "tester");
 
     expect(create).toHaveBeenCalledWith(
@@ -738,6 +756,7 @@ describe("GatewayService retained stream facade behavior", () => {
                       eventId: "event-2",
                       sequence: 2,
                       delta: "hello",
+                      __publicSecretProjectionVersion: 1,
                     },
                   },
                   {
@@ -828,7 +847,7 @@ describe("GatewayService retained stream facade behavior", () => {
     ).resolves.toMatchObject([{ type: "done", sequence: 3 }]);
 
     async function* source(): AsyncGenerator<ChatStreamChunkDraft> {
-      yield { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "one" };
+      yield { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "one " };
       yield { type: "done", sessionId: "session-1", turnId: "turn-1", messageId: "assistant-message-1" };
     }
 

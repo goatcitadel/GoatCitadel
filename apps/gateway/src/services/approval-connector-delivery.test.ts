@@ -83,6 +83,49 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     expect(payload?.payload?.message).toContain("Rollback: Restore the previous file from backup.");
   });
 
+  it("contains preview and rollback secrets while preserving the intended one-time action token", () => {
+    const approval = createApproval({
+      preview: {
+        summary: "Send the governed action.",
+        webhookUrl: "https://hooks.example.test/services/team/preview-secret",
+        authorization: "Bearer short",
+        DATABASE_PASSWORD: "hunter2",
+      },
+      payload: {
+        rollbackNote: '{"DATABASE_PASSWORD":"rollback-secret"}',
+      },
+    });
+    const browser = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval,
+      connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
+      token: "grat_token",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+    });
+    const channel = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval,
+      connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
+        approvalDeliveryTarget: "#ops-approvals",
+      }),
+      token: "grat_token",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+    });
+
+    for (const delivery of [browser, channel]) {
+      const serialized = JSON.stringify(delivery);
+      expect(serialized).not.toContain("preview-secret");
+      expect(serialized).not.toContain("Bearer short");
+      expect(serialized).not.toContain("hunter2");
+      expect(serialized).not.toContain("rollback-secret");
+      expect(serialized).toContain("rat_123");
+    }
+    expect(JSON.stringify(browser)).toContain("grat_token");
+    expect(JSON.stringify(channel)).not.toContain("grat_token");
+    expect(JSON.stringify(approval)).toContain("preview-secret");
+    expect(JSON.stringify(approval)).toContain("rollback-secret");
+  });
+
   it("adds integration approval buttons only when interactive actions are enabled", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),

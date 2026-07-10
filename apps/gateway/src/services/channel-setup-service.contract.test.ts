@@ -4,6 +4,7 @@ import {
   createChannelSetupDraft,
   finalizeChannelSetupDraft,
   testChannelSetupDraft,
+  updateChannelSetupDraft,
   type ChannelSetupHost,
 } from "./channel-setup-service.js";
 
@@ -194,5 +195,61 @@ describe("channel-setup-service contract behavior", () => {
     });
     expect(() => host.storage.channelSetupDrafts.get(created.draftId)).toThrow(/Missing draft/);
     expect(host.recentChannelSetupTests.has(created.draftId)).toBe(false);
+  });
+
+  it("reconciles public draft placeholders while leaving the internal raw update path unchanged", () => {
+    const host = createHost();
+    const created = createChannelSetupDraft(host, {
+      catalogId: "channel.slack",
+      lifecycleMode: "repair",
+    });
+    host.storage.channelSetupDrafts.update(created.draftId, {
+      draft: {
+        botToken: "bot-short",
+        webhookUrl: "https://hooks.example.test/events?token=hook-short&mode=events",
+        botTokenEnv: "SLACK_BOT_TOKEN",
+        channelId: "C-OLD",
+      },
+      hydration: {
+        status: "opaque-secret",
+        fieldState: { botToken: "configured" },
+        warnings: [],
+        rawLegacyConfig: {
+          botToken: "bot-short",
+          DATABASE_PASSWORD: "db-short",
+        },
+      },
+    });
+
+    const updated = updateChannelSetupDraft(
+      host,
+      created.draftId,
+      {
+        draft: {
+          webhookUrl: "[REDACTED]",
+          botTokenEnv: "SLACK_BOT_TOKEN_V2",
+          channelId: "C-NEXT",
+        },
+      },
+      { reconcilePublicProjection: true },
+    );
+
+    expect(updated.draft).toEqual({
+      botToken: "bot-short",
+      webhookUrl: "https://hooks.example.test/events?token=hook-short&mode=events",
+      botTokenEnv: "SLACK_BOT_TOKEN_V2",
+      channelId: "C-NEXT",
+    });
+    expect(updated.hydration?.rawLegacyConfig).toMatchObject({
+      botToken: "bot-short",
+      DATABASE_PASSWORD: "db-short",
+    });
+
+    const internal = updateChannelSetupDraft(host, created.draftId, {
+      draft: {
+        botToken: "replacement-short",
+      },
+    });
+    expect(internal.draft.botToken).toBe("replacement-short");
   });
 });

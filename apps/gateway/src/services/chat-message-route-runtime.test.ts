@@ -51,6 +51,52 @@ describe("chat-message-route-runtime", () => {
     expect(runtime.storage.chatGeneratedArtifacts.listByTurnIds).toHaveBeenCalledWith(["turn-root", "turn-child-a"]);
   });
 
+  it("projects secret-bearing tool runs for the public thread without mutating runtime truth", async () => {
+    const state = createThreadState();
+    const rootTrace = state.traces.find((trace) => trace.turnId === "turn-root")!;
+    rootTrace.toolRuns = [
+      {
+        toolRunId: "tool-secret-1",
+        turnId: "turn-root",
+        sessionId: "sess-1",
+        toolName: "docs.search",
+        status: "executed",
+        args: {
+          webhookUrl: "https://hooks.example.test/send?token=short-token",
+          tokenEnv: "DOCS_SEARCH_TOKEN",
+        },
+        result: {
+          authorization: "Bearer short",
+          DATABASE_PASSWORD: "tiny-secret",
+          tokenBudget: 2048,
+        },
+        startedAt: "2026-03-22T12:00:00.000Z",
+        finishedAt: "2026-03-22T12:00:01.000Z",
+      } as never,
+    ];
+    const rawAssistantMessage = state.messagesById.get("assistant-root")!;
+    rawAssistantMessage.content =
+      '{\\"DATABASE_PASSWORD\\":\\"legacy-db-secret\\",\\"webhookUrl\\":\\"https://hooks.example.test/services/team/legacy-hook-secret\\"}';
+    const runtime = createRuntime({ state });
+
+    const thread = await getChatThread(runtime, "sess-1");
+
+    expect(JSON.stringify(thread)).not.toContain("short-token");
+    expect(JSON.stringify(thread)).not.toContain("Bearer short");
+    expect(JSON.stringify(thread)).not.toContain("tiny-secret");
+    expect(JSON.stringify(thread)).not.toContain("legacy-db-secret");
+    expect(JSON.stringify(thread)).not.toContain("legacy-hook-secret");
+    expect(thread.turns[0]?.toolRuns?.[0]).toMatchObject({
+      args: { tokenEnv: "DOCS_SEARCH_TOKEN" },
+      result: { tokenBudget: 2048 },
+    });
+    expect(JSON.stringify(rootTrace)).toContain("short-token");
+    expect(JSON.stringify(rootTrace)).toContain("Bearer short");
+    expect(JSON.stringify(rootTrace)).toContain("tiny-secret");
+    expect(rawAssistantMessage.content).toContain("legacy-db-secret");
+    expect(rawAssistantMessage.content).toContain("legacy-hook-secret");
+  });
+
   it("validates context manifest session and turn identifiers", () => {
     const runtime = createRuntime({
       trace: createTrace({

@@ -33,7 +33,12 @@ import type {
   LlmProviderSummary,
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
-import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
+import {
+  findProviderTemplate,
+  inferProviderForModelId,
+  providerAllowsForeignModelIds,
+  SECRET_REDACTION_MARKER,
+} from "@goatcitadel/contracts";
 import { clampSummaryReserveTokens, type ClampSummaryReserveResult } from "./chat-compaction.js";
 import { sanitizeMessages } from "./chat-message-sanitize.js";
 import { loadLlmModelMetadataManifest, lookupModelMetadata } from "./llm-model-metadata.js";
@@ -379,7 +384,9 @@ export class LlmService {
     if (input.upsertProvider) {
       const existing = this.providers.get(input.upsertProvider.providerId);
       const isCodexOAuthProvider = input.upsertProvider.providerId.trim().toLowerCase() === "openai-codex";
-      const submittedApiKey = isCodexOAuthProvider ? undefined : input.upsertProvider.apiKey?.trim();
+      const submittedApiKeyValue = input.upsertProvider.apiKey?.trim();
+      const submittedApiKey =
+        isCodexOAuthProvider || submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
       if (submittedApiKey) {
         this.setProviderApiKey(input.upsertProvider.providerId, submittedApiKey);
       }
@@ -387,7 +394,10 @@ export class LlmService {
       const merged: LlmProviderConfig = normalizeProvider({
         providerId: input.upsertProvider.providerId,
         label: input.upsertProvider.label ?? existing?.label ?? input.upsertProvider.providerId,
-        baseUrl: input.upsertProvider.baseUrl ?? existing?.baseUrl ?? "http://127.0.0.1:1234/v1",
+        baseUrl:
+          preserveProjectedProviderString(existing?.baseUrl, input.upsertProvider.baseUrl) ??
+          existing?.baseUrl ??
+          "http://127.0.0.1:1234/v1",
         apiStyle: normalizeProviderApiStyle(
           input.upsertProvider.providerId,
           input.upsertProvider.apiStyle ?? existing?.apiStyle,
@@ -404,10 +414,10 @@ export class LlmService {
           ? undefined
           : submittedApiKey
             ? undefined
-            : (input.upsertProvider.apiKey ?? existing?.apiKey),
+            : (preserveProjectedProviderString(existing?.apiKey, input.upsertProvider.apiKey) ?? existing?.apiKey),
         apiKeyEnv: isCodexOAuthProvider ? undefined : (input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv),
-        request: input.upsertProvider.request ?? existing?.request,
-        headers: input.upsertProvider.headers ?? existing?.headers,
+        request: mergeProviderRequestConfig(existing?.request, input.upsertProvider.request),
+        headers: mergeProviderHeaders(existing?.headers, input.upsertProvider.headers),
       });
       this.providers.set(merged.providerId, merged);
       this.secretStatusCache.delete(merged.providerId);
@@ -1953,6 +1963,79 @@ function scrubProviderRequestSecrets(
   // `request.headers` is intentionally dropped — its keys are arbitrary and
   // every Authorization/Cookie/X-API-Key header value would otherwise leak.
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+function mergeProviderRequestConfig(
+  existing: LlmProviderRequestConfig | undefined,
+  incoming: LlmProviderRequestConfig | undefined,
+): LlmProviderRequestConfig | undefined {
+  if (!incoming) {
+    return existing ? structuredClone(existing) : undefined;
+  }
+  const merged: LlmProviderRequestConfig = { ...structuredClone(existing), ...structuredClone(incoming) };
+  merged.headers = mergeProviderHeaders(existing?.headers, incoming.headers);
+  merged.auth = mergeProviderAuthConfig(existing?.auth, incoming.auth);
+  if (incoming.proxy) {
+    merged.proxy = {
+      ...structuredClone(existing?.proxy),
+      ...structuredClone(incoming.proxy),
+      url: preserveProjectedProviderString(existing?.proxy?.url, incoming.proxy.url) ?? incoming.proxy.url,
+      auth: mergeProviderAuthConfig(existing?.proxy?.auth, incoming.proxy.auth),
+      tls: mergeProviderTlsConfig(existing?.proxy?.tls, incoming.proxy.tls),
+    };
+  } else if (existing?.proxy) {
+    merged.proxy = structuredClone(existing.proxy);
+  }
+  merged.tls = mergeProviderTlsConfig(existing?.tls, incoming.tls);
+  return merged;
+}
+
+function mergeProviderHeaders(
+  existing: Record<string, string> | undefined,
+  incoming: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!incoming) {
+    return existing ? { ...existing } : undefined;
+  }
+  return { ...existing, ...incoming };
+}
+
+function mergeProviderAuthConfig<T extends LlmProviderRequestAuthConfig | LlmProviderRequestProxyAuthConfig>(
+  existing: T | undefined,
+  incoming: T | undefined,
+): T | undefined {
+  if (!incoming) {
+    return existing ? structuredClone(existing) : undefined;
+  }
+  if (!existing || existing.type !== incoming.type) {
+    return structuredClone(incoming);
+  }
+  const raw = existing as unknown as Record<string, unknown>;
+  const update = incoming as unknown as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...raw, ...update };
+  for (const key of ["token", "value"] as const) {
+    if (update[key] === SECRET_REDACTION_MARKER) {
+      merged[key] = raw[key];
+    }
+  }
+  return merged as unknown as T;
+}
+
+function mergeProviderTlsConfig(
+  existing: LlmProviderRequestTlsConfig | undefined,
+  incoming: LlmProviderRequestTlsConfig | undefined,
+): LlmProviderRequestTlsConfig | undefined {
+  if (!incoming) {
+    return existing ? structuredClone(existing) : undefined;
+  }
+  return { ...structuredClone(existing), ...structuredClone(incoming) };
+}
+
+function preserveProjectedProviderString(
+  existing: string | undefined,
+  incoming: string | undefined,
+): string | undefined {
+  return incoming?.includes(SECRET_REDACTION_MARKER) ? existing : incoming;
 }
 
 // Helper: TLS config in this contract has only non-secret fields (paths

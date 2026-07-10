@@ -15,11 +15,53 @@ describe("chat delegate routes", () => {
   });
 
   it("runs, fetches, suggests, and accepts delegation through the service facade", async () => {
+    const rawResponse = {
+      runId: "run-1",
+      taskId: "task-1",
+      status: "completed",
+      steps: [
+        {
+          stepId: "step-1",
+          runId: "run-1",
+          role: "Researcher",
+          status: "completed",
+          index: 0,
+          startedAt: "2026-07-09T00:00:00.000Z",
+          output: "Authorization: Bearer delegated-step-secret",
+        },
+      ],
+      stitchedOutput: "Result https://discord.com/api/webhooks/123/delegated-path-secret",
+      citations: [],
+    };
+    const rawRun = {
+      runId: "run-1",
+      sessionId: "sess-1",
+      taskId: "task-1",
+      objective: "Operator objective Authorization: Bearer user-owned-secret",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "completed",
+      startedAt: "2026-07-09T00:00:00.000Z",
+      citations: [],
+      finalSummary: "Provider used apiKey=get-run-secret",
+    };
     const chatDelegate = {
-      runChatDelegation: vi.fn(async () => ({ runId: "run-1", status: "completed" })),
-      getChatDelegationRun: vi.fn(() => ({ runId: "run-1", status: "completed" })),
-      suggestChatDelegation: vi.fn(async () => ({ suggestionId: "suggestion-1" })),
-      acceptChatDelegation: vi.fn(async () => ({ runId: "run-accepted" })),
+      runChatDelegation: vi.fn(async () => rawResponse),
+      getChatDelegationRun: vi.fn(() => rawRun),
+      suggestChatDelegation: vi.fn(async () => ({
+        suggestion: {
+          suggestionId: "suggestion-1",
+          sessionId: "sess-1",
+          objective: "Operator suggestion Authorization: Bearer suggestion-user-secret",
+          roles: ["Planner"],
+          mode: "sequential",
+          confidence: 0.9,
+          reason: "Provider failed with Authorization: Bearer suggestion-reason-secret",
+          source: "manual",
+          createdAt: "2026-07-09T00:00:00.000Z",
+        },
+      })),
+      acceptChatDelegation: vi.fn(async () => ({ ...rawResponse, runId: "run-accepted" })),
     };
     app = buildApp(chatDelegate);
 
@@ -39,6 +81,10 @@ describe("chat delegate routes", () => {
       },
     });
     expect(run.statusCode).toBe(200);
+    expect(run.json()).toMatchObject({
+      steps: [{ output: "Authorization: [REDACTED]" }],
+      stitchedOutput: "Result https://discord.com/api/webhooks/[REDACTED]/[REDACTED]",
+    });
     expect(chatDelegate.runChatDelegation).toHaveBeenCalledWith("sess-1", {
       objective: "Review the launch plan",
       roles: ["Researcher", "QA"],
@@ -56,6 +102,10 @@ describe("chat delegate routes", () => {
       url: "/api/v1/chat/sessions/sess-1/delegations/run-1",
     });
     expect(fetched.statusCode).toBe(200);
+    expect(fetched.json()).toMatchObject({
+      objective: "Operator objective Authorization: Bearer user-owned-secret",
+      finalSummary: "Provider used apiKey=[REDACTED]",
+    });
     expect(chatDelegate.getChatDelegationRun).toHaveBeenCalledWith("sess-1", "run-1");
 
     const suggested = await app.inject({
@@ -64,6 +114,12 @@ describe("chat delegate routes", () => {
       payload: { objective: "Plan it", roles: ["Planner"], mode: "sequential" },
     });
     expect(suggested.statusCode).toBe(200);
+    expect(suggested.json()).toMatchObject({
+      suggestion: {
+        objective: "Operator suggestion Authorization: Bearer suggestion-user-secret",
+        reason: "Provider failed with Authorization: [REDACTED]",
+      },
+    });
     expect(chatDelegate.suggestChatDelegation).toHaveBeenCalledWith("sess-1", {
       objective: "Plan it",
       roles: ["Planner"],
@@ -86,6 +142,10 @@ describe("chat delegate routes", () => {
       },
     });
     expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({
+      steps: [{ output: "Authorization: [REDACTED]" }],
+      stitchedOutput: "Result https://discord.com/api/webhooks/[REDACTED]/[REDACTED]",
+    });
     expect(chatDelegate.acceptChatDelegation).toHaveBeenCalledWith("sess-1", {
       suggestionId: "suggestion-1",
       objective: "Run it",
@@ -97,6 +157,8 @@ describe("chat delegate routes", () => {
       policyRunId: "parent-run-1",
       policyTaskId: "parent-task-1",
     });
+    expect(rawResponse.steps[0]?.output).toContain("delegated-step-secret");
+    expect(rawRun.finalSummary).toContain("get-run-secret");
   });
 
   it("maps validation, service, not-found, and Goat errors to the public route contract", async () => {

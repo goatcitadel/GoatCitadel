@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NotFoundError, type DurableRunRecord } from "@goatcitadel/contracts";
+import { NotFoundError, type DurableRunRecord, type ExternalSideEffectRunRecord } from "@goatcitadel/contracts";
 import {
   ComplianceExportService,
   computeBundleContentHash,
@@ -86,6 +86,60 @@ describe("ComplianceExportService.buildComplianceBundle", () => {
       { runId: "run-b", valid: true },
       { runId: "run-a", valid: true },
     ]);
+  });
+
+  it("reuses the projected signed receipt manifest without exposing canonical secrets", () => {
+    const rawLastError = "Provider failed with Authorization: Bearer compliance-error-secret";
+    const rawExternalReference =
+      "url:https://bundle-user:bundle-password@example.test/result?token=compliance-reference-secret";
+    const run = makeRun({
+      runId: "run-compliance-secret",
+      createdAt: "2026-06-11T00:00:00.000Z",
+      status: "failed",
+      payload: { workspaceId: "workspace-compliance" },
+      lastError: rawLastError,
+    });
+    const sideEffect: ExternalSideEffectRunRecord = {
+      runId: "extfx-compliance-secret",
+      workspaceId: "workspace-compliance",
+      boundary: "integration.write",
+      routePath: "/api/v1/integrations/webhook/send",
+      actorScope: "operator",
+      idempotencyKey: "idem-compliance-secret",
+      payloadHash: "payload-hash-compliance-secret",
+      status: "completed",
+      replayPolicy: "audit_only",
+      resumeState: "completed",
+      externalReferenceId: rawExternalReference,
+      attemptCount: 1,
+      completedAt: "2026-06-11T00:00:01.000Z",
+      createdAt: "2026-06-11T00:00:00.000Z",
+      updatedAt: "2026-06-11T00:00:01.000Z",
+    };
+    const data = dataPortFor([run]);
+    data.listSideEffectsForWorkspace = () => [sideEffect];
+    const service = new ComplianceExportService({
+      data,
+      signingKeys: new InMemoryEvidenceReceiptSigningKeyProvider(),
+      now: () => new Date(FIXED_NOW),
+    });
+
+    const bundle = service.buildComplianceBundle({
+      ...WIDE_RANGE,
+      workspaceId: "workspace-compliance",
+    });
+
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain("compliance-error-secret");
+    expect(serialized).not.toContain("bundle-password");
+    expect(serialized).not.toContain("compliance-reference-secret");
+    expect(bundle.receipts[0]?.manifest.lineage.lastError).toBe("Provider failed with Authorization: [REDACTED]");
+    expect(bundle.receipts[0]?.manifest.sideEffects[0]?.externalReferenceId).toBe(
+      "url:https://[REDACTED]@example.test/result?token=[REDACTED]",
+    );
+    expect(service.verifyComplianceBundle(bundle).valid).toBe(true);
+    expect(run.lastError).toBe(rawLastError);
+    expect(sideEffect.externalReferenceId).toBe(rawExternalReference);
   });
 
   it("filters runs outside the requested time range", () => {
@@ -175,9 +229,7 @@ describe("verifyComplianceBundle tamper detection", () => {
     const tampered: ComplianceBundle = {
       ...bundle,
       receipts: bundle.receipts.map((receipt, index) =>
-        index === 0
-          ? { ...receipt, manifest: { ...receipt.manifest, workflowKey: "tampered.workflow" } }
-          : receipt,
+        index === 0 ? { ...receipt, manifest: { ...receipt.manifest, workflowKey: "tampered.workflow" } } : receipt,
       ),
     };
 
@@ -241,9 +293,7 @@ describe("verifyComplianceBundle tamper detection", () => {
     const bundle = service.buildComplianceBundle(WIDE_RANGE);
 
     // Build a separate, independently-valid receipt for a run NOT committed by this bundle.
-    const otherService = buildService([
-      makeRun({ runId: "run-foreign", createdAt: "2026-06-13T00:00:00.000Z" }),
-    ]);
+    const otherService = buildService([makeRun({ runId: "run-foreign", createdAt: "2026-06-13T00:00:00.000Z" })]);
     const foreignBundle = otherService.buildComplianceBundle(WIDE_RANGE);
     const foreignReceipt = foreignBundle.receipts[0];
 

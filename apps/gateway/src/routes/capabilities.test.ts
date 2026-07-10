@@ -60,7 +60,20 @@ describe("capabilities routes", () => {
       getToolSchema: vi.fn((toolName: string) => ({
         toolName,
         schemaHash: "schema123",
-        schema: { type: "object", properties: { path: { type: "string" } } },
+        schema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            password: {
+              type: "string",
+              default: "schema-password-secret",
+              enum: ["schema-password-alpha", "schema-password-beta"],
+              examples: ["schema-password-example"],
+            },
+            token: { type: "string" },
+          },
+          required: ["path", "password", "token"],
+        },
       })),
       getCapabilityCandidateDetail: vi.fn((candidateId: string) => ({
         candidateId,
@@ -340,8 +353,23 @@ describe("capabilities routes", () => {
     expect(service.getToolSchema).toHaveBeenCalledWith("tool.safe_read");
     expect(schema.json()).toMatchObject({
       toolName: "tool.safe_read",
-      schema: { properties: { path: { type: "string" } } },
+      schema: {
+        properties: {
+          path: { type: "string" },
+          password: {
+            type: "string",
+            default: "[REDACTED]",
+            enum: ["[REDACTED]", "[REDACTED]"],
+            examples: ["[REDACTED]"],
+          },
+          token: { type: "string" },
+        },
+        required: ["path", "password", "token"],
+      },
     });
+    expect(schema.body).not.toContain("schema-password-secret");
+    expect(Array.isArray(schema.json().schema.properties.password.enum)).toBe(true);
+    expect(Array.isArray(schema.json().schema.properties.password.examples)).toBe(true);
   });
 
   it("creates a capability proposal through the capability route service", async () => {
@@ -888,6 +916,340 @@ describe("capabilities routes", () => {
       baselineRunId: "code-run-0",
       matches: { policySnapshot: false },
     });
+  });
+
+  it("projects proposal, candidate, lifecycle, and Code Mode evidence without mutating runtime truth", async () => {
+    const rawProposal = {
+      proposalId: "proposal-secret",
+      proposalKind: "skill",
+      status: "proposed",
+      title: "Secret-bearing proposal",
+      summary: "Review before activation.",
+      payload: {
+        token: "proposal-short",
+        endpoint: "https://proposal.example.test/token/proposal-path?mode=review",
+      },
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+    };
+    const rawRun = {
+      runId: "code-run-secret",
+      status: "failed",
+      language: "typescript",
+      workspaceId: "default",
+      saveCandidateOnSuccess: false,
+      capabilitySnapshotId: "snapshot-1",
+      codeModeInputHash: "sha256:input",
+      wrapperManifestHash: "sha256:wrapper",
+      policySnapshotHash: "sha256:policy",
+      codeHash: "sha256:code",
+      codeArtifact: {
+        artifactId: "code",
+        relPath: "code.ts",
+        sha256: "sha256:code",
+        bytes: 1,
+        mimeType: "text/plain",
+        createdAt: "2026-07-09T00:00:00.000Z",
+      },
+      wrapperManifestArtifact: {
+        artifactId: "wrapper",
+        relPath: "wrapper.json",
+        sha256: "sha256:wrapper",
+        bytes: 1,
+        mimeType: "application/json",
+        createdAt: "2026-07-09T00:00:00.000Z",
+      },
+      policySnapshotArtifact: {
+        artifactId: "policy",
+        relPath: "policy.json",
+        sha256: "sha256:policy",
+        bytes: 1,
+        mimeType: "application/json",
+        createdAt: "2026-07-09T00:00:00.000Z",
+      },
+      stdoutPreview: "Authorization: Bearer stdout-short",
+      stderrPreview: "password=stderr-short",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      result: { apiKey: "result-short", requestCount: 2 },
+      error: "Authorization: Bearer error-short",
+      errorDetails: { webhookUrl: "https://hooks.example.test/services/team/error-path" },
+      createdAt: "2026-07-09T00:00:00.000Z",
+    };
+    const rawCandidate = {
+      candidateId: "candidate-secret",
+      versions: [],
+      relatedProposals: [rawProposal],
+      originatingRun: rawRun,
+      activationBlocked: true,
+      activationBlockers: ["Approval required."],
+    };
+    const rawEvent = {
+      eventId: "event-secret",
+      proposalId: rawProposal.proposalId,
+      eventType: "created",
+      actorId: "operator",
+      payload: { password: "event-short", result: { token: "event-result-short" } },
+      createdAt: "2026-07-09T00:00:00.000Z",
+    };
+    const rawArtifactPreview = {
+      runId: rawRun.runId,
+      artifactKind: "stdout",
+      artifact: {
+        artifactId: "stdout-artifact",
+        relPath: "data/code-mode/stdout.txt",
+        sha256: "sha256:stored-raw",
+        bytes: 80,
+        mimeType: "text/plain",
+        createdAt: "2026-07-09T00:00:00.000Z",
+      },
+      content: '{"token":"artifact-short","endpoint":"https://artifact.example.test/token/artifact-path"}',
+      sha256: "sha256:stored-raw",
+      verifiedAt: "2026-07-09T00:00:00.000Z",
+      truncated: false,
+    };
+    const rawComparison = {
+      runId: rawRun.runId,
+      baselineRunId: "code-run-baseline",
+      comparedAt: "2026-07-09T00:00:00.000Z",
+      matches: { source: false },
+      diagnostics: { token: "comparison-short" },
+    };
+    const createCapabilityProposal = vi.fn((input: Record<string, unknown>) => ({
+      ...rawProposal,
+      payload: input.payload,
+    }));
+    const createCodeModeRun = vi.fn(async (input: Record<string, unknown>) => ({
+      ...rawRun,
+      input: input.input,
+    }));
+    await registerCapabilitiesService({
+      listCapabilityProposals: vi.fn(() => [rawProposal]),
+      createCapabilityProposal,
+      getCapabilityProposalDetail: vi.fn(() => ({
+        proposal: rawProposal,
+        events: [rawEvent],
+        candidate: rawCandidate,
+      })),
+      getCapabilityCandidateDetail: vi.fn(() => rawCandidate),
+      promoteCapabilityCandidate: vi.fn(() => ({
+        action: "promote",
+        candidateId: rawCandidate.candidateId,
+        selectedVersionId: "version-1",
+        changedVersionIds: ["version-1"],
+        occurredAt: "2026-07-09T00:00:00.000Z",
+        detail: rawCandidate,
+      })),
+      revokeCapabilityCandidate: vi.fn(() => ({
+        action: "revoke",
+        candidateId: rawCandidate.candidateId,
+        selectedVersionId: "version-1",
+        changedVersionIds: ["version-1"],
+        occurredAt: "2026-07-09T00:00:00.000Z",
+        detail: rawCandidate,
+      })),
+      rollbackCapabilityCandidate: vi.fn(() => ({
+        action: "rollback",
+        candidateId: rawCandidate.candidateId,
+        selectedVersionId: "version-1",
+        changedVersionIds: ["version-1"],
+        occurredAt: "2026-07-09T00:00:00.000Z",
+        detail: rawCandidate,
+      })),
+      listCodeModeRuns: vi.fn(() => [rawRun]),
+      getCodeModeRunInScope: vi.fn(() => rawRun),
+      getCodeModeRunArtifactPreview: vi.fn(async () => rawArtifactPreview),
+      compareCodeModeRuns: vi.fn(() => rawComparison),
+      createCodeModeRun,
+    });
+
+    const responses = await Promise.all([
+      app!.inject({ method: "GET", url: "/api/v1/capabilities/proposals" }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/capabilities/proposals",
+        payload: {
+          proposalKind: "skill",
+          title: "Secret-bearing proposal",
+          summary: "Review before activation.",
+          payload: { token: "create-proposal-short" },
+        },
+      }),
+      app!.inject({ method: "GET", url: `/api/v1/capabilities/proposals/${rawProposal.proposalId}` }),
+      app!.inject({ method: "GET", url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}` }),
+      app!.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}/promote`,
+        payload: { versionId: "version-1" },
+      }),
+      app!.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}/revoke`,
+        payload: { versionId: "version-1" },
+      }),
+      app!.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}/rollback`,
+        payload: { targetVersionId: "version-1" },
+      }),
+      app!.inject({ method: "GET", url: "/api/v1/code-mode/runs" }),
+      app!.inject({ method: "GET", url: `/api/v1/code-mode/runs/${rawRun.runId}` }),
+      app!.inject({
+        method: "GET",
+        url: `/api/v1/code-mode/runs/${rawRun.runId}/artifacts/stdout`,
+      }),
+      app!.inject({
+        method: "GET",
+        url: `/api/v1/code-mode/runs/${rawRun.runId}/compare/${rawComparison.baselineRunId}`,
+      }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/code-mode/runs",
+        payload: {
+          language: "typescript",
+          source: "return input;",
+          input: { token: "code-input-short" },
+        },
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBeLessThan(300);
+    }
+    const publicBodies = responses.map((response) => response.body).join("\n");
+    for (const secret of [
+      "proposal-short",
+      "proposal-path",
+      "event-short",
+      "event-result-short",
+      "stdout-short",
+      "stderr-short",
+      "result-short",
+      "error-short",
+      "error-path",
+      "comparison-short",
+      "artifact-short",
+      "artifact-path",
+      "create-proposal-short",
+      "code-input-short",
+    ]) {
+      expect(publicBodies).not.toContain(secret);
+    }
+    expect(responses[9]!.json()).toMatchObject({
+      artifact: { sha256: "sha256:stored-raw" },
+      sha256: "sha256:stored-raw",
+      publicProjection: {
+        contentRedacted: true,
+        canonicalSha256RefersToStoredArtifact: true,
+      },
+    });
+    expect(createCapabilityProposal.mock.calls[0]?.[0]).toMatchObject({
+      payload: { token: "create-proposal-short" },
+    });
+    expect(createCodeModeRun.mock.calls[0]?.[0]).toMatchObject({
+      input: { token: "code-input-short" },
+    });
+    expect(rawProposal.payload.token).toBe("proposal-short");
+    expect(rawRun.stdoutPreview).toContain("stdout-short");
+    expect(rawArtifactPreview.content).toContain("artifact-short");
+  });
+
+  it("projects catalog snapshots and autonomy-grant evidence without mutating service inputs", async () => {
+    const catalogItem = {
+      capabilityId: "cap-secret",
+      name: "Catalog capability",
+      kind: "skill",
+      category: "candidate",
+      callable: false,
+      summary: "Authorization: Bearer catalog-secret",
+    };
+    const rawGrant = {
+      grantId: "grant-secret",
+      status: "active",
+      reason: "password=list-grant-secret",
+    };
+    const createAutonomousActivationGrant = vi.fn((input: Record<string, unknown>) => ({
+      grantId: "grant-created-secret",
+      status: "active",
+      ...input,
+    }));
+    const revokeAutonomousActivationGrant = vi.fn((grantId: string, input: Record<string, unknown>) => ({
+      grantId,
+      status: "revoked",
+      ...input,
+    }));
+    await registerCapabilitiesService({
+      listCapabilityCatalog: vi.fn(() => [catalogItem]),
+      getCapabilityCatalogSnapshot: vi.fn(() => ({ snapshotId: "snapshot-secret", items: [catalogItem] })),
+      listAutonomousActivationGrants: vi.fn(() => [rawGrant]),
+      createAutonomousActivationGrant,
+      evaluateAutonomousActivationGrant: vi.fn(() => ({
+        allowed: false,
+        blockers: ["Authorization: Bearer evaluate-secret"],
+        governance: [],
+      })),
+      revokeAutonomousActivationGrant,
+    });
+
+    const responses = await Promise.all([
+      app!.inject({ method: "GET", url: "/api/v1/capabilities/catalog" }),
+      app!.inject({ method: "GET", url: "/api/v1/capabilities/snapshots/snapshot-secret" }),
+      app!.inject({ method: "GET", url: "/api/v1/capabilities/autonomy-grants" }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/capabilities/autonomy-grants",
+        payload: {
+          workspaceId: "default",
+          surfaces: ["chat"],
+          maxRiskLevel: "safe",
+          capabilityPatterns: ["capability.*"],
+          toolPatterns: ["tool.*"],
+          activationKinds: ["tool"],
+          maxActivations: 1,
+          grantor: "operator",
+          reason: "Authorization: Bearer create-grant-secret",
+          expiresAt: "2026-07-11T00:00:00.000Z",
+        },
+      }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/capabilities/autonomy-grants/evaluate",
+        payload: {
+          workspaceId: "default",
+          surface: "chat",
+          riskLevel: "safe",
+          activationKind: "tool",
+          toolName: "tool.safe_read",
+        },
+      }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/capabilities/autonomy-grants/grant-secret/revoke",
+        payload: { revokedBy: "operator", reason: "Authorization: Bearer revoke-grant-secret" },
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBeLessThan(300);
+    }
+    const publicBodies = responses.map((response) => response.body).join("\n");
+    for (const secret of [
+      "catalog-secret",
+      "list-grant-secret",
+      "create-grant-secret",
+      "evaluate-secret",
+      "revoke-grant-secret",
+    ]) {
+      expect(publicBodies).not.toContain(secret);
+    }
+    expect(createAutonomousActivationGrant.mock.calls[0]?.[0]).toMatchObject({
+      reason: "Authorization: Bearer create-grant-secret",
+    });
+    expect(revokeAutonomousActivationGrant.mock.calls[0]?.[1]).toMatchObject({
+      reason: "Authorization: Bearer revoke-grant-secret",
+    });
+    expect(catalogItem.summary).toContain("catalog-secret");
+    expect(rawGrant.reason).toContain("list-grant-secret");
   });
 
   it("defaults Code Mode run detail reads to the default workspace", async () => {

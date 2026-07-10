@@ -206,6 +206,114 @@ describe("agents routes", () => {
     });
   });
 
+  it("projects imported catalog provenance URLs at every response boundary without mutating service truth", async () => {
+    const rawRepoUrl =
+      "https://agency-user:agent-provenance-secret@example.test/private-agents.git?access_token=agent-provenance-secret";
+    const rawMarkdown = [
+      "# Private Agent",
+      "",
+      "Operator-authored example: Authorization: Bearer prose-must-remain-byte-identical",
+    ].join("\n");
+    const catalogEntry = {
+      entryId: "catalog-private",
+      workspaceId: "default",
+      division: "engineering",
+      state: "approved",
+      definition: {
+        definitionId: "definition-private",
+        slug: "private-agent",
+        rawMarkdown,
+        provenance: {
+          provider: "agency_agents",
+          repoUrl: rawRepoUrl,
+          ref: "main",
+          path: "engineering/private-agent.md",
+          sha256: "sha-private",
+          importedAt: "2026-07-09T12:00:00.000Z",
+        },
+      },
+    };
+    const catalogList = {
+      workspaceId: "default",
+      divisions: ["engineering"],
+      items: [catalogEntry],
+    };
+    const importResult = {
+      workspaceId: "default",
+      repoUrl: rawRepoUrl,
+      ref: "main",
+      importedAt: "2026-07-09T12:00:00.000Z",
+      importedCount: 1,
+      divisions: ["engineering"],
+      parseCounts: { supported: 1, supported_with_warnings: 0, unsupported: 0 },
+    };
+    const activationResult = {
+      catalogEntry,
+      specialist: {
+        candidateId: "candidate-private",
+        sessionId: "sess-private",
+        source: "catalog",
+        status: "active",
+        routingMode: "manual_only",
+      },
+    };
+    const service = await registerAgentsService({
+      listImportedAgentCatalog: vi.fn(() => catalogList),
+      getImportedAgentCatalogEntry: vi.fn(() => catalogEntry),
+      importAgencyAgentCatalog: vi.fn(async () => importResult),
+      patchImportedAgentCatalogEntryState: vi.fn(() => catalogEntry),
+      activateImportedAgentCatalogEntryForSession: vi.fn(() => activationResult),
+    });
+
+    const listResponse = await app!.inject({ method: "GET", url: "/api/v1/agents/catalog" });
+    const detailResponse = await app!.inject({ method: "GET", url: "/api/v1/agents/catalog/catalog-private" });
+    const importResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents/catalog/import/agency-agents",
+      payload: { workspaceId: "default", repoUrl: rawRepoUrl, ref: "main" },
+    });
+    const stateResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/agents/catalog/catalog-private/state",
+      payload: { state: "approved" },
+    });
+    const activationResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents/catalog/catalog-private/activate-session",
+      payload: { sessionId: "sess-private" },
+    });
+
+    expect(service.importAgencyAgentCatalog).toHaveBeenCalledWith({
+      workspaceId: "default",
+      repoUrl: rawRepoUrl,
+      ref: "main",
+    });
+    expect([
+      listResponse.statusCode,
+      detailResponse.statusCode,
+      importResponse.statusCode,
+      stateResponse.statusCode,
+      activationResponse.statusCode,
+    ]).toEqual([200, 200, 201, 200, 200]);
+    const publicBodies = [
+      listResponse.json(),
+      detailResponse.json(),
+      importResponse.json(),
+      stateResponse.json(),
+      activationResponse.json(),
+    ];
+    for (const body of publicBodies) {
+      expect(JSON.stringify(body)).not.toContain("agent-provenance-secret");
+      expect(JSON.stringify(body)).toContain("[REDACTED]");
+    }
+    expect(listResponse.json().items[0].definition.rawMarkdown).toBe(rawMarkdown);
+    expect(detailResponse.json().definition.rawMarkdown).toBe(rawMarkdown);
+
+    expect(catalogEntry.definition.provenance.repoUrl).toBe(rawRepoUrl);
+    expect(catalogEntry.definition.rawMarkdown).toBe(rawMarkdown);
+    expect(importResult.repoUrl).toBe(rawRepoUrl);
+  });
+
   it("lists active agents with default route filters", async () => {
     const service = await registerAgentsService();
 

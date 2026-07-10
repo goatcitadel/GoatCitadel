@@ -98,7 +98,7 @@ describe("orchestration routes", () => {
   });
 
   it("creates orchestration plans with the enriched run contract", async () => {
-    const createOrchestrationPlan = vi.fn(async () => ({
+    const rawCreatedRun = {
       runId: "run-1",
       planId: "plan-1",
       status: "queued",
@@ -111,7 +111,10 @@ describe("orchestration routes", () => {
       worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
       worktreeStatus: "ready",
       worktreeBaseRef: "main",
-    }));
+      lastError: "Authorization: Bearer create-plan-secret",
+      tokenId: "create-plan-token-id",
+    };
+    const createOrchestrationPlan = vi.fn(async () => rawCreatedRun);
     app = Fastify();
     app.decorateRequest("authActorId", "operator-auth");
     app.decorateRequest("authActorSource", "loopback");
@@ -166,7 +169,10 @@ describe("orchestration routes", () => {
       executionState: "queued",
       worktreeStatus: "ready",
       worktreeBaseRef: "main",
+      lastError: "Authorization: [redacted]",
+      tokenId: "create-plan-token-id",
     });
+    expect(rawCreatedRun.lastError).toContain("create-plan-secret");
   });
 
   it("previews recipe-generated orchestration plans without running them", async () => {
@@ -453,7 +459,7 @@ describe("orchestration routes", () => {
   });
 
   it("creates recipe plans through the existing plan creation route service", async () => {
-    const createPlanFromRecipe = vi.fn(async () => ({
+    const rawRecipePlanResult = {
       recipe: {
         name: "Campaign review",
         goal: "Review campaign.",
@@ -462,13 +468,20 @@ describe("orchestration routes", () => {
         steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
       },
       plan: { planId: "recipe-campaign-review-abc" },
-      run: { runId: "run-1", planId: "recipe-campaign-review-abc", status: "queued" },
+      run: {
+        runId: "run-1",
+        planId: "recipe-campaign-review-abc",
+        status: "queued",
+        lastError: "Authorization: Bearer recipe-plan-secret",
+        tokenId: "recipe-plan-token-id",
+      },
       warnings: [],
       requiredApprovals: [],
       missingTools: [],
       missingSkills: [],
       estimatedLimits: { maxIterations: 3, maxRuntimeMinutes: 30, maxCostUsd: 3 },
-    }));
+    };
+    const createPlanFromRecipe = vi.fn(async () => rawRecipePlanResult);
     app = Fastify();
     app.decorateRequest("authActorId", "operator-auth");
     app.decorateRequest("authActorSource", "loopback");
@@ -501,19 +514,76 @@ describe("orchestration routes", () => {
         workspaceId: "workspace-recipe",
       }),
     );
-    expect(response.json()).toMatchObject({ run: { runId: "run-1" } });
+    expect(response.json()).toMatchObject({
+      run: {
+        runId: "run-1",
+        lastError: "Authorization: [redacted]",
+        tokenId: "recipe-plan-token-id",
+      },
+    });
+    expect(rawRecipePlanResult.run.lastError).toContain("recipe-plan-secret");
   });
 
   it("runs plans and exposes checkpoints/context", async () => {
-    const runOrchestrationPlan = vi.fn(() => ({ runId: "run-1" }));
-    const cancelRun = vi.fn(() => ({
-      run: { runId: "run-1", status: "cancelled", executionState: "cancelled" },
-      checkpoints: [{ checkpointId: "cp-cancel", checkpointKind: "run_cancelled" }],
-    }));
+    const rawStartedRun = {
+      runId: "run-1",
+      lastError: "Authorization: Bearer run-plan-secret",
+      tokenId: "run-plan-token-id",
+    };
+    const runOrchestrationPlan = vi.fn(() => rawStartedRun);
+    const rawCancelResult = {
+      run: {
+        runId: "run-1",
+        status: "cancelled",
+        executionState: "cancelled",
+        lastError: "Authorization: Bearer cancel-run-secret",
+        tokenId: "cancel-run-token-id",
+      },
+      checkpoints: [
+        {
+          checkpointId: "cp-cancel",
+          checkpointKind: "run_cancelled",
+          details: { webhookUrl: "https://hooks.example.test/cancel-secret", tokenBudget: 256 },
+        },
+      ],
+    };
+    const cancelRun = vi.fn(() => rawCancelResult);
     const getRun = vi.fn(() => ({ runId: "run-1", workspaceId: "default" }));
-    const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
+    const rawCheckpoint = {
+      checkpointId: "cp-1",
+      runId: "run-1",
+      checkpointKind: "run_started",
+      details: {
+        webhookUrl: "https://hooks.slack.com/services/T000/B000/shortsecret",
+        status: "running",
+        tokenBudget: 4_096,
+      },
+    };
+    const listRunCheckpoints = vi.fn(() => [rawCheckpoint]);
     const getRunTrace = vi.fn(() => ({ decisions: [{ decisionId: "event-1" }] }));
-    const listRunContexts = vi.fn(() => [{ contextId: "ctx-1" }]);
+    const rawContext = {
+      contextId: "ctx-1",
+      scope: "orchestration",
+      runId: "run-1",
+      queryHash: "query-hash",
+      sourcesHash: "sources-hash",
+      contextText: "Authorization: Bearer short",
+      citations: [
+        {
+          candidateId: "candidate-1",
+          sourceType: "file",
+          sourceRef: "safe-source-ref",
+          snippet: "https://example.test/context?token=short-token&ok=1",
+          score: 1,
+        },
+      ],
+      quality: { status: "generated" },
+      originalTokenEstimate: 100,
+      distilledTokenEstimate: 50,
+      createdAt: "2026-04-12T00:00:01.000Z",
+      expiresAt: "2026-04-12T01:00:01.000Z",
+    };
+    const listRunContexts = vi.fn(() => [rawContext]);
     app = Fastify();
     app.decorateRequest("authActorId", "operator-auth");
     app.decorateRequest("authActorSource", "loopback");
@@ -551,6 +621,12 @@ describe("orchestration routes", () => {
         workspaceId: "workspace-a",
       }),
     );
+    expect(runResponse.json()).toMatchObject({
+      runId: "run-1",
+      lastError: "Authorization: [redacted]",
+      tokenId: "run-plan-token-id",
+    });
+    expect(rawStartedRun.lastError).toContain("run-plan-secret");
 
     const cancelResponse = await app.inject({
       method: "POST",
@@ -563,9 +639,21 @@ describe("orchestration routes", () => {
     expect(cancelResponse.statusCode).toBe(202);
     expect(cancelRun).toHaveBeenCalledWith("run-1", "operator-auth", "workspace-a");
     expect(cancelResponse.json()).toMatchObject({
-      run: { status: "cancelled", executionState: "cancelled" },
-      checkpoints: [{ checkpointKind: "run_cancelled" }],
+      run: {
+        status: "cancelled",
+        executionState: "cancelled",
+        lastError: "Authorization: [redacted]",
+        tokenId: "cancel-run-token-id",
+      },
+      checkpoints: [
+        {
+          checkpointKind: "run_cancelled",
+          details: { webhookUrl: "[redacted]", tokenBudget: 256 },
+        },
+      ],
     });
+    expect(rawCancelResult.run.lastError).toContain("cancel-run-secret");
+    expect(rawCancelResult.checkpoints[0]?.details.webhookUrl).toContain("cancel-secret");
 
     const checkpoints = await app.inject({
       method: "GET",
@@ -573,7 +661,17 @@ describe("orchestration routes", () => {
     });
     expect(checkpoints.statusCode).toBe(200);
     expect(listRunCheckpoints).toHaveBeenCalledWith("run-1", undefined);
-    expect(checkpoints.json()).toMatchObject({ items: [{ checkpointId: "cp-1" }] });
+    expect(checkpoints.json()).toMatchObject({
+      items: [
+        {
+          checkpointId: "cp-1",
+          runId: "run-1",
+          checkpointKind: "run_started",
+          details: { webhookUrl: "[redacted]", status: "running", tokenBudget: 4_096 },
+        },
+      ],
+    });
+    expect(rawCheckpoint.details.webhookUrl).toContain("shortsecret");
 
     const trace = await app.inject({
       method: "GET",
@@ -589,7 +687,26 @@ describe("orchestration routes", () => {
     });
     expect(context.statusCode).toBe(200);
     expect(getRun).toHaveBeenCalledWith("run-1", undefined);
-    expect(context.json()).toMatchObject({ items: [{ contextId: "ctx-1" }] });
+    expect(context.json()).toMatchObject({
+      items: [
+        {
+          contextId: "ctx-1",
+          runId: "run-1",
+          queryHash: "query-hash",
+          sourcesHash: "sources-hash",
+          contextText: "Authorization: [redacted]",
+          citations: [
+            {
+              candidateId: "candidate-1",
+              sourceRef: "safe-source-ref",
+              snippet: "https://example.test/context?token=[redacted]&ok=1",
+            },
+          ],
+        },
+      ],
+    });
+    expect(rawContext.contextText).toBe("Authorization: Bearer short");
+    expect(rawContext.citations[0]?.snippet).toContain("short-token");
   });
 
   it("passes requested workspace scope to run-specific orchestration reads", async () => {
@@ -628,6 +745,39 @@ describe("orchestration routes", () => {
     expect(getRunTrace).toHaveBeenCalledWith("run-1", "workspace-a");
   });
 
+  it("projects secret-bearing orchestration run responses without mutating runtime truth", async () => {
+    const rawRun = {
+      runId: "run-secret-projection",
+      planId: "plan-secret-projection",
+      status: "failed",
+      startedAt: "2026-07-09T12:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 1,
+      workspaceId: "workspace-a",
+      lastError: "Authorization: Bearer orchestration-run-secret",
+      tokenId: "orchestration-token-id",
+    };
+    const getRun = vi.fn(() => rawRun);
+    app = Fastify();
+    app.decorate("services", { orchestration: { getRun } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/orchestration/runs/run-secret-projection?workspaceId=workspace-a",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      runId: "run-secret-projection",
+      status: "failed",
+      lastError: "Authorization: [redacted]",
+      tokenId: "orchestration-token-id",
+    });
+    expect(rawRun.lastError).toContain("orchestration-run-secret");
+  });
+
   it("maps missing orchestration runs to a 404 instead of a 500", async () => {
     const getRun = vi.fn(() => {
       throw new NotFoundError({ entity: "Orchestration run", id: "run-missing" });
@@ -654,7 +804,7 @@ describe("orchestration routes", () => {
   });
 
   it("records approval resume intent without synchronously advancing the orchestration", async () => {
-    const approvePhase = vi.fn(async () => ({
+    const rawApprovalResult = {
       run: {
         runId: "run-1",
         planId: "plan-1",
@@ -665,9 +815,18 @@ describe("orchestration routes", () => {
         durableRunId: "durable-run-1",
         executionState: "resume_requested",
         pendingApprovalPhaseId: "phase-2",
+        lastError: "Authorization: Bearer approve-phase-secret",
+        tokenId: "approve-phase-token-id",
       },
-      checkpoints: [{ checkpointId: "cp-1", checkpointKind: "phase_approved" }],
-    }));
+      checkpoints: [
+        {
+          checkpointId: "cp-1",
+          checkpointKind: "phase_approved",
+          details: { DATABASE_PASSWORD: "approval-checkpoint-secret", secretRef: "vault:approval" },
+        },
+      ],
+    };
+    const approvePhase = vi.fn(async () => rawApprovalResult);
     app = Fastify();
     app.decorateRequest("authActorId", "operator-auth");
     app.decorate("services", { orchestration: { approvePhase } } as never);
@@ -691,8 +850,17 @@ describe("orchestration routes", () => {
         status: "running",
         executionState: "resume_requested",
         pendingApprovalPhaseId: "phase-2",
+        lastError: "Authorization: [redacted]",
+        tokenId: "approve-phase-token-id",
       },
-      checkpoints: [{ checkpointKind: "phase_approved" }],
+      checkpoints: [
+        {
+          checkpointKind: "phase_approved",
+          details: { DATABASE_PASSWORD: "[redacted]", secretRef: "vault:approval" },
+        },
+      ],
     });
+    expect(rawApprovalResult.run.lastError).toContain("approve-phase-secret");
+    expect(rawApprovalResult.checkpoints[0]?.details.DATABASE_PASSWORD).toBe("approval-checkpoint-secret");
   });
 });

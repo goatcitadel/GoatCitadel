@@ -2,6 +2,112 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { approvalsRoutes, resolveApprovalActorId } from "./approvals.js";
 
+const APPROVAL_ID = "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d";
+const WEBHOOK_QUERY_SECRET = "hook-short";
+const BEARER_SECRET = "tiny";
+const DATABASE_PASSWORD_SECRET = "db-short";
+
+function createSensitiveApproval(status = "pending") {
+  return {
+    approvalId: APPROVAL_ID,
+    kind: "tool.invoke",
+    status,
+    riskLevel: "danger",
+    payload: {
+      webhookUrl: `https://hooks.example.test/inbound?token=${WEBHOOK_QUERY_SECRET}`,
+      command: `curl -H "Authorization: Bearer ${BEARER_SECRET}" https://example.test`,
+      environment: { DATABASE_PASSWORD: DATABASE_PASSWORD_SECRET },
+      tokenId: "rat_123",
+      secretRef: "env:DATABASE_PASSWORD",
+      status: "queued",
+    },
+    preview: {
+      authorization: `Bearer ${BEARER_SECRET}`,
+    },
+    linkage: {
+      tokenId: "rat_123",
+      connectorId: "mission-control",
+    },
+    createdAt: "2026-07-09T00:00:00.000Z",
+  };
+}
+
+function createSensitiveResolution(approval: ReturnType<typeof createSensitiveApproval>) {
+  return {
+    approval,
+    effects: [
+      {
+        effectId: "effect-1",
+        status: "pending",
+        payload: {
+          webhookUrl: approval.payload.webhookUrl,
+          tokenId: "rat_123",
+          secretRef: "env:DATABASE_PASSWORD",
+        },
+      },
+    ],
+    replay: {
+      approval,
+      events: [
+        {
+          eventId: "event-1",
+          eventType: "resolved",
+          payload: {
+            command: approval.payload.command,
+            environment: approval.payload.environment,
+            tokenId: "rat_123",
+            secretRef: "env:DATABASE_PASSWORD",
+            status: "approved",
+          },
+        },
+      ],
+      pendingAction: {
+        approvalId: APPROVAL_ID,
+        status: "pending",
+        result: {
+          webhookUrl: approval.payload.webhookUrl,
+        },
+      },
+    },
+    durableRunId: "durable-run-42",
+  };
+}
+
+function expectSecretSafeApprovalProjection(value: unknown): void {
+  const serialized = JSON.stringify(value);
+  expect(serialized).not.toContain(WEBHOOK_QUERY_SECRET);
+  expect(serialized).not.toContain(BEARER_SECRET);
+  expect(serialized).not.toContain(DATABASE_PASSWORD_SECRET);
+  expect(serialized).toContain("[REDACTED]");
+}
+
+function expectApprovalMetadataPreserved(approval: Record<string, unknown>): void {
+  expect(approval).toMatchObject({
+    approvalId: APPROVAL_ID,
+    status: expect.any(String),
+    payload: {
+      tokenId: "rat_123",
+      secretRef: "env:DATABASE_PASSWORD",
+      status: "queued",
+    },
+    linkage: {
+      tokenId: "rat_123",
+      connectorId: "mission-control",
+    },
+  });
+}
+
+function expectRawApprovalUnchanged(approval: ReturnType<typeof createSensitiveApproval>): void {
+  expect(approval.payload).toMatchObject({
+    webhookUrl: `https://hooks.example.test/inbound?token=${WEBHOOK_QUERY_SECRET}`,
+    command: `curl -H "Authorization: Bearer ${BEARER_SECRET}" https://example.test`,
+    environment: { DATABASE_PASSWORD: DATABASE_PASSWORD_SECRET },
+    tokenId: "rat_123",
+    secretRef: "env:DATABASE_PASSWORD",
+    status: "queued",
+  });
+}
+
 function buildApp(approvals: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
   const app = Fastify();
   app.decorate("services", { approvals } as never);
@@ -48,6 +154,58 @@ describe("approvals routes", () => {
       cursor: "cursor-1",
       workspaceId: "workspace-a",
     });
+  });
+
+  it("projects approval creation responses without mutating executable approval truth", async () => {
+    const rawApproval = createSensitiveApproval();
+    const createApproval = vi.fn(async () => rawApproval);
+    const built = buildApp({ createApproval });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: { "idempotency-key": "approval-secret-projection-create" },
+      payload: {
+        kind: rawApproval.kind,
+        riskLevel: rawApproval.riskLevel,
+        payload: rawApproval.payload,
+        preview: rawApproval.preview,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json<Record<string, unknown>>();
+    expectSecretSafeApprovalProjection(body);
+    expectApprovalMetadataPreserved(body);
+    expect(createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          webhookUrl: rawApproval.payload.webhookUrl,
+          command: rawApproval.payload.command,
+          environment: rawApproval.payload.environment,
+        }),
+      }),
+    );
+    expectRawApprovalUnchanged(rawApproval);
+  });
+
+  it("projects paged approval list responses without mutating stored approval truth", async () => {
+    const rawApproval = createSensitiveApproval();
+    const listApprovalsPage = vi.fn(() => ({ items: [rawApproval], nextCursor: "cursor-next" }));
+    const built = buildApp({ listApprovalsPage });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/approvals?limit=25" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ items: Array<Record<string, unknown>>; nextCursor: string }>();
+    expectSecretSafeApprovalProjection(body);
+    expectApprovalMetadataPreserved(body.items[0]!);
+    expect(body.nextCursor).toBe("cursor-next");
+    expectRawApprovalUnchanged(rawApproval);
   });
 
   it("blocks approval creation for non-loopback callers", async () => {
@@ -256,6 +414,11 @@ describe("approvals routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      tokenId: "rat_123",
+      token: "grat_token",
+      state: "pending",
+    });
     expect(createApprovalRemoteActionToken).toHaveBeenCalledTimes(1);
     expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
       "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
@@ -300,14 +463,39 @@ describe("approvals routes", () => {
     expect(built.requireOperatorAuth).not.toHaveBeenCalled();
   });
 
+  it("projects remote approval resolution responses while preserving internal executable truth", async () => {
+    const rawApproval = createSensitiveApproval("approved");
+    const rawResolution = createSensitiveResolution(rawApproval);
+    const resolveApprovalWithRemoteToken = vi.fn(async () => rawResolution);
+    const built = buildApp({ resolveApprovalWithRemoteToken });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/remote-resolve",
+      payload: { token: "grat_token", decision: "approve" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ approval: Record<string, unknown>; durableRunId: string }>();
+    expectSecretSafeApprovalProjection(body);
+    expectApprovalMetadataPreserved(body.approval);
+    expect(body.durableRunId).toBe("durable-run-42");
+    expectRawApprovalUnchanged(rawApproval);
+    expect(rawResolution.replay.events[0]!.payload.command).toBe(rawApproval.payload.command);
+  });
+
   it("bulk resolves pending approvals through the gateway", async () => {
+    const rawApproval = createSensitiveApproval("rejected");
+    const rawResolution = createSensitiveResolution(rawApproval);
     const resolveApprovalsBulk = vi.fn(async () => ({
       decision: "reject",
       status: "pending",
       resolvedCount: 6,
       skippedCount: 1,
       failedCount: 0,
-      results: [],
+      results: [rawResolution],
     }));
     const built = buildApp({
       resolveApprovalsBulk,
@@ -338,6 +526,8 @@ describe("approvals routes", () => {
       skippedCount: 1,
       failedCount: 0,
     });
+    expectSecretSafeApprovalProjection(response.json());
+    expectRawApprovalUnchanged(rawApproval);
   });
 
   it("server-stamps single approval resolution actor", async () => {
@@ -368,6 +558,42 @@ describe("approvals routes", () => {
       decision: "approve",
       resolvedBy: "ip:127.0.0.1",
     });
+  });
+
+  it("projects direct approval resolution and replay fields without mutating service results", async () => {
+    const rawApproval = createSensitiveApproval("approved");
+    const rawResolution = createSensitiveResolution(rawApproval);
+    const resolveApproval = vi.fn(async () => rawResolution);
+    const built = buildApp({ resolveApproval });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
+      payload: { decision: "approve" },
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      approval: Record<string, unknown>;
+      replay: { events: Array<{ eventType: string; payload: Record<string, unknown> }> };
+      durableRunId: string;
+    }>();
+    expectSecretSafeApprovalProjection(body);
+    expectApprovalMetadataPreserved(body.approval);
+    expect(body.replay.events[0]).toMatchObject({
+      eventType: "resolved",
+      payload: {
+        tokenId: "rat_123",
+        secretRef: "env:DATABASE_PASSWORD",
+        status: "approved",
+      },
+    });
+    expect(body.durableRunId).toBe("durable-run-42");
+    expectRawApprovalUnchanged(rawApproval);
+    expect(rawResolution.effects[0]!.payload.webhookUrl).toBe(rawApproval.payload.webhookUrl);
   });
 
   it("uses request actor fallback when bulk-resolve omits resolvedBy", async () => {
@@ -489,6 +715,40 @@ describe("approvals routes", () => {
       durableRunId: "durable-run-42",
     });
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("projects approval replay snapshots without hiding safe lineage metadata", async () => {
+    const rawApproval = createSensitiveApproval("approved");
+    const rawReplay = createSensitiveResolution(rawApproval).replay;
+    const getApprovalReplay = vi.fn(() => ({ ...rawReplay, durableRunId: "durable-run-42" }));
+    const built = buildApp({ getApprovalReplay });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/approvals/${APPROVAL_ID}/replay`,
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      approval: Record<string, unknown>;
+      events: Array<{ eventType: string; payload: Record<string, unknown> }>;
+      durableRunId: string;
+    }>();
+    expectSecretSafeApprovalProjection(body);
+    expectApprovalMetadataPreserved(body.approval);
+    expect(body.events[0]).toMatchObject({
+      eventType: "resolved",
+      payload: {
+        tokenId: "rat_123",
+        secretRef: "env:DATABASE_PASSWORD",
+        status: "approved",
+      },
+    });
+    expect(body.durableRunId).toBe("durable-run-42");
+    expectRawApprovalUnchanged(rawApproval);
   });
 });
 

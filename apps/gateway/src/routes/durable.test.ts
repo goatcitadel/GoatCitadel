@@ -270,7 +270,120 @@ describe("durable routes", () => {
       correlationId: "approval-1",
     });
   });
+
+  it("projects arbitrary durable response state across read and control routes without mutating backing records", async () => {
+    const rawRecord = createSecretBearingDurableRecord();
+    const diagnostics = {
+      enabled: true,
+      recentRuns: [rawRecord],
+      recentDeadLetters: [rawRecord],
+      state: structuredClone(rawRecord.state),
+    };
+    app = buildDurableApp({
+      getDiagnostics: vi.fn(() => diagnostics),
+      listRuns: vi.fn(() => [rawRecord]),
+      listDeadLetters: vi.fn(() => [rawRecord]),
+      listRunCheckpoints: vi.fn(() => [rawRecord]),
+      createRun: vi.fn(() => rawRecord),
+      getRun: vi.fn(() => rawRecord),
+      listRunTimeline: vi.fn(() => [rawRecord]),
+      pauseRun: vi.fn(() => rawRecord),
+      resumeRun: vi.fn(() => rawRecord),
+      cancelRun: vi.fn(() => rawRecord),
+      retryRun: vi.fn(() => rawRecord),
+      wakeRun: vi.fn(() => rawRecord),
+      recoverDeadLetter: vi.fn(() => rawRecord),
+    });
+    await app.register(durableRoutes);
+
+    const responses = await Promise.all([
+      app.inject({ method: "GET", url: "/api/v1/durable/diagnostics" }),
+      app.inject({ method: "GET", url: "/api/v1/durable/runs" }),
+      app.inject({ method: "GET", url: "/api/v1/durable/dead-letters" }),
+      app.inject({ method: "GET", url: "/api/v1/durable/runs/run-secret/checkpoints" }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs", payload: { workflowKey: "connector.delivery" } }),
+      app.inject({ method: "GET", url: "/api/v1/durable/runs/run-secret" }),
+      app.inject({ method: "GET", url: "/api/v1/durable/runs/run-secret/timeline" }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-secret/pause", payload: {} }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-secret/resume", payload: {} }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-secret/cancel", payload: {} }),
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-secret/retry", payload: {} }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/durable/runs/run-secret/events/wake",
+        payload: { eventKey: "provider.ready" },
+      }),
+      app.inject({ method: "POST", url: "/api/v1/durable/dead-letters/dead-secret/recover", payload: {} }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBeLessThan(300);
+      expect(response.body).not.toContain("path-secret");
+      expect(response.body).not.toContain("query-short");
+      expect(response.body).not.toContain("Bearer tiny");
+      expect(response.body).not.toContain("db-short");
+      expect(response.body).not.toContain("grat_aaaaaaaa");
+      expect(response.body).toContain("[REDACTED]");
+      expect(response.body).toContain("token-id-safe");
+      expect(response.body).toContain("keychain:durable-safe");
+    }
+
+    const run = responses[5]!.json();
+    expect(run).toMatchObject({
+      runId: "run-secret",
+      status: "queued",
+      budget: { tokenBudget: 1200 },
+      linkage: { tokenId: "token-id-safe", secretRef: "keychain:durable-safe", requestCount: 7 },
+      payload: {
+        webhookUrl: "[REDACTED]",
+        authorization: "[REDACTED]",
+        DATABASE_PASSWORD: "[REDACTED]",
+      },
+    });
+    expect(rawRecord.payload.webhookUrl).toContain("path-secret");
+    expect(rawRecord.payload.authorization).toBe("Bearer tiny");
+    expect(rawRecord.payload.DATABASE_PASSWORD).toBe("db-short");
+    expect(diagnostics.recentRuns[0]).toBe(rawRecord);
+  });
 });
+
+function createSecretBearingDurableRecord() {
+  return {
+    runId: "run-secret",
+    entryId: "dead-secret",
+    checkpointId: "checkpoint-secret",
+    eventId: "event-secret",
+    status: "queued",
+    budget: { tokenBudget: 1200 },
+    linkage: {
+      tokenId: "token-id-safe",
+      secretRef: "keychain:durable-safe",
+      requestCount: 7,
+    },
+    payload: {
+      webhookUrl: "https://hooks.example.test/services/team/path-secret?token=query-short",
+      authorization: "Bearer tiny",
+      DATABASE_PASSWORD: "db-short",
+      interactiveActions: {
+        buttons: [
+          {
+            label: "Approve",
+            callbackData: `gca:grat_${"a".repeat(43)}:a`,
+          },
+        ],
+      },
+    },
+    metadata: {
+      callbackUrl: "https://callback.example.test/result?token=query-short",
+      tokenId: "token-id-safe",
+    },
+    state: {
+      response: "Authorization: Bearer tiny",
+      requestCount: 7,
+    },
+    errorText: "password=db-short",
+  };
+}
 
 function buildDurableApp(durableOverrides: Record<string, unknown>): FastifyInstance {
   const next = Fastify();

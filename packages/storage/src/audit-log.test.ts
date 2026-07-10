@@ -199,7 +199,7 @@ describe("AuditLog", () => {
       commandArgs: ["--authorization=Bearer abcdefghijklmnopqrstuvwxyz012345"],
     });
 
-    assert.equal(sanitized.message, "[REDACTED] Basic [REDACTED] Authorization: [REDACTED] [REDACTED] [REDACTED]");
+    assert.equal(sanitized.message, "[REDACTED] Basic [REDACTED] Authorization: [REDACTED]");
     assert.deepEqual(sanitized.processEnv, { OPENAI_API_KEY: "[REDACTED]" });
     assert.deepEqual(sanitized.execArgv, [
       "--password",
@@ -208,6 +208,36 @@ describe("AuditLog", () => {
       { token: "[REDACTED]" },
     ]);
     assert.deepEqual(sanitized.commandArgs, ["--authorization=[REDACTED]"]);
+  });
+
+  it("uses canonical structured redaction for compound keys without mutating the audit source", () => {
+    const circular: Record<string, unknown> = { visible: "ok" };
+    circular.self = circular;
+    const source = {
+      webhookUrl: "https://hooks.example.test/services/team/short-path-secret",
+      authorization: "Bearer short",
+      DATABASE_PASSWORD: "hunter2",
+      tokenEnv: "AUDIT_TOKEN",
+      tokenId: "audit-token-id",
+      tokenBudget: 256,
+      circular,
+    };
+
+    const sanitized = sanitizeForAudit(source);
+
+    assert.deepEqual(sanitized, {
+      webhookUrl: "[REDACTED]",
+      authorization: "[REDACTED]",
+      DATABASE_PASSWORD: "[REDACTED]",
+      tokenEnv: "AUDIT_TOKEN",
+      tokenId: "audit-token-id",
+      tokenBudget: 256,
+      circular: { visible: "ok", self: "[Circular]" },
+    });
+    assert.equal(source.webhookUrl, "https://hooks.example.test/services/team/short-path-secret");
+    assert.equal(source.authorization, "Bearer short");
+    assert.equal(source.DATABASE_PASSWORD, "hunter2");
+    assert.equal(circular.self, circular);
   });
 
   it("writes degraded records when sanitized payloads still cannot be serialized", async () => {

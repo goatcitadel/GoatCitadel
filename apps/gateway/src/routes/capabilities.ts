@@ -1,5 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  projectCapabilityPublicValue,
+  projectCapabilityToolSchemaForPublic,
+  projectCodeModeRunArtifactPreviewForPublic,
+} from "../services/capability-public-projection.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
@@ -155,7 +160,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
         )
       : fastify.services.capabilities.listCapabilityCatalog(scope);
-    return reply.send({ scope, items });
+    return reply.send({ scope, items: projectCapabilityPublicValue(items) });
   });
 
   fastify.get("/api/v1/capabilities/tool-directory/compact", async (request, reply) => {
@@ -163,7 +168,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.services.capabilities.getCompactToolDirectorySnapshot(parsed.data.ttlMs));
+    return reply.send(
+      projectCapabilityPublicValue(fastify.services.capabilities.getCompactToolDirectorySnapshot(parsed.data.ttlMs)),
+    );
   });
 
   fastify.get("/api/v1/capabilities/tool-directory/schemas/:toolName", async (request, reply) => {
@@ -172,7 +179,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.capabilities.getToolSchema(parsed.data.toolName));
+      return reply.send(
+        projectCapabilityToolSchemaForPublic(fastify.services.capabilities.getToolSchema(parsed.data.toolName)),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -184,7 +193,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.capabilities.getCapabilityCatalogSnapshot(parsed.data.snapshotId));
+      return reply.send(
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.getCapabilityCatalogSnapshot(parsed.data.snapshotId),
+        ),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -196,7 +209,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.capabilities.listCapabilityProposals(parsed.data.limit ?? 100),
+      items: projectCapabilityPublicValue(
+        fastify.services.capabilities.listCapabilityProposals(parsed.data.limit ?? 100),
+      ),
     });
   });
 
@@ -206,7 +221,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.capabilities.createCapabilityProposal(parsed.data));
+      return reply
+        .code(201)
+        .send(projectCapabilityPublicValue(fastify.services.capabilities.createCapabilityProposal(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -218,7 +235,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.capabilities.listAutonomousActivationGrants(parsed.data.includeExpired === "true"),
+      items: projectCapabilityPublicValue(
+        fastify.services.capabilities.listAutonomousActivationGrants(parsed.data.includeExpired === "true"),
+      ),
     });
   });
 
@@ -228,7 +247,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.capabilities.createAutonomousActivationGrant(parsed.data));
+      return reply
+        .code(201)
+        .send(projectCapabilityPublicValue(fastify.services.capabilities.createAutonomousActivationGrant(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -239,7 +260,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.services.capabilities.evaluateAutonomousActivationGrant(parsed.data));
+    return reply.send(
+      projectCapabilityPublicValue(fastify.services.capabilities.evaluateAutonomousActivationGrant(parsed.data)),
+    );
   });
 
   fastify.post("/api/v1/capabilities/autonomy-grants/:grantId/revoke", async (request, reply) => {
@@ -254,7 +277,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.services.capabilities.revokeAutonomousActivationGrant(params.data.grantId, body.data));
+      return reply.send(
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.revokeAutonomousActivationGrant(params.data.grantId, body.data),
+        ),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -266,7 +293,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.capabilities.getCapabilityProposalDetail(parsed.data.proposalId));
+      return reply.send(
+        projectCapabilityPublicValue(fastify.services.capabilities.getCapabilityProposalDetail(parsed.data.proposalId)),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -278,7 +307,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.capabilities.getCapabilityCandidateDetail(parsed.data.candidateId));
+      return reply.send(
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.getCapabilityCandidateDetail(parsed.data.candidateId),
+        ),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -297,7 +330,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.capabilities.promoteCapabilityCandidate(params.data.candidateId, body.data.versionId),
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.promoteCapabilityCandidate(params.data.candidateId, body.data.versionId),
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -317,7 +352,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.capabilities.revokeCapabilityCandidate(params.data.candidateId, body.data.versionId),
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.revokeCapabilityCandidate(params.data.candidateId, body.data.versionId),
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -337,7 +374,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.capabilities.rollbackCapabilityCandidate(params.data.candidateId, body.data.targetVersionId),
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.rollbackCapabilityCandidate(params.data.candidateId, body.data.targetVersionId),
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -350,11 +389,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.capabilities.listCodeModeRuns({
-        ...parsed.data,
-        limit: parsed.data.limit ?? 100,
-        workspaceId: parsed.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
-      }),
+      items: projectCapabilityPublicValue(
+        fastify.services.capabilities.listCodeModeRuns({
+          ...parsed.data,
+          limit: parsed.data.limit ?? 100,
+          workspaceId: parsed.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+        }),
+      ),
     });
   });
 
@@ -380,7 +421,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
         ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
         ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
       });
-      return reply.send(run);
+      return reply.send(projectCapabilityPublicValue(run));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -399,13 +440,16 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
-      return reply.send(
-        await fastify.services.capabilities.getCodeModeRunArtifactPreview(parsed.data.runId, parsed.data.artifactKind, {
+      const preview = await fastify.services.capabilities.getCodeModeRunArtifactPreview(
+        parsed.data.runId,
+        parsed.data.artifactKind,
+        {
           workspaceId,
           ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
           ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
-        }),
+        },
       );
+      return reply.send(projectCodeModeRunArtifactPreviewForPublic(preview));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -425,11 +469,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
       return reply.send(
-        fastify.services.capabilities.compareCodeModeRuns(parsed.data.runId, parsed.data.baselineRunId, {
-          workspaceId,
-          ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
-          ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
-        }),
+        projectCapabilityPublicValue(
+          fastify.services.capabilities.compareCodeModeRuns(parsed.data.runId, parsed.data.baselineRunId, {
+            workspaceId,
+            ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
+            ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
+          }),
+        ),
       );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -442,13 +488,12 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(
-        await fastify.services.capabilities.createCodeModeRun({
-          ...parsed.data,
-          operatorId: request.authActorId,
-          originSurface: parsed.data.originSurface ?? readCodeModeOriginSurface(request.headers),
-        }),
-      );
+      const run = await fastify.services.capabilities.createCodeModeRun({
+        ...parsed.data,
+        operatorId: request.authActorId,
+        originSurface: parsed.data.originSurface ?? readCodeModeOriginSurface(request.headers),
+      });
+      return reply.code(201).send(projectCapabilityPublicValue(run));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

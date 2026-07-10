@@ -436,6 +436,43 @@ describe("gateway request diagnostics", { timeout: 120_000 }, () => {
       await app.close();
     }
   }, 45_000);
+
+  it("projects credential-bearing error bodies globally without changing successful token issuance", async () => {
+    configureDiagnosticsGateway(tempRoots);
+    const app = await buildApp();
+    app.get(
+      "/__test/public-error-projection",
+      { config: { goatcitadelRouteAccessClass: "public" } },
+      async (_request, reply) =>
+        reply.code(400).send({
+          error: "Provider failed with Authorization: Bearer app-error-secret",
+          details: {
+            webhookUrl: "https://hooks.slack.com/services/T000/B000/app-path-secret",
+          },
+          validation: { fieldErrors: { token: ["Required"] } },
+        }),
+    );
+    app.get("/__test/successful-token-issuance", { config: { goatcitadelRouteAccessClass: "public" } }, async () => ({
+      token: `grat_${"a".repeat(43)}`,
+    }));
+    try {
+      const failed = await app.inject({ method: "GET", url: "/__test/public-error-projection" });
+      const succeeded = await app.inject({ method: "GET", url: "/__test/successful-token-issuance" });
+
+      expect(failed.statusCode).toBe(400);
+      expect(failed.body).not.toContain("app-error-secret");
+      expect(failed.body).not.toContain("app-path-secret");
+      expect(failed.json()).toMatchObject({
+        error: "Provider failed with Authorization: [REDACTED]",
+        details: { webhookUrl: "[REDACTED]" },
+        validation: { fieldErrors: { token: ["Required"] } },
+      });
+      expect(succeeded.statusCode).toBe(200);
+      expect(succeeded.body).toContain("grat_");
+    } finally {
+      await app.close();
+    }
+  }, 45_000);
 });
 
 function configureDiagnosticsGateway(tempRoots: string[]): void {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
-import { eventsRoutes } from "./events.js";
+import { canReceiveApprovalActionTokens, eventsRoutes } from "./events.js";
 
 function decorateRealtimeEvents(app: FastifyInstance, methods: Record<string, unknown>) {
   app.decorate("services", { realtimeEvents: methods } as never);
@@ -22,6 +22,27 @@ describe("events stream route", () => {
     }
     await app.close();
     app = null;
+  });
+
+  it("limits live approval action tokens to operator-derived or direct-loopback streams", () => {
+    const request = (authActorSource: string, remoteAddress = "203.0.113.5", headers = {}) => ({
+      authActorSource,
+      headers,
+      raw: { socket: { remoteAddress } },
+    });
+
+    for (const source of ["token", "basic", "loopback", "sse"]) {
+      expect(canReceiveApprovalActionTokens(request(source))).toBe(true);
+    }
+    for (const source of ["companion", "device", "a2a_peer"]) {
+      expect(canReceiveApprovalActionTokens(request(source))).toBe(false);
+    }
+    expect(canReceiveApprovalActionTokens(request("none", "127.0.0.1"))).toBe(true);
+    expect(canReceiveApprovalActionTokens(request("none", "::1"))).toBe(true);
+    expect(canReceiveApprovalActionTokens(request("none"))).toBe(false);
+    expect(canReceiveApprovalActionTokens(request("none", "127.0.0.1", { "x-forwarded-for": "198.51.100.8" }))).toBe(
+      false,
+    );
   });
 
   it("returns CORS headers for allowed origins on SSE stream responses", async () => {
@@ -310,7 +331,7 @@ describe("events stream route", () => {
         eventType: "system",
         source: "tests",
         timestamp: "2026-03-20T10:00:12.000Z",
-        payload: { n: 12 },
+        payload: { n: 12, deliveryToken: "redacted-replay" },
       },
     ];
     decorateRealtimeEvents(app, {
@@ -323,7 +344,7 @@ describe("events stream route", () => {
           eventType: "system",
           source: "tests",
           timestamp: "2026-03-20T10:00:12.000Z",
-          payload: { n: 12 },
+          payload: { n: 12, deliveryToken: "raw-live" },
         });
         liveListener?.({
           eventId: "event-13",
@@ -362,6 +383,10 @@ describe("events stream route", () => {
 
     // The overlapping event (seq 12) is delivered exactly once...
     expect(occurrences(text, '"sequence":12')).toBe(1);
+    // ...using the live version so transient approval capabilities are not
+    // replaced by their retained redacted projection during snapshot overlap.
+    expect(text).toContain('"deliveryToken":"raw-live"');
+    expect(text).not.toContain('"deliveryToken":"redacted-replay"');
     // ...the new buffered event (seq 13) exactly once...
     expect(occurrences(text, '"sequence":13')).toBe(1);
     // ...in ascending order, with seq 13 (flushed) before stream-ready.

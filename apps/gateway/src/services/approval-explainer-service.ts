@@ -1,8 +1,9 @@
-import type {
-  ApprovalExplanation,
-  ApprovalRequest,
-  ChatCompletionRequest,
-  ChatCompletionResponse,
+import {
+  redactStructuredSecrets,
+  type ApprovalExplanation,
+  type ApprovalRequest,
+  type ChatCompletionRequest,
+  type ChatCompletionResponse,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ApprovalExplainerConfig } from "../config.js";
@@ -151,39 +152,16 @@ function riskScore(value: ApprovalRequest["riskLevel"] | ApprovalExplainerConfig
 }
 
 function buildPromptPayload(approval: ApprovalRequest, maxPayloadChars: number): string {
-  const redacted = {
+  const redacted = redactStructuredSecrets({
     approvalId: approval.approvalId,
     kind: approval.kind,
     riskLevel: approval.riskLevel,
-    preview: redactObject(approval.preview),
-    payload: redactObject(approval.payload),
-  };
+    preview: approval.preview,
+    payload: approval.payload,
+  }).value;
 
   const serialized = JSON.stringify(redacted, null, 2);
   return truncate(serialized, maxPayloadChars);
-}
-
-function redactObject(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => redactObject(item));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  const out: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    if (isSensitiveKey(key)) {
-      out[key] = "[REDACTED]";
-      continue;
-    }
-    out[key] = redactObject(nested);
-  }
-  return out;
-}
-
-function isSensitiveKey(key: string): boolean {
-  return /(token|password|secret|authorization|cookie|api[-_]?key)/i.test(key);
 }
 
 function parseExplanationResponse(response: ChatCompletionResponse): {

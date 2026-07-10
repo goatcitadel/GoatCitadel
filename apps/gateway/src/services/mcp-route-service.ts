@@ -12,6 +12,7 @@ import type {
   McpToolRecord,
 } from "@goatcitadel/contracts";
 import type { McpElicitationService } from "./mcp-elicitation-service.js";
+import { preserveMcpServerSecretsForPublicUpdate, projectMcpPublicValue } from "./mcp-public-projection.js";
 
 export interface McpRoutePort {
   /** Shared MCP elicitation store, also consumed by the approval-inbox respond/list tools. */
@@ -43,23 +44,25 @@ export class McpRouteService {
   }
 
   public listMcpServers() {
-    return this.mcp.listMcpServers();
+    return projectMcpPublicValue(this.mcp.listMcpServers());
   }
 
   public listMcpTemplates() {
-    return this.mcp.listMcpTemplates();
+    return projectMcpPublicValue(this.mcp.listMcpTemplates());
   }
 
   public listMcpTemplateDiscovery() {
-    return this.mcp.listMcpTemplateDiscovery();
+    return projectMcpPublicValue(this.mcp.listMcpTemplateDiscovery());
   }
 
   public createMcpServer(input: McpServerCreateInput) {
-    return this.mcp.createMcpServer(input);
+    return projectMcpPublicValue(this.mcp.createMcpServer(input));
   }
 
   public updateMcpServer(serverId: string, input: McpServerUpdateInput) {
-    return this.mcp.updateMcpServer(serverId, input);
+    const current = this.mcp.listMcpServers().find((server) => server.serverId === serverId);
+    const reconciled = current ? preserveMcpServerSecretsForPublicUpdate(current, input) : input;
+    return projectMcpPublicValue(this.mcp.updateMcpServer(serverId, reconciled));
   }
 
   public deleteMcpServer(serverId: string) {
@@ -67,11 +70,11 @@ export class McpRouteService {
   }
 
   public connectMcpServer(serverId: string) {
-    return this.mcp.connectMcpServer(serverId);
+    return this.mcp.connectMcpServer(serverId).then(projectMcpPublicValue);
   }
 
   public disconnectMcpServer(serverId: string) {
-    return this.mcp.disconnectMcpServer(serverId);
+    return projectMcpPublicValue(this.mcp.disconnectMcpServer(serverId));
   }
 
   public startMcpOAuth(serverId: string) {
@@ -79,22 +82,26 @@ export class McpRouteService {
   }
 
   public completeMcpOAuth(serverId: string, code: string, state?: string) {
-    return this.mcp.completeMcpOAuth(serverId, code, state);
+    return this.mcp.completeMcpOAuth(serverId, code, state).then(projectMcpPublicValue);
   }
 
   public listMcpTools(serverId: string) {
-    return this.mcp.listMcpTools(serverId);
+    return projectMcpPublicValue(this.mcp.listMcpTools(serverId));
   }
 
   public invokeMcpTool(input: McpInvokeRequest) {
-    return this.mcp.invokeMcpTool(input);
+    return this.mcp.invokeMcpTool(input).then(projectMcpPublicValue);
   }
 
   public updateMcpServerPolicy(serverId: string, policy: Partial<McpServerPolicy>) {
-    return this.mcp.updateMcpServerPolicy(serverId, policy);
+    const current = this.mcp.listMcpServers().find((server) => server.serverId === serverId);
+    const reconciled = current
+      ? (preserveMcpServerSecretsForPublicUpdate(current, { policy }).policy ?? policy)
+      : policy;
+    return projectMcpPublicValue(this.mcp.updateMcpServerPolicy(serverId, reconciled));
   }
 
   public runMcpServerHealthCheck(serverId: string) {
-    return this.mcp.runMcpServerHealthCheck(serverId);
+    return projectMcpPublicValue(this.mcp.runMcpServerHealthCheck(serverId));
   }
 }

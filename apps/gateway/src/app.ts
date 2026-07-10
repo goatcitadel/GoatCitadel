@@ -78,6 +78,7 @@ import { trustRoutes } from "./routes/trust.js";
 import { surfaceRoutes } from "./routes/surface.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
+import { projectPublicErrorValue } from "./services/public-secret-projection.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 import { assertAuthTokenIsNotPlaceholder } from "./startup-guard.js";
 import { isSuspiciousEncodedPath } from "./path-guard.js";
@@ -171,6 +172,10 @@ export async function buildApp() {
   });
 
   const isNonLoopbackBind = !["127.0.0.1", "::1", "localhost"].includes(process.env.GATEWAY_HOST ?? "127.0.0.1");
+
+  app.addHook("preSerialization", async (_request, reply, payload) => {
+    return reply.statusCode >= 400 ? projectPublicErrorValue(payload) : payload;
+  });
 
   app.addHook("onSend", async (_request, reply) => {
     applyBaselineSecurityHeaders(reply, { isNonLoopbackBind });

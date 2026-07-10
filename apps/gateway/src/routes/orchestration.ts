@@ -4,6 +4,7 @@ import { planSchema } from "@goatcitadel/orchestration";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
+import { projectOrchestrationPublicValue } from "../services/orchestration-lifecycle-service.js";
 
 const recipeBodySchema = z
   .object({
@@ -142,7 +143,11 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(await orchestration.createPlanFromRecipe(parsed.data, buildRunPolicyContext(request, policyBody.data)));
+        .send(
+          projectOrchestrationRunResponse(
+            await orchestration.createPlanFromRecipe(parsed.data, buildRunPolicyContext(request, policyBody.data)),
+          ),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -160,7 +165,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const run = await orchestration.createPlan(parsed.data, buildRunPolicyContext(request, policyBody.data));
-      return reply.code(201).send(run);
+      return reply.code(201).send(projectOrchestrationRunResponse(run));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -177,7 +182,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const run = await orchestration.runPlan(params.data.planId, buildRunPolicyContext(request, body.data));
-      return reply.send(run);
+      return reply.send(projectOrchestrationRunResponse(run));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -197,12 +202,14 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply
         .code(202)
         .send(
-          await orchestration.approvePhase(
-            body.data.runId,
-            params.data.phaseId,
-            resolveActorId(request),
-            body.data.costIncrementUsd ?? 0,
-            body.data.workspaceId,
+          projectOrchestrationRunResponse(
+            await orchestration.approvePhase(
+              body.data.runId,
+              params.data.phaseId,
+              resolveActorId(request),
+              body.data.costIncrementUsd ?? 0,
+              body.data.workspaceId,
+            ),
           ),
         );
     } catch (error) {
@@ -222,7 +229,11 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(202)
-        .send(await orchestration.cancelRun(params.data.runId, resolveActorId(request), body.data.workspaceId));
+        .send(
+          projectOrchestrationRunResponse(
+            await orchestration.cancelRun(params.data.runId, resolveActorId(request), body.data.workspaceId),
+          ),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -238,7 +249,9 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     try {
-      return reply.send(orchestration.getRun(params.data.runId, query.data.workspaceId));
+      return reply.send(
+        projectOrchestrationRunResponse(orchestration.getRun(params.data.runId, query.data.workspaceId)),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -254,7 +267,11 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     try {
-      return reply.send({ items: orchestration.listRunCheckpoints(params.data.runId, query.data.workspaceId) });
+      return reply.send({
+        items: orchestration
+          .listRunCheckpoints(params.data.runId, query.data.workspaceId)
+          .map((checkpoint) => projectOrchestrationPublicValue(checkpoint)),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -287,9 +304,30 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       orchestration.getRun(params.data.runId, query.data.workspaceId);
-      return reply.send({ items: orchestration.listRunContexts(params.data.runId) });
+      return reply.send({
+        items: orchestration
+          .listRunContexts(params.data.runId)
+          .map((context) => projectOrchestrationPublicValue(context)),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 };
+
+function projectOrchestrationRunResponse<T>(value: T): T {
+  if (!isRecord(value) || !isRecord(value.run)) {
+    return projectOrchestrationPublicValue(value) as T;
+  }
+  return {
+    ...value,
+    run: projectOrchestrationPublicValue(value.run),
+    ...(Array.isArray(value.checkpoints)
+      ? { checkpoints: value.checkpoints.map((checkpoint) => projectOrchestrationPublicValue(checkpoint)) }
+      : {}),
+  } as T;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

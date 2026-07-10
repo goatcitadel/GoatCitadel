@@ -20,6 +20,7 @@ import {
   clampInt,
   ConflictError,
   NotFoundError,
+  SECRET_REDACTION_MARKER,
   ValidationError,
   type ApprovalCreateInput,
   type ApprovalEffectRecord,
@@ -51,6 +52,10 @@ import type { MeshService } from "@goatcitadel/mesh-core";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
+import {
+  preserveSettingsSecretsForPublicUpdate,
+  requiresSettingsPublicProjectionReconciliation,
+} from "./provider-settings-public-projection.js";
 
 const settingsLog = logger.child("settings-auth-service");
 import {
@@ -329,7 +334,10 @@ export interface UpdateSettingsInput {
 const UNSAFE_CONFIG_MUTATION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: UpdateSettingsInput): RuntimeSettings {
-  const input = sanitizeConfigMutationInput(rawInput, "settings") as UpdateSettingsInput;
+  const reconciledInput = requiresSettingsPublicProjectionReconciliation(rawInput)
+    ? preserveSettingsSecretsForPublicUpdate(getSettings(deps), rawInput)
+    : rawInput;
+  const input = sanitizeConfigMutationInput(reconciledInput, "settings") as UpdateSettingsInput;
   deps.assertDeploymentProfileUpdate(input);
   deps.assertFirecrawlRuntimeUpdate(input);
 
@@ -629,7 +637,11 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
       ...input.llm,
       upsertProvider: input.llm.upsertProvider ? { ...input.llm.upsertProvider } : undefined,
     };
-    const submittedApiKey = llmInput.upsertProvider?.apiKey?.trim();
+    const submittedApiKeyValue = llmInput.upsertProvider?.apiKey?.trim();
+    const submittedApiKey = submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
+    if (llmInput.upsertProvider && submittedApiKeyValue === SECRET_REDACTION_MARKER) {
+      llmInput.upsertProvider.apiKey = undefined;
+    }
     if (llmInput.upsertProvider && submittedApiKey) {
       persistProviderApiKeyWithFallback({
         providerId: llmInput.upsertProvider.providerId,

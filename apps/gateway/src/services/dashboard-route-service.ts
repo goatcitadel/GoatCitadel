@@ -1,24 +1,25 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
-import type {
-  ApprovalRequest,
-  ChatGeneratedArtifactRecord,
-  ChatStreamUsageRecord,
-  ChatToolRunRecord,
-  DurableCheckpointRecord,
-  DurableRunRecord,
-  DurableRunTimelineEvent,
-  MemoryContextPack,
-  OpsDesignQualitySnapshot,
-  OpsQualitySecurityExecutionItem,
-  OpsQualityOtelExportResponse,
-  OpsQualityOtelSpan,
-  OpsQualitySnapshotResponse,
-  PromptPackSecurityEvalPackRecord,
-  PromptPackSecurityQualityGateRecord,
-  RuntimeLifecycleResponse,
-  RuntimeLifecycleTurnSummary,
-  RuntimeLifecycleToolRunSummary,
+import {
+  redactStructuredSecrets,
+  type ApprovalRequest,
+  type ChatGeneratedArtifactRecord,
+  type ChatStreamUsageRecord,
+  type ChatToolRunRecord,
+  type DurableCheckpointRecord,
+  type DurableRunRecord,
+  type DurableRunTimelineEvent,
+  type MemoryContextPack,
+  type OpsDesignQualitySnapshot,
+  type OpsQualitySecurityExecutionItem,
+  type OpsQualityOtelExportResponse,
+  type OpsQualityOtelSpan,
+  type OpsQualitySnapshotResponse,
+  type PromptPackSecurityEvalPackRecord,
+  type PromptPackSecurityQualityGateRecord,
+  type RuntimeLifecycleResponse,
+  type RuntimeLifecycleTurnSummary,
+  type RuntimeLifecycleToolRunSummary,
 } from "@goatcitadel/contracts";
 import { readDesignQualityEvidence } from "@goatcitadel/skills";
 import type { Storage } from "@goatcitadel/storage";
@@ -229,7 +230,10 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
         .filter((approval) => !approval.expiresAt || Date.parse(approval.expiresAt) > now.getTime()).length;
       const activeSubagents = deps.storage.taskSubagents.activeCount();
       const taskStatusCounts = deps.storage.tasks.statusCounts();
-      const recentEvents = deps.storage.realtimeEvents.list(100);
+      const recentEvents = deps.storage.realtimeEvents.list(100).map((event) => ({
+        ...event,
+        payload: redactStructuredSecrets(event.payload).value,
+      }));
       const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
       const to = now.toISOString();
       const byDay = deps.storage.costLedger.summary("day", from, to);
@@ -706,7 +710,7 @@ async function buildObserveRunTrace(
     .map((checkpoint) => checkpoint.checkpointId);
   const resumeEligible = run.status === "paused";
 
-  return {
+  const trace: ObserveRunTraceResponse = {
     version: "observe.run_trace.v1",
     generatedAt: new Date().toISOString(),
     runId,
@@ -784,6 +788,7 @@ async function buildObserveRunTrace(
       },
     },
   };
+  return redactStructuredSecrets(trace).value;
 }
 
 function safeRunTraceFilenameSegment(value: string): string {

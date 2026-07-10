@@ -57,6 +57,7 @@ import {
   retryChatTurnStream,
   type ChatTurnEntryHost,
 } from "./chat-turn-entry-service.js";
+import { ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 
 function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   const userMessage: ChatMessageRecord = {
@@ -266,7 +267,11 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
       yield { type: "done", sessionId: "session-1", turnId };
     }),
     persistChatStreamChunk: vi.fn(),
-    registerActiveChatTurnStream: vi.fn(),
+    registerActiveChatTurnStream: vi.fn(() => ({
+      registrationId: "stream-registration-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+    })),
     completeActiveChatTurnStream: vi.fn(),
     closeActiveChatTurnStream: vi.fn(),
     ingestEvent: vi.fn(),
@@ -958,6 +963,12 @@ describe("agentSendChatMessage", () => {
   it("cancels active turns, rejects cross-session cancellation, and resumes persisted streams", async () => {
     const host = createHost({});
     host.storage.chatTurnTraces.get = vi.fn(() => createTrace({ durable: { runId: "durable-run-1" } })) as never;
+    host.getActiveChatTurnStream = vi.fn(() => ({
+      registrationId: "stream-registration-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "durable-run-1",
+    })) as never;
 
     const cancelled = await cancelChatTurn(host, "session-1", "turn-1", "operator");
     const resumed = await collectChunks(resumeAgentChatTurnStream(host, "session-1", "turn-1", "event-4"));
@@ -979,8 +990,9 @@ describe("agentSendChatMessage", () => {
         trace: expect.objectContaining({ status: "cancelled" }),
       }),
       "durable-run-1",
+      expect.objectContaining({ registrationId: "stream-registration-1" }),
     );
-    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
+    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1", "stream-registration-1");
     expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", {
       sinceEventId: "event-4",
       liveTail: true,
@@ -1000,7 +1012,9 @@ describe("agentSendChatMessage", () => {
       throw new NotFoundError({ entity: "Chat turn", id: "turn-1" });
     }) as never;
     host.getActiveChatTurnStream = vi.fn(() => ({
+      registrationId: "stream-registration-fast",
       sessionId: "session-1",
+      turnId: "turn-1",
       runId: "durable-run-fast",
     })) as never;
 
@@ -1015,7 +1029,57 @@ describe("agentSendChatMessage", () => {
     );
     expect(host.cancelDurableChatRun).toHaveBeenCalledWith("durable-run-fast", "operator");
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1", "operator");
-    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
+    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1", "stream-registration-fast");
+  });
+
+  it("keeps terminal cancellation idempotent while a completed stream registration is retained", async () => {
+    const host = createHost({});
+    const terminalTrace = createTrace({
+      status: "completed",
+      assistantMessageId: "assistant-1",
+      durable: { runId: "durable-run-terminal", status: "completed" },
+      finishedAt: "2026-05-14T00:00:02.000Z",
+    });
+    host.storage.chatTurnTraces.get = vi.fn(() => terminalTrace) as never;
+    host.markChatTurnCancelled = vi.fn(() => terminalTrace);
+    host.getActiveChatTurnStream = vi.fn(() => ({
+      registrationId: "stream-registration-completed",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "durable-run-terminal",
+      completed: true,
+    })) as never;
+    host.persistChatStreamChunk = vi.fn((_chunk, _durableRunId, registrationId) => {
+      if (registrationId !== undefined) {
+        throw new ChatTurnStreamRegistrationMismatchError("turn-1", registrationId);
+      }
+      return {} as never;
+    }) as never;
+
+    await expect(cancelChatTurn(host, "session-1", "turn-1", "operator")).resolves.toEqual(
+      expect.objectContaining({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        cancelled: false,
+        trace: terminalTrace,
+      }),
+    );
+
+    expect(host.persistChatStreamChunk).toHaveBeenCalledTimes(2);
+    expect(host.persistChatStreamChunk).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ type: "trace_update", trace: terminalTrace }),
+      "durable-run-terminal",
+      undefined,
+    );
+    expect(host.persistChatStreamChunk).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ type: "done", messageId: "assistant-1" }),
+      "durable-run-terminal",
+      undefined,
+    );
+    expect(host.completeActiveChatTurnStream).not.toHaveBeenCalled();
+    expect(host.closeActiveChatTurnStream).not.toHaveBeenCalled();
   });
 
   it("preflights chat routes through the live route resolver and validates retry context", async () => {

@@ -9,6 +9,7 @@ import type {
   RuntimeDiagnosticStatus,
   RuntimeDiagnosticEventInput,
 } from "@goatcitadel/contracts";
+import { redactStructuredSecrets } from "@goatcitadel/contracts";
 
 interface DevDiagnosticsContext {
   correlationId?: string;
@@ -61,8 +62,10 @@ interface DevDiagnosticsRecordInput {
 
 const DEFAULT_BUFFER_SIZE = 300;
 const REDACTED = "[redacted]";
-const REDACT_KEY_PATTERN = /(token|password|authorization|api[_-]?key|secret|cookie)/i;
 const MAX_CONTEXT_DEPTH = 5;
+const ARGV_LIKE_KEY_PATTERN = /^(?:argv|args|execArgv|commandArgs|command_argv)$/i;
+const SECRET_ARG_FLAG_PATTERN =
+  /^--?(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|secret|password|authorization|proxy-authorization)(?:=|$)/i;
 
 const diagnosticsContextStorage = new AsyncLocalStorage<DevDiagnosticsContext>();
 
@@ -201,8 +204,8 @@ export class GatewayDevDiagnosticsService {
       level: input.level,
       category: input.category,
       event: input.event,
-      message: input.message,
-      context: input.context ? (redactValue(input.context, 0) as Record<string, unknown>) : undefined,
+      message: sanitizeDiagnosticValue(input.message) as string,
+      context: input.context ? (sanitizeDiagnosticValue(input.context) as Record<string, unknown>) : undefined,
       correlationId: input.correlationId ?? inherited.correlationId,
       sessionId: input.sessionId ?? inherited.sessionId,
       chatId: input.chatId ?? inherited.chatId,
@@ -220,7 +223,7 @@ export class GatewayDevDiagnosticsService {
       runtimeKind: input.runtimeKind,
       runtimeStatus: input.runtimeStatus,
       runtimeError: input.runtimeError
-        ? (redactValue(input.runtimeError, 0) as DevDiagnosticsEvent["runtimeError"])
+        ? (sanitizeDiagnosticValue(input.runtimeError) as DevDiagnosticsEvent["runtimeError"])
         : undefined,
       source: "gateway",
     };
@@ -379,7 +382,17 @@ function categoryForRuntimeKind(kind: RuntimeDiagnosticEventInput["kind"]): DevD
   return "runtime";
 }
 
-function redactValue(value: unknown, depth: number): unknown {
+function sanitizeDiagnosticValue(value: unknown): unknown {
+  const capped = capAndSanitizeDiagnosticArgv(value, 0);
+  const projected = redactStructuredSecrets(capped, {
+    marker: REDACTED,
+    circularMarker: "[circular]",
+    redactEnvAssignmentsAsWhole: true,
+  }).value;
+  return collapseDiagnosticBearerMarkers(projected);
+}
+
+function capAndSanitizeDiagnosticArgv(value: unknown, depth: number, key?: string): unknown {
   if (depth >= MAX_CONTEXT_DEPTH) {
     return "[max-depth]";
   }
@@ -387,20 +400,56 @@ function redactValue(value: unknown, depth: number): unknown {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactValue(item, depth + 1));
+    return key && ARGV_LIKE_KEY_PATTERN.test(key)
+      ? sanitizeDiagnosticArgv(value, depth)
+      : value.map((item) => capAndSanitizeDiagnosticArgv(item, depth + 1));
   }
   if (typeof value === "object") {
     const result: Record<string, unknown> = {};
-    for (const [key, nested] of Object.entries(value)) {
-      result[key] = REDACT_KEY_PATTERN.test(key) ? REDACTED : redactValue(nested, depth + 1);
+    for (const [childKey, nested] of Object.entries(value)) {
+      result[childKey] = capAndSanitizeDiagnosticArgv(nested, depth + 1, childKey);
     }
     return result;
   }
-  if (typeof value === "string" && /^bearer\s+[a-z0-9._~+/-]+$/i.test(value)) {
-    return REDACTED;
-  }
-  if (typeof value === "string" && /\bbearer\s+[a-z0-9._~+/-]+/i.test(value)) {
-    return value.replace(/\bbearer\s+[a-z0-9._~+/-]+/gi, REDACTED);
-  }
   return value;
+}
+
+function sanitizeDiagnosticArgv(value: unknown[], depth: number): unknown[] {
+  let redactNext = false;
+  return value.map((entry) => {
+    if (redactNext) {
+      redactNext = false;
+      return REDACTED;
+    }
+    if (typeof entry !== "string") {
+      return capAndSanitizeDiagnosticArgv(entry, depth + 1);
+    }
+    if (!SECRET_ARG_FLAG_PATTERN.test(entry)) {
+      return entry;
+    }
+    const equalsIndex = entry.indexOf("=");
+    if (equalsIndex >= 0) {
+      return `${entry.slice(0, equalsIndex + 1)}${REDACTED}`;
+    }
+    redactNext = true;
+    return entry;
+  });
+}
+
+function collapseDiagnosticBearerMarkers(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(/\bBearer\s+\[redacted\]/gi, REDACTED);
+  }
+  if (Array.isArray(value)) {
+    return value.map(collapseDiagnosticBearerMarkers);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key,
+      collapseDiagnosticBearerMarkers(nested),
+    ]),
+  );
 }

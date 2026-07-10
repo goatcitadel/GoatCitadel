@@ -177,7 +177,7 @@ async function main() {
     await runScenario(context, {
       id: "install.gateway.demo-first-outcome",
       lane: "install-smoke",
-      title: "Safe demo bootstrap creates first-run Chat, Cowork, Code, and project anchors",
+      title: "Safe demo bootstrap creates a canonical Chat, project, and governed task anchors",
       subsystem: "gateway",
     }, async () => {
       const bootstrap = await requestJson(stack.gatewayUrl, "/api/v1/demo/bootstrap", {
@@ -190,9 +190,10 @@ async function main() {
       const hasFirstRunAnchors =
         Boolean(bootstrap.body?.workspace) &&
         Boolean(bootstrap.body?.project) &&
+        sessions.length === 1 &&
         modes.has("chat") &&
-        modes.has("cowork") &&
-        modes.has("code") &&
+        !modes.has("cowork") &&
+        !modes.has("code") &&
         Array.isArray(bootstrap.body?.tasks) &&
         bootstrap.body.tasks.length >= 2 &&
         state.body?.status === "ready";
@@ -208,8 +209,9 @@ async function main() {
           hasWorkspace: Boolean(bootstrap.body?.workspace),
           hasProject: Boolean(bootstrap.body?.project),
           hasChat: modes.has("chat"),
-          hasCowork: modes.has("cowork"),
-          hasCode: modes.has("code"),
+          legacyPrimarySurfaceCount: sessions.filter(
+            (session) => session.mode === "cowork" || session.mode === "code",
+          ).length,
         },
       };
     });

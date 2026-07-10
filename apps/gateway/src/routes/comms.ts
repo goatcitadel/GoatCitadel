@@ -1,6 +1,7 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { ChannelDeliveryRuntimeRecord } from "../services/channel-delivery-runtime-service.js";
+import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 
 const channelAttachmentSchema = z.object({
   url: z.string().url().optional(),
@@ -193,7 +194,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       }));
-    return reply.send({ deliveries, count: deliveries.length });
+    return reply.send(projectPublicSecretValue({ deliveries, count: deliveries.length }));
   });
 
   fastify.post("/api/v1/comms/send", async (request, reply) => {
@@ -202,10 +203,12 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(
-      await fastify.services.comms.commsSend({
-        ...parsed.data,
-        idempotencyKey: request.idempotencyKey,
-      } as never),
+      projectPublicSecretValue(
+        await fastify.services.comms.commsSend({
+          ...parsed.data,
+          idempotencyKey: request.idempotencyKey,
+        } as never),
+      ),
     );
   });
 
@@ -215,10 +218,12 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(
-      await fastify.services.comms.commsReply({
-        ...parsed.data,
-        idempotencyKey: request.idempotencyKey,
-      } as never),
+      projectPublicSecretValue(
+        await fastify.services.comms.commsReply({
+          ...parsed.data,
+          idempotencyKey: request.idempotencyKey,
+        } as never),
+      ),
     );
   });
 
@@ -227,7 +232,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsReact(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsReact(parsed.data)));
   });
 
   fastify.post("/api/v1/comms/unsend", async (request, reply) => {
@@ -235,7 +240,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsUnsend(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsUnsend(parsed.data)));
   });
 
   fastify.post("/api/v1/comms/typing", async (request, reply) => {
@@ -243,7 +248,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsTyping(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsTyping(parsed.data)));
   });
 
   fastify.post("/api/v1/comms/activity", async (request, reply) => {
@@ -251,7 +256,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsActivity(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsActivity(parsed.data)));
   });
 
   fastify.get("/api/v1/comms/capabilities/:connectionId", async (request, reply) => {
@@ -260,11 +265,15 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.comms.getIntegrationConnectionChannelCapabilities(params.data.connectionId));
+      return reply.send(
+        projectPublicSecretValue(
+          fastify.services.comms.getIntegrationConnectionChannelCapabilities(params.data.connectionId),
+        ),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendProjectedCommsError(reply, notFound ? 404 : 409, message);
     }
   });
 
@@ -274,11 +283,15 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.comms.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId));
+      return reply.send(
+        projectPublicSecretValue(
+          fastify.services.comms.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId),
+        ),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendProjectedCommsError(reply, notFound ? 404 : 409, message);
     }
   });
 
@@ -288,11 +301,15 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.comms.runIntegrationConnectionDiagnostics(params.data.connectionId));
+      return reply.send(
+        projectPublicSecretValue(
+          await fastify.services.comms.runIntegrationConnectionDiagnostics(params.data.connectionId),
+        ),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendProjectedCommsError(reply, notFound ? 404 : 409, message);
     }
   });
 
@@ -301,7 +318,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsGmailRead(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsGmailRead(parsed.data)));
   });
 
   fastify.post("/api/v1/comms/gmail/send", async (request, reply) => {
@@ -309,7 +326,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsGmailSend(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsGmailSend(parsed.data)));
   });
 
   fastify.post("/api/v1/comms/calendar/list", async (request, reply) => {
@@ -317,7 +334,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsCalendarList(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsCalendarList(parsed.data)));
   });
 
   fastify.post("/api/v1/comms/calendar/create", async (request, reply) => {
@@ -325,6 +342,10 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsCalendarCreate(parsed.data));
+    return reply.send(projectPublicSecretValue(await fastify.services.comms.commsCalendarCreate(parsed.data)));
   });
 };
+
+function sendProjectedCommsError(reply: FastifyReply, statusCode: number, message: string) {
+  return reply.code(statusCode).send(projectPublicSecretValue({ error: message }));
+}

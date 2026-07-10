@@ -114,8 +114,20 @@ describe("tasks routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       harnesses: expect.any(Array),
-      providers: [expect.objectContaining({ runtimeId: "provider-openai", status: "not_configured" })],
-      plugins: [expect.objectContaining({ runtimeId: "plugin-corrupt", status: "unavailable" })],
+      providers: [
+        expect.objectContaining({
+          runtimeId: "provider-openai",
+          status: "not_configured",
+          manifestSource: "https://api.openai.com/access-token/[REDACTED]?token=[REDACTED]",
+        }),
+      ],
+      plugins: [
+        expect.objectContaining({
+          runtimeId: "plugin-corrupt",
+          status: "unavailable",
+          manifestSource: "URL: https://plugins.example.test/api-key/[REDACTED]?token=[REDACTED]",
+        }),
+      ],
       channels: [expect.objectContaining({ capabilityId: "channel:telegram", status: "callable", callable: true })],
       scalability: expect.arrayContaining([
         expect.objectContaining({
@@ -386,6 +398,154 @@ describe("tasks routes", () => {
       { taskId: "a2a-task-1" },
       expect.any(String),
     );
+  });
+
+  it("projects authenticated A2A HTTP, JSON-RPC, outbound, and error boundaries without reshaping authored messages", async () => {
+    const authoredText = "Peer-authored Authorization: Bearer keep-this-message";
+    const artifact = {
+      artifactId: "artifact-secret",
+      name: "Local artifact",
+      uri: "https://discord.com/api/webhooks/team-id/route-discord-short",
+      parts: [
+        {
+          kind: "data",
+          data: {
+            description: "Authorization: Bearer tiny at https://api.telegram.org/botroute-telegram-short/sendMessage",
+            path: "https://local.example/token/route-generic-short",
+          },
+        },
+      ],
+      metadata: { authorization: "Bearer tiny" },
+    };
+    const message = { role: "user", parts: [{ kind: "text", text: authoredText }] };
+    const task = {
+      id: "a2a-task-secret",
+      contextId: "ctx-secret",
+      status: { state: "working", timestamp: "2026-06-01T00:00:00.000Z" },
+      messages: [message],
+      artifacts: [artifact],
+      metadata: { bridge: "goatcitadel-a2a", authorization: "Bearer tiny" },
+    };
+    const routeError = Object.assign(
+      new Error("Authorization: Bearer tiny at https://api.telegram.org/botroute-error-short/sendMessage"),
+      { statusCode: 400, reason: "a2a_task_failed" },
+    );
+    const authenticatePeerRequest = vi.fn(() => ({ peerId: "peer-1", scopes: ["a2a:http-json"] }));
+    app = buildApp(
+      {},
+      {
+        a2a: {
+          ...createDefaultA2AService(),
+          authenticatePeerRequest,
+          handleJsonRpc: vi.fn(async () => ({ jsonrpc: "2.0", id: "rpc-secret", result: { task } })),
+          getHttpJsonTask: vi.fn(() => task),
+          getHttpJsonTaskEvents: vi.fn(() => ({
+            task,
+            events: [
+              {
+                sequence: 1,
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "task.message",
+                timestamp: task.status.timestamp,
+                message,
+              },
+              {
+                sequence: 2,
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "task.artifact",
+                timestamp: task.status.timestamp,
+                artifact,
+              },
+            ],
+          })),
+          cancelHttpJsonTask: vi.fn(async () => {
+            throw routeError;
+          }),
+          previewOutbound: vi.fn(() => ({
+            checkedAt: "2026-06-01T00:00:00.000Z",
+            peerId: "peer-remote",
+            method: "SendMessage",
+            transport: "JSONRPC",
+            callable: true,
+            governance: {},
+            warnings: [],
+            envelope: {
+              jsonrpc: "2.0",
+              id: "outbound-preview",
+              method: "SendMessage",
+              params: { message, artifact },
+            },
+          })),
+          sendOutbound: vi.fn(async () => ({
+            checkedAt: "2026-06-01T00:00:00.000Z",
+            peerId: "peer-remote",
+            method: "SendMessage",
+            transport: "JSONRPC",
+            status: "sent",
+            idempotencyKey: "outbound-send",
+            warnings: [],
+            response: { jsonrpc: "2.0", id: "outbound-send", result: { task } },
+          })),
+        },
+      },
+    );
+    await app.register(tasksRoutes);
+    const headers = { authorization: "Bearer peer-token" };
+
+    const jsonRpc = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/jsonrpc",
+      headers,
+      payload: { jsonrpc: "2.0", id: "rpc-secret", method: "GetTask", params: { taskId: task.id } },
+    });
+    const httpTask = await app.inject({
+      method: "GET",
+      url: `/api/v1/a2a/http-json/tasks/${task.id}`,
+      headers,
+    });
+    const events = await app.inject({
+      method: "GET",
+      url: `/api/v1/a2a/http-json/tasks/${task.id}/events?lastEventSequence=0`,
+      headers,
+    });
+    const failed = await app.inject({
+      method: "POST",
+      url: `/api/v1/a2a/http-json/tasks/${task.id}/cancel`,
+      headers,
+    });
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/outbound/preview",
+      payload: { peerId: "peer-remote", method: "SendMessage", params: { message, artifact } },
+    });
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/outbound/send",
+      payload: { peerId: "peer-remote", method: "SendMessage", params: { message, artifact } },
+    });
+
+    for (const response of [jsonRpc, httpTask, events, preview, sent]) {
+      expect(response.body).not.toContain("route-discord-short");
+      expect(response.body).not.toContain("route-telegram-short");
+      expect(response.body).not.toContain("route-generic-short");
+      expect(response.body).not.toContain("Bearer tiny");
+    }
+    for (const response of [jsonRpc, httpTask, events, sent]) {
+      expect(response.body).toContain(authoredText);
+    }
+    expect(preview.json().envelope.params.message).toMatchObject({
+      role: "user",
+      parts: [expect.objectContaining({ kind: "text" })],
+    });
+    expect(preview.body).not.toContain("keep-this-message");
+    expect(failed.statusCode).toBe(400);
+    expect(failed.body).toContain("[REDACTED]");
+    expect(failed.body).not.toContain("Bearer tiny");
+    expect(failed.body).not.toContain("route-error-short");
+    expect(JSON.stringify(task)).toContain("route-discord-short");
+    expect(JSON.stringify(message)).toContain(authoredText);
   });
 
   it("keeps A2A peer routes with literal rate limits visible to CodeQL", () => {
@@ -987,7 +1147,7 @@ function buildApp(
         {
           providerId: "provider-openai",
           label: "OpenAI",
-          baseUrl: "https://api.openai.com/v1",
+          baseUrl: "https://api.openai.com/access-token/provider-availability-path?token=provider-availability-query",
           apiStyle: "openai-chat-completions",
           defaultModel: "gpt-5.1",
           hasApiKey: false,
@@ -1006,6 +1166,12 @@ function buildApp(
           updatedAt: "2026-05-05T00:00:00.000Z",
           capabilities: ["channel.send"],
           integrityStatus: "mismatch",
+          sourceMetadata: {
+            type: "url",
+            display:
+              "URL: https://plugins.example.test/api-key/plugin-availability-path?token=plugin-availability-query",
+            integrityStatus: "mismatch",
+          },
         },
       ]),
       listIntegrationCatalog: vi.fn(() => [

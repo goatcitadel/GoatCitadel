@@ -1902,11 +1902,12 @@ export class GatewayService {
         this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       resolveBasePromptCapabilityCatalog: () => this.resolveBasePromptCapabilityCatalog(),
-      closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
+      closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
       commsSend: (input) => this.commsSend(input),
-      completeActiveChatTurnStream: (turnId) => this.completeActiveChatTurnStream(turnId),
+      completeActiveChatTurnStream: (turnId, registrationId) =>
+        this.completeActiveChatTurnStream(turnId, registrationId),
       createChatCompletion: (request) => this.createChatCompletion(request),
       createChatSession: (input) => this.createChatSession(input),
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
@@ -1934,11 +1935,11 @@ export class GatewayService {
       maybeAutoTitleChatSession: (sessionId, content) => this.maybeAutoTitleChatSession(sessionId, content),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       patchSessionAutonomyPrefs: (sessionId, input) => this.patchSessionAutonomyPrefs(sessionId, input),
-      persistChatStreamChunk: (chunk, durableRunId) => {
+      persistChatStreamChunk: (chunk, durableRunId, streamRegistration) => {
         if (!chunk.turnId) {
           throw new Error("Persistable chat stream chunk is missing a turn id.");
         }
-        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId);
+        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
       },
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
       recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
@@ -1946,8 +1947,8 @@ export class GatewayService {
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       recordTurnCommitments: (input) => this.recordTurnCommitments(input),
-      registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
-        this.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
+      registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
+        this.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
       requireChatTurnContext: (sessionId, turnId) => this.requireChatTurnContext(sessionId, turnId),
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
       resolveFallbackTargets: (runtime, primaryProviderId, primaryModel) =>
@@ -2060,21 +2061,22 @@ export class GatewayService {
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
-      persistChatStreamChunk: (chunk, durableRunId) => {
+      persistChatStreamChunk: (chunk, durableRunId, streamRegistration) => {
         if (!chunk.turnId) {
           throw new Error("Persistable chat stream chunk is missing a turn id.");
         }
-        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId);
+        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
       },
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
       finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
-      completeActiveChatTurnStream: (turnId) => this.completeActiveChatTurnStream(turnId),
-      closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
+      completeActiveChatTurnStream: (turnId, registrationId) =>
+        this.completeActiveChatTurnStream(turnId, registrationId),
+      closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       getActiveChatTurnStream: (turnId) => this.getActiveChatTurnStream(turnId),
       beginDurableChatRun: (prepared, input, threadEventType) =>
         this.beginDurableChatRun(prepared, input, threadEventType),
-      registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
-        this.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
+      registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
+        this.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
       ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
         this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
@@ -3288,7 +3290,8 @@ export class GatewayService {
         storage: this.storage,
         chatTurnExecutionRegistry: this.chatTurnExecutionRegistry,
         createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
-        persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
+        persistChatStreamChunk: (chunk, runId, streamRegistration) =>
+          this.persistChatStreamChunk(chunk, runId, streamRegistration),
         initialLastChatStreamPurgeAt: typeof legacyInitialPurgeAt === "number" ? legacyInitialPurgeAt : undefined,
       });
     }
@@ -3313,26 +3316,31 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     runId?: string,
+    options?: import("./chat-turn-runtime-collaborators.js").ChatTurnStreamRegistrationOptions,
   ): ActiveChatTurnStreamExecution {
-    return this.getChatStreamRuntime().registerActiveChatTurnStream(sessionId, turnId, runId);
+    return this.getChatStreamRuntime().registerActiveChatTurnStream(sessionId, turnId, runId, options);
   }
 
   public getActiveChatTurnStream(turnId: string): ActiveChatTurnStreamExecution | undefined {
     return this.getChatStreamRuntime().getActiveChatTurnStream(turnId);
   }
 
-  public completeActiveChatTurnStream(turnId: string): void {
-    this.getChatStreamRuntime().completeActiveChatTurnStream(turnId);
+  public completeActiveChatTurnStream(turnId: string, registrationId: string): boolean {
+    return this.getChatStreamRuntime().completeActiveChatTurnStream(turnId, registrationId);
   }
 
-  public closeActiveChatTurnStream(turnId: string): void {
-    this.getChatStreamRuntime().closeActiveChatTurnStream(turnId);
+  public closeActiveChatTurnStream(turnId: string, registrationId: string): boolean {
+    return this.getChatStreamRuntime().closeActiveChatTurnStream(turnId, registrationId);
   }
 
-  public persistChatStreamChunk(chunk: PersistableChatStreamChunk, runId?: string): ChatStreamChunk {
+  public persistChatStreamChunk(
+    chunk: PersistableChatStreamChunk,
+    runId?: string,
+    streamRegistration?: ActiveChatTurnStreamExecution,
+  ): ChatStreamChunk {
     const runtime = this.getChatStreamRuntime();
     this.syncLegacyChatStreamPurgeState(runtime);
-    const persisted = runtime.persistChatStreamChunk(chunk, runId);
+    const persisted = runtime.persistChatStreamChunk(chunk, runId, streamRegistration);
     this.writeBackLegacyChatStreamPurgeState(runtime);
     return persisted;
   }
@@ -3373,16 +3381,7 @@ export class GatewayService {
     source: AsyncGenerator<ChatStreamChunkDraft>,
     runId?: string,
   ): AsyncGenerator<ChatStreamChunk> {
-    let sequence = 1;
-    for await (const chunk of source) {
-      yield {
-        ...chunk,
-        eventId: randomUUID(),
-        sequence,
-        ...(runId ? { runId } : {}),
-      } as ChatStreamChunk;
-      sequence += 1;
-    }
+    yield* this.getChatStreamRuntime().withEphemeralStreamEnvelope(source, runId);
   }
 
   private async *streamTurnStateFallback(sessionId: string, turnId: string): AsyncGenerator<ChatStreamChunk> {
@@ -4907,9 +4906,10 @@ export class GatewayService {
     input: ChatSendMessageRequest,
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-    durableRunId?: string,
-    resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-    options?: {
+    durableRunId: string | undefined,
+    resolvedOrchestration: PreparedChatExecutionPlanResolution | undefined,
+    options: {
+      streamRegistration: ActiveChatTurnStreamExecution;
       skipMessageStart?: boolean;
     },
   ): Promise<void> {

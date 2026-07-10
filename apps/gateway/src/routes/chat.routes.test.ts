@@ -269,7 +269,7 @@ describe("chat routes additional coverage", () => {
       summary: { changedFiles: 1, additions: 4, deletions: 1 },
       diff: "diff --git a/index.ts b/index.ts",
     }));
-    const getChatSessionWorkbenchOutput = vi.fn(async () => ({
+    const rawWorkbenchOutput = {
       state: {
         sessionId: "sess-1",
         projectId: "proj-1",
@@ -279,9 +279,10 @@ describe("chat routes additional coverage", () => {
         updatedAt: "2026-04-10T00:01:00.000Z",
       },
       helperRuns: [],
-      output: "No validation output yet.",
-    }));
-    const runChatSessionWorkbenchCommand = vi.fn(async () => ({
+      output: "Authorization: Bearer workbench-output-secret",
+    };
+    const getChatSessionWorkbenchOutput = vi.fn(async () => rawWorkbenchOutput);
+    const rawWorkbenchCommand = {
       state: {
         sessionId: "sess-1",
         projectId: "proj-1",
@@ -295,14 +296,15 @@ describe("chat routes additional coverage", () => {
         commandRunId: "workbench-command:run-1",
         sessionId: "sess-1",
         worktreePath: "./.worktrees/sess-1",
-        command: "pnpm",
-        args: ["test"],
+        command: "pnpm --api-key workbench-command-secret",
+        args: ["test", "--token", "workbench-argument-secret"],
         status: "passed",
         exitCode: 0,
         timedOut: false,
         startedAt: "2026-04-10T00:03:00.000Z",
         completedAt: "2026-04-10T00:03:01.000Z",
-        stdoutPreview: "ok",
+        stdoutPreview: "token=workbench-stdout-secret",
+        stderrPreview: "Authorization: Bearer workbench-stderr-secret",
         validationStatus: "passed",
         cwd: "./.worktrees/sess-1",
         durationMs: 1000,
@@ -311,7 +313,8 @@ describe("chat routes additional coverage", () => {
         stdoutTruncated: false,
         stderrTruncated: false,
       },
-    }));
+    };
+    const runChatSessionWorkbenchCommand = vi.fn(async () => rawWorkbenchCommand);
     const runChatSessionWorkbenchFileOperation = vi.fn(async () => ({
       state: {
         sessionId: "sess-1",
@@ -535,7 +538,7 @@ describe("chat routes additional coverage", () => {
     });
     expect(outputResponse.statusCode).toBe(200);
     expect(outputResponse.json()).toMatchObject({
-      output: "No validation output yet.",
+      output: "Authorization: [REDACTED]",
     });
 
     const commandResponse = await app.inject({
@@ -550,10 +553,12 @@ describe("chat routes additional coverage", () => {
     expect(commandResponse.statusCode).toBe(200);
     expect(commandResponse.json()).toMatchObject({
       run: {
-        command: "pnpm",
-        args: ["test"],
+        command: "pnpm --api-key [REDACTED]",
+        args: ["test", "--token", "[REDACTED]"],
         status: "passed",
         exitCode: 0,
+        stdoutPreview: "token=[REDACTED]",
+        stderrPreview: "Authorization: [REDACTED]",
       },
       state: {
         validationStatus: "passed",
@@ -564,6 +569,8 @@ describe("chat routes additional coverage", () => {
       args: ["test"],
       timeoutMs: 30_000,
     });
+    expect(rawWorkbenchOutput.output).toContain("workbench-output-secret");
+    expect(rawWorkbenchCommand.run.stdoutPreview).toContain("workbench-stdout-secret");
 
     const fileOperationResponse = await app.inject({
       method: "POST",
@@ -944,7 +951,7 @@ describe("chat routes additional coverage", () => {
           index: 1,
           startedAt: "2026-03-11T20:00:02.000Z",
           finishedAt: "2026-03-11T20:00:03.000Z",
-          output: "Validation complete.",
+          output: "Authorization: Bearer delegation-sse-step-secret",
         },
       };
       yield {
@@ -959,7 +966,7 @@ describe("chat routes additional coverage", () => {
           index: 0,
           startedAt: "2026-03-11T20:00:00.000Z",
           finishedAt: "2026-03-11T20:00:04.000Z",
-          output: "Design locked.",
+          output: "apiKey=delegation-sse-design-secret",
         },
       };
       yield {
@@ -982,7 +989,7 @@ describe("chat routes additional coverage", () => {
               childSessionId: "sess-child-1",
               childTurnId: "turn-child-1",
               durableRunId: "durable-child-1",
-              output: "Design locked.",
+              output: "apiKey=delegation-sse-done-secret",
             },
             {
               stepId: "step-2",
@@ -995,10 +1002,10 @@ describe("chat routes additional coverage", () => {
               childSessionId: "sess-child-2",
               childTurnId: "turn-child-2",
               durableRunId: "durable-child-2",
-              output: "Validation complete.",
+              output: "Authorization: Bearer delegation-sse-validation-secret",
             },
           ],
-          stitchedOutput: "### Architect\nDesign locked.\n\n### QA\nValidation complete.",
+          stitchedOutput: "Authorization: Bearer delegation-sse-stitched-secret",
           citations: [],
         },
       };
@@ -1036,6 +1043,12 @@ describe("chat routes additional coverage", () => {
     expect(response.body).toContain('"type":"status"');
     expect(response.body).toContain('"type":"step"');
     expect(response.body).toContain('"type":"done"');
+    expect(response.body).toContain("[REDACTED]");
+    expect(response.body).not.toContain("delegation-sse-step-secret");
+    expect(response.body).not.toContain("delegation-sse-design-secret");
+    expect(response.body).not.toContain("delegation-sse-done-secret");
+    expect(response.body).not.toContain("delegation-sse-validation-secret");
+    expect(response.body).not.toContain("delegation-sse-stitched-secret");
     expect(runChatDelegationStream).toHaveBeenCalledWith(
       "sess-1",
       expect.objectContaining({
@@ -1589,7 +1602,7 @@ describe("chat routes additional coverage", () => {
   });
 
   it("returns persisted turn context manifests", async () => {
-    const getTurnContextManifestForSession = vi.fn(() => ({
+    const rawDetail = {
       manifest: {
         manifestId: "manifest-1",
         scope: "chat_turn",
@@ -1606,7 +1619,7 @@ describe("chat routes additional coverage", () => {
           kind: "system_message",
           entryIndex: 0,
           sourceRef: "system:0",
-          contentText: "System instructions",
+          contentText: "System instructions Authorization: Bearer context-system-secret",
           contentHash: "hash-1",
           metadata: {},
           createdAt: "2026-04-01T00:00:00.000Z",
@@ -1617,13 +1630,17 @@ describe("chat routes additional coverage", () => {
           kind: "memory_context",
           entryIndex: 1,
           sourceRef: "memory-1",
-          contentText: "Relevant memory context",
+          contentText: "Relevant memory context password=context-memory-secret",
           contentHash: "hash-2",
-          metadata: { status: "generated" },
+          metadata: {
+            status: "generated",
+            webhookUrl: "https://hooks.example.test/services/team/context-path-secret",
+          },
           createdAt: "2026-04-01T00:00:01.000Z",
         },
       ],
-    }));
+    };
+    const getTurnContextManifestForSession = vi.fn(() => rawDetail);
     app = Fastify();
     app.decorate("services", { chatMessages: { getTurnContextManifestForSession } } as never);
     await app.register(chatRoutes);
@@ -1642,6 +1659,32 @@ describe("chat routes additional coverage", () => {
       },
       entries: [{ kind: "system_message" }, { kind: "memory_context" }],
     });
+    expect(response.json().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          contentHash: "hash-1",
+          publicProjection: expect.objectContaining({
+            entryRedacted: true,
+            contentRedacted: true,
+            canonicalContentHashRefersToStoredEntry: true,
+          }),
+        }),
+        expect.objectContaining({
+          contentHash: "hash-2",
+          publicProjection: expect.objectContaining({
+            entryRedacted: true,
+            contentRedacted: true,
+            metadataRedacted: true,
+            canonicalContentHashRefersToStoredEntry: true,
+          }),
+        }),
+      ]),
+    );
+    for (const secret of ["context-system-secret", "context-memory-secret", "context-path-secret"]) {
+      expect(response.body).not.toContain(secret);
+    }
+    expect(rawDetail.entries[0]!.contentText).toContain("context-system-secret");
+    expect(rawDetail.entries[1]!.metadata.webhookUrl).toContain("context-path-secret");
   });
 
   it("returns 409 for branch-write conflicts on agent send", async () => {

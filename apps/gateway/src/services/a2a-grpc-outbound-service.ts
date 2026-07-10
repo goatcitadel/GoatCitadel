@@ -10,6 +10,7 @@ import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { A2AGrpcClientPort } from "./a2a-grpc-client.js";
+import { projectA2AJsonRpcResponseForExternal } from "./a2a-public-projection.js";
 import { buildOutboundHeaders, hashStableJson } from "./a2a-route-utils.js";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -55,14 +56,16 @@ export async function sendOutboundGrpc(input: {
     execute: async (claim) => {
       const discovered = await discoverOutboundGrpcUrl(peer, checkedAt, deps);
       claim.markExternalCallStarted();
-      return deps.grpcClient.call({
-        grpcUrl: discovered.grpcUrl,
-        method: request.method,
-        params: request.params,
-        id: preview.envelope.id,
-        peer,
-        allowlist: deps.config.toolPolicy.sandbox.networkAllowlist,
-      });
+      return projectA2AJsonRpcResponseForExternal(
+        await deps.grpcClient.call({
+          grpcUrl: discovered.grpcUrl,
+          method: request.method,
+          params: request.params,
+          id: preview.envelope.id,
+          peer,
+          allowlist: deps.config.toolPolicy.sandbox.networkAllowlist,
+        }),
+      );
     },
   });
 

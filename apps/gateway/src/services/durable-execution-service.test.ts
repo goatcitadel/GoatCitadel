@@ -1133,11 +1133,20 @@ describe("durable-execution-service orchestration workflow", () => {
         },
       },
       prepareAgentChatTurn,
-      registerActiveChatTurnStream: vi.fn(),
+      registerActiveChatTurnStream: vi.fn(() => ({
+        registrationId: "stream-registration-resume",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+      })),
       persistChatStreamChunk,
     };
 
     await executeDurableChatTurnRun(host as never, run);
+
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, {
+      continuation: true,
+    });
 
     expect(prepareAgentChatTurn).toHaveBeenCalledWith(
       "session-1",
@@ -1158,7 +1167,10 @@ describe("durable-execution-service orchestration workflow", () => {
       "chat_thread_turn_appended",
       run.runId,
       undefined,
-      { skipMessageStart: true },
+      {
+        streamRegistration: expect.objectContaining({ registrationId: "stream-registration-resume" }),
+        skipMessageStart: true,
+      },
     );
 
     await markDurableWorkflowUnrecoverable(host as never, run, "operator stopped the run");
@@ -1207,11 +1219,18 @@ describe("durable-execution-service orchestration workflow", () => {
         },
       },
       prepareAgentChatTurn,
-      registerActiveChatTurnStream: vi.fn(),
+      registerActiveChatTurnStream: vi.fn(() => ({
+        registrationId: "stream-registration-cancel",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+      })),
       persistChatStreamChunk: vi.fn(),
     };
 
     await executeDurableChatTurnRun(host as never, run, { signal: abortController.signal });
+
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, undefined);
 
     expect(prepareAgentChatTurn).toHaveBeenCalledWith(
       "session-1",
@@ -1228,8 +1247,61 @@ describe("durable-execution-service orchestration workflow", () => {
       "chat_thread_turn_appended",
       run.runId,
       undefined,
-      { skipMessageStart: true, abortSignal: abortController.signal },
+      {
+        streamRegistration: expect.objectContaining({ registrationId: "stream-registration-cancel" }),
+        skipMessageStart: true,
+        abortSignal: abortController.signal,
+      },
     );
+  });
+
+  it("recognizes a reclaimed exact-turn lease as a continuation after retained events expire", async () => {
+    vi.mocked(executePreparedAgentChatTurnBackground).mockResolvedValue(undefined as never);
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", {
+        version: "chat.turn.execute.v1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        userMessageId: "user-1",
+        assistantMessageId: "assistant-1",
+        branchKind: "new",
+        threadEventType: "chat_thread_turn_appended",
+        request: { content: "original" },
+      }),
+      startedAt: "2026-04-19T00:00:00.000Z",
+      leaseHeartbeatAt: "2026-04-20T00:00:00.000Z",
+    };
+    const host = {
+      storage: {
+        chatMessages: {
+          get: vi.fn(() => ({
+            messageId: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "Ship it",
+          })),
+        },
+      },
+      prepareAgentChatTurn: vi.fn(async () => ({
+        turnId: "turn-1",
+        branchKind: "new",
+        userMessage: { messageId: "user-1", content: "Ship it" },
+        assistantMessage: { messageId: "assistant-1", content: "" },
+      })),
+      registerActiveChatTurnStream: vi.fn(() => ({
+        registrationId: "stream-registration-reclaimed",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+      })),
+      persistChatStreamChunk: vi.fn(),
+    };
+
+    await executeDurableChatTurnRun(host as never, run);
+
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, {
+      continuation: true,
+    });
   });
 
   it("blocks queued autonomous chat turns while the autonomy kill switch is engaged", async () => {
