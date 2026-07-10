@@ -12,6 +12,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
+import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 
 export type ChatTurnRealtimeOptions = Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 
@@ -49,6 +50,11 @@ export interface ChatTurnLeaseControl {
   ): AsyncGenerator<ChatStreamChunk>;
 }
 
+export interface ChatTurnStreamRegistrationOptions {
+  continuation?: boolean;
+  reservation?: boolean;
+}
+
 export interface ChatTurnStreamLifecycleControl {
   withEphemeralStreamEnvelope(
     stream: AsyncGenerator<ChatStreamChunkDraft>,
@@ -64,17 +70,21 @@ export interface ChatTurnStreamLifecycleControl {
       signal?: AbortSignal;
     },
   ): AsyncGenerator<ChatStreamChunk>;
-  persistChatStreamChunk(chunk: ChatStreamChunkDraft, durableRunId?: string): void;
+  persistChatStreamChunk(
+    chunk: ChatStreamChunkDraft,
+    durableRunId?: string,
+    streamRegistration?: ActiveChatTurnStreamExecution,
+  ): void;
   createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
-  registerActiveChatTurnStream(sessionId: string, turnId: string, durableRunId?: string): void;
-  getActiveChatTurnStream(turnId: string):
-    | {
-        sessionId: string;
-        runId?: string;
-      }
-    | undefined;
-  completeActiveChatTurnStream(turnId: string): void;
-  closeActiveChatTurnStream(turnId: string): void;
+  registerActiveChatTurnStream(
+    sessionId: string,
+    turnId: string,
+    durableRunId?: string,
+    options?: ChatTurnStreamRegistrationOptions,
+  ): ActiveChatTurnStreamExecution;
+  getActiveChatTurnStream(turnId: string): ActiveChatTurnStreamExecution | undefined;
+  completeActiveChatTurnStream(turnId: string, registrationId: string): boolean;
+  closeActiveChatTurnStream(turnId: string, registrationId: string): boolean;
 }
 
 export interface ChatTurnDurableRunOwner {

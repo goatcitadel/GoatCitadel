@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ChatGeneratedArtifactRecord, ChatSessionRecord } from "@goatcitadel/contracts";
-import { projectChatGeneratedArtifactForPublic, projectChatSessionForPublic } from "./chat-secret-projection.js";
+import type { ChatGeneratedArtifactRecord, ChatMessageRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import {
+  preserveChatSessionSecretsForPublicUpdate,
+  projectChatGeneratedArtifactForPublic,
+  projectChatMessageForPublic,
+  projectChatSessionForPublic,
+} from "./chat-secret-projection.js";
 
 describe("chat secret projection", () => {
   it("projects legacy generated-artifact content without changing canonical content or hash truth", () => {
@@ -90,5 +95,132 @@ describe("chat secret projection", () => {
     expect(JSON.stringify(projected)).not.toContain("nested-reference-secret");
     expect(projected.tokenTotal).toBe(0);
     expect(session.generatedArtifacts?.[0]?.title).toContain("nested-reference-secret");
+  });
+
+  it("restores every canonical credential-label slot while preserving safe title edits", () => {
+    const labels = [
+      "auth",
+      "authentication",
+      "authorization",
+      "proxyAuthorization",
+      "bearer",
+      "cookie",
+      "cookies",
+      "credential",
+      "credentials",
+      "apiKey",
+      "apikey",
+      "clientKey",
+      "accessKey",
+      "privateKey",
+      "consumerKey",
+      "signingKey",
+      "accessToken",
+      "refreshToken",
+      "clientSecret",
+      "token",
+      "secret",
+      "password",
+      "passwd",
+      "signature",
+      "webhookUrl",
+      "webhookUri",
+      "webhookEndpoint",
+      "databasePassword",
+    ] as const;
+
+    for (const label of labels) {
+      const session = {
+        sessionId: `session-${label}`,
+        sessionKey: `mission:operator:${label}`,
+        scope: "mission",
+        includeInHistory: true,
+        pinned: false,
+        lifecycleStatus: "active",
+        channel: "mission",
+        account: "operator",
+        title: `original ${label}=sk-abcdefghijklmnop note`,
+        updatedAt: "2026-07-09T12:00:00.000Z",
+        lastActivityAt: "2026-07-09T12:00:00.000Z",
+        tokenTotal: 0,
+        costUsdTotal: 0,
+      } satisfies ChatSessionRecord;
+      const projected = projectChatSessionForPublic(session);
+
+      expect(projected.title, label).toBe(`original ${label}=[REDACTED] note`);
+      expect(
+        preserveChatSessionSecretsForPublicUpdate(session, {
+          title: `renamed ${label}=[REDACTED] note`,
+        }),
+        label,
+      ).toEqual({ title: `renamed ${label}=sk-abcdefghijklmnop note` });
+      expect(session.title, label).toBe(`original ${label}=sk-abcdefghijklmnop note`);
+    }
+  });
+
+  it("keeps assistant code valid while removing literal credentials", () => {
+    const message: ChatMessageRecord = {
+      messageId: "message-code",
+      sessionId: "session-code",
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: [
+        "type Login = { password: string };",
+        "const password = process.env.PASSWORD;",
+        "const apiKey = process.env.API_KEY;",
+        'const denoApiKey = Deno.env.get("API_KEY");',
+        'const pythonApiKey = os.getenv("API_KEY");',
+        'const accessorApiKey = secrets.get("API_KEY");',
+        'const awaitedApiKey = await secrets.get("API_KEY");',
+        "apiKey=${API_KEY}",
+        "const password = config.password;",
+        "type GenericLogin = { password: SomeType<string> };",
+        "const passwordPolicy: PasswordPolicy = strict;",
+        'const apiKey = "literal-chat-secret";',
+        "const templatePassword = `hello world`;",
+        'const header = "Authorization: Custom one two three";',
+        "const templateHeader = `Authorization: Token abcdef1234567890`;",
+      ].join("\n"),
+      timestamp: "2026-07-09T12:00:00.000Z",
+    };
+
+    const projected = projectChatMessageForPublic(message);
+
+    expect(projected?.content).toBe(
+      [
+        "type Login = { password: string };",
+        "const password = process.env.PASSWORD;",
+        "const apiKey = process.env.API_KEY;",
+        'const denoApiKey = Deno.env.get("API_KEY");',
+        'const pythonApiKey = os.getenv("API_KEY");',
+        'const accessorApiKey = secrets.get("API_KEY");',
+        'const awaitedApiKey = await secrets.get("API_KEY");',
+        "apiKey=${API_KEY}",
+        "const password = config.password;",
+        "type GenericLogin = { password: SomeType<string> };",
+        "const passwordPolicy: PasswordPolicy = strict;",
+        'const apiKey = "[REDACTED]";',
+        "const templatePassword = `[REDACTED]`;",
+        'const header = "Authorization: [REDACTED]";',
+        "const templateHeader = `Authorization: [REDACTED]`;",
+      ].join("\n"),
+    );
+    expect(message.content).toContain('"literal-chat-secret"');
+  });
+
+  it("contains arbitrary authorization values in ordinary JSON message content", () => {
+    const message: ChatMessageRecord = {
+      messageId: "message-json-auth",
+      sessionId: "session-code",
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: '{"authorization":"Custom one two three"}',
+      timestamp: "2026-07-09T12:00:00.000Z",
+    };
+
+    expect(projectChatMessageForPublic(message)?.content).toBe('{"authorization":"[REDACTED]"}');
+    expect(message.content).toContain("Custom one two three");
   });
 });

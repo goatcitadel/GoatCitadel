@@ -1,12 +1,14 @@
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCitationRecord,
+  ChatStreamApprovalRecord,
   ChatStreamChunk,
   ChatStreamUsageRecord,
   ChatToolRunRecord,
   ChatTurnBranchKind,
   ChatTurnRepairRecord,
   ChatTurnTraceRecord,
+  ChatUserInputPromptRecord,
 } from "@goatcitadel/contracts";
 import type { DurableChatTurnExecutionPayload } from "../chat-turn-types.js";
 
@@ -53,6 +55,15 @@ export function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
             ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
           }
         : undefined;
+    case "thinking_delta":
+      return typeof value.turnId === "string" && typeof value.delta === "string"
+        ? {
+            ...common,
+            type: "thinking_delta",
+            turnId: value.turnId,
+            delta: value.delta,
+          }
+        : undefined;
     case "usage":
       return typeof value.turnId === "string" && isChatStreamUsageRecord(value.usage)
         ? {
@@ -90,20 +101,26 @@ export function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
             toolRun: value.toolRun,
           }
         : undefined;
-    case "approval_required":
-      return typeof value.turnId === "string" &&
-        isRecord(value.approval) &&
-        typeof value.approval.approvalId === "string"
+    case "approval_required": {
+      const approval = toChatStreamApprovalRecord(value.approval);
+      return typeof value.turnId === "string" && approval
         ? {
             ...common,
             type: "approval_required",
             turnId: value.turnId,
-            approval: {
-              approvalId: value.approval.approvalId,
-              ...(typeof value.approval.toolName === "string" ? { toolName: value.approval.toolName } : {}),
-              ...(typeof value.approval.reason === "string" ? { reason: value.approval.reason } : {}),
-              ...(typeof value.approval.expiresAt === "string" ? { expiresAt: value.approval.expiresAt } : {}),
-            },
+            approval,
+          }
+        : undefined;
+    }
+    case "user_input_required":
+      return typeof value.turnId === "string" &&
+        isChatUserInputPromptRecord(value.prompt) &&
+        value.prompt.turnId === value.turnId
+        ? {
+            ...common,
+            type: "user_input_required",
+            turnId: value.turnId,
+            prompt: value.prompt,
           }
         : undefined;
     case "trace_update":
@@ -174,6 +191,65 @@ function isChatStreamUsageRecord(value: unknown): value is ChatStreamUsageRecord
   );
 }
 
+function toChatStreamApprovalRecord(value: unknown): ChatStreamApprovalRecord | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.approvalId !== "string" ||
+    !hasOptionalStringFields(value, [
+      "kind",
+      "toolName",
+      "description",
+      "reason",
+      "taskId",
+      "codeModeRunId",
+      "codeHash",
+      "wrapperManifestHash",
+      "capabilitySnapshotId",
+      "inspectPath",
+      "requestedOutputIntent",
+      "expiresAt",
+    ]) ||
+    (value.riskLevel !== undefined &&
+      value.riskLevel !== "safe" &&
+      value.riskLevel !== "caution" &&
+      value.riskLevel !== "danger" &&
+      value.riskLevel !== "nuclear") ||
+    (value.affectedResources !== undefined &&
+      (!Array.isArray(value.affectedResources) ||
+        !value.affectedResources.every((resource) => typeof resource === "string"))) ||
+    (value.saveCandidateOnSuccess !== undefined && typeof value.saveCandidateOnSuccess !== "boolean") ||
+    (value.remainingCount !== undefined &&
+      (typeof value.remainingCount !== "number" || !Number.isFinite(value.remainingCount)))
+  ) {
+    return undefined;
+  }
+  return {
+    approvalId: value.approvalId,
+    ...(typeof value.kind === "string" ? { kind: value.kind } : {}),
+    ...(typeof value.toolName === "string" ? { toolName: value.toolName } : {}),
+    ...(typeof value.description === "string" ? { description: value.description } : {}),
+    ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+    ...(value.riskLevel !== undefined ? { riskLevel: value.riskLevel } : {}),
+    ...(Array.isArray(value.affectedResources) ? { affectedResources: [...value.affectedResources] } : {}),
+    ...(typeof value.taskId === "string" ? { taskId: value.taskId } : {}),
+    ...(typeof value.codeModeRunId === "string" ? { codeModeRunId: value.codeModeRunId } : {}),
+    ...(typeof value.codeHash === "string" ? { codeHash: value.codeHash } : {}),
+    ...(typeof value.wrapperManifestHash === "string" ? { wrapperManifestHash: value.wrapperManifestHash } : {}),
+    ...(typeof value.capabilitySnapshotId === "string" ? { capabilitySnapshotId: value.capabilitySnapshotId } : {}),
+    ...(typeof value.inspectPath === "string" ? { inspectPath: value.inspectPath } : {}),
+    ...(typeof value.requestedOutputIntent === "string" ? { requestedOutputIntent: value.requestedOutputIntent } : {}),
+    ...(typeof value.saveCandidateOnSuccess === "boolean"
+      ? { saveCandidateOnSuccess: value.saveCandidateOnSuccess }
+      : {}),
+    ...(typeof value.remainingCount === "number" ? { remainingCount: value.remainingCount } : {}),
+    ...(typeof value.expiresAt === "string" ? { expiresAt: value.expiresAt } : {}),
+  };
+}
+
+function hasOptionalStringFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  return fields.every((field) => value[field] === undefined || typeof value[field] === "string");
+}
+
 function isChatToolRunRecord(value: unknown): value is ChatToolRunRecord {
   return (
     isRecord(value) &&
@@ -207,6 +283,33 @@ function isChatTurnRepairRecord(value: unknown): value is ChatTurnRepairRecord {
     (value.source === undefined || typeof value.source === "string") &&
     (value.preRepairContent === undefined || typeof value.preRepairContent === "string") &&
     (value.postRepairContent === undefined || typeof value.postRepairContent === "string")
+  );
+}
+
+function isChatUserInputPromptRecord(value: unknown): value is ChatUserInputPromptRecord {
+  return (
+    isRecord(value) &&
+    typeof value.promptId === "string" &&
+    typeof value.turnId === "string" &&
+    (value.kind === "single_select" || value.kind === "text") &&
+    typeof value.title === "string" &&
+    typeof value.question === "string" &&
+    typeof value.required === "boolean" &&
+    (value.dismissible === undefined || typeof value.dismissible === "boolean") &&
+    (value.expiresAt === undefined || typeof value.expiresAt === "string") &&
+    (value.placeholder === undefined || typeof value.placeholder === "string") &&
+    (value.submitLabel === undefined || typeof value.submitLabel === "string") &&
+    (value.multiline === undefined || typeof value.multiline === "boolean") &&
+    (value.options === undefined ||
+      (Array.isArray(value.options) &&
+        value.options.every(
+          (option) =>
+            isRecord(option) &&
+            typeof option.optionId === "string" &&
+            typeof option.label === "string" &&
+            typeof option.description === "string" &&
+            (option.helpText === undefined || typeof option.helpText === "string"),
+        )))
   );
 }
 

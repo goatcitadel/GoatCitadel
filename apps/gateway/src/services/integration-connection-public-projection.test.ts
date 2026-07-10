@@ -37,6 +37,25 @@ function createConnection(): IntegrationConnection {
 }
 
 describe("integration connection public projection", () => {
+  it("contains generated-connector signing, consumer, and encoded userinfo credentials", () => {
+    const connection = createConnection();
+    Object.assign(connection.config, {
+      signingKey: "0123456789abcdef",
+      consumerKey: "ck_0123456789abcdef",
+      endpoint: "https://user:p%40ss:w0rd@example.test/path",
+    });
+
+    const projected = projectIntegrationConnectionForPublicResponse(connection);
+
+    expect(projected.config).toMatchObject({
+      signingKey: "[REDACTED]",
+      consumerKey: "[REDACTED]",
+      endpoint: "https://[REDACTED]@example.test/path",
+    });
+    expect(connection.config.signingKey).toBe("0123456789abcdef");
+    expect(connection.config.consumerKey).toBe("ck_0123456789abcdef");
+  });
+
   it("redacts structured inline secrets while preserving safe refs, identifiers, and metrics", () => {
     const connection = createConnection();
 

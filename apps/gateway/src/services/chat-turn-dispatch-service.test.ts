@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import type { ChatTurnDispatchHost } from "./chat-turn-dispatch-service.js";
+import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
 vi.mock("./chat-turn-helpers.js", () => ({
   dedupeChatCitations: (items: unknown[]) => items,
@@ -43,7 +44,9 @@ describe("chat turn dispatch durable ownership", () => {
       "chat_thread_turn_appended",
     );
 
-    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1");
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1", {
+      reservation: true,
+    });
     expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "chat.dispatch.stream_registered",
@@ -106,8 +109,10 @@ describe("chat turn dispatch durable ownership", () => {
         type: "error",
         error: expect.stringContaining("durable_unavailable"),
       }),
+      undefined,
+      expect.objectContaining({ sessionId: "session-1", turnId: "turn-1" }),
     );
-    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
+    expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
   });
 
   it("records completed integration writeback traces without allocating a durable run", async () => {
@@ -253,7 +258,10 @@ function createHost(
       routing: {},
       startedAt: "2026-04-11T00:00:00.000Z",
     } as unknown as ChatTurnTraceRecord);
-  const registerActiveChatTurnStream = vi.fn();
+  const executionRegistry = new ChatTurnExecutionRegistry();
+  const registerActiveChatTurnStream = vi.fn((sessionId: string, turnId: string, runId?: string) =>
+    executionRegistry.registerActiveStream(sessionId, turnId, 0, runId),
+  );
   const persistChatStreamChunk = vi.fn();
   const completeActiveChatTurnStream = vi.fn();
   const closeActiveChatTurnStream = vi.fn();
@@ -289,6 +297,7 @@ function createHost(
     finalizeDurableChatRun: vi.fn(),
     completeActiveChatTurnStream,
     closeActiveChatTurnStream,
+    getActiveChatTurnStream: vi.fn((turnId: string) => executionRegistry.getActiveStream(turnId)),
     beginDurableChatRun,
     registerActiveChatTurnStream,
     ensureSessionInternalToolGrant: vi.fn(),

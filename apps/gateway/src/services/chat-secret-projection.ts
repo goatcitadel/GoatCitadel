@@ -18,8 +18,10 @@ import {
 } from "@goatcitadel/contracts";
 import { projectPublicSecretValue } from "./public-secret-projection.js";
 import { projectProviderRuntimePublicValue } from "./provider-settings-public-projection.js";
+import { restoreProjectedUrlFragments } from "./integration-connection-public-projection.js";
 
 const PUBLIC_MARKER = "[REDACTED]";
+const PUBLIC_MARKER_PATTERN = /\[REDACTED\]/gi;
 
 export function projectChatTurnTraceForPublic(trace: ChatTurnTraceRecord): ChatTurnTraceRecord {
   return redactStructuredSecrets(trace).value as ChatTurnTraceRecord;
@@ -213,22 +215,52 @@ function reconcileProjectedSessionText(
   if (incoming === projected) {
     return raw;
   }
-  if (!incoming.includes(PUBLIC_MARKER)) {
+  if (normalizePublicMarkers(incoming) === projected) {
+    return raw;
+  }
+  const restoredUrl = restoreProjectedUrlFragments(raw, projected, incoming);
+  if (restoredUrl !== undefined) {
+    return restoredUrl;
+  }
+  if (containsEncodedPublicMarker(incoming) || isProjectedMarkerUrl(projected, incoming)) {
+    throw new Error("Projected session URL metadata cannot move or encode a hidden credential slot.");
+  }
+  if (!containsPublicMarker(incoming)) {
     return incoming;
   }
 
   const slots = extractProjectedSecretSlots(raw, projected);
-  const incomingParts = incoming.split(PUBLIC_MARKER);
-  if (!slots || incomingParts.length !== slots.length + 1) {
+  if (!slots) {
     throw new Error("Projected session metadata must keep each redaction marker in its original credential slot.");
   }
-  for (let index = 0; index < slots.length; index += 1) {
-    const anchor = markerAnchor(projected.split(PUBLIC_MARKER)[index] ?? "");
-    if (!anchor || !(incomingParts[index] ?? "").endsWith(anchor)) {
+  const projectedParts = projected.split(PUBLIC_MARKER);
+  const anchors = slots.map((_slot, index) => markerAnchor(projectedParts[index] ?? ""));
+  if (anchors.some((anchor) => !anchor)) {
+    throw new Error("Projected session metadata must keep each redaction marker in its original credential slot.");
+  }
+  const anchorIdentities = anchors.map((anchor) => normalizeMarkerAnchor(anchor!));
+  if (new Set(anchorIdentities).size !== anchorIdentities.length) {
+    throw new Error(
+      "Projected session metadata with repeated credential slots cannot be reordered or edited in place.",
+    );
+  }
+  const slotByAnchor = new Map(anchorIdentities.map((identity, index) => [identity, slots[index] ?? ""]));
+  const usedAnchors = new Set<string>();
+  let cursor = 0;
+  let reconciled = "";
+  for (const match of incoming.matchAll(/\[REDACTED\]/gi)) {
+    const markerIndex = match.index;
+    const anchor = markerAnchor(incoming.slice(0, markerIndex));
+    const identity = anchor ? normalizeMarkerAnchor(anchor) : "";
+    const slot = slotByAnchor.get(identity);
+    if (!identity || slot === undefined || usedAnchors.has(identity)) {
       throw new Error("Projected session metadata must keep each redaction marker in its original credential slot.");
     }
+    usedAnchors.add(identity);
+    reconciled += `${incoming.slice(cursor, markerIndex)}${slot}`;
+    cursor = markerIndex + match[0].length;
   }
-  return incomingParts.map((part, index) => (index < slots.length ? `${part}${slots[index]}` : part)).join("");
+  return `${reconciled}${incoming.slice(cursor)}`;
 }
 
 function reconcileProjectedSessionTags(
@@ -236,20 +268,26 @@ function reconcileProjectedSessionTags(
   projected: string[] | undefined,
   incoming: string[] | undefined,
 ): string[] | undefined {
-  if (!raw || !projected || !incoming || !incoming.some((tag) => tag.includes(PUBLIC_MARKER))) {
+  const hasProjectedSecrets = Boolean(
+    raw && projected && raw.length === projected.length && raw.some((tag, index) => tag !== projected[index]),
+  );
+  if (hasProjectedSecrets && incoming?.some(containsEncodedPublicMarker)) {
+    throw new Error("Projected session URL metadata cannot move or encode a hidden credential slot.");
+  }
+  if (!raw || !projected || !incoming || !incoming.some(containsPublicMarker)) {
     return incoming;
   }
   if (raw.length !== projected.length || projected.length !== incoming.length) {
     throw new Error("Projected session tags with hidden values cannot be reordered or resized.");
   }
-  const projectedMarkerIndices = projected.flatMap((tag, index) => (tag.includes(PUBLIC_MARKER) ? [index] : []));
-  const incomingMarkerIndices = incoming.flatMap((tag, index) => (tag.includes(PUBLIC_MARKER) ? [index] : []));
-  if (!isDeepStrictEqual(projectedMarkerIndices, incomingMarkerIndices)) {
+  const projectedMarkerIndices = projected.flatMap((tag, index) => (containsPublicMarker(tag) ? [index] : []));
+  const incomingMarkerIndices = incoming.flatMap((tag, index) => (containsPublicMarker(tag) ? [index] : []));
+  if (incomingMarkerIndices.some((index) => !projectedMarkerIndices.includes(index))) {
     throw new Error("Projected session tags with hidden values cannot be reordered or resized.");
   }
   if (
     projectedMarkerIndices.length > 1 &&
-    projectedMarkerIndices.some((index) => incoming[index] !== projected[index])
+    incomingMarkerIndices.some((index) => normalizePublicMarkers(incoming[index] ?? "") !== projected[index])
   ) {
     throw new Error("Projected session tags with hidden values cannot be reordered or resized.");
   }
@@ -277,7 +315,57 @@ function extractProjectedSecretSlots(raw: string, projected: string): string[] |
 
 function markerAnchor(prefix: string): string | undefined {
   const match = prefix.match(
-    /(?:Authorization|Proxy-Authorization)\s*:\s*$|(?:Bearer|Basic)\s+$|(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|passwd|signature|secret)\s*[:=]\s*$|\/(?:services|webhooks|bot)\/?$/i,
+    /\b[A-Za-z0-9_-]*(?:authorization|authentication|auth|bearer|cookie|cookies|credential|credentials|api[-_]?key|apikey|client[-_]?key|access[-_]?key|private[-_]?key|consumer[-_]?key|signing[-_]?key|token|secret|password|passwd|signature|webhook[-_]?(?:url|uri|endpoint)?)[A-Za-z0-9_-]*\b\s*[:=]\s*$|(?:Bearer|Basic)\s+$|\/(?:services|webhooks|bot)\/?$/i,
   );
   return match?.[0];
+}
+
+function normalizeMarkerAnchor(anchor: string): string {
+  return anchor.toLowerCase().replace(/\s+/g, "");
+}
+
+function containsPublicMarker(value: string): boolean {
+  PUBLIC_MARKER_PATTERN.lastIndex = 0;
+  return PUBLIC_MARKER_PATTERN.test(value);
+}
+
+function normalizePublicMarkers(value: string): string {
+  return value.replace(PUBLIC_MARKER_PATTERN, PUBLIC_MARKER);
+}
+
+function containsEncodedPublicMarker(value: string): boolean {
+  return /%5Bredacted%5D/i.test(value);
+}
+
+function isProjectedMarkerUrl(projected: string, incoming: string): boolean {
+  const projectedUrl = parseHttpUrl(projected);
+  const incomingUrl = parseHttpUrl(incoming);
+  return Boolean(projectedUrl && incomingUrl && urlContainsPublicMarker(projectedUrl));
+}
+
+function parseHttpUrl(value: string): URL | undefined {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function urlContainsPublicMarker(url: URL): boolean {
+  return (
+    containsPublicMarker(decodeUrlComponent(url.pathname)) ||
+    containsPublicMarker(decodeUrlComponent(url.hash)) ||
+    [...url.searchParams.values()].some(containsPublicMarker) ||
+    containsPublicMarker(url.username) ||
+    containsPublicMarker(url.password)
+  );
+}
+
+function decodeUrlComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

@@ -141,9 +141,7 @@ describe("evidence-receipts routes", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json() as EvidenceReceipt;
-    expect(body.manifest.lineage.lastError).toBe(
-      "Provider rejected Authorization: [REDACTED] at https://[REDACTED]@example.test/fail?token=[REDACTED]",
-    );
+    expect(body.manifest.lineage.lastError).toBe("Provider rejected Authorization: [REDACTED]");
     expect(body.manifest.sideEffects[0]?.externalReferenceId).toBe(
       "url:https://[REDACTED]@example.test/result?access_token=[REDACTED]",
     );

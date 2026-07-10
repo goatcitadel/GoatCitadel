@@ -55,11 +55,13 @@ describe("createChatTurnRuntimeHost", () => {
     expect(host.getActiveChatTurnExecution("turn-1")).toBe("active");
     expect(host.markChatTurnCancelled("session-1", "turn-1", "operator")).toBe("cancelled");
 
-    expect(host.closeActiveChatTurnStream("turn-1")).toBe("closed");
-    expect(host.completeActiveChatTurnStream("turn-1")).toBe("completed");
+    expect(host.closeActiveChatTurnStream("turn-1", "stream-registration-1")).toBe(true);
+    expect(host.completeActiveChatTurnStream("turn-1", "stream-registration-1")).toBe(true);
     expect(host.createHydratedChatTurnTrace("turn-1", {} as never)).toBe("hydrated");
-    expect(host.persistChatStreamChunk({ type: "done" } as never, "run-1")).toBe("persisted");
-    expect(host.registerActiveChatTurnStream("session-1", "turn-1", "run-1")).toBe("registered");
+    expect(host.persistChatStreamChunk({ type: "done" } as never, "run-1", "stream-registration-1")).toBe("persisted");
+    expect(host.registerActiveChatTurnStream("session-1", "turn-1", "run-1")).toMatchObject({
+      registrationId: "stream-registration-1",
+    });
     expect(host.streamPersistedChatTurnEvents("session-1", "turn-1")).toBe(stream);
     expect(host.withEphemeralStreamEnvelope(asyncGenerator("raw"), "run-1")).toBe(wrappedStream);
 
@@ -116,7 +118,7 @@ describe("createChatTurnRuntimeHost", () => {
     expect(host.updateChatSessionPrefs("session-1", { mode: "chat" } as never)).toBe("prefs");
 
     expect(source.fns.buildLlmMessagesFromBranchPath).toHaveBeenCalledWith("session-1", ["turn-1"], "hello", {}, {});
-    expect(source.fns.persistChatStreamChunk).toHaveBeenCalledWith({ type: "done" }, "run-1");
+    expect(source.fns.persistChatStreamChunk).toHaveBeenCalledWith({ type: "done" }, "run-1", "stream-registration-1");
     expect(source.fns.resolveFallbackTargets).toHaveBeenCalledWith({}, "openai", "gpt");
   });
 
@@ -170,11 +172,16 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     markChatTurnCancelled: vi.fn(() => "cancelled"),
     withChatTurnWriteLease: vi.fn(),
     withChatTurnWriteLeaseStream: vi.fn(),
-    closeActiveChatTurnStream: vi.fn(() => "closed"),
-    completeActiveChatTurnStream: vi.fn(() => "completed"),
+    closeActiveChatTurnStream: vi.fn(() => true),
+    completeActiveChatTurnStream: vi.fn(() => true),
     createHydratedChatTurnTrace: vi.fn(() => "hydrated"),
     persistChatStreamChunk: vi.fn(() => "persisted"),
-    registerActiveChatTurnStream: vi.fn(() => "registered"),
+    registerActiveChatTurnStream: vi.fn(() => ({
+      registrationId: "stream-registration-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "run-1",
+    })),
     streamPersistedChatTurnEvents: vi.fn(),
     withEphemeralStreamEnvelope: vi.fn(),
     beginDurableChatRun: vi.fn(() => "durable-run"),

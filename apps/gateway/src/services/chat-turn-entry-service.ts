@@ -1230,6 +1230,7 @@ export async function cancelChatTurn(
     }
   }
   const activeStream = host.getActiveChatTurnStream(turnId);
+  const writableActiveStream = activeStream && !activeStream.completed ? activeStream : undefined;
   if (current?.sessionId !== undefined && current.sessionId !== sessionId) {
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
   }
@@ -1262,6 +1263,7 @@ export async function cancelChatTurn(
       trace,
     },
     durableRunId,
+    writableActiveStream,
   );
   if (trace.assistantMessageId) {
     host.persistChatStreamChunk(
@@ -1272,10 +1274,13 @@ export async function cancelChatTurn(
         messageId: trace.assistantMessageId,
       },
       durableRunId,
+      writableActiveStream,
     );
   }
-  host.completeActiveChatTurnStream(turnId);
-  setTimeout(() => host.closeActiveChatTurnStream(turnId), 30_000);
+  if (writableActiveStream) {
+    host.completeActiveChatTurnStream(turnId, writableActiveStream.registrationId);
+    setTimeout(() => host.closeActiveChatTurnStream(turnId, writableActiveStream.registrationId), 30_000);
+  }
   return {
     sessionId,
     turnId,

@@ -34,6 +34,7 @@ import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
 import { DeviceTokenVault } from "./device-token-vault.js";
 import {
   preserveSettingsSecretsForPublicUpdate,
+  projectProviderRuntimePublicValue,
   projectSettingsPublicValue,
 } from "./provider-settings-public-projection.js";
 
@@ -718,6 +719,195 @@ describe("settings-auth-service durable settings", () => {
     expect(updated.llamaCpp.threads).toBe(8);
   });
 
+  it("projects the full credential-flag family while preserving executable secret references", () => {
+    const flags = [
+      "--auth",
+      "--authentication",
+      "--authorization",
+      "--proxy-authorization",
+      "--bearer",
+      "--cookie",
+      "--cookies",
+      "--credential",
+      "--credentials",
+      "--api-key",
+      "--client-key",
+      "--access-key",
+      "--private-key",
+      "--consumer-key",
+      "--signing-key",
+      "--access-token",
+      "--refresh-token",
+      "--client-secret",
+      "--secret",
+      "--password",
+      "--passwd",
+      "--signature",
+      "--webhook-url",
+      "--webhook-uri",
+      "--webhook-endpoint",
+    ];
+    const extraArgs = flags.flatMap((flag, index) => [flag, `raw-secret-${index}`]);
+    const command = flags.map((flag, index) => `${flag}=raw-command-secret-${index}`).join(" ");
+
+    const projected = projectProviderRuntimePublicValue({ command, extraArgs });
+
+    expect(projected.extraArgs).toEqual(flags.flatMap((flag) => [flag, "[REDACTED]"]));
+    expect(projected.command).toBe(flags.map((flag) => `${flag}=[REDACTED]`).join(" "));
+    expect(JSON.stringify(projected)).not.toContain("raw-secret");
+    expect(JSON.stringify(projected)).not.toContain("raw-command-secret");
+
+    const safeReferences = {
+      command:
+        "runner --api-key $API_KEY --access-key process.env.ACCESS_KEY --private-key %PRIVATE_KEY% --signing-key $env:SIGNING_KEY",
+      extraArgs: [
+        "--api-key",
+        "$API_KEY",
+        "--access-key=process.env.ACCESS_KEY",
+        "--private-key",
+        "%PRIVATE_KEY%",
+        "--signing-key=$env:SIGNING_KEY",
+      ],
+    };
+    expect(projectProviderRuntimePublicValue(safeReferences)).toEqual(safeReferences);
+  });
+
+  it.each([
+    "--auth",
+    "--authentication",
+    "--authorization",
+    "--proxy-authorization",
+    "--proxy_authorization",
+    "--bearer",
+  ])("projects and safely reconciles %s schemes with their following credentials", (flag) => {
+    const current = {
+      llamaCpp: {
+        command: `runner ${flag} Bearer command-secret --threads 4`,
+        extraArgs: [flag, "Basic", "argument-secret", "--threads", "4"],
+      },
+    };
+    const projected = projectProviderRuntimePublicValue(current);
+
+    expect(projected).toEqual({
+      llamaCpp: {
+        command: `runner ${flag} [REDACTED] [REDACTED] --threads 4`,
+        extraArgs: [flag, "[REDACTED]", "[REDACTED]", "--threads", "4"],
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("command-secret");
+    expect(JSON.stringify(projected)).not.toContain("argument-secret");
+
+    expect(
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command: projected.llamaCpp.command.replace("--threads 4", "--threads 8"),
+          extraArgs: projected.llamaCpp.extraArgs.map((value) => (value === "4" ? "8" : value)),
+        },
+      }),
+    ).toEqual({
+      llamaCpp: {
+        command: `runner ${flag} Bearer command-secret --threads 8`,
+        extraArgs: [flag, "Basic", "argument-secret", "--threads", "8"],
+      },
+    });
+  });
+
+  it("restores anchored command secret slots without discarding safe sibling edits", () => {
+    const current = {
+      llamaCpp: {
+        command: "runner --api-key hunter2 --password password-secret --threads 4",
+      },
+    };
+    const projected = projectProviderRuntimePublicValue(current);
+    const incoming = {
+      llamaCpp: {
+        command: projected.llamaCpp.command.replace("--threads 4", "--threads 8"),
+      },
+    };
+    const snapshot = structuredClone(incoming);
+
+    expect(preserveSettingsSecretsForPublicUpdate(current, incoming)).toEqual({
+      llamaCpp: {
+        command: "runner --api-key hunter2 --password password-secret --threads 8",
+      },
+    });
+    expect(incoming).toEqual(snapshot);
+
+    expect(
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command: "runner --api-key replacement --password [REDACTED] --threads 10",
+        },
+      }),
+    ).toEqual({
+      llamaCpp: {
+        command: "runner --api-key replacement --password password-secret --threads 10",
+      },
+    });
+  });
+
+  it("rejects moved or duplicated command markers", () => {
+    const current = {
+      llamaCpp: {
+        command: "runner --api-key hunter2 --password password-secret --threads 4",
+      },
+    };
+
+    expect(() =>
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command: "runner --password [REDACTED] --api-key [REDACTED] --threads 8",
+        },
+      }),
+    ).toThrow("Projected settings commands with hidden values cannot move or duplicate credential markers.");
+    expect(() =>
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command: "runner --api-key [REDACTED] --password [REDACTED] --signing-key [REDACTED] --threads 8",
+        },
+      }),
+    ).toThrow("Projected settings commands with hidden values cannot move or duplicate credential markers.");
+  });
+
+  it("rejects ambiguous duplicate credential-flag removal or reordering while allowing safe sibling edits", () => {
+    const current = {
+      llamaCpp: {
+        command:
+          "runner --mode old --profile alpha --api-key first-secret --profile beta --api-key second-secret --threads 4",
+      },
+    };
+    const projected = projectProviderRuntimePublicValue(current);
+
+    expect(() =>
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command: "runner --mode old --profile beta --api-key [REDACTED] --threads 8",
+        },
+      }),
+    ).toThrow("Projected settings commands with hidden values cannot move or duplicate credential markers.");
+    expect(() =>
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command:
+            "runner --mode old --profile beta --api-key [REDACTED] --profile alpha --api-key [REDACTED] --threads 8",
+        },
+      }),
+    ).toThrow("Projected settings commands with hidden values cannot move or duplicate credential markers.");
+
+    expect(
+      preserveSettingsSecretsForPublicUpdate(current, {
+        llamaCpp: {
+          command: projected.llamaCpp.command.replace("--mode old", "--mode new").replace("--threads 4", "--threads 8"),
+        },
+      }),
+    ).toEqual({
+      llamaCpp: {
+        command:
+          "runner --mode new --profile alpha --api-key first-secret --profile beta --api-key second-secret --threads 8",
+      },
+    });
+  });
+
   it("restores projected settings secrets without losing partial sibling edits or mutating the patch", () => {
     const host = buildHost();
     host.config.assistant.web.firecrawl.baseUrl =
@@ -792,6 +982,98 @@ describe("settings-auth-service durable settings", () => {
     expect(updated.llamaCpp.threads).toBe(8);
     expect(patch).toEqual(patchSnapshot);
     expect(JSON.stringify(host.config.assistant)).not.toContain("[REDACTED]");
+  });
+
+  it("restores hidden settings array slots while preserving safe siblings and rejecting marker movement", () => {
+    const host = buildHost();
+    host.config.assistant.mesh.discovery.staticPeers = [
+      "https://peer-a.example.test/token/peer-a-secret?mode=sync",
+      "https://peer-b.example.test/v1",
+    ];
+    host.config.assistant.llamaCpp.server.extraArgs = [
+      "--api-key",
+      "argument-secret",
+      "--password",
+      "password-secret",
+      "--threads",
+      "4",
+    ];
+    const displayed = projectSettingsPublicValue(getSettings(host));
+    const patch = {
+      mesh: {
+        staticPeers: [displayed.mesh.staticPeers[0]!, "https://peer-b.example.test/v2"],
+      },
+      llamaCpp: {
+        extraArgs: [...displayed.llamaCpp.extraArgs.slice(0, 4), "--threads", "8"],
+      },
+    };
+    const patchSnapshot = structuredClone(patch);
+
+    updateSettings(host, patch);
+
+    expect(host.config.assistant.mesh.discovery.staticPeers).toEqual([
+      "https://peer-a.example.test/token/peer-a-secret?mode=sync",
+      "https://peer-b.example.test/v2",
+    ]);
+    expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual([
+      "--api-key",
+      "argument-secret",
+      "--password",
+      "password-secret",
+      "--threads",
+      "8",
+    ]);
+    expect(patch).toEqual(patchSnapshot);
+
+    const partialCredentialReplacement = {
+      llamaCpp: {
+        extraArgs: [
+          displayed.llamaCpp.extraArgs[0]!,
+          displayed.llamaCpp.extraArgs[1]!,
+          "--password",
+          "new-password-secret",
+          "--threads",
+          "10",
+        ],
+      },
+    };
+    const partialCredentialReplacementSnapshot = structuredClone(partialCredentialReplacement);
+    updateSettings(host, partialCredentialReplacement);
+    expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual([
+      "--api-key",
+      "argument-secret",
+      "--password",
+      "new-password-secret",
+      "--threads",
+      "10",
+    ]);
+    expect(partialCredentialReplacement).toEqual(partialCredentialReplacementSnapshot);
+
+    const rawPeers = structuredClone(host.config.assistant.mesh.discovery.staticPeers);
+    const rawExtraArgs = structuredClone(host.config.assistant.llamaCpp.server.extraArgs);
+    expect(() =>
+      updateSettings(host, {
+        mesh: {
+          staticPeers: ["https://peer-b.example.test/v2", displayed.mesh.staticPeers[0]!],
+        },
+      }),
+    ).toThrow("Projected settings arrays with hidden values cannot be reordered or resized.");
+    expect(() =>
+      updateSettings(host, {
+        llamaCpp: {
+          extraArgs: [
+            "--password",
+            displayed.llamaCpp.extraArgs[1]!,
+            "--api-key",
+            displayed.llamaCpp.extraArgs[3]!,
+            "--threads",
+            "10",
+          ],
+        },
+      }),
+    ).toThrow("Projected settings arrays with hidden values cannot be reordered or resized.");
+    expect(host.config.assistant.mesh.discovery.staticPeers).toEqual(rawPeers);
+    expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual(rawExtraArgs);
   });
 
   it("keeps omitted projected fields omitted and accepts explicit non-marker replacements", () => {

@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- Ordering-sensitive redaction parsers stay co-located with their shared invariants. */
+
 export const SECRET_REDACTION_MARKER = "[REDACTED]";
 
 export interface SecretTextRedactionOptions {
@@ -43,8 +45,9 @@ export function redactSecretText(value: string, options: SecretTextRedactionOpti
   }
 
   const marker = options.marker ?? SECRET_REDACTION_MARKER;
-  let redactionCount = 0;
-  let redacted = value;
+  const collectionProjection = redactCredentialCollections(value, marker);
+  let redactionCount = collectionProjection.redactionCount;
+  let redacted = collectionProjection.value;
 
   for (const item of buildSecretPatterns(marker, options)) {
     item.pattern.lastIndex = 0;
@@ -169,7 +172,7 @@ function isSensitiveStructuredKey(key: string): boolean {
     /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER|COOKIE|COOKIES|CREDENTIAL|CREDENTIALS|PASSWORD|PASSWD|SECRET|SIGNATURE|TOKEN)(?:_|$)/.test(
       normalized,
     ) ||
-    /(?:^|_)(?:API|ACCESS|PRIVATE|SECRET)_KEY(?:_|$)/.test(normalized)
+    /(?:^|_)(?:API|ACCESS|CLIENT|CONSUMER|PRIVATE|SECRET|SIGNING)_KEY(?:_|$)/.test(normalized)
   );
 }
 
@@ -668,9 +671,10 @@ function isSafeCryptographicDigest(value: string): boolean {
 function looksLikeExplicitCredential(value: string): boolean {
   return (
     /^(?:Bearer|Basic)\s+\S+/i.test(value.trim()) ||
-    /(?:^|\s)(?:Authorization|Proxy-Authorization):\s*(?:Bearer|Basic)\s+\S+/i.test(value) ||
+    /(?:^|\s)(?:Authorization|Proxy-Authorization)\s*:\s*\S+/i.test(value) ||
     containsCredentialAssignmentText(value) ||
     containsCredentialChannelUrl(value) ||
+    /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s]+@/.test(value) ||
     /\bgrat_[A-Za-z0-9_-]{16,}\b/.test(value) ||
     /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/.test(value) ||
     /(?:[?&](?:api[-_]?key|apikey|key|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/i.test(
@@ -683,18 +687,22 @@ function looksLikeExplicitCredential(value: string): boolean {
 }
 
 function containsCredentialAssignmentText(value: string): boolean {
-  if (
-    /(\\["'])\b([A-Za-z0-9-_]*(?:authorization|api[-_]?key|apikey|token|secret|password|passwd|signature|webhook[-_]?(?:url|uri|endpoint)?)[A-Za-z0-9-_]*)\b\1(\s*)([:=])(\s*)(\\["'])([\s\S]*?)\6/i.test(
-      value,
-    )
-  ) {
-    return true;
+  if (/(\\["'])([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(\\["'])([\s\S]*?)\6/i.test(value)) {
+    const escaped = /(\\["'])([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(\\["'])([\s\S]*?)\6/gi;
+    for (let match = escaped.exec(value); match; match = escaped.exec(value)) {
+      if (
+        isSensitiveCredentialLabel(match[2] ?? "") &&
+        !isNonSecretCredentialAssignment(match[2] ?? "", match[7] ?? "", match[4] ?? "")
+      ) {
+        return true;
+      }
+    }
   }
   const pattern = createCredentialAssignmentPattern();
   for (let match = pattern.exec(value); match; match = pattern.exec(value)) {
     const label = match[2] ?? "";
     const assignedValue = match[6] ?? "";
-    if (!isNonSecretCredentialAssignment(label, assignedValue)) {
+    if (isSensitiveCredentialLabel(label) && !isNonSecretCredentialAssignment(label, assignedValue, match[4] ?? "")) {
       return true;
     }
   }
@@ -702,19 +710,385 @@ function containsCredentialAssignmentText(value: string): boolean {
 }
 
 function createCredentialAssignmentPattern(): RegExp {
-  return /(["']?)\b([A-Za-z0-9-_]*(?:authorization|api[-_]?key|apikey|token|secret|password|passwd|signature|webhook[-_]?(?:url|uri|endpoint)?)[A-Za-z0-9-_]*)\b\1(\s*)([:=])(\s*)(?!(?:Authorization|Proxy-Authorization)\s*:\s)("(?:\\.|[^"\\])+"|'(?:\\.|[^'\\])+'|(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(\s*\)|[^\s,;)"'\]}[]+)(?=$|[\s,;)"'\]}])/gi;
+  return /(["']?)([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(?!(?:Authorization|Proxy-Authorization)\s*:\s)([rubf]{0,2}"(?:\\.|[^"\\])+"|[rubf]{0,2}'(?:\\.|[^'\\])+'|`(?:\\.|[^`\\])+`|(?:(?:process|Bun)\.env|import\.meta\.env)(?:\.[A-Z_][A-Z0-9_]*|\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\])|Deno\.env\.get\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\)|os\.(?:environ\[(?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\]|getenv\((?:"[A-Z_][A-Z0-9_]*"|'[A-Z_][A-Z0-9_]*')\))|\$(?:env:)?[A-Z_][A-Z0-9_]*|\$\{(?:env:)?[A-Z_][A-Z0-9_]*\}|%[A-Z_][A-Z0-9_]*%|\$\([^()\r\n]+\)|(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^()\r\n])*\)\??|[^\s,;)"'\]}[]+)(?=$|[\s,;)"'\]}])/gi;
 }
 
-function isNonSecretCredentialAssignment(label: string, assignedValue: string): boolean {
-  const normalizedValue = assignedValue.trim();
+function isNonSecretCredentialAssignment(label: string, assignedValue: string, separator = ""): boolean {
+  const rawValue = assignedValue.trim();
+  const normalizedValue = unwrapCredentialLiteral(rawValue);
+  const normalizedLabel = normalizeStructuredKey(label);
+  if (/^\[REDACTED(?:_[A-Z]+)?(?::[^\]]+)?\]?$/.test(normalizedValue)) {
+    return true;
+  }
+  if (normalizedValue.includes("[REDACTED]")) {
+    return true;
+  }
   if (/^(?:true|false|null|undefined)$/i.test(normalizedValue)) {
     return true;
   }
   if (/^[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?$/i.test(normalizedValue)) {
-    const normalizedLabel = normalizeStructuredKey(label);
     return normalizedLabel === "FENCING_TOKEN" || isSafeTokenMetricKey(normalizedLabel);
   }
-  return /^(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(\s*\)$/i.test(normalizedValue);
+  if (/^(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(\s*\)$/i.test(normalizedValue)) {
+    return true;
+  }
+  if (isCredentialReferenceExpression(normalizedValue)) {
+    return true;
+  }
+  if (separator === ":=" && rawValue === normalizedValue && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(normalizedValue)) {
+    return true;
+  }
+  if (isSafeDynamicAuthorizationTemplate(normalizedLabel, rawValue)) {
+    return true;
+  }
+  if (isSafeCredentialMetadataLabel(label) && (rawValue.startsWith("[") || rawValue.startsWith("{"))) {
+    return true;
+  }
+  if (/_HASH$/.test(normalizedLabel) && isSafeCryptographicDigest(normalizedValue)) {
+    return true;
+  }
+  if (
+    /_STORAGE$/.test(normalizedLabel) &&
+    /^(?:strong|partial|weak|unknown|not_applicable|keychain|vault)$/i.test(normalizedValue)
+  ) {
+    return true;
+  }
+  if (
+    /_FIELD_KEYS$/.test(normalizedLabel) &&
+    /^[A-Za-z_][A-Za-z0-9_.-]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_.-]*)*$/.test(normalizedValue)
+  ) {
+    return true;
+  }
+  if (/(?:_FILE|_FILES)$/.test(normalizedLabel) && /^(?:[A-Za-z]:[\\/]|[./~\\])[^\r\n]*$/.test(normalizedValue)) {
+    return true;
+  }
+  if (
+    /_(?:ENV|ENV_NAME|HANDLE|ID|REF|REFERENCE)$/.test(normalizedLabel) &&
+    /^(?:[A-Za-z_][A-Za-z0-9_.-]*|(?:keychain|vault|memory|artifact):[^\s]+)$/.test(normalizedValue)
+  ) {
+    return true;
+  }
+  if (
+    separator === ":" &&
+    (/^(?:any|bigint|boolean|never|number|object|string|str|symbol|unknown|void|String\??|&str)$/i.test(
+      normalizedValue,
+    ) ||
+      /^[A-Z][A-Za-z0-9_$.]*(?:<|$)/.test(normalizedValue) ||
+      /^(?:typeof\b|[a-z_$][A-Za-z0-9_$.]*<|\()/.test(normalizedValue))
+  ) {
+    return true;
+  }
+  if (
+    /^(?:config|context|credentials|ctx|env|input|options|props|secrets|settings|state|this)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/.test(
+      normalizedValue,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /_(?:ALGORITHM|CONFIGURED|CONTEXT|ENABLED|ENV|HANDLE|ID|IDS|KIND|METHOD|MODE|NAME|POLICY|PRESENT|PROFILE|READINESS|REF|REFERENCE|REQUIRED|REQUIREMENTS|SCHEME|SOURCE|STATE|STATUS|SUPPORTED|TYPE)$/.test(
+      normalizedLabel,
+    ) && /^[A-Za-z_$][A-Za-z0-9_$.-]*$/.test(normalizedValue)
+  );
+}
+
+function unwrapCredentialLiteral(value: string): string {
+  const literal = /^(?:[rubf]{0,2})(["'`])([\s\S]*)\1$/i.exec(value);
+  if (literal) {
+    return literal[2] ?? "";
+  }
+  const delimiter = value[0];
+  if ((delimiter === '"' || delimiter === "'" || delimiter === "`") && value.endsWith(delimiter)) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function replaceCredentialLiteral(value: string, marker: string): string {
+  const literal = /^([rubf]{0,2})(["'`])[\s\S]*\2$/i.exec(value.trim());
+  return literal ? `${literal[1]}${literal[2]}${marker}${literal[2]}` : marker;
+}
+
+function decodeJsonUnicodeLabel(value: string): string {
+  return value.replace(/\\u([0-9a-f]{4})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+function isSensitiveCredentialLabel(label: string): boolean {
+  return isSensitiveStructuredKey(label);
+}
+
+function isSafeCredentialMetadataLabel(label: string): boolean {
+  const normalized = normalizeStructuredKey(label);
+  return (
+    /_(?:ALGORITHM|CONFIGURED|CONTEXT|COUNT|COUNTS|ENABLED|ENV|ENVS|ENV_NAME|FIELD_KEYS|FILE|FILES|HANDLE|HANDLES|HASH|ID|IDS|KIND|METHOD|METHODS|MODE|NAME|POLICY|PRESENT|PROFILE|READINESS|REF|REFS|REFERENCE|REFERENCES|REQUIRED|REQUIREMENTS|SCHEME|SOURCE|STATE|STATUS|STATUS_CODES|STORAGE|SUPPORTED|TYPE)$/.test(
+      normalized,
+    ) ||
+    (/_(?:URL|URI|ENDPOINT)$/.test(normalized) && !/(?:^|_)WEBHOOK_(?:URL|URI|ENDPOINT)$/.test(normalized))
+  );
+}
+
+function isExecutableSecretLabel(label: string): boolean {
+  if (!isSensitiveCredentialLabel(label)) {
+    return false;
+  }
+  const normalized = normalizeStructuredKey(label);
+  return !/_(?:ALGORITHM|CONFIGURED|CONTEXT|COUNT|COUNTS|ENABLED|ENV|ENVS|ENV_NAME|HEADER_NAME|ID|IDS|KIND|METHOD|MODE|NAME|POLICY|PRESENT|PROFILE|READINESS|REF|REFS|REFERENCE|REFERENCES|REQUIRED|REQUIREMENTS|SCHEME|SOURCE|STATE|STATUS|SUPPORTED|TYPE)$/.test(
+    normalized,
+  );
+}
+
+function isAuthorizationCredentialLabel(label: string): boolean {
+  return /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER)(?:_|$)/.test(normalizeStructuredKey(label));
+}
+
+function isSafeDynamicAuthorizationTemplate(normalizedLabel: string, value: string): boolean {
+  if (!/(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER)(?:_|$)/.test(normalizedLabel)) {
+    return false;
+  }
+  return (
+    /^`(?:Bearer|Basic)\s+\$\{[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\}`$/i.test(value) ||
+    /^f["'](?:Bearer|Basic)\s+\{[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\}["']$/i.test(value) ||
+    /^["'](?:Bearer|Basic)\s+\$[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*["']$/i.test(value) ||
+    /^["'](?:Bearer|Basic)\s*["']$/i.test(value)
+  );
+}
+
+function isNonLiteralCredentialDeclaration(
+  input: string,
+  offset: number,
+  assignedValue: string,
+  separator: string,
+  labelQuote: string,
+): boolean {
+  if (labelQuote || separator !== "=" || !Number.isFinite(offset)) {
+    return false;
+  }
+  const lineStart = boundedLineStart(input, offset);
+  const prefix = input.slice(lineStart, offset);
+  if (!/\b(?:const|let|val|var)\s*$/.test(prefix)) {
+    return false;
+  }
+  const value = assignedValue.trim();
+  return (
+    !/^(?:true|false|null|undefined)$/i.test(value) &&
+    (isCredentialReferenceExpression(value) ||
+      /^(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(\s*\)\??$/.test(value) ||
+      /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value))
+  );
+}
+
+function isCredentialTypeAnnotationBeforeInitializer(
+  input: string,
+  offset: number,
+  separator: string,
+  labelQuote: string,
+): boolean {
+  if (labelQuote || separator !== ":" || !Number.isFinite(offset)) {
+    return false;
+  }
+  const lineEnd = boundedLineEnd(input, offset);
+  const line = input.slice(offset, lineEnd);
+  const colon = line.indexOf(":");
+  return colon >= 0 && /\s*=\s*["'`]/.test(line.slice(colon + 1));
+}
+
+function isCredentialTypeProperty(input: string, offset: number, separator: string, labelQuote: string): boolean {
+  if (labelQuote || (separator !== ":" && separator !== "=") || !Number.isFinite(offset)) {
+    return false;
+  }
+  const prefix = input.slice(Math.max(0, offset - 4_096), offset);
+  const openBrace = prefix.lastIndexOf("{");
+  if (openBrace <= prefix.lastIndexOf("}")) {
+    return false;
+  }
+  const beforeBrace = prefix.slice(0, openBrace);
+  const boundary = Math.max(beforeBrace.lastIndexOf("}"), beforeBrace.lastIndexOf(";"));
+  const declaration = beforeBrace.slice(boundary + 1);
+  return separator === "="
+    ? /\b(?:const\s+)?enum\b/.test(declaration)
+    : /\b(?:type|interface|struct|enum)\b/.test(declaration);
+}
+
+function isCredentialTypeAlias(input: string, offset: number, separator: string, labelQuote: string): boolean {
+  if (labelQuote || separator !== "=" || !Number.isFinite(offset)) {
+    return false;
+  }
+  const lineStart = boundedLineStart(input, offset);
+  return /\btype\s+$/.test(input.slice(lineStart, offset));
+}
+
+function isNonLiteralCredentialObjectProperty(
+  input: string,
+  offset: number,
+  assignedValue: string,
+  separator: string,
+  labelQuote: string,
+): boolean {
+  if (labelQuote || separator !== ":" || !Number.isFinite(offset)) {
+    return false;
+  }
+  const prefix = input.slice(Math.max(0, offset - 4_096), offset);
+  if (prefix.lastIndexOf("{") <= prefix.lastIndexOf("}")) {
+    return false;
+  }
+  const value = assignedValue.trim();
+  return (
+    isCredentialReferenceExpression(value) ||
+    /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value) ||
+    /^(?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(\s*\)\??$/.test(value)
+  );
+}
+
+function isNonLiteralCredentialParameterDefault(
+  input: string,
+  offset: number,
+  assignedValue: string,
+  separator: string,
+  labelQuote: string,
+): boolean {
+  if (labelQuote || separator !== "=" || !Number.isFinite(offset)) {
+    return false;
+  }
+  const prefix = input.slice(Math.max(0, offset - 4_096), offset);
+  const openParen = prefix.lastIndexOf("(");
+  if (openParen <= prefix.lastIndexOf(")")) {
+    return false;
+  }
+  const beforeParen = prefix.slice(Math.max(0, openParen - 256), openParen);
+  if (
+    !/(?:\bfunction\s+[A-Za-z_$][A-Za-z0-9_$]*|\bconstructor|\b(?:async\s+)?[A-Za-z_$][A-Za-z0-9_$]*\s*)$/.test(
+      beforeParen,
+    )
+  ) {
+    return false;
+  }
+  const value = unwrapCredentialLiteral(assignedValue.trim());
+  return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(value);
+}
+
+function isCredentialControlFlowLabel(input: string, offset: number, separator: string, labelQuote: string): boolean {
+  if (labelQuote || separator !== ":" || !Number.isFinite(offset)) {
+    return false;
+  }
+  const lineStart = boundedLineStart(input, offset);
+  const prefix = input.slice(lineStart, offset);
+  return /\bcase\s*$/.test(prefix) || /\?[^:\r\n]*$/.test(prefix);
+}
+
+function isAuthorizationCodeContext(match: string, input: string, offset: number): boolean {
+  if (!Number.isFinite(offset)) {
+    return false;
+  }
+  const prefix = input.slice(Math.max(0, offset - 4_096), offset);
+  const lineStart = Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("\r")) + 1;
+  const linePrefix = prefix.slice(lineStart);
+  const separatorIndex = match.indexOf(":");
+  const rawAssignedValue = match.slice(separatorIndex + 1).trim();
+  const assignedValue = rawAssignedValue.replace(/\s*[;,}]\s*$/, "").trim();
+  const looksLikeCode =
+    /\b(?:const|let|var|function|interface|type|class|return)\b/.test(linePrefix) ||
+    linePrefix.lastIndexOf("{") > linePrefix.lastIndexOf("}") ||
+    linePrefix.lastIndexOf("(") > linePrefix.lastIndexOf(")");
+  return (
+    /^(?:any|bigint|boolean|never|number|object|string|str|symbol|unknown|void|String\??|&str)$/i.test(assignedValue) ||
+    /^(?:typeof\s+)?[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^\r\n;{}]+>)?\??$/.test(assignedValue) ||
+    isCredentialReferenceExpression(assignedValue) ||
+    (looksLikeCode &&
+      /^(?:any|bigint|boolean|never|number|object|string|str|symbol|unknown|void|String\??|&str|[A-Z][A-Za-z0-9_$.]*(?:<[^\r\n;{}]+>)?\??)(?:\s*=\s*(?:[A-Za-z_$][A-Za-z0-9_$.]*|null|undefined))?\s*[),;{].*$/i.test(
+        rawAssignedValue,
+      )) ||
+    (looksLikeCode && isSafeDynamicAuthorizationTemplate("AUTHORIZATION", rawAssignedValue.replace(/\s*[;}]+\s*$/, "")))
+  );
+}
+
+function boundedLineStart(input: string, offset: number): number {
+  const windowStart = Math.max(0, offset - 4_096);
+  const prefix = input.slice(windowStart, offset);
+  return windowStart + Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("\r")) + 1;
+}
+
+function boundedLineEnd(input: string, offset: number): number {
+  const windowEnd = Math.min(input.length, offset + 4_096);
+  const suffix = input.slice(offset, windowEnd);
+  const lineBreak = suffix.search(/[\r\n]/);
+  return lineBreak < 0 ? windowEnd : offset + lineBreak;
+}
+
+function isAuthorizationObjectLiteralContext(input: string, offset: number): boolean {
+  if (!Number.isFinite(offset)) {
+    return false;
+  }
+  const prefix = input.slice(0, offset).replace(/[ \t]+$/, "");
+  return prefix.endsWith("{") || prefix.endsWith(",");
+}
+
+function isCredentialReferenceExpression(value: string): boolean {
+  return (
+    /^(?:(?:process|Bun)\.env|import\.meta\.env)\.[A-Z_][A-Z0-9_]*$/.test(value) ||
+    /^(?:(?:process|Bun)\.env|import\.meta\.env)\[["'][A-Z_][A-Z0-9_]*["']\]$/.test(value) ||
+    /^Deno\.env\.get\(["'][A-Z_][A-Z0-9_]*["']\)$/.test(value) ||
+    /^os\.(?:environ\[["'][A-Z_][A-Z0-9_]*["']\]|getenv\(["'][A-Z_][A-Z0-9_]*["']\))$/.test(value) ||
+    /^\$(?:env:)?[A-Z_][A-Z0-9_]*$/i.test(value) ||
+    /^\$\{(?:env:)?[A-Z_][A-Z0-9_]*\}$/i.test(value) ||
+    /^%[A-Z_][A-Z0-9_]*%$/i.test(value) ||
+    /^\$\([^()\r\n]+\)$/.test(value) ||
+    /^[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)+$/.test(value) ||
+    isApprovedCredentialReferenceCall(value)
+  );
+}
+
+function isApprovedCredentialReferenceCall(value: string): boolean {
+  const candidate = value.trim().replace(/\?$/, "");
+  if (
+    /^format!\(\s*["'](?:Bearer|Basic)\s+\{\}["']\s*,\s*[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\)$/i.test(
+      candidate,
+    )
+  ) {
+    return true;
+  }
+  const name = /^(?:await\s+)?([A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*)!?\s*\(/.exec(
+    candidate,
+  )?.[1];
+  return Boolean(
+    name &&
+    /^(?:getSecret|secrets\.get|secret_store\.get|secretStore\.get|Deno\.env\.get|os\.getenv|os\.Getenv|System\.getenv|std::env::var)$/i.test(
+      name,
+    ),
+  );
+}
+
+function redactCredentialCallLiterals(value: string, marker: string): string {
+  return value.replace(
+    /([rubf]{0,2})(["'`])(?:\\.|(?!\2)[^\\])*\2/gi,
+    (_match, prefix, quote) => `${prefix}${quote}${marker}${quote}`,
+  );
+}
+
+function credentialCallContainsLiteral(value: string): boolean {
+  return /[rubf]{0,2}["'`](?:\\.|[^"'`\\])*["'`]/i.test(value);
+}
+
+function isProjectedCredentialCallPrefix(
+  input: string,
+  offset: number,
+  assignedValue: string,
+  marker: string,
+): boolean {
+  if (!/(?:\(|!)$/.test(assignedValue.trim())) {
+    return false;
+  }
+  const statement = input.slice(offset, Math.min(input.length, offset + 512)).split(/[;\r\n]/, 1)[0] ?? "";
+  return statement.includes(marker);
+}
+
+function isSafeDynamicAuthorizationStatement(input: string, offset: number, label: string): boolean {
+  if (!isAuthorizationCredentialLabel(label)) {
+    return false;
+  }
+  const statement = input.slice(offset, boundedLineEnd(input, offset));
+  return /(?:=|:=)\s*format!\(\s*["'](?:Bearer|Basic)\s+\{\}["']\s*,\s*[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*\s*\)/i.test(
+    statement,
+  );
 }
 
 function containsCredentialChannelUrl(value: string): boolean {
@@ -735,6 +1109,102 @@ function normalizeStructuredKey(key: string): string {
     .toUpperCase();
 }
 
+function redactCredentialCollections(value: string, marker: string): SecretTextRedactionResult {
+  const assignment =
+    /(\\["']|["']?)((?:\\u[0-9a-f]{4}|[A-Za-z_$][A-Za-z0-9_$-]*))\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)/gi;
+  const replacements: Array<{ start: number; end: number }> = [];
+  for (let match = assignment.exec(value); match; match = assignment.exec(value)) {
+    const quote = match[1] ?? "";
+    const label = decodeJsonUnicodeLabel(match[2] ?? "");
+    const separator = match[4] ?? "";
+    if (
+      !isSensitiveCredentialLabel(label) ||
+      isSafeCredentialMetadataLabel(label) ||
+      isCredentialTypeProperty(value, match.index, separator, quote) ||
+      isCredentialTypeAlias(value, match.index, separator, quote)
+    ) {
+      continue;
+    }
+    const collectionStart = match.index + match[0].length;
+    const opening = value[collectionStart] ?? "";
+    if (opening !== "[" && opening !== "{") {
+      continue;
+    }
+    const closing = opening === "[" ? "]" : "}";
+    const closingIndex = findClosingCollectionDelimiter(value, collectionStart, closing);
+    const logicalLineEnd = findLogicalLineEnd(value, collectionStart);
+    const collectionEnd = closingIndex >= 0 ? closingIndex + 1 : logicalLineEnd;
+    if (
+      !quote &&
+      isCredentialReferenceCollectionContext(value, match.index, value.slice(collectionStart, collectionEnd))
+    ) {
+      assignment.lastIndex = Math.max(assignment.lastIndex, collectionEnd);
+      continue;
+    }
+    replacements.push({
+      start: collectionStart,
+      end: collectionEnd,
+    });
+    assignment.lastIndex = Math.max(assignment.lastIndex, closingIndex >= 0 ? closingIndex + 1 : logicalLineEnd);
+  }
+  let redacted = value;
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    redacted = `${redacted.slice(0, replacement.start)}${marker}${redacted.slice(replacement.end)}`;
+  }
+  return { value: redacted, redactionCount: replacements.length };
+}
+
+function isCredentialReferenceCollectionContext(_input: string, _offset: number, collection: string): boolean {
+  const body = collection.slice(1, -1).trim();
+  if (!body || /["'`]/.test(body)) {
+    return false;
+  }
+  return body.split(",").every((entry) => {
+    const separator = collection.startsWith("{") ? entry.indexOf(":") : -1;
+    const candidate = (separator >= 0 ? entry.slice(separator + 1) : entry).trim();
+    return (
+      isCredentialReferenceExpression(candidate) ||
+      /^[A-Za-z_$][A-Za-z0-9_$]*(?:Ref|Reference|Handle)$/i.test(candidate)
+    );
+  });
+}
+
+function findClosingCollectionDelimiter(value: string, start: number, expectedClose: string): number {
+  const opening = value[start] ?? "";
+  let depth = 1;
+  let quote = "";
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const character = value[index] ?? "";
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+    } else if (character === opening) {
+      depth += 1;
+    } else if (character === expectedClose) {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function findLogicalLineEnd(value: string, start: number): number {
+  const lineBreak = value.slice(start).search(/[\r\n]/);
+  return lineBreak < 0 ? value.length : start + lineBreak;
+}
+
 function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions): SecretPattern[] {
   const envAssignmentReplacement = options.redactEnvAssignmentsAsWhole ? marker : `$1${marker}`;
   const envAssignmentPattern: SecretPattern = {
@@ -743,8 +1213,95 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
   };
   const patterns: SecretPattern[] = [
     {
-      pattern: /\b(Authorization|Proxy-Authorization):\s*(?:Bearer|Basic)\s+[^\s,;]+/gi,
-      replace: (_match, header) => `${header}: ${marker}`,
+      pattern:
+        /(?<![A-Za-z0-9_)\]}])`((?:\\.|[^`\\])*?\b(?:Authorization|Proxy-Authorization|Cookie|Set-Cookie)\s*:\s*)(?:\\.|[^`\\])*`/gi,
+      replace: (_match, prefix) => `\`${prefix}${marker}\``,
+    },
+    {
+      pattern:
+        /(?<![A-Za-z0-9_)\]}])"((?:\\.|[^"\\])*?\b(?:Authorization|Proxy-Authorization|Cookie|Set-Cookie)\s*:\s*)(?:\\.|[^"\\])*"/gi,
+      replace: (_match, prefix) => `"${prefix}${marker}"`,
+    },
+    {
+      pattern:
+        /(?<![A-Za-z0-9_)\]}])'((?:\\.|[^'\\])*?\b(?:Authorization|Proxy-Authorization|Cookie|Set-Cookie)\s*:\s*)(?:\\.|[^'\\])*'/gi,
+      replace: (_match, prefix) => `'${prefix}${marker}'`,
+    },
+    {
+      pattern: /(^|\r?\n)([ \t]*)(Authorization|Proxy-Authorization)\s*:\s*[^\r\n]+(?:\r?\n[ \t]+[^\r\n]+)*/gi,
+      shouldRedact: (match, _linePrefix, _indent, _header, offset, input) =>
+        !match.includes(marker) && !isAuthorizationCodeContext(match, input, Number(offset)),
+      replace: (_match, linePrefix, indent, header) => `${linePrefix}${indent}${header}: ${marker}`,
+    },
+    {
+      pattern: /(^|[ \t]+)(Authorization|Proxy-Authorization)\s*:\s*[^\r\n]+/gi,
+      shouldRedact: (match, _prefix, _header, offset, input) =>
+        !match.includes(marker) &&
+        !isAuthorizationObjectLiteralContext(input, Number(offset)) &&
+        !isAuthorizationCodeContext(match, input, Number(offset)),
+      replace: (_match, prefix, header) => `${prefix}${header}: ${marker}`,
+    },
+    {
+      pattern: /(^|\r?\n)([ \t]*)(Cookie|Set-Cookie)\s*:\s*[^\r\n]*(?:\r?\n[ \t]+[^\r\n]+)*/gi,
+      replace: (_match, linePrefix, indent, header) => `${linePrefix}${indent}${header}: ${marker}`,
+    },
+    {
+      pattern: /\b(Authorization|Proxy-Authorization)(\s*:\s*)([^,\r\n}]+)(?=[,}\r\n]|$)/gi,
+      shouldRedact: (match, header, _separator, assignedValue, offset, input) =>
+        !match.includes(marker) &&
+        isAuthorizationObjectLiteralContext(input, Number(offset)) &&
+        !/^["'`]/.test(assignedValue.trim()) &&
+        !isAuthorizationCodeContext(match, input, Number(offset)) &&
+        !isNonSecretCredentialAssignment(header, assignedValue, ":"),
+      replace: (_match, header, separator) => `${header}${separator}${marker}`,
+    },
+    {
+      pattern: /\b([A-Za-z_$][A-Za-z0-9_$-]*)\b(\s*:\s*)[|>][+\-0-9]*[^\r\n]*(?:\r?\n(?:[ \t]+[^\r\n]*|(?=\r?\n)))+/gi,
+      shouldRedact: (_match, label) => isSensitiveCredentialLabel(label),
+      replace: (_match, label, beforeValue) => `${label}${beforeValue}${marker}`,
+    },
+    {
+      pattern: /\b([A-Za-z_$][A-Za-z0-9_$-]*)\b([ \t]*:[ \t]*)(\r?\n(?:[ \t]+[^\r\n]*(?:\r?\n|$)|\r?\n)+)/gi,
+      shouldRedact: (_match, label, _beforeValue, _block, offset, input) =>
+        isSensitiveCredentialLabel(label) &&
+        !isSafeCredentialMetadataLabel(label) &&
+        !isCredentialControlFlowLabel(input, Number(offset), ":", ""),
+      replace: (match, label, beforeValue) =>
+        `${label}${beforeValue.endsWith(" ") ? beforeValue : `${beforeValue} `}${marker}${/\r?\n$/.test(match) ? "\n" : ""}`,
+    },
+    {
+      pattern: /\b([A-Za-z_$][A-Za-z0-9_$-]*)\b(\s*:\s*)(?:(?:!!|!|&)[^\s\r\n]+\s+|\*[^\s\r\n]+)[^\r\n]*/gi,
+      shouldRedact: (match, label) =>
+        isSensitiveCredentialLabel(label) && !isSafeCredentialMetadataLabel(label) && !/\s=/.test(match),
+      replace: (_match, label, beforeValue) => `${label}${beforeValue}${marker}`,
+    },
+    {
+      pattern:
+        /(\\["'])((?=[^\r\n]*\\u[0-9a-f]{4})(?:\\u[0-9a-f]{4}|[A-Za-z0-9_$-])+?)\1(\s*:\s*)(\\["'])([\s\S]*?)\4/gi,
+      shouldRedact: (_match, _quote, encodedLabel, _beforeValue, _valueQuote, assignedValue) => {
+        const label = decodeJsonUnicodeLabel(encodedLabel);
+        return (
+          isSensitiveCredentialLabel(label) &&
+          !isSafeCredentialMetadataLabel(label) &&
+          !isNonSecretCredentialAssignment(label, assignedValue, ":")
+        );
+      },
+      replace: (_match, quote, encodedLabel, beforeValue, valueQuote) =>
+        `${quote}${encodedLabel}${quote}${beforeValue}${valueQuote}${marker}${valueQuote}`,
+    },
+    {
+      pattern:
+        /(["'])((?=[^"'\r\n]*\\u[0-9a-f]{4})(?:\\u[0-9a-f]{4}|[A-Za-z0-9_$-])+?)\1(\s*:\s*)([rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|\[[^\]\r\n]*\]|\{[^}\r\n]*\}|[^\s,}\]]+)/gi,
+      shouldRedact: (_match, _quote, encodedLabel, _beforeValue, assignedValue) => {
+        const label = decodeJsonUnicodeLabel(encodedLabel);
+        return (
+          isSensitiveCredentialLabel(label) &&
+          !isSafeCredentialMetadataLabel(label) &&
+          !isNonSecretCredentialAssignment(label, assignedValue, ":")
+        );
+      },
+      replace: (_match, quote, encodedLabel, beforeValue, assignedValue) =>
+        `${quote}${encodedLabel}${quote}${beforeValue}${replaceCredentialLiteral(assignedValue, marker)}`,
     },
     ...(options.redactEnvAssignmentsAsWhole ? [envAssignmentPattern] : []),
     {
@@ -775,23 +1332,90 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     },
     {
       pattern:
-        /(\\["'])\b([A-Za-z0-9-_]*(?:authorization|api[-_]?key|apikey|token|secret|password|passwd|signature|webhook[-_]?(?:url|uri|endpoint)?)[A-Za-z0-9-_]*)\b\1(\s*)([:=])(\s*)(\\["'])([\s\S]*?)\6/gi,
+        /(["'])(-{1,2}([A-Za-z][A-Za-z0-9_-]*))\1(\s*,\s*)(["'`])(?:Bearer|Basic)\5(\s*,\s*)(["'`])((?:\\.|(?!\7)[^\\])*)\7/gi,
+      shouldRedact: (_match, _flagQuote, _flag, label) =>
+        isExecutableSecretLabel(label) && isAuthorizationCredentialLabel(label),
+      replace: (_match, flagQuote, flag, _label, between, valueQuote, secondBetween, tokenQuote) =>
+        `${flagQuote}${flag}${flagQuote}${between}${valueQuote}${marker}${valueQuote}${secondBetween}${tokenQuote}${marker}${tokenQuote}`,
+    },
+    {
+      pattern: /(["'])(-{1,2}([A-Za-z][A-Za-z0-9_-]*))\1(\s*,\s*)(["'`])((?:\\.|(?!\5)[^\\])*)\5/gi,
+      shouldRedact: (_match, _flagQuote, _flag, label, _between, _valueQuote, value) =>
+        isExecutableSecretLabel(label) && !isCredentialReferenceExpression(value),
+      replace: (_match, flagQuote, flag, _label, between, valueQuote) =>
+        `${flagQuote}${flag}${flagQuote}${between}${valueQuote}${marker}${valueQuote}`,
+    },
+    {
+      pattern:
+        /(^|[ \t\r\n])(-{1,2}([A-Za-z][A-Za-z0-9_-]*)[ \t]+)((?:Bearer|Basic)[ \t]+[^\s]+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s]+)/gi,
+      shouldRedact: (_match, _leading, _prefix, label, value) =>
+        isExecutableSecretLabel(label) && !isCredentialReferenceExpression(unwrapCredentialLiteral(value)),
+      replace: (_match, leading, prefix, _label, value) => {
+        const delimiter = value[0];
+        const quoted = (delimiter === '"' || delimiter === "'" || delimiter === "`") && value.endsWith(delimiter);
+        return `${leading}${prefix}${quoted ? `${delimiter}${marker}${delimiter}` : marker}`;
+      },
+    },
+    {
+      pattern: /(\\["'])([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|:|(?<![=!<>])=(?!=|>))(\s*)(\\["'])([\s\S]*?)\6/gi,
+      shouldRedact: (_match, _keyQuote, label, _beforeSeparator, separator, _afterSeparator, _valueQuote, value) =>
+        isSensitiveCredentialLabel(label) && !isNonSecretCredentialAssignment(label, value, separator),
       replace: (_match, keyQuote, label, beforeSeparator, separator, afterSeparator, valueQuote) =>
         `${keyQuote}${label}${keyQuote}${beforeSeparator}${separator}${afterSeparator}${valueQuote}${marker}${valueQuote}`,
     },
     {
+      pattern:
+        /(["']?)([A-Za-z_$][A-Za-z0-9_$-]*)\1(\s*)(:=|(?<![=!<>])=(?!=|>))(\s*)((?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*!?\s*\((?:[rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^()"'`;\r\n]|\([^()\r\n]*\))*\)\??)/gi,
+      shouldRedact: (_match, _quote, label, _beforeSeparator, _separator, _afterSeparator, expression) =>
+        isSensitiveCredentialLabel(label) &&
+        !isSafeCredentialMetadataLabel(label) &&
+        credentialCallContainsLiteral(expression) &&
+        !isApprovedCredentialReferenceCall(expression),
+      replace: (_match, quote, label, beforeSeparator, separator, afterSeparator, expression) =>
+        `${quote}${label}${quote}${beforeSeparator}${separator}${afterSeparator}${redactCredentialCallLiterals(expression, marker)}`,
+    },
+    {
+      pattern:
+        /\b([A-Za-z_$][A-Za-z0-9_$-]*)\b(\s*:\s*)((?:(?:=>)|[^=;}\r\n]){1,256}?)(\s*=\s*)([rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/gi,
+      shouldRedact: (_match, label) => isSensitiveCredentialLabel(label),
+      replace: (_match, label, beforeType, typeExpression, beforeValue, literal) =>
+        `${label}${beforeType}${typeExpression}${beforeValue}${replaceCredentialLiteral(literal, marker)}`,
+    },
+    {
       pattern: createCredentialAssignmentPattern(),
-      shouldRedact: (_match, _quote, label, _beforeSeparator, _separator, _afterSeparator, assignedValue) =>
-        !isNonSecretCredentialAssignment(label, assignedValue),
-      replace: (_match, quote, label, beforeSeparator, separator, afterSeparator) =>
-        `${quote}${label}${quote}${beforeSeparator}${separator}${afterSeparator}${marker}`,
+      shouldRedact: (
+        _match,
+        quote,
+        label,
+        _beforeSeparator,
+        separator,
+        _afterSeparator,
+        assignedValue,
+        offset,
+        input,
+      ) =>
+        isSensitiveCredentialLabel(label) &&
+        !isSafeDynamicAuthorizationStatement(input, Number(offset), label) &&
+        !isProjectedCredentialCallPrefix(input, Number(offset), assignedValue, marker) &&
+        !isNonSecretCredentialAssignment(label, assignedValue, separator) &&
+        !isNonLiteralCredentialDeclaration(input, Number(offset), assignedValue, separator, quote) &&
+        !isCredentialTypeAnnotationBeforeInitializer(input, Number(offset), separator, quote) &&
+        !isCredentialTypeProperty(input, Number(offset), separator, quote) &&
+        !isCredentialTypeAlias(input, Number(offset), separator, quote) &&
+        !isNonLiteralCredentialParameterDefault(input, Number(offset), assignedValue, separator, quote) &&
+        !isCredentialControlFlowLabel(input, Number(offset), separator, quote) &&
+        !isNonLiteralCredentialObjectProperty(input, Number(offset), assignedValue, separator, quote),
+      replace: (_match, quote, label, beforeSeparator, separator, afterSeparator, assignedValue) => {
+        const replacement = replaceCredentialLiteral(assignedValue, marker);
+        return `${quote}${label}${quote}${beforeSeparator}${separator}${afterSeparator}${replacement}`;
+      },
     },
     {
       pattern: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+={0,}/gi,
       replace: (match) => `${match.split(/\s+/, 1)[0]} ${marker}`,
     },
     {
-      pattern: /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]+@/g,
+      pattern: /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/?#\s]+@/g,
       replace: (_match, prefix) => `${prefix}${marker}@`,
     },
     {
@@ -811,6 +1435,26 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
       replace: () => marker,
     },
     {
+      pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+      replace: () => marker,
+    },
+    {
+      pattern: /\bglpat-[A-Za-z0-9_-]{20,}\b/g,
+      replace: () => marker,
+    },
+    {
+      pattern: /\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b/g,
+      replace: () => marker,
+    },
+    {
+      pattern: /\bnpm_[A-Za-z0-9]{36,}\b/g,
+      replace: () => marker,
+    },
+    {
+      pattern: /\bhf_[A-Za-z0-9]{30,}\b/g,
+      replace: () => marker,
+    },
+    {
       pattern: /\bxox[baprs]-[A-Za-z0-9-]{12,}\b/g,
       replace: () => marker,
     },
@@ -821,6 +1465,7 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     {
       pattern:
         /\b(?=[A-Za-z0-9_.-]*(?:secret|token|api[-_]?key))(?=[A-Za-z0-9_.-]*[-_])(?=[A-Za-z0-9_.-]{16,}\b)[A-Za-z0-9_.-]+\b/gi,
+      shouldRedact: (match) => !isCredentialReferenceExpression(match) && !/^[A-Z_][A-Z0-9_]*$/.test(match),
       replace: () => marker,
     },
     ...(options.redactEnvAssignmentsAsWhole ? [] : [envAssignmentPattern]),

@@ -7,6 +7,7 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
@@ -68,7 +69,15 @@ async function collect<T>(source: AsyncGenerator<T>, limit = 10): Promise<T[]> {
 
 describe("GatewayService loop 26 stream and runtime behavior", () => {
   it("persists stream chunks with active-stream sequencing and bounded purge cadence", () => {
-    const active = { nextSequence: 7 };
+    const active = {
+      nextSequence: 7,
+      isActive: () => true,
+      claimNextSequence: () => {
+        const sequence = active.nextSequence;
+        active.nextSequence += 1;
+        return sequence;
+      },
+    };
     const gateway = createGatewayHarness({
       chatTurnExecutionRegistry: {
         getActiveStream: vi.fn(() => active),
@@ -90,7 +99,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         sessionId: "session-1",
         turnId: "turn-1",
         messageId: "message-1",
-        delta: "hello",
+        delta: "hello ",
       } as never,
       "run-1",
     );
@@ -100,7 +109,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       sessionId: "session-1",
       turnId: "turn-1",
       messageId: "message-1",
-      delta: "hello",
+      delta: "hello ",
       sequence: 7,
       runId: "run-1",
     });
@@ -114,10 +123,100 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         sequence: 7,
         runId: "run-1",
         chunkType: "delta",
-        payload: expect.objectContaining({ delta: "hello", runId: "run-1" }),
+        payload: expect.objectContaining({
+          delta: "hello ",
+          runId: "run-1",
+          __publicSecretProjectionVersion: 1,
+        }),
       }),
     );
     expect(gateway.storage.chatStreamEvents.purgeBefore).toHaveBeenCalledWith(expect.stringMatching(/T.*Z$/));
+  });
+
+  it("streams a fresh durable turn after its initial message-start event", () => {
+    const append = vi.fn();
+    const gateway = createGatewayHarness({
+      chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+      storage: {
+        chatStreamEvents: {
+          append,
+          get: vi.fn(() => ({
+            chunkType: "message_start",
+            payload: { type: "message_start", sessionId: "session-1", turnId: "turn-1" },
+          })),
+          getLatestSequence: vi.fn(() => 1),
+          purgeBefore: vi.fn(),
+        },
+      },
+    });
+
+    const producer = GatewayService.prototype.registerActiveChatTurnStream.call(
+      gateway,
+      "session-1",
+      "turn-1",
+      "run-1",
+    );
+    const delta = GatewayService.prototype.persistChatStreamChunk.call(
+      gateway,
+      {
+        type: "delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        delta: "hello ",
+      } as never,
+      "run-1",
+      producer,
+    );
+
+    expect(delta).toMatchObject({ type: "delta", delta: "hello ", sequence: 2 });
+    expect(append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sequence: 2,
+        payload: expect.objectContaining({ type: "delta", delta: "hello " }),
+      }),
+    );
+  });
+
+  it("persists the pending thinking tail before terminal content", () => {
+    const gateway = createGatewayHarness({
+      chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+    });
+    const producer = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-thinking");
+
+    GatewayService.prototype.persistChatStreamChunk.call(
+      gateway,
+      {
+        type: "thinking_delta",
+        sessionId: "session-1",
+        turnId: "turn-thinking",
+        delta: "Considering options.",
+      } as never,
+      undefined,
+      producer,
+    );
+    const done = GatewayService.prototype.persistChatStreamChunk.call(
+      gateway,
+      {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-thinking",
+        messageId: "message-thinking",
+        content: "Final answer",
+      } as never,
+      undefined,
+      producer,
+    );
+
+    const payloads = gateway.storage.chatStreamEvents.append.mock.calls.map(
+      ([event]: [{ payload: Record<string, unknown> }]) => event.payload,
+    );
+    expect(payloads).toEqual([
+      expect.objectContaining({ type: "thinking_delta", delta: "Considering ", sequence: 1 }),
+      expect.objectContaining({ type: "thinking_delta", delta: "options.", sequence: 2 }),
+      expect.objectContaining({ type: "message_done", content: "Final answer", sequence: 3 }),
+    ]);
+    expect(done).toMatchObject({ type: "message_done", sequence: 3 });
   });
 
   it("persists a projected tool-result chunk without mutating the executable record", () => {
@@ -163,6 +262,38 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     expect(JSON.stringify(gateway.storage.chatStreamEvents.append.mock.calls[0]?.[0]?.payload)).not.toContain(
       "short-token",
     );
+  });
+
+  it("redacts credentials split at every provider delta boundary before persistence", () => {
+    const content = "Authorization: Bearer hunter2";
+    for (let split = 1; split < content.length; split += 1) {
+      const gateway = createGatewayHarness();
+      const chunks = [content.slice(0, split), content.slice(split)].map((delta) =>
+        GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+          type: "delta",
+          sessionId: "session-split",
+          turnId: "turn-split",
+          messageId: "message-split",
+          delta,
+        } as never),
+      );
+      const done = GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+        type: "message_done",
+        sessionId: "session-split",
+        turnId: "turn-split",
+        messageId: "message-split",
+        content,
+      } as never);
+
+      expect(
+        chunks.map((chunk) => (chunk.type === "delta" ? chunk.delta : "")).join(""),
+        `split ${split}`,
+      ).not.toContain("hunter2");
+      expect(done).toMatchObject({ type: "message_done", content: "Authorization: [REDACTED]" });
+      expect(JSON.stringify(gateway.storage.chatStreamEvents.append.mock.calls), `stored split ${split}`).not.toContain(
+        "hunter2",
+      );
+    }
   });
 
   it("replays persisted events, skips malformed payloads, and stops on done", async () => {
@@ -220,13 +351,141 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         type: "delta",
         eventId: "event-2",
         sequence: 2,
-        delta: expect.stringContaining("[REDACTED]"),
+        delta: "",
       }),
       expect.objectContaining({ type: "done", eventId: "event-3", sequence: 3 }),
     ]);
     expect(JSON.stringify(chunks)).not.toContain("legacy-stream-secret");
     expect(JSON.stringify(chunks)).not.toContain("legacy-stream-hook");
     expect(legacyPayload.delta).toContain("legacy-stream-secret");
+  });
+
+  it("replays versioned statefully projected deltas without suppressing safe text", async () => {
+    const gateway = createGatewayHarness({
+      storage: {
+        chatStreamEvents: {
+          getByEventId: vi.fn(),
+          listByTurn: vi.fn((_turnId: string, afterSequence: number) =>
+            afterSequence === 0
+              ? [
+                  {
+                    sequence: 1,
+                    payload: {
+                      type: "delta",
+                      sessionId: "session-1",
+                      eventId: "event-safe",
+                      sequence: 1,
+                      turnId: "turn-1",
+                      messageId: "message-1",
+                      delta: "hello ",
+                      __publicSecretProjectionVersion: 1,
+                    },
+                  },
+                  {
+                    sequence: 2,
+                    payload: {
+                      type: "done",
+                      sessionId: "session-1",
+                      eventId: "event-done",
+                      sequence: 2,
+                      turnId: "turn-1",
+                      messageId: "message-1",
+                    },
+                  },
+                ]
+              : [],
+          ),
+        },
+      },
+    });
+
+    await expect(
+      collect(GatewayService.prototype.streamPersistedChatTurnEvents.call(gateway, "session-1", "turn-1")),
+    ).resolves.toEqual([
+      expect.objectContaining({ type: "delta", delta: "hello " }),
+      expect.objectContaining({ type: "done" }),
+    ]);
+  });
+
+  it("replays versioned thinking, suppresses legacy thinking, and preserves user-input prompts", async () => {
+    const prompt = {
+      promptId: "prompt-1",
+      turnId: "turn-1",
+      kind: "text",
+      title: "Clarification needed",
+      question: "Which environment should I use?",
+      required: true,
+      placeholder: "staging",
+      submitLabel: "Continue",
+      multiline: false,
+    };
+    const gateway = createGatewayHarness({
+      storage: {
+        chatStreamEvents: {
+          getByEventId: vi.fn(),
+          listByTurn: vi.fn((_turnId: string, afterSequence: number) =>
+            afterSequence === 0
+              ? [
+                  {
+                    sequence: 1,
+                    payload: {
+                      type: "thinking_delta",
+                      sessionId: "session-1",
+                      eventId: "event-legacy-thinking",
+                      sequence: 1,
+                      turnId: "turn-1",
+                      delta: "legacy private fragment",
+                    },
+                  },
+                  {
+                    sequence: 2,
+                    payload: {
+                      type: "thinking_delta",
+                      sessionId: "session-1",
+                      eventId: "event-current-thinking",
+                      sequence: 2,
+                      turnId: "turn-1",
+                      delta: "safe projected thought ",
+                      __publicSecretProjectionVersion: 1,
+                    },
+                  },
+                  {
+                    sequence: 3,
+                    payload: {
+                      type: "user_input_required",
+                      sessionId: "session-1",
+                      eventId: "event-user-input",
+                      sequence: 3,
+                      turnId: "turn-1",
+                      prompt,
+                    },
+                  },
+                  {
+                    sequence: 4,
+                    payload: {
+                      type: "done",
+                      sessionId: "session-1",
+                      eventId: "event-done",
+                      sequence: 4,
+                      turnId: "turn-1",
+                      messageId: "message-1",
+                    },
+                  },
+                ]
+              : [],
+          ),
+        },
+      },
+    });
+
+    await expect(
+      collect(GatewayService.prototype.streamPersistedChatTurnEvents.call(gateway, "session-1", "turn-1")),
+    ).resolves.toEqual([
+      expect.objectContaining({ type: "thinking_delta", delta: "" }),
+      expect.objectContaining({ type: "thinking_delta", delta: "safe projected thought " }),
+      expect.objectContaining({ type: "user_input_required", prompt }),
+      expect.objectContaining({ type: "done" }),
+    ]);
   });
 
   it("replays memory citation provenance from persisted stream events", async () => {
@@ -437,14 +696,13 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       finishedAt: "2026-03-22T12:00:01.000Z",
     };
     async function* source() {
-      yield { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "a" } as never;
+      yield { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "a " } as never;
       yield { type: "tool_result", sessionId: "session-1", turnId: "turn-1", toolRun } as never;
       yield { type: "done", sessionId: "session-1", turnId: "turn-1", messageId: "message-1" } as never;
     }
 
-    const chunks = await collect(
-      GatewayService.prototype.withEphemeralStreamEnvelope.call({} as never, source(), "run-1"),
-    );
+    const gateway = createGatewayHarness();
+    const chunks = await collect(GatewayService.prototype.withEphemeralStreamEnvelope.call(gateway, source(), "run-1"));
 
     expect(chunks).toEqual([
       expect.objectContaining({ type: "delta", sequence: 1, runId: "run-1" }),
@@ -459,6 +717,101 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     expect(chunks[1]?.eventId).toEqual(expect.any(String));
     expect(chunks[2]?.eventId).toEqual(expect.any(String));
     expect(new Set(chunks.map((chunk) => chunk.eventId)).size).toBe(3);
+  });
+
+  it("redacts every split credential boundary in ephemeral streams", async () => {
+    const content = "Authorization: Bearer hunter2";
+    for (let split = 1; split < content.length; split += 1) {
+      async function* source() {
+        yield {
+          type: "delta",
+          sessionId: "session-ephemeral-split",
+          turnId: "turn-ephemeral-split",
+          messageId: "message-ephemeral-split",
+          delta: content.slice(0, split),
+        } as never;
+        yield {
+          type: "delta",
+          sessionId: "session-ephemeral-split",
+          turnId: "turn-ephemeral-split",
+          messageId: "message-ephemeral-split",
+          delta: content.slice(split),
+        } as never;
+        yield {
+          type: "message_done",
+          sessionId: "session-ephemeral-split",
+          turnId: "turn-ephemeral-split",
+          messageId: "message-ephemeral-split",
+          content,
+        } as never;
+      }
+
+      const chunks = await collect(
+        GatewayService.prototype.withEphemeralStreamEnvelope.call(createGatewayHarness(), source(), "run-split"),
+      );
+      expect(JSON.stringify(chunks), `ephemeral split ${split}`).not.toContain("hunter2");
+      expect(chunks.at(-1)).toMatchObject({
+        type: "message_done",
+        content: "Authorization: [REDACTED]",
+      });
+    }
+  });
+
+  it("emits the pending ephemeral thinking tail before terminal content", async () => {
+    async function* source() {
+      yield {
+        type: "thinking_delta",
+        sessionId: "session-thinking",
+        turnId: "turn-thinking",
+        delta: "Considering options.",
+      } as never;
+      yield {
+        type: "message_done",
+        sessionId: "session-thinking",
+        turnId: "turn-thinking",
+        messageId: "message-thinking",
+        content: "Final answer",
+      } as never;
+    }
+
+    await expect(
+      collect(
+        GatewayService.prototype.withEphemeralStreamEnvelope.call(createGatewayHarness(), source(), "run-thinking"),
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({ type: "thinking_delta", delta: "Considering ", sequence: 1 }),
+      expect.objectContaining({ type: "thinking_delta", delta: "options.", sequence: 2 }),
+      expect.objectContaining({ type: "message_done", content: "Final answer", sequence: 3 }),
+    ]);
+  });
+
+  it("flushes pending ephemeral thinking before propagating a source failure", async () => {
+    async function* source() {
+      yield {
+        type: "thinking_delta",
+        sessionId: "session-thinking",
+        turnId: "turn-thinking",
+        delta: "Considering options.",
+      } as never;
+      throw new Error("provider stream failed");
+    }
+
+    const chunks: Array<Record<string, unknown>> = [];
+    await expect(
+      (async () => {
+        for await (const chunk of GatewayService.prototype.withEphemeralStreamEnvelope.call(
+          createGatewayHarness(),
+          source(),
+          "run-thinking",
+        )) {
+          chunks.push(chunk);
+        }
+      })(),
+    ).rejects.toThrow("provider stream failed");
+    expect(chunks).toEqual([
+      expect.objectContaining({ type: "thinking_delta", delta: "Considering ", sequence: 1 }),
+      expect.objectContaining({ type: "thinking_delta", delta: "options.", sequence: 2 }),
+    ]);
   });
 
   it("applies Firecrawl defaults to docs ingest URL reads without touching unrelated requests", () => {

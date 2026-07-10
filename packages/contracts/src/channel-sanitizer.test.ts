@@ -31,7 +31,7 @@ describe("sanitizeChannelOutboundMessage", () => {
       'Visible api-key="abcDEF123._~+/" token: qwerty1234, password=plainsecret done',
     );
 
-    expect(result.message).toBe("Visible api-key=[REDACTED] token: [REDACTED], password=[REDACTED] done");
+    expect(result.message).toBe('Visible api-key="[REDACTED]" token: [REDACTED], password=[REDACTED] done');
     expect(result.redactedSecretCount).toBe(3);
   });
 
@@ -42,7 +42,7 @@ describe("sanitizeChannelOutboundMessage", () => {
     const bearerResult = sanitizeChannelOutboundMessage(`${noisyAuthorizationPrefix}Bearer abcDEF-._~+/== done`);
     const credentialResult = sanitizeChannelOutboundMessage(`${noisyUrlPrefix}user:p@example.test/path`);
 
-    expect(bearerResult.message).toContain("Authorization: [REDACTED] done");
+    expect(bearerResult.message).toBe("Authorization: [REDACTED]");
     expect(bearerResult.message).not.toContain("abcDEF");
     expect(bearerResult.redactedSecretCount).toBe(1);
     expect(credentialResult.message).toContain("[REDACTED]@example.test/path");
@@ -54,7 +54,7 @@ describe("sanitizeChannelOutboundMessage", () => {
       'stripe_api_key="abcDEF123._~+/" "git_token": qwerty1234, \'my_password\'=plainsecret done',
     );
 
-    expect(result.message).toBe("stripe_api_key=[REDACTED] \"git_token\": [REDACTED], 'my_password'=[REDACTED] done");
+    expect(result.message).toBe('stripe_api_key="[REDACTED]" "git_token": [REDACTED], \'my_password\'=[REDACTED] done');
     expect(result.redactedSecretCount).toBe(3);
   });
 

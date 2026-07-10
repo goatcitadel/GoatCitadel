@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { HEARTBEAT_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 import { ChatSteerService } from "./chat-steer-service.js";
+import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
 
@@ -41,6 +42,10 @@ const {
 // `streamPreparedAgentChatTurn`) so a regression that drops a chunk type from
 // that loop's manual `if (chunk.type === ...)` guards is actually caught.
 const { executePreparedAgentChatTurnBackground } = await import("./chat-turn-dispatch-service.js");
+
+function createTestStreamRegistration() {
+  return new ChatTurnExecutionRegistry().registerActiveStream("session-1", "turn-1", 0);
+}
 
 describe("streamPreparedAgentChatTurn", () => {
   it("collects child turn tool runs in delegation step order", () => {
@@ -453,6 +458,9 @@ describe("streamPreparedAgentChatTurn", () => {
       { content: "hello", mode: "cowork" } as never,
       createPreparedTurn({ mode: "cowork", subagentPolicy: "auto_when_useful" }),
       "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
     );
 
     expect(register).toHaveBeenCalledTimes(1);
@@ -495,6 +503,9 @@ describe("streamPreparedAgentChatTurn", () => {
       { content: "delegated work", mode: "cowork" } as never,
       flooredPrepared,
       "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
     );
 
     // Even if a child model hallucinated an agent.fanout call past the schema
@@ -534,6 +545,9 @@ describe("streamPreparedAgentChatTurn", () => {
       { content: "heartbeat", mode: "cowork", permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID } as never,
       createPreparedTurn({ mode: "cowork", subagentPolicy: "auto_when_useful" }),
       "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
     );
 
     expect(register).not.toHaveBeenCalled();
@@ -573,6 +587,9 @@ describe("streamPreparedAgentChatTurn", () => {
       { content: "hello", mode: "cowork" } as never,
       createPreparedTurn({ mode: "cowork", subagentPolicy: "auto_when_useful" }),
       "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
     ).catch(() => undefined);
 
     // The registration generator's finally must fire on a throw, or a stale
@@ -624,6 +641,9 @@ describe("streamPreparedAgentChatTurn", () => {
       { content: "hello", mode: "chat" } as never,
       createPreparedTurn(),
       "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
     );
 
     const thinkingCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "thinking_delta");
@@ -685,6 +705,9 @@ describe("streamPreparedAgentChatTurn", () => {
       { content: "hello", mode: "chat" } as never,
       createPreparedTurn(),
       "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
     );
 
     const thinkingCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "thinking_delta");
@@ -1605,6 +1628,14 @@ function createHost(): ChatTurnStreamHost & {
     isFeatureEnabled: vi.fn(() => false),
     beginActiveChatTurnExecution: vi.fn(() => new AbortController()),
     endActiveChatTurnExecution: vi.fn(),
+    getActiveChatTurnStream: vi.fn(() => ({
+      registrationId: "stream-registration-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      startedAt: "2026-04-18T00:00:00.000Z",
+      nextSequence: 1,
+      completed: false,
+    })),
     createHydratedChatTurnTrace: vi.fn((_turnId: string, nextTrace: ChatTurnTraceRecord) => nextTrace),
     steerService: new ChatSteerService(),
     ingestEvent: vi.fn(async () => undefined),

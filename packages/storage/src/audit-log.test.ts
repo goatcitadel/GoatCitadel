@@ -199,7 +199,7 @@ describe("AuditLog", () => {
       commandArgs: ["--authorization=Bearer abcdefghijklmnopqrstuvwxyz012345"],
     });
 
-    assert.equal(sanitized.message, "[REDACTED] Basic [REDACTED] Authorization: [REDACTED] [REDACTED] [REDACTED]");
+    assert.equal(sanitized.message, "[REDACTED] Basic [REDACTED] Authorization: [REDACTED]");
     assert.deepEqual(sanitized.processEnv, { OPENAI_API_KEY: "[REDACTED]" });
     assert.deepEqual(sanitized.execArgv, [
       "--password",

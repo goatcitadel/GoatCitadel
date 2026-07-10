@@ -19,6 +19,10 @@ import type {
 import type { Storage } from "@goatcitadel/storage";
 import { dedupeChatCitations, splitIntoChunks } from "./chat-turn-helpers.js";
 import {
+  ChatTurnStreamRegistrationMismatchError,
+  type ActiveChatTurnStreamExecution,
+} from "./chat-turn-execution-registry.js";
+import {
   isPersistableChatStreamChunk,
   type InspectableChatStreamChunk,
   type PreparedChatExecutionPlanResolution,
@@ -221,9 +225,10 @@ export async function executePreparedAgentChatTurnBackground(
   input: ChatSendMessageRequest,
   prepared: PreparedAgentChatTurn,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-  durableRunId?: string,
-  resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-  options?: {
+  durableRunId: string | undefined,
+  resolvedOrchestration: PreparedChatExecutionPlanResolution | undefined,
+  options: {
+    streamRegistration: ActiveChatTurnStreamExecution;
     skipMessageStart?: boolean;
     abortSignal?: AbortSignal;
   },
@@ -253,10 +258,14 @@ export async function executePreparedAgentChatTurnBackground(
             }
           : rawChunk;
       if (isPersistableChatStreamChunk(chunk)) {
-        host.persistChatStreamChunk(chunk, durableRunId);
+        host.persistChatStreamChunk(chunk, durableRunId, options.streamRegistration);
       }
     }
   } catch (error) {
+    if (error instanceof ChatTurnStreamRegistrationMismatchError) {
+      throw error;
+    }
+    options.streamRegistration.requireActive(prepared.turnId);
     host.recordDevDiagnostic({
       level: "warn",
       category: "chat",
@@ -312,6 +321,7 @@ export async function executePreparedAgentChatTurnBackground(
           trace: host.createHydratedChatTurnTrace(prepared.turnId, patchedTrace),
         },
         durableRunId,
+        options.streamRegistration,
       );
     }
     host.persistChatStreamChunk(
@@ -322,22 +332,25 @@ export async function executePreparedAgentChatTurnBackground(
         error: error instanceof Error ? error.message : "Chat stream execution failed.",
       },
       durableRunId,
+      options.streamRegistration,
     );
   } finally {
-    let finalTrace: ChatTurnTraceRecord | undefined;
-    try {
-      finalTrace = host.storage.chatTurnTraces.get(prepared.turnId);
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        // eslint-disable-next-line no-console
-        console.error("Failed to load chat turn trace during stream finalization", error);
+    if (options.streamRegistration.isActive()) {
+      let finalTrace: ChatTurnTraceRecord | undefined;
+      try {
+        finalTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to load chat turn trace during stream finalization", error);
+        }
       }
+      if (durableRunId && finalTrace) {
+        host.finalizeDurableChatRun(durableRunId, prepared, finalTrace);
+      }
+      options.streamRegistration.complete();
+      setTimeout(() => options.streamRegistration.close(), 30_000);
     }
-    if (durableRunId && finalTrace) {
-      host.finalizeDurableChatRun(durableRunId, prepared, finalTrace);
-    }
-    host.completeActiveChatTurnStream(prepared.turnId);
-    setTimeout(() => host.closeActiveChatTurnStream(prepared.turnId), 30_000);
   }
 }
 
@@ -351,7 +364,9 @@ export function launchPreparedAgentChatTurnStream(
 ): string | undefined {
   const durableRequested = shouldUseDurableExecution(host, prepared, input);
   const durableRun = host.beginDurableChatRun(prepared, input, threadEventType);
-  host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId);
+  const streamRegistration = host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId, {
+    ...(durableRun ? { reservation: true } : {}),
+  });
   host.recordDevDiagnostic({
     level: "info",
     category: "chat",
@@ -375,7 +390,7 @@ export function launchPreparedAgentChatTurnStream(
     return durableRun.runId;
   }
   if (durableRequested) {
-    persistDurableUnavailableFailure(host, sessionId, prepared);
+    persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration);
     return undefined;
   }
   const task = executePreparedAgentChatTurnBackground(
@@ -386,8 +401,12 @@ export function launchPreparedAgentChatTurnStream(
     threadEventType,
     undefined,
     resolvedOrchestration,
+    { streamRegistration },
   );
-  task.finally(() => host.backgroundTasks.delete(task));
+  const removeBackgroundTask = (): void => {
+    host.backgroundTasks.delete(task);
+  };
+  void task.then(removeBackgroundTask, removeBackgroundTask);
   host.backgroundTasks.add(task);
   return undefined;
 }
@@ -396,6 +415,7 @@ function persistDurableUnavailableFailure(
   host: ChatTurnDispatchHost,
   sessionId: string,
   prepared: PreparedAgentChatTurn,
+  streamRegistration: ActiveChatTurnStreamExecution,
 ): void {
   host.recordDevDiagnostic({
     level: "warn",
@@ -433,20 +453,28 @@ function persistDurableUnavailableFailure(
       repaired: false,
     },
   });
-  host.persistChatStreamChunk({
-    type: "trace_update",
-    sessionId,
-    turnId: prepared.turnId,
-    trace: host.createHydratedChatTurnTrace(prepared.turnId, failedTrace),
-  });
-  host.persistChatStreamChunk({
-    type: "error",
-    sessionId,
-    turnId: prepared.turnId,
-    error: "durable_unavailable: shipped Chat/Cowork/Code sends must allocate a durable run before execution.",
-  });
-  host.completeActiveChatTurnStream(prepared.turnId);
-  setTimeout(() => host.closeActiveChatTurnStream(prepared.turnId), 30_000);
+  host.persistChatStreamChunk(
+    {
+      type: "trace_update",
+      sessionId,
+      turnId: prepared.turnId,
+      trace: host.createHydratedChatTurnTrace(prepared.turnId, failedTrace),
+    },
+    undefined,
+    streamRegistration,
+  );
+  host.persistChatStreamChunk(
+    {
+      type: "error",
+      sessionId,
+      turnId: prepared.turnId,
+      error: "durable_unavailable: shipped Chat/Cowork/Code sends must allocate a durable run before execution.",
+    },
+    undefined,
+    streamRegistration,
+  );
+  streamRegistration.complete();
+  setTimeout(() => streamRegistration.close(), 30_000);
 }
 
 export async function sendPreparedIntegrationChatTurn(

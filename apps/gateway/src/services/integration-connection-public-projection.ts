@@ -320,7 +320,7 @@ function containsRedactionMarkerDeep(value: unknown, seen = new WeakSet<object>(
   return (Array.isArray(value) ? value : Object.values(value)).some((item) => containsRedactionMarkerDeep(item, seen));
 }
 
-function restoreProjectedUrlFragments(raw: string, projected: string, incoming: string): string | undefined {
+export function restoreProjectedUrlFragments(raw: string, projected: string, incoming: string): string | undefined {
   if (projectPublicSecretValue(raw) !== projected) {
     return undefined;
   }

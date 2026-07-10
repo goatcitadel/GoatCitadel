@@ -11,9 +11,7 @@ import { redactSensitivePayload } from "./improvement-common.js";
 
 describe("redactSensitivePayload (codex #27)", () => {
   it("redacts OpenAI-shape keys", () => {
-    expect(redactSensitivePayload("call ok with sk-proj-A1b2C3d4E5f6G7h8I9j0", {})).toBe(
-      "call ok with [REDACTED]",
-    );
+    expect(redactSensitivePayload("call ok with sk-proj-A1b2C3d4E5f6G7h8I9j0", {})).toBe("call ok with [REDACTED]");
   });
 
   it("redacts Telegram bot tokens", () => {
@@ -23,9 +21,7 @@ describe("redactSensitivePayload (codex #27)", () => {
   });
 
   it("redacts Authorization Bearer header values", () => {
-    expect(redactSensitivePayload("Authorization: Bearer abc123def456ghi789jkl", {})).toBe(
-      "Authorization: [REDACTED]",
-    );
+    expect(redactSensitivePayload("Authorization: Bearer abc123def456ghi789jkl", {})).toBe("Authorization: [REDACTED]");
   });
 
   it("redacts GitHub personal access tokens", () => {
@@ -43,7 +39,7 @@ describe("redactSensitivePayload (codex #27)", () => {
   it("redacts literal env-resolved values with the env-name marker", () => {
     const env = { FIRECRAWL_API_KEY: "fcrl_abcdefghijklmnop", OPENAI_API_KEY: "sk-test-aaaaaaaaaaaa" };
     const redacted = redactSensitivePayload(
-      "headers: { Authorization: Bearer sk-test-aaaaaaaaaaaa, X-Firecrawl: fcrl_abcdefghijklmnop }",
+      "Authorization: Bearer sk-test-aaaaaaaaaaaa\nX-Firecrawl: fcrl_abcdefghijklmnop",
       env,
     );
     expect(redacted).not.toContain("fcrl_abcdefghijklmnop");

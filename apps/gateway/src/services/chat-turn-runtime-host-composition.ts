@@ -121,13 +121,15 @@ function composeActiveExecution(source: ChatTurnRuntimeHost): ChatTurnActiveExec
 
 function composeStreamLifecycle(source: ChatTurnRuntimeHost): ChatTurnStreamLifecycleControl {
   return {
-    closeActiveChatTurnStream: (turnId) => source.closeActiveChatTurnStream(turnId),
-    completeActiveChatTurnStream: (turnId) => source.completeActiveChatTurnStream(turnId),
+    closeActiveChatTurnStream: (turnId, registrationId) => source.closeActiveChatTurnStream(turnId, registrationId),
+    completeActiveChatTurnStream: (turnId, registrationId) =>
+      source.completeActiveChatTurnStream(turnId, registrationId),
     createHydratedChatTurnTrace: (turnId, trace) => source.createHydratedChatTurnTrace(turnId, trace),
     getActiveChatTurnStream: (turnId) => source.getActiveChatTurnStream(turnId),
-    persistChatStreamChunk: (chunk, durableRunId) => source.persistChatStreamChunk(chunk, durableRunId),
-    registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
-      source.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
+    persistChatStreamChunk: (chunk, durableRunId, streamRegistration) =>
+      source.persistChatStreamChunk(chunk, durableRunId, streamRegistration),
+    registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
+      source.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
     streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
       source.streamPersistedChatTurnEvents(sessionId, turnId, options),
     withEphemeralStreamEnvelope: (stream, runId) => source.withEphemeralStreamEnvelope(stream, runId),

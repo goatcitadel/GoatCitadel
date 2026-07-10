@@ -1216,7 +1216,13 @@ export async function executeDurableChatTurnRun(
     assistantMessageId: payload.assistantMessageId,
   });
   throwIfDurableWorkflowAborted(context);
-  host.registerActiveChatTurnStream(payload.sessionId, payload.turnId, run.runId);
+  const continuation = isDurableChatStreamContinuation(run, payload);
+  const streamRegistration = host.registerActiveChatTurnStream(
+    payload.sessionId,
+    payload.turnId,
+    run.runId,
+    continuation ? { continuation: true } : undefined,
+  );
   await chatTurnDispatchService.executePreparedAgentChatTurnBackground(
     host,
     payload.sessionId,
@@ -1226,12 +1232,24 @@ export async function executeDurableChatTurnRun(
     run.runId,
     undefined,
     {
+      streamRegistration,
       skipMessageStart: true,
       ...(context?.signal ? { abortSignal: context.signal } : {}),
     },
   );
   maybeEnqueueAutonomousDelivery(host, run, payload);
   maybeCleanupSilentHeartbeatTurn(host, run, payload);
+}
+
+function isDurableChatStreamContinuation(run: DurableRunRecord, payload: DurableChatTurnExecutionPayload): boolean {
+  if ((payload.userInputResponses?.length ?? 0) > 0 || run.attemptCount > 0) {
+    return true;
+  }
+  // A fresh first claim writes startedAt and leaseHeartbeatAt from the same
+  // timestamp. Resume, wake, and lease takeover retain the original startedAt
+  // while installing a new lease heartbeat, giving us durable continuation
+  // truth even after retained stream events have expired.
+  return Boolean(run.startedAt && run.leaseHeartbeatAt && run.startedAt !== run.leaseHeartbeatAt);
 }
 
 /** Read the persisted assistant text for a completed durable chat turn, if any. */

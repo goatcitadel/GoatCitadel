@@ -6,6 +6,7 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { ChatTurnDispatchHost } from "./chat-turn-dispatch-service.js";
+import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 
 const streamPreparedAgentChatTurn = vi.fn();
 
@@ -129,7 +130,9 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       { content: "hello", mode: "chat" },
       "chat_thread_turn_appended",
     );
-    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1");
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1", {
+      reservation: true,
+    });
     expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", {
       liveTail: true,
       returnOnDurableInterrupt: true,
@@ -139,7 +142,37 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
     expect(response.model).toBe("durable-model");
   });
 
+  it("does not suppress a brand-new non-durable retry turn as a continuation", async () => {
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield {
+        type: "delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        delta: "retry remains live",
+      };
+    });
+    const host = createHost({ durableEnabled: false });
+
+    dispatchService.launchPreparedAgentChatTurnStream(
+      host,
+      "session-1",
+      { content: "retry" },
+      createPrepared(),
+      "chat_thread_turn_retried",
+    );
+    await Promise.allSettled([...host.backgroundTasks]);
+
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", undefined, {});
+    expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "delta", delta: "retry remains live" }),
+      undefined,
+      expect.objectContaining({ turnId: "turn-1" }),
+    );
+  });
+
   it("persists background stream chunks with durable run status and finalizes the active stream", async () => {
+    vi.useFakeTimers();
     const trace = {
       turnId: "turn-1",
       sessionId: "session-1",
@@ -162,37 +195,196 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       };
     });
     const host = createHost({ traceState: trace });
+    const streamRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
 
-    await dispatchService.executePreparedAgentChatTurnBackground(
-      host,
-      "session-1",
-      { content: "hello" },
-      createPrepared(),
-      "chat_thread_turn_appended",
-      "run-1",
-      undefined,
-      { skipMessageStart: true },
-    );
+    try {
+      await dispatchService.executePreparedAgentChatTurnBackground(
+        host,
+        "session-1",
+        { content: "hello" },
+        createPrepared(),
+        "chat_thread_turn_appended",
+        "run-1",
+        undefined,
+        { streamRegistration, skipMessageStart: true },
+      );
 
-    expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "trace_update",
-        trace: expect.objectContaining({
-          durable: expect.objectContaining({
-            runId: "run-1",
-            status: "running",
-            checkpointKind: "run_started",
+      expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "trace_update",
+          trace: expect.objectContaining({
+            durable: expect.objectContaining({
+              runId: "run-1",
+              status: "running",
+              checkpointKind: "run_started",
+            }),
           }),
         }),
-      }),
-      "run-1",
-    );
-    expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
-      "run-1",
-      expect.objectContaining({ turnId: "turn-1" }),
-      trace,
-    );
-    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
+        "run-1",
+        streamRegistration,
+      );
+      expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ turnId: "turn-1" }),
+        trace,
+      );
+      expect(streamRegistration.completed).toBe(true);
+      expect(host.getActiveChatTurnStream("turn-1")).toBe(streamRegistration);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(host.getActiveChatTurnStream("turn-1")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rethrows stale stream registration writes without patching the trace or persisting an error", async () => {
+    vi.useFakeTimers();
+    const mismatch = new ChatTurnStreamRegistrationMismatchError("turn-1", "stream-registration-stale");
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield {
+        type: "delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        delta: "stale producer output",
+      };
+    });
+    const host = createHost();
+    const staleRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-stale");
+    host.registerActiveChatTurnStream("session-1", "turn-1", "run-resumed");
+    host.persistChatStreamChunk.mockImplementation(() => {
+      throw mismatch;
+    });
+
+    try {
+      await expect(
+        dispatchService.executePreparedAgentChatTurnBackground(
+          host,
+          "session-1",
+          { content: "hello" },
+          createPrepared(),
+          "chat_thread_turn_appended",
+          undefined,
+          undefined,
+          { streamRegistration: staleRegistration },
+        ),
+      ).rejects.toBe(mismatch);
+
+      expect(host.persistChatStreamChunk).toHaveBeenCalledTimes(1);
+      expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delta" }),
+        undefined,
+        staleRegistration,
+      );
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalled();
+      expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fences stale provider failures before they can patch a resumed attempt trace", async () => {
+    vi.useFakeTimers();
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw new Error("paused provider failed");
+    });
+    const host = createHost();
+    const staleRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-stale");
+    host.registerActiveChatTurnStream("session-1", "turn-1", "run-resumed");
+
+    try {
+      await expect(
+        dispatchService.executePreparedAgentChatTurnBackground(
+          host,
+          "session-1",
+          { content: "hello" },
+          createPrepared(),
+          "chat_thread_turn_appended",
+          "run-stale",
+          undefined,
+          { streamRegistration: staleRegistration },
+        ),
+      ).rejects.toBeInstanceOf(ChatTurnStreamRegistrationMismatchError);
+
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalled();
+      expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
+      expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
+      expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
+      expect(host.completeActiveChatTurnStream).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leak an unhandled rejection when explicit cancellation fences a non-durable background stream", async () => {
+    let releaseProvider: (() => void) | undefined;
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      await providerGate;
+      yield {
+        type: "delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        delta: "late provider output",
+      };
+    });
+    const host = createHost({ durableEnabled: false });
+    let cancelled = false;
+    host.completeActiveChatTurnStream.mockImplementation((turnId, registrationId) => {
+      cancelled = true;
+      return host.getActiveChatTurnStream(turnId)?.registrationId === registrationId
+        ? host.getActiveChatTurnStream(turnId)!.complete()
+        : false;
+    });
+    host.persistChatStreamChunk.mockImplementation((_chunk, _durableRunId, registration) => {
+      if (cancelled) {
+        throw new ChatTurnStreamRegistrationMismatchError(
+          "turn-1",
+          registration?.registrationId ?? "missing-registration",
+        );
+      }
+    });
+    const unhandledReasons: unknown[] = [];
+    const trackUnhandledRejection = (reason: unknown): void => {
+      unhandledReasons.push(reason);
+    };
+    process.on("unhandledRejection", trackUnhandledRejection);
+
+    try {
+      dispatchService.launchPreparedAgentChatTurnStream(
+        host,
+        "session-1",
+        { content: "hello" },
+        createPrepared(),
+        "chat_thread_turn_appended",
+      );
+      const launchedTasks = [...host.backgroundTasks];
+      expect(launchedTasks).toHaveLength(1);
+      const streamRegistration = host.getActiveChatTurnStream("turn-1");
+      expect(streamRegistration).toBeDefined();
+
+      // Model cancelChatTurn completing this registration while the provider is
+      // still in flight. Its eventual output must be fenced without becoming a
+      // process-level rejection from the fire-and-forget launcher.
+      host.completeActiveChatTurnStream("turn-1", streamRegistration!.registrationId);
+      releaseProvider?.();
+      await Promise.allSettled(launchedTasks);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(host.persistChatStreamChunk).toHaveBeenCalledTimes(1);
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalled();
+      expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
+      expect(unhandledReasons).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", trackUnhandledRejection);
+    }
   });
 });
 
@@ -221,6 +413,10 @@ function createHost(
       status: "completed",
       routing: {},
     } as ChatTurnTraceRecord);
+  const executionRegistry = new ChatTurnExecutionRegistry();
+  const registerActiveChatTurnStream = vi.fn((sessionId: string, turnId: string, runId?: string) =>
+    executionRegistry.registerActiveStream(sessionId, turnId, 0, runId),
+  );
   return {
     config: {
       assistant: {
@@ -243,7 +439,8 @@ function createHost(
     backgroundTasks: new Set(),
     isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
     beginDurableChatRun: options.beginDurableChatRun ?? vi.fn(() => undefined),
-    registerActiveChatTurnStream: vi.fn(),
+    registerActiveChatTurnStream,
+    getActiveChatTurnStream: vi.fn((turnId: string) => executionRegistry.getActiveStream(turnId)),
     streamPersistedChatTurnEvents: vi.fn(async function* () {
       for (const chunk of persistedChunks) {
         yield chunk;
@@ -253,8 +450,12 @@ function createHost(
     createHydratedChatTurnTrace: vi.fn((_turnId: string, trace: ChatTurnTraceRecord) => trace),
     recordDevDiagnostic: vi.fn(),
     finalizeDurableChatRun: vi.fn(),
-    completeActiveChatTurnStream: vi.fn(),
-    closeActiveChatTurnStream: vi.fn(),
+    completeActiveChatTurnStream: vi.fn((turnId: string, registrationId: string) =>
+      executionRegistry.completeActiveStream(turnId, registrationId),
+    ),
+    closeActiveChatTurnStream: vi.fn((turnId: string, registrationId: string) =>
+      executionRegistry.closeActiveStream(turnId, registrationId),
+    ),
   } as unknown as ChatTurnDispatchHost & {
     beginDurableChatRun: ReturnType<typeof vi.fn>;
     registerActiveChatTurnStream: ReturnType<typeof vi.fn>;

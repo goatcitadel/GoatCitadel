@@ -22,7 +22,7 @@ describe("redactSecretText", () => {
       'api-key="abcDEF123._~+/" token: qwerty1234 https://example.test/hook?token=secret-token&ok=1',
     );
 
-    expect(result.value).toBe("api-key=[REDACTED] token: [REDACTED] https://example.test/hook?token=[REDACTED]&ok=1");
+    expect(result.value).toBe('api-key="[REDACTED]" token: [REDACTED] https://example.test/hook?token=[REDACTED]&ok=1');
     expect(result.redactionCount).toBe(3);
   });
 
@@ -42,12 +42,23 @@ describe("redactSecretText", () => {
   it("redacts short values when an explicit credential key labels serialized text", () => {
     const result = redactSecretText('{"DATABASE_PASSWORD":"Tr0ub4dor&3","password":"p@ssw0rd!","visible":"ok"}');
 
-    expect(result.value).toBe('{"DATABASE_PASSWORD":[REDACTED],"password":[REDACTED],"visible":"ok"}');
+    expect(result.value).toBe('{"DATABASE_PASSWORD":"[REDACTED]","password":"[REDACTED]","visible":"ok"}');
     expect(result.redactionCount).toBe(2);
 
     const assignments = redactSecretText("DATABASE_PASSWORD=Tr0ub4dor&3 password: p@ssw0rd!");
     expect(assignments.value).toBe("DATABASE_PASSWORD=[REDACTED] password: [REDACTED]");
     expect(assignments.redactionCount).toBe(2);
+
+    const keyAssignments = redactSecretText(
+      "auth=hunter2 authentication=hunter2 bearer=hunter2 cookie=hunter2 cookies=hunter2 " +
+        "credential=hunter2 credentials=hunter2 clientKey=hunter2 accessKey=hunter2 privateKey=tiny-secret",
+    );
+    expect(keyAssignments.value).toBe(
+      "auth=[REDACTED] authentication=[REDACTED] bearer=[REDACTED] cookie=[REDACTED] " +
+        "cookies=[REDACTED] credential=[REDACTED] credentials=[REDACTED] clientKey=[REDACTED] " +
+        "accessKey=[REDACTED] privateKey=[REDACTED]",
+    );
+    expect(keyAssignments.redactionCount).toBe(10);
 
     const escaped = redactSecretText('{\\"DATABASE_PASSWORD\\":\\"tiny\\",\\"visible\\":\\"ok\\"}');
     expect(escaped.value).toBe('{\\"DATABASE_PASSWORD\\":\\"[REDACTED]\\",\\"visible\\":\\"ok\\"}');
@@ -73,12 +84,443 @@ describe("redactSecretText", () => {
         "const tokenCount = 5;",
         "const passwordPolicy = true;",
         "const accessToken = getToken();",
-        "const apiKey = [REDACTED];",
+        'const apiKey = "[REDACTED]";',
         "password=[REDACTED]",
         "password=[REDACTED]",
       ].join("\n"),
     );
     expect(result.redactionCount).toBe(3);
+  });
+
+  it("preserves credential-shaped code declarations and references without preserving literal values", () => {
+    const result = redactSecretText(
+      [
+        "type Login = { password: string };",
+        "const password = process.env.PASSWORD;",
+        "const apiKey = process.env.API_KEY;",
+        'const bracketApiKey = process.env["API_KEY"];',
+        'const denoApiKey = Deno.env.get("API_KEY");',
+        'const pythonApiKey = os.getenv("API_KEY");',
+        'const pythonBracketApiKey = os.environ["API_KEY"];',
+        'const accessorApiKey = secrets.get("API_KEY");',
+        'const awaitedApiKey = await secrets.get("API_KEY");',
+        'const passwordFromAccessor = getSecret("db");',
+        "const apiKeyAlias = secretReference;",
+        "apiKey=$API_KEY",
+        "apiKey=${API_KEY}",
+        "const password = config.password;",
+        "type GenericLogin = { password: SomeType<string> };",
+        "type MappedLogin = { password: Record<string, string> };",
+        "type FunctionLogin = { password: (() => string) };",
+        "type InferredLogin = { password: z.infer<typeof schema> };",
+        "type TypeofLogin = { apiKey: typeof config.apiKey };",
+        "const passwordPolicy: PasswordPolicy = strict;",
+        "interface Headers { Authorization: string; }",
+        "const headers = { authorization: authHeader };",
+        "const proxy = { proxyAuthorization: config.proxyAuthorization };",
+        'const signingKey = "literal-signing-secret";',
+        "const templatePassword = `hello world`;",
+        "const templateApiKey = `secret-${tenant}`;",
+        'const header = "Authorization: Token abcdef1234567890";',
+        "const templateHeader = `Authorization: Custom one two three`;",
+      ].join("\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "type Login = { password: string };",
+        "const password = process.env.PASSWORD;",
+        "const apiKey = process.env.API_KEY;",
+        'const bracketApiKey = process.env["API_KEY"];',
+        'const denoApiKey = Deno.env.get("API_KEY");',
+        'const pythonApiKey = os.getenv("API_KEY");',
+        'const pythonBracketApiKey = os.environ["API_KEY"];',
+        'const accessorApiKey = secrets.get("API_KEY");',
+        'const awaitedApiKey = await secrets.get("API_KEY");',
+        'const passwordFromAccessor = getSecret("db");',
+        "const apiKeyAlias = secretReference;",
+        "apiKey=$API_KEY",
+        "apiKey=${API_KEY}",
+        "const password = config.password;",
+        "type GenericLogin = { password: SomeType<string> };",
+        "type MappedLogin = { password: Record<string, string> };",
+        "type FunctionLogin = { password: (() => string) };",
+        "type InferredLogin = { password: z.infer<typeof schema> };",
+        "type TypeofLogin = { apiKey: typeof config.apiKey };",
+        "const passwordPolicy: PasswordPolicy = strict;",
+        "interface Headers { Authorization: string; }",
+        "const headers = { authorization: authHeader };",
+        "const proxy = { proxyAuthorization: config.proxyAuthorization };",
+        'const signingKey = "[REDACTED]";',
+        "const templatePassword = `[REDACTED]`;",
+        "const templateApiKey = `[REDACTED]`;",
+        'const header = "Authorization: [REDACTED]";',
+        "const templateHeader = `Authorization: [REDACTED]`;",
+      ].join("\n"),
+    );
+    expect(result.redactionCount).toBe(5);
+  });
+
+  it("preserves typed declarations while redacting cross-language literal initializers", () => {
+    const result = redactSecretText(
+      [
+        'const apiKey: string = "literal-secret";',
+        'const password: string = "hunter2";',
+        'let token: string | undefined = "abcdef123456";',
+        'password: str = "python-secret"',
+        'let password: &str = "rust-secret";',
+        'var token: String? = "kotlin-secret"',
+        'password := "go-secret"',
+        'password := "hunter2"',
+        'const inlinePassword: string = "inline-secret"; const x = "safe";',
+        'const firstPassword: string = "first-inline", secondToken: string = "second-inline";',
+        'const accessorPassword: string = getSecret("db"); const y = "safe";',
+        'const functionPassword: (() => string) = "function-secret";',
+        'type Auth = { token: "bearer" | "basic" };',
+        'type Login = { password: "required" | "optional" };',
+        'type InlineAuth = { token: "bearer" | "basic" }; const safeAfterType = "safe";',
+        'interface InlineLogin { password: "required" } const safeAfterInterface = "safe";',
+        'enum AuthKind { token = "bearer", password = "required" }',
+        'const enum KeyName { apiKey = "API_KEY" }',
+        'type Token = "bearer" | "basic";',
+        'type Password = "required" | "optional";',
+        "type ApiKey = `key-${string}`;",
+        'const runtime = { password: "object-secret" };',
+      ].join("\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        'const apiKey: string = "[REDACTED]";',
+        'const password: string = "[REDACTED]";',
+        'let token: string | undefined = "[REDACTED]";',
+        'password: str = "[REDACTED]"',
+        'let password: &str = "[REDACTED]";',
+        'var token: String? = "[REDACTED]"',
+        'password := "[REDACTED]"',
+        'password := "[REDACTED]"',
+        'const inlinePassword: string = "[REDACTED]"; const x = "safe";',
+        'const firstPassword: string = "[REDACTED]", secondToken: string = "[REDACTED]";',
+        'const accessorPassword: string = getSecret("db"); const y = "safe";',
+        'const functionPassword: (() => string) = "[REDACTED]";',
+        'type Auth = { token: "bearer" | "basic" };',
+        'type Login = { password: "required" | "optional" };',
+        'type InlineAuth = { token: "bearer" | "basic" }; const safeAfterType = "safe";',
+        'interface InlineLogin { password: "required" } const safeAfterInterface = "safe";',
+        'enum AuthKind { token = "bearer", password = "required" }',
+        'const enum KeyName { apiKey = "API_KEY" }',
+        'type Token = "bearer" | "basic";',
+        'type Password = "required" | "optional";',
+        "type ApiKey = `key-${string}`;",
+        'const runtime = { password: "[REDACTED]" };',
+      ].join("\n"),
+    );
+    expect(result.redactionCount).toBe(13);
+  });
+
+  it("redacts arbitrary authorization schemes and encoded URL userinfo completely", () => {
+    const result = redactSecretText(
+      [
+        "Authorization: Token abcdef1234567890",
+        "Proxy-Authorization: Digest username=operator, response=abcdef1234567890",
+        "Authorization: Custom one two three",
+        "Authorization: Digest username=alice realm=private nonce=abc",
+        "https://user:p%40ss:w0rd@example.test/path",
+        "https://user:p@ss@example.test/path",
+        "postgres://user:p@ss@db.example.test/name",
+      ].join("\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "Authorization: [REDACTED]",
+        "Proxy-Authorization: [REDACTED]",
+        "Authorization: [REDACTED]",
+        "Authorization: [REDACTED]",
+        "https://[REDACTED]@example.test/path",
+        "https://[REDACTED]@example.test/path",
+        "postgres://[REDACTED]@db.example.test/name",
+      ].join("\n"),
+    );
+    expect(result.value).not.toContain("abcdef1234567890");
+    expect(result.value).not.toContain("p%40ss:w0rd");
+  });
+
+  it("redacts raw JSON authorization fields for arbitrary schemes", () => {
+    const result = redactSecretText(
+      '{"authorization":"Custom one two three","proxyAuthorization":"Digest username=operator nonce=abc"}',
+    );
+
+    expect(result.value).toBe('{"authorization":"[REDACTED]","proxyAuthorization":"[REDACTED]"}');
+    expect(result.redactionCount).toBe(2);
+  });
+
+  it("redacts folded headers, YAML secret blocks, cookie headers, and separated CLI flags", () => {
+    const result = redactSecretText(
+      [
+        "Authorization: Bearer\n hunter2",
+        "Proxy-Authorization: Digest username=alice,\r\n response=abcdef1234567890",
+        "Cookie: safe=abc; sessionid=hunter2; csrf=abcdef1234567890",
+        "Set-Cookie: sessionid=hunter2; Path=/; HttpOnly",
+        "apiKey: |\n  yaml-secret",
+        "password: >\n  folded-secret",
+        "credential: >-\n  first\n\n  blank-line-secret\nnext-field: safe",
+        "privateKey: |\n  -----BEGIN PRIVATE KEY-----\n  private-key-body\n  -----END PRIVATE KEY-----",
+        'curl --password hunter2 --api-key "api-secret" --signing-key signing-secret',
+      ].join("\nnext\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "Authorization: [REDACTED]",
+        "Proxy-Authorization: [REDACTED]",
+        "Cookie: [REDACTED]",
+        "Set-Cookie: [REDACTED]",
+        "apiKey: [REDACTED]",
+        "password: [REDACTED]",
+        "credential: [REDACTED]\nnext-field: safe",
+        "privateKey: [REDACTED]",
+        'curl --password [REDACTED] --api-key "[REDACTED]" --signing-key [REDACTED]',
+      ].join("\nnext\n"),
+    );
+    expect(result.value).not.toContain("hunter2");
+    expect(result.value).not.toContain("private-key-body");
+    expect(result.redactionCount).toBe(11);
+  });
+
+  it("redacts credential flags in shell and argv forms while preserving references", () => {
+    const result = redactSecretText(
+      [
+        "tool --api-key hunter2 --token=abcdef123456 --password $PASSWORD --access-key process.env.ACCESS_KEY",
+        "tool -password tiny-secret -token ${TOKEN} -private-key $env:PRIVATE_KEY -consumer-key %CONSUMER_KEY%",
+        "const args = ['--password', 'hunter2', '--token', 'abcdef123456'];",
+        'const refs = ["--api-key", "process.env.API_KEY", "--signing-key", "$SIGNING_KEY"];',
+        'command: ["tool", "--access-key", "access-secret"]',
+      ].join("\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "tool --api-key [REDACTED] --token=[REDACTED] --password $PASSWORD --access-key process.env.ACCESS_KEY",
+        "tool -password [REDACTED] -token ${TOKEN} -private-key $env:PRIVATE_KEY -consumer-key %CONSUMER_KEY%",
+        "const args = ['--password', '[REDACTED]', '--token', '[REDACTED]'];",
+        'const refs = ["--api-key", "process.env.API_KEY", "--signing-key", "$SIGNING_KEY"];',
+        'command: ["tool", "--access-key", "[REDACTED]"]',
+      ].join("\n"),
+    );
+    expect(result.redactionCount).toBe(6);
+  });
+
+  it("matches credential label components without corrupting lexical lookalikes or metadata", () => {
+    const safe = [
+      'author="Alice"',
+      'const author = "Alice";',
+      'authority="https://login.example.test"',
+      'oauth="enabled"',
+      'tokenizer="cl100k_base"',
+      'tokenizationMode="fast"',
+      'secretary="Alice"',
+      'const secretariat = "office";',
+      'authMode="oauth"',
+      'authenticationStatus="ready"',
+      'bearerType="JWT"',
+      'credentialsPresent="yes"',
+      'passwordPolicy="strict"',
+      'apiKeyStatus="configured"',
+    ];
+
+    expect(redactSecretText(safe.join("\n"))).toEqual({ value: safe.join("\n"), redactionCount: 0 });
+  });
+
+  it("preserves cross-language credential declarations and code operators", () => {
+    const safe = [
+      "password: str",
+      "var token: String? = null",
+      'pub const API_KEY: &str = env!("API_KEY");',
+      "function f(Authorization: string) {}",
+      "const Authorization: string = authHeader;",
+      "Authorization: SomeType<string>;",
+      "const headers = { Authorization: `Bearer ${token}` };",
+      "const f = password => password.length;",
+      "items.map(token => token.id);",
+      "if (password === expected) {}",
+      "if (token == null) {}",
+      "function f(password = defaultPassword) {}",
+      "case password:\n  return true;",
+      "const x = condition ? password : defaultPassword;",
+      'const pythonHeaders = {"Authorization": f"Bearer {token}"}',
+      'val authorization = "Bearer $token"',
+      'headers := map[string]string{"Authorization": "Bearer " + token}',
+      'let authorization = format!("Bearer {}", token);',
+      "const credentials = [credentialRef, process.env.API_KEY];",
+      "const config = { credentials: [credentialRef, process.env.API_KEY] };",
+      "const secretRefs = { primary: vault.secretRef };",
+    ];
+
+    expect(redactSecretText(safe.join("\n"))).toEqual({ value: safe.join("\n"), redactionCount: 0 });
+    expect(redactSecretText("const headers = { Authorization: Custom one two three }; ").value).toBe(
+      "const headers = { Authorization: [REDACTED]}; ",
+    );
+  });
+
+  it("redacts complete Cookie and Set-Cookie logical values in text and quoted code", () => {
+    const result = redactSecretText(
+      [
+        "Cookie: safe=abc; session=hunter2; csrf=abcdef123456",
+        "Cookie: a=one;\n b=two",
+        "Set-Cookie: session=hunter2; Path=/; Secure; HttpOnly",
+        'const header = "Cookie: a=one; session=hunter2; csrf=abcdef123456";',
+      ].join("\nnext\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "Cookie: [REDACTED]",
+        "Cookie: [REDACTED]",
+        "Set-Cookie: [REDACTED]",
+        'const header = "Cookie: [REDACTED]";',
+      ].join("\nnext\n"),
+    );
+  });
+
+  it("redacts common fine-grained, package, model, and payment tokens without labels", () => {
+    const secrets = [
+      `github_pat_${"a".repeat(80)}`,
+      `glpat-${"b".repeat(24)}`,
+      `sk_live_${"c".repeat(24)}`,
+      `rk_live_${"d".repeat(24)}`,
+      `npm_${"e".repeat(36)}`,
+      `hf_${"f".repeat(36)}`,
+    ];
+    const result = redactSecretText(secrets.join(" "));
+
+    expect(result.value).toBe(secrets.map(() => "[REDACTED]").join(" "));
+    expect(result.redactionCount).toBe(secrets.length);
+  });
+
+  it("redacts structured credential collections, YAML containers, tags, and anchors", () => {
+    const result = redactSecretText(
+      [
+        'credentials: ["hunter2", "other"] okay',
+        "credentials: {primary: hunter2, backup: other}",
+        "credentials:\n  - hunter2\n  - other\nsafe: yes",
+        "cookies:\n  - name: sid\n    value: hunter2\nsafe: yes",
+        "password: !!str hunter2",
+        "apiKey: &primary hunter2",
+        "token: !vault hunter2",
+      ].join("\nnext\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "credentials: [REDACTED] okay",
+        "credentials: [REDACTED]",
+        "credentials: [REDACTED]\nsafe: yes",
+        "cookies: [REDACTED]\nsafe: yes",
+        "password: [REDACTED]",
+        "apiKey: [REDACTED]",
+        "token: [REDACTED]",
+      ].join("\nnext\n"),
+    );
+    expect(result.value).not.toContain("hunter2");
+  });
+
+  it("redacts authorization flag schemes and their following credential", () => {
+    const result = redactSecretText(
+      [
+        "curl --authorization Bearer hunter2 https://example.test",
+        "curl -auth Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
+        '["--authorization", "Bearer", "hunter2"]',
+        "['--auth', 'Basic', 'QWxhZGRpbjpvcGVuIHNlc2FtZQ==']",
+      ].join("\n"),
+    );
+
+    expect(result.value).toBe(
+      [
+        "curl --authorization [REDACTED] https://example.test",
+        "curl -auth [REDACTED]",
+        '["--authorization", "[REDACTED]", "[REDACTED]"]',
+        "['--auth', '[REDACTED]', '[REDACTED]']",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves safe credential metadata in scalar and CLI text", () => {
+    const safe = [
+      "credentialStorage: keychain",
+      "credentialsFile: /home/user/.config/app",
+      "secretFieldKeys: password,apiKey",
+      `passwordHash: ${"a".repeat(64)}`,
+      "signingKeyRef: vault:key",
+      "tool --auth-method oauth2 --token-count 100 --api-key-env API_KEY --api-key-source env --authorization-header-name X-Auth",
+      'authMethods: ["oauth2", "bearer"]',
+    ];
+
+    expect(redactSecretText(safe.join("\n"))).toEqual({ value: safe.join("\n"), redactionCount: 0 });
+  });
+
+  it("preserves cross-language secret references while redacting literals returned from ordinary calls", () => {
+    const safe = [
+      'let api_key = std::env::var("API_KEY")?;',
+      'val apiKey = System.getenv("API_KEY")',
+      'apiKey := os.Getenv("API_KEY")',
+      "password := cfg.Password",
+      "password := passwordValue",
+      "apiKey := key",
+      "token=$(pass show token)",
+      'let secret = secret_store.get("name")?;',
+    ];
+    const input = [
+      ...safe,
+      'const password = getLiteral("hunter2");',
+      'const token = Buffer.from("hunter2");',
+      'let api_key = Some("hunter2".to_string());',
+      'let authorization = format!("Bearer hunter2");',
+      'password = f"hunter2"',
+      'password = r"hunter2"',
+    ].join("\n");
+    const result = redactSecretText(input);
+
+    expect(result.value).toBe(
+      [
+        ...safe,
+        'const password = getLiteral("[REDACTED]");',
+        'const token = Buffer.from("[REDACTED]");',
+        'let api_key = Some("[REDACTED]".to_string());',
+        'let authorization = format!("[REDACTED]");',
+        'password = f"[REDACTED]"',
+        'password = r"[REDACTED]"',
+      ].join("\n"),
+    );
+  });
+
+  it("recognizes JSON Unicode escapes in credential keys", () => {
+    const result = redactSecretText(
+      '{"pass\\u0077ord":"hunter2","api\\u004bey":"tiny-secret","\\u0063redentials":["other-secret"]}',
+    );
+
+    expect(result.value).toBe(
+      '{"pass\\u0077ord":"[REDACTED]","api\\u004bey":"[REDACTED]","\\u0063redentials":[REDACTED]}',
+    );
+    expect(redactSecretText('{\\"pass\\u0077ord\\":\\"hunter2\\"}').value).toBe(
+      '{\\"pass\\u0077ord\\":\\"[REDACTED]\\"}',
+    );
+  });
+
+  it("keeps repeated assignment redaction bounded on single-line provider output", () => {
+    const small = "password: safevalue ".repeat(2_500);
+    const large = small.repeat(2);
+    const startedSmall = performance.now();
+    const smallResult = redactSecretText(small);
+    const smallMs = Math.max(1, performance.now() - startedSmall);
+    const startedLarge = performance.now();
+    const largeResult = redactSecretText(large);
+    const largeMs = performance.now() - startedLarge;
+
+    expect(smallResult.redactionCount).toBe(2_500);
+    expect(largeResult.redactionCount).toBe(5_000);
+    expect(largeMs).toBeLessThan(2_000);
+    expect(largeMs / smallMs).toBeLessThan(3.5);
   });
 
   it("redacts remote approval capability tokens inside callback data and free text", () => {
@@ -103,7 +545,7 @@ describe("redactSecretText", () => {
   it("does not reinterpret repeated authorization labels as credential values", () => {
     const result = redactSecretText(`${"Authorization: ".repeat(128)}Bearer abcDEF-._~+/== done`);
 
-    expect(result.value).toContain("Authorization: [REDACTED] done");
+    expect(result.value).toBe("Authorization: [REDACTED]");
     expect(result.value).not.toContain("abcDEF");
     expect(result.redactionCount).toBe(1);
   });
@@ -207,6 +649,23 @@ describe("redactStructuredSecrets", () => {
       accessTokenExpiresAt: "2026-07-09T12:00:00.000Z",
       tokenRefreshSkewSeconds: 30,
     });
+  });
+
+  it("classifies generated-connector signing and consumer keys as credentials", () => {
+    const input = {
+      signingKey: "0123456789abcdef",
+      consumerKey: "ck_0123456789abcdef",
+      signingKeyId: "signing-key-1",
+      consumerKeyRef: "keychain:consumer-key",
+    };
+
+    expect(redactStructuredSecrets(input).value).toEqual({
+      signingKey: "[REDACTED]",
+      consumerKey: "[REDACTED]",
+      signingKeyId: "signing-key-1",
+      consumerKeyRef: "keychain:consumer-key",
+    });
+    expect(input.signingKey).toBe("0123456789abcdef");
   });
 
   it("reports and safely projects circular references", () => {
