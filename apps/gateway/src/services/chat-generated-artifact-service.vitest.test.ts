@@ -258,6 +258,34 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     expect(turns[1]?.generatedArtifacts).toEqual([]);
   });
 
+  it("projects legacy secrets out of generated-artifact references without mutating storage truth", () => {
+    const artifact = {
+      artifactId: "artifact-legacy",
+      sessionId: "session-legacy",
+      turnId: "turn-legacy",
+      title: "Deploy with DATABASE_PASSWORD=tiny-db-secret",
+      kind: "markdown",
+      content: "canonical artifact content",
+      sourceSurface: "chat",
+      version: 1,
+      providerId: "provider-legacy",
+      model: "Bearer tiny-model-secret",
+      createdAt: now,
+      updatedAt: now,
+    } satisfies ChatGeneratedArtifactRecord;
+
+    const reference = buildGeneratedArtifactReference(artifact);
+
+    expect(JSON.stringify(reference)).not.toContain("tiny-db-secret");
+    expect(JSON.stringify(reference)).not.toContain("tiny-model-secret");
+    expect(reference).toMatchObject({
+      artifactId: "artifact-legacy",
+      providerId: "provider-legacy",
+    });
+    expect(artifact.title).toContain("tiny-db-secret");
+    expect(artifact.model).toContain("tiny-model-secret");
+  });
+
   it("reuses existing turn artifacts and preserves supersede lineage idempotently", async () => {
     const { storage, rootDir } = await createStorage();
     roots.push(rootDir);

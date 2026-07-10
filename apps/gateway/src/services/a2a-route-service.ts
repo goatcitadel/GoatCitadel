@@ -23,6 +23,12 @@ import type { Storage } from "@goatcitadel/storage";
 import type { FastifyRequest } from "fastify";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { timingSafeStringEqual } from "./crypto-equals.js";
+import {
+  projectA2AExternalValue,
+  projectA2AJsonRpcResponseForExternal,
+  projectA2ATaskEventForExternal,
+  projectA2ATaskForExternal,
+} from "./a2a-public-projection.js";
 import { type EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import {
   buildA2ABridgeStatus,
@@ -192,6 +198,14 @@ export class A2ARouteService {
     peer: A2APeerAuthResult,
     body: unknown,
     checkedAt = new Date().toISOString(),
+  ): Promise<A2AJsonRpcResponse> {
+    return projectA2AJsonRpcResponseForExternal(await this.handleJsonRpcRaw(peer, body, checkedAt));
+  }
+
+  private async handleJsonRpcRaw(
+    peer: A2APeerAuthResult,
+    body: unknown,
+    checkedAt: string,
   ): Promise<A2AJsonRpcResponse> {
     const request = parseJsonRpcRequest(body);
     if (!request.ok) {
@@ -462,6 +476,10 @@ export class A2ARouteService {
     input: A2AOutboundPreviewRequest,
     checkedAt = new Date().toISOString(),
   ): A2AOutboundPreviewResponse {
+    return projectA2AExternalValue(this.buildOutboundPreview(input, checkedAt));
+  }
+
+  private buildOutboundPreview(input: A2AOutboundPreviewRequest, checkedAt: string): A2AOutboundPreviewResponse {
     const peer = this.findOutboundPeer(input.peerId);
     const transport = normalizeOutboundTransport(input.transport);
     const envelope: A2AJsonRpcRequest = {
@@ -497,7 +515,15 @@ export class A2ARouteService {
     actorId: string,
     checkedAt = new Date().toISOString(),
   ): Promise<A2AOutboundSendResponse> {
-    const preview = this.previewOutbound(input, checkedAt);
+    return projectA2AExternalValue(await this.sendOutboundRaw(input, actorId, checkedAt));
+  }
+
+  private async sendOutboundRaw(
+    input: A2AOutboundPreviewRequest,
+    actorId: string,
+    checkedAt: string,
+  ): Promise<A2AOutboundSendResponse> {
+    const preview = this.buildOutboundPreview(input, checkedAt);
     const idempotencyKey = input.idempotencyKey?.trim() || hashStableJson(preview.envelope);
     const peer = this.findOutboundPeer(input.peerId);
     if (!preview.callable || !peer) {
@@ -594,7 +620,7 @@ export class A2ARouteService {
         if (!response.ok) {
           throw new Error(`A2A peer returned HTTP ${response.status}.`);
         }
-        return parseJsonRpcResponse(payload);
+        return projectA2AJsonRpcResponseForExternal(parseJsonRpcResponse(payload));
       },
     });
 
@@ -862,7 +888,7 @@ export class A2ARouteService {
     const statusState = localTask ? mapTaskStatusToA2AState(localTask.status, binding.state) : binding.state;
     const message = readInboundMessageFromBinding(binding);
     const artifacts = binding.localTaskId ? this.readArtifacts(binding.localTaskId) : [];
-    return {
+    const task: A2ABridgeTask = {
       id: binding.a2aTaskId,
       contextId: binding.contextId,
       status: {
@@ -882,6 +908,7 @@ export class A2ARouteService {
         localTaskStatus: localTask?.status,
       },
     };
+    return projectA2ATaskForExternal(task);
   }
 
   private buildEventsForTask(task: A2ABridgeTask, since: number, checkedAt: string): A2ABridgeTaskEvent[] {
@@ -922,7 +949,7 @@ export class A2ARouteService {
         lastEventSequence: events[events.length - 1]!.sequence,
       });
     }
-    return events.filter((event) => event.sequence > since);
+    return events.filter((event) => event.sequence > since).map(projectA2ATaskEventForExternal);
   }
 
   private readArtifacts(taskId: string): A2ABridgeArtifact[] {

@@ -10,12 +10,14 @@ import type {
   TaskRecord,
   WorkspaceRecord,
 } from "@goatcitadel/contracts";
+import { projectChatSessionForPublic } from "../services/chat-secret-projection.js";
 
 const DEMO_WORKSPACE_SLUG = "goatcitadel-demo";
 const DEMO_WORKSPACE_NAME = "GoatCitadel Demo";
 const DEMO_PROJECT_NAME = "Adoption Tour";
 const DEMO_PROJECT_PATH = "demo/goatcitadel-adoption-tour";
 const DEMO_TAG = "goatcitadel-demo";
+const DEMO_CHAT_TITLE = "Demo Chat: guided operations tour";
 
 const STARTER_PROMPTS: DemoPromptSeed[] = [
   {
@@ -24,14 +26,14 @@ const STARTER_PROMPTS: DemoPromptSeed[] = [
     prompt: "Give me a plain-English tour of what GoatCitadel can help me do today.",
   },
   {
-    surface: "cowork",
+    surface: "chat",
     title: "Plan a launch workflow",
-    prompt: "Create a visible Cowork plan for launching a small local-first AI product.",
+    prompt: "Create a visible agentic plan in Chat for launching a small local-first AI product.",
   },
   {
-    surface: "code",
+    surface: "chat",
     title: "Review a code change",
-    prompt: "Review this repo like a senior engineer and propose the smallest safe validation path.",
+    prompt: "From Chat, review this repo like a senior engineer and propose the smallest safe validation path.",
   },
 ];
 
@@ -98,7 +100,7 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     project = fastify.services.chatProjects.createChatProject({
       workspaceId: workspace.workspaceId,
       name: DEMO_PROJECT_NAME,
-      description: "A sample project that ties Chat, Cowork, and Code threads together.",
+      description: "A sample project for conversation, agentic planning, and governed code-capability work in Chat.",
       workspacePath: DEMO_PROJECT_PATH,
       color: "#14b8a6",
     }) as ChatProjectRecord;
@@ -108,35 +110,12 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     throw new Error("Demo project could not be created.");
   }
 
-  const chatSession = ensureDemoSession(
-    fastify,
-    workspace.workspaceId,
-    project.projectId,
-    "chat",
-    created,
-    "chatSession",
-  );
-  const coworkSession = ensureDemoSession(
-    fastify,
-    workspace.workspaceId,
-    project.projectId,
-    "cowork",
-    created,
-    "coworkSession",
-  );
-  const codeSession = ensureDemoSession(
-    fastify,
-    workspace.workspaceId,
-    project.projectId,
-    "code",
-    created,
-    "codeSession",
-  );
+  const chatSession = ensureDemoSession(fastify, workspace.workspaceId, project.projectId, created);
 
   const coworkTask = ensureDemoTask(fastify, workspace.workspaceId, {
-    title: "Demo Cowork mission: launch readiness",
+    title: "Demo agentic mission: launch readiness",
     description:
-      "Use Cowork to decompose a launch task, expose blockers, and keep approvals and evidence visible to the operator.",
+      "Use Chat to decompose a launch task, expose blockers, and keep approvals and evidence visible to the operator.",
     status: "planning",
     priority: "normal",
   });
@@ -145,10 +124,10 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     fastify.services.tasks.appendTaskActivity(coworkTask.task.taskId, {
       activityType: "comment",
       agentId: "demo",
-      message: "Demo task created to show Cowork planning, blockers, and deliverables.",
+      message: "Demo task created to show agentic planning, blockers, and deliverables in Chat.",
     });
   }
-  const governedJob = await ensureFirstRunGovernedJob(fastify, workspace, coworkSession, coworkTask.task);
+  const governedJob = await ensureFirstRunGovernedJob(fastify, workspace, chatSession, coworkTask.task);
   if (governedJob.created && governedJob.durableBacked) {
     notes.push("Created a first-run approval checkpoint backed by a durable run; approve it only after inspection.");
   } else if (!governedJob.durableBacked) {
@@ -158,8 +137,8 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
   }
 
   const codeTask = ensureDemoTask(fastify, workspace.workspaceId, {
-    title: "Demo Code mission: validate a small change",
-    description: "Use Code to inspect a patch, run targeted validation, export a diff, and hand off risk notes.",
+    title: "Demo code-capability mission: validate a small change",
+    description: "Use Chat to inspect a patch, run targeted validation, export a diff, and hand off risk notes.",
     status: "inbox",
     priority: "normal",
   });
@@ -209,11 +188,11 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     status,
     workspace: pickWorkspace(workspace),
     project: pickProject(project),
-    sessions: [chatSession, coworkSession, codeSession].map(pickSession),
+    sessions: [chatSession].map(pickSession),
     tasks: [coworkTask.task, codeTask.task].map(pickTask),
     starterPrompts: STARTER_PROMPTS,
     memorySeeds: MEMORY_SEEDS,
-    nextRoute: `/cowork?sessionId=${encodeURIComponent(coworkSession.sessionId)}`,
+    nextRoute: `/chat?sessionId=${encodeURIComponent(chatSession.sessionId)}`,
     notes: notes.length ? notes : ["Demo workspace is ready and uses only local/sample data."],
     created,
   };
@@ -233,7 +212,7 @@ async function readDemoState(fastify: FastifyInstance): Promise<DemoBootstrapSta
     };
   }
   const project = findDemoProject(fastify, workspace.workspaceId);
-  const sessions = (fastify.services.chatSessions
+  const demoSessions = (fastify.services.chatSessions
     .listChatSessions({
       workspaceId: workspace.workspaceId,
       projectId: project?.projectId,
@@ -242,23 +221,22 @@ async function readDemoState(fastify: FastifyInstance): Promise<DemoBootstrapSta
       includeHidden: true,
       limit: 20,
     })
-    .filter((item: ChatSessionRecord) => item.mode === "chat" || item.mode === "cowork" || item.mode === "code") ??
-    []) as ChatSessionRecord[];
+    .filter((item: ChatSessionRecord) => item.mode === "chat") ?? []) as ChatSessionRecord[];
+  const canonicalSession = demoSessions.find((item) => item.title === DEMO_CHAT_TITLE) ?? demoSessions[0];
+  const sessions = canonicalSession ? [canonicalSession] : [];
   const tasks = (fastify.services.tasks
     .listTasks(100, undefined, undefined, "all", workspace.workspaceId)
     .filter((item: TaskRecord) => item.title.startsWith("Demo ")) ?? []) as TaskRecord[];
-  const coworkSession = sessions.find((item) => item.mode === "cowork");
-
   return {
-    status: project && sessions.length >= 3 && tasks.length >= 2 ? "ready" : "partial",
+    status: project && sessions.length >= 1 && tasks.length >= 2 ? "ready" : "partial",
     workspace: pickWorkspace(workspace),
     project: project ? pickProject(project) : undefined,
     sessions: sessions.map(pickSession),
     tasks: tasks.map(pickTask),
     starterPrompts: STARTER_PROMPTS,
     memorySeeds: MEMORY_SEEDS,
-    nextRoute: coworkSession
-      ? `/cowork?sessionId=${encodeURIComponent(coworkSession.sessionId)}`
+    nextRoute: canonicalSession
+      ? `/chat?sessionId=${encodeURIComponent(canonicalSession.sessionId)}`
       : "/settings/onboarding",
     notes: ["Demo state is read-only until you press Start demo."],
   };
@@ -284,37 +262,31 @@ function ensureDemoSession(
   fastify: FastifyInstance,
   workspaceId: string,
   projectId: string,
-  mode: "chat" | "cowork" | "code",
   created: DemoBootstrapResponse["created"],
-  createdKey: keyof Pick<DemoBootstrapResponse["created"], "chatSession" | "coworkSession" | "codeSession">,
 ): ChatSessionRecord {
-  const existing = fastify.services.chatSessions
-    .listChatSessions({
-      workspaceId,
-      projectId,
-      tag: DEMO_TAG,
-      view: "all",
-      includeHidden: true,
-      limit: 30,
-    })
-    .find((item: ChatSessionRecord) => item.mode === mode) as ChatSessionRecord | undefined;
+  const existingSessions = fastify.services.chatSessions.listChatSessions({
+    workspaceId,
+    projectId,
+    tag: DEMO_TAG,
+    view: "all",
+    includeHidden: true,
+    limit: 30,
+  }) as ChatSessionRecord[];
+  const existing =
+    existingSessions.find((item) => item.mode === "chat" && item.title === DEMO_CHAT_TITLE) ??
+    existingSessions.find((item) => item.mode === "chat");
   if (existing) {
     return existing as ChatSessionRecord;
   }
 
-  created[createdKey] = true;
+  created.chatSession = true;
   return fastify.services.chatSessions.createChatSession({
     workspaceId,
     projectId,
-    mode,
+    mode: "chat",
     origin: "system",
     includeInHistory: true,
-    title:
-      mode === "chat"
-        ? "Demo Chat: product tour"
-        : mode === "cowork"
-          ? "Demo Cowork: visible mission"
-          : "Demo Code: validation loop",
+    title: DEMO_CHAT_TITLE,
     tags: [DEMO_TAG],
   }) as ChatSessionRecord;
 }
@@ -374,7 +346,7 @@ async function ensureFirstRunGovernedJob(
       },
       preview: {
         title: "First-run demo checkpoint",
-        surface: "cowork",
+        surface: "chat",
         workspace: workspace.name,
         task: task.title,
       },
@@ -382,7 +354,7 @@ async function ensureFirstRunGovernedJob(
         workspaceId: workspace.workspaceId,
         sessionId: session.sessionId,
         taskId: task.taskId,
-        originSurface: "cowork",
+        originSurface: "chat",
         actionType: "demo.first_run",
       },
       expiresAt: null,
@@ -396,7 +368,7 @@ async function ensureFirstRunGovernedJob(
         "First-run approval checkpoint created without durable-run linkage because durable execution is unavailable.",
       metadata: {
         approvalId: approval.approvalId,
-        surface: "cowork",
+        surface: "chat",
         sideEffectPosture: "local_demo_only",
       },
     });
@@ -409,11 +381,11 @@ async function ensureFirstRunGovernedJob(
     status: taskStatus,
     agenticContext: {
       ...(task.agenticContext ?? {}),
-      boardId: "cowork:demo",
+      boardId: "chat:demo",
       runId: durableRunId,
       durableRunId,
       parentSessionId: session.sessionId,
-      surface: "cowork",
+      surface: "chat",
       status: agenticStatus,
       contextMode: "isolated",
       workspaceScope: { kind: "session" },
@@ -428,7 +400,7 @@ async function ensureFirstRunGovernedJob(
       runId: durableRunId,
       approvalId: approval.approvalId,
       approvalStatus: approval.status,
-      surface: "cowork",
+      surface: "chat",
       sideEffectPosture: "local_demo_only",
     },
   });
@@ -494,11 +466,12 @@ function pickProject(project: ChatProjectRecord): DemoBootstrapStateResponse["pr
 }
 
 function pickSession(session: ChatSessionRecord): DemoBootstrapStateResponse["sessions"][number] {
+  const projected = projectChatSessionForPublic(session);
   return {
-    sessionId: session.sessionId,
-    title: session.title,
-    mode: session.mode,
-    projectId: session.projectId,
+    sessionId: projected.sessionId,
+    title: projected.title,
+    mode: projected.mode,
+    projectId: projected.projectId,
   };
 }
 

@@ -3,6 +3,7 @@ import type { ChatStreamChunk, ChatStreamChunkDraft, ChatTurnTraceRecord } from 
 import type { Storage } from "@goatcitadel/storage";
 import type { ActiveChatTurnStreamExecution, ChatTurnExecutionRegistry } from "../chat-turn-execution-registry.js";
 import type { PersistableChatStreamChunk } from "../chat-turn-types.js";
+import { projectChatStreamChunkForPublic } from "../chat-secret-projection.js";
 import { chatStreamChunkToRecord, toChatStreamChunk } from "./chat-stream-codecs.js";
 
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
@@ -58,22 +59,24 @@ export class GatewayChatStreamRuntime {
   }
 
   public persistChatStreamChunk(chunk: PersistableChatStreamChunk, runId?: string): ChatStreamChunk {
-    const active = this.host.chatTurnExecutionRegistry.getActiveStream(chunk.turnId);
-    const sequence = active?.nextSequence ?? this.host.storage.chatStreamEvents.getLatestSequence(chunk.turnId) + 1;
+    const projectedChunk = projectChatStreamChunkForPublic(chunk);
+    const active = this.host.chatTurnExecutionRegistry.getActiveStream(projectedChunk.turnId);
+    const sequence =
+      active?.nextSequence ?? this.host.storage.chatStreamEvents.getLatestSequence(projectedChunk.turnId) + 1;
     if (active) {
       active.nextSequence = sequence + 1;
     }
     const eventId = randomUUID();
     const enriched = {
-      ...chunk,
+      ...projectedChunk,
       eventId,
       sequence,
       ...(runId ? { runId } : {}),
     } as ChatStreamChunk;
     this.host.storage.chatStreamEvents.append({
       eventId,
-      sessionId: chunk.sessionId,
-      turnId: chunk.turnId,
+      sessionId: projectedChunk.sessionId,
+      turnId: projectedChunk.turnId,
       sequence,
       runId,
       chunkType: enriched.type,
@@ -82,7 +85,7 @@ export class GatewayChatStreamRuntime {
     });
     // Wake any live-tail reader immediately so it doesn't wait out the poll
     // interval before forwarding this chunk to the client (P0-#1).
-    this.signalChatStreamEvent(chunk.turnId);
+    this.signalChatStreamEvent(projectedChunk.turnId);
     this.purgeExpiredChatStreamEventsIfNeeded();
     return enriched;
   }
@@ -133,7 +136,7 @@ export class GatewayChatStreamRuntime {
           if (!payload) {
             continue;
           }
-          yield payload;
+          yield projectChatStreamChunkForPublic(payload);
           if (payload.type === "done") {
             return;
           }
@@ -257,8 +260,9 @@ export class GatewayChatStreamRuntime {
   ): AsyncGenerator<ChatStreamChunk> {
     let sequence = 1;
     for await (const chunk of source) {
+      const projectedChunk = projectChatStreamChunkForPublic(chunk);
       yield {
-        ...chunk,
+        ...projectedChunk,
         eventId: randomUUID(),
         sequence,
         ...(runId ? { runId } : {}),

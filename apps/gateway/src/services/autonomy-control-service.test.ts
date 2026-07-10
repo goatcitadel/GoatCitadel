@@ -112,6 +112,52 @@ describe("AutonomyControlService", () => {
       expect(status.audit.byKind).toHaveLength(5);
       expect(status.audit.recent).toHaveLength(2);
     });
+
+    it("projects restore snapshots for status while rollback still receives raw ledger truth", async () => {
+      const { service, storage, handlers } = await createService({ autonomyDisabled: false });
+      const priorSnapshot = {
+        operatorProfileId: "op-secret-projection",
+        revision: 7,
+        DATABASE_PASSWORD: "rollback-db-secret",
+        authorization: "Bearer rollback-auth-secret",
+        secretRef: "vault:operator-profile",
+        tokenId: "operator-profile-token-id",
+      };
+      const entry = storage.autonomyAudit.append({
+        kind: "memory",
+        targetKey: "op-secret-projection",
+        restoreRef: ref("memory", { priorSnapshot }),
+      });
+
+      const status = service.getStatus(1);
+
+      expect(JSON.stringify(status)).not.toContain("rollback-db-secret");
+      expect(JSON.stringify(status)).not.toContain("rollback-auth-secret");
+      expect(status.audit.recent[0]).toMatchObject({
+        auditId: entry.auditId,
+        kind: "memory",
+        targetKey: "op-secret-projection",
+        reverted: false,
+        restoreRef: {
+          kind: "memory",
+          priorSnapshot: {
+            operatorProfileId: "op-secret-projection",
+            revision: 7,
+            DATABASE_PASSWORD: "[REDACTED]",
+            authorization: "[REDACTED]",
+            secretRef: "vault:operator-profile",
+            tokenId: "operator-profile-token-id",
+          },
+        },
+      });
+      const rawEntry = storage.autonomyAudit.listRecent(1)[0];
+      expect(rawEntry?.restoreRef).toEqual({ kind: "memory", priorSnapshot });
+
+      const reverted = service.revertAutonomousChangesSince("2000-01-01T00:00:00.000Z");
+
+      expect(reverted.reverted).toBe(1);
+      expect(handlers.restoreOperatorProfile).toHaveBeenCalledWith(priorSnapshot);
+    });
   });
 
   describe("setKillSwitch", () => {
@@ -142,13 +188,20 @@ describe("AutonomyControlService", () => {
   describe("revertAutonomousChangesSince", () => {
     it("restores only entries >= T (newest-first) and marks them reverted", async () => {
       const { service, storage, handlers } = await createService();
-      storage.autonomyAudit.append({ kind: "tune", targetKey: "old", restoreRef: ref("tune", { tuneId: "old" }) }, "2026-06-20T00:00:00.000Z");
+      storage.autonomyAudit.append(
+        { kind: "tune", targetKey: "old", restoreRef: ref("tune", { tuneId: "old" }) },
+        "2026-06-20T00:00:00.000Z",
+      );
       storage.autonomyAudit.append(
         { kind: "tune", targetKey: "mid", restoreRef: ref("tune", { tuneId: "mid" }) },
         "2026-06-22T00:00:00.000Z",
       );
       storage.autonomyAudit.append(
-        { kind: "curator_archive", targetKey: "skill_new", restoreRef: ref("curator_archive", { skillId: "skill_new" }) },
+        {
+          kind: "curator_archive",
+          targetKey: "skill_new",
+          restoreRef: ref("curator_archive", { skillId: "skill_new" }),
+        },
         "2026-06-23T00:00:00.000Z",
       );
 
@@ -313,7 +366,10 @@ describe("AutonomyControlService", () => {
 
     it("can filter by kind", async () => {
       const { service, storage, handlers } = await createService();
-      storage.autonomyAudit.append({ kind: "tune", targetKey: "t", restoreRef: ref("tune") }, "2026-06-22T00:00:00.000Z");
+      storage.autonomyAudit.append(
+        { kind: "tune", targetKey: "t", restoreRef: ref("tune") },
+        "2026-06-22T00:00:00.000Z",
+      );
       storage.autonomyAudit.append(
         { kind: "curator_archive", targetKey: "c", restoreRef: ref("curator_archive") },
         "2026-06-22T00:00:01.000Z",

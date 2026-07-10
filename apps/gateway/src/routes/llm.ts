@@ -1,5 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  projectLlmConfigPublicValue,
+  projectProviderRuntimePublicValue,
+} from "../services/provider-settings-public-projection.js";
 
 const llmApiStyleSchema = z.enum([
   "openai-chat-completions",
@@ -227,7 +231,7 @@ const chatCompletionSchema = z.object({
 
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llm/providers", async (_request, reply) => {
-    return reply.send({ items: fastify.services.llm.listLlmProviders() });
+    return reply.send(projectProviderRuntimePublicValue({ items: fastify.services.llm.listLlmProviders() }));
   });
 
   fastify.get("/api/v1/llm/providers/openai-codex/oauth/status", async (_request, reply) => {
@@ -297,7 +301,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {
-    return reply.send(fastify.services.llm.getLlmConfigWithDetails());
+    return reply.send(projectLlmConfigPublicValue(fastify.services.llm.getLlmConfigWithDetails()));
   });
 
   fastify.patch("/api/v1/llm/config", async (request, reply) => {
@@ -306,7 +310,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.llm.updateLlmConfig(parsed.data));
+      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.updateLlmConfig(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -319,7 +323,9 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.services.llm.listLlmModels(parsed.data.providerId));
+      return reply.send(
+        projectProviderRuntimePublicValue(await fastify.services.llm.listLlmModels(parsed.data.providerId)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -331,7 +337,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.llm.getProviderAdvice(parsed.data));
+      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.getProviderAdvice(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -343,7 +349,9 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.llm.listLlmRuntimeMeasurements(parsed.data));
+      return reply.send(
+        projectProviderRuntimePublicValue(fastify.services.llm.listLlmRuntimeMeasurements(parsed.data)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -351,7 +359,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/llm/local-engines", async (_request, reply) => {
     try {
-      return reply.send(fastify.services.llm.listLlmLocalEngines());
+      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.listLlmLocalEngines()));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -363,7 +371,9 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.llm.listLlmEvalProofRuns(parsed.data.limit));
+      return reply.send(
+        projectProviderRuntimePublicValue(fastify.services.llm.listLlmEvalProofRuns(parsed.data.limit)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -375,7 +385,9 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.llm.exportLlmEvalProofRuns(parsed.data.limit));
+      return reply.send(
+        projectProviderRuntimePublicValue(fastify.services.llm.exportLlmEvalProofRuns(parsed.data.limit)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -387,7 +399,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.llm.runLlmEvalProof(parsed.data));
+      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.runLlmEvalProof(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -400,7 +412,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.services.llm.previewLlmModels(parsed.data));
+      return reply.send(projectProviderRuntimePublicValue(await fastify.services.llm.previewLlmModels(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -413,7 +425,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.services.llm.generateImage(parsed.data));
+      return reply.send(projectProviderRuntimePublicValue(await fastify.services.llm.generateImage(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -427,7 +439,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const result = await fastify.services.llm.createChatCompletion(parsed.data);
-      return reply.send(result);
+      return reply.send(projectProviderRuntimePublicValue(result));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

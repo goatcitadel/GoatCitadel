@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from "fastify";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { A2APeerAuthFailure, A2APeerAuthResult, A2ARouteService } from "./a2a-route-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
+import { projectA2AExternalErrorText, projectA2AExternalValue } from "./a2a-public-projection.js";
 import {
   type A2AGrpcJsonRequest,
   type A2AGrpcTaskEventsRequest,
@@ -70,20 +71,20 @@ function shouldStartA2AGrpcServer(config: GatewayRuntimeConfig): boolean {
 function createA2AGrpcHandlers(a2a: A2ARouteService): grpc.UntypedServiceImplementation {
   return {
     sendMessage: unary(a2a, async (peer, request: A2AGrpcJsonRequest) => ({
-      json: JSON.stringify(await a2a.sendGrpcMessage(peer, parseJsonRequest(request))),
+      json: JSON.stringify(projectA2AExternalValue(await a2a.sendGrpcMessage(peer, parseJsonRequest(request)))),
     })),
     sendStreamingMessage: unary(a2a, async (peer, request: A2AGrpcJsonRequest) => {
       const result = await a2a.sendGrpcStreamingMessage(peer, parseJsonRequest(request));
       return {
-        taskJson: JSON.stringify(result.task),
-        eventJson: result.events.map((event) => JSON.stringify(event)),
+        taskJson: JSON.stringify(projectA2AExternalValue(result.task)),
+        eventJson: result.events.map((event) => JSON.stringify(projectA2AExternalValue(event))),
       };
     }),
     getTask: unary(a2a, (peer, request: A2AGrpcTaskRequest) => ({
-      json: JSON.stringify(a2a.getGrpcTask(peer, taskRequestParams(request))),
+      json: JSON.stringify(projectA2AExternalValue(a2a.getGrpcTask(peer, taskRequestParams(request)))),
     })),
     cancelTask: unary(a2a, async (peer, request: A2AGrpcTaskRequest) => ({
-      json: JSON.stringify(await a2a.cancelGrpcTask(peer, taskRequestParams(request))),
+      json: JSON.stringify(projectA2AExternalValue(await a2a.cancelGrpcTask(peer, taskRequestParams(request)))),
     })),
     subscribeToTask: async (
       call: grpc.ServerWritableStream<A2AGrpcTaskEventsRequest, { json: string }>,
@@ -92,7 +93,7 @@ function createA2AGrpcHandlers(a2a: A2ARouteService): grpc.UntypedServiceImpleme
         const peer = authenticateGrpcPeer(a2a, call.metadata);
         const result = a2a.getGrpcTaskEvents(peer, taskEventsRequestParams(call.request));
         for (const event of result.events) {
-          call.write({ json: JSON.stringify(event) });
+          call.write({ json: JSON.stringify(projectA2AExternalValue(event)) });
         }
         call.end();
       } catch (error) {
@@ -100,19 +101,31 @@ function createA2AGrpcHandlers(a2a: A2ARouteService): grpc.UntypedServiceImpleme
       }
     },
     setTaskPushNotificationConfig: unary(a2a, async (peer, request: A2AGrpcJsonRequest) => ({
-      json: JSON.stringify(await a2a.setGrpcTaskPushNotificationConfig(peer, parseJsonRequest(request))),
+      json: JSON.stringify(
+        projectA2AExternalValue(await a2a.setGrpcTaskPushNotificationConfig(peer, parseJsonRequest(request))),
+      ),
     })),
     getTaskPushNotificationConfig: unary(a2a, (peer, request: A2AGrpcTaskRequest) => ({
-      json: JSON.stringify(a2a.getGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
+      json: JSON.stringify(
+        projectA2AExternalValue(a2a.getGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
+      ),
     })),
     listTaskPushNotificationConfig: unary(a2a, (peer, request: A2AGrpcJsonRequest) => ({
-      json: JSON.stringify(a2a.listGrpcTaskPushNotificationConfigs(peer, parseJsonRequest(request))),
+      json: JSON.stringify(
+        projectA2AExternalValue(a2a.listGrpcTaskPushNotificationConfigs(peer, parseJsonRequest(request))),
+      ),
     })),
     deleteTaskPushNotificationConfig: unary(a2a, (peer, request: A2AGrpcTaskRequest) => ({
-      json: JSON.stringify(a2a.deleteGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
+      json: JSON.stringify(
+        projectA2AExternalValue(a2a.deleteGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
+      ),
     })),
     getAuthenticatedExtendedCard: unary(a2a, (peer) => ({
-      json: JSON.stringify(a2a.getGrpcAuthenticatedExtendedAgentCard(peer, { checkedAt: new Date().toISOString() })),
+      json: JSON.stringify(
+        projectA2AExternalValue(
+          a2a.getGrpcAuthenticatedExtendedAgentCard(peer, { checkedAt: new Date().toISOString() }),
+        ),
+      ),
     })),
   };
 }
@@ -204,16 +217,25 @@ function parseJsonObject(value: string | undefined): Record<string, unknown> {
 
 function toGrpcError(error: unknown): grpc.ServiceError {
   if (isGrpcServiceError(error)) {
-    return error;
+    return grpcStatusError(
+      error.code,
+      projectA2AExternalErrorText(error.details || error.message || "A2A gRPC request failed."),
+    );
   }
   if (error instanceof A2AJsonRpcServiceError) {
-    return grpcStatusError(mapA2AServiceCode(error.code), error.message);
+    return grpcStatusError(mapA2AServiceCode(error.code), projectA2AExternalErrorText(error.message));
   }
   const routeError = error as { statusCode?: number; message?: string };
   if (typeof routeError.statusCode === "number") {
-    return grpcStatusError(mapHttpStatus(routeError.statusCode), routeError.message ?? "A2A gRPC request failed.");
+    return grpcStatusError(
+      mapHttpStatus(routeError.statusCode),
+      projectA2AExternalErrorText(routeError.message ?? "A2A gRPC request failed."),
+    );
   }
-  return grpcStatusError(grpc.status.INTERNAL, error instanceof Error ? error.message : "A2A gRPC request failed.");
+  return grpcStatusError(
+    grpc.status.INTERNAL,
+    projectA2AExternalErrorText(error instanceof Error ? error.message : "A2A gRPC request failed."),
+  );
 }
 
 function isGrpcServiceError(error: unknown): error is grpc.ServiceError {

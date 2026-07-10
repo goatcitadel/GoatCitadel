@@ -120,7 +120,62 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     expect(gateway.storage.chatStreamEvents.purgeBefore).toHaveBeenCalledWith(expect.stringMatching(/T.*Z$/));
   });
 
+  it("persists a projected tool-result chunk without mutating the executable record", () => {
+    const gateway = createGatewayHarness();
+    const toolRun = {
+      toolRunId: "tool-secret-1",
+      turnId: "turn-1",
+      sessionId: "session-1",
+      toolName: "docs.search",
+      status: "executed",
+      args: {
+        webhookUrl: "https://hooks.example.test/send?token=short-token",
+        tokenEnv: "DOCS_SEARCH_TOKEN",
+      },
+      result: {
+        authorization: "Bearer short",
+        DATABASE_PASSWORD: "tiny-secret",
+        tokenBudget: 2048,
+      },
+      startedAt: "2026-03-22T12:00:00.000Z",
+      finishedAt: "2026-03-22T12:00:01.000Z",
+    };
+
+    const chunk = GatewayService.prototype.persistChatStreamChunk.call(gateway, {
+      type: "tool_result",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      toolRun,
+    } as never);
+
+    expect(JSON.stringify(chunk)).not.toContain("short-token");
+    expect(JSON.stringify(chunk)).not.toContain("Bearer short");
+    expect(JSON.stringify(chunk)).not.toContain("tiny-secret");
+    expect(chunk).toMatchObject({
+      toolRun: {
+        args: { tokenEnv: "DOCS_SEARCH_TOKEN" },
+        result: { tokenBudget: 2048 },
+      },
+    });
+    expect(JSON.stringify(toolRun)).toContain("short-token");
+    expect(JSON.stringify(toolRun)).toContain("Bearer short");
+    expect(JSON.stringify(toolRun)).toContain("tiny-secret");
+    expect(JSON.stringify(gateway.storage.chatStreamEvents.append.mock.calls[0]?.[0]?.payload)).not.toContain(
+      "short-token",
+    );
+  });
+
   it("replays persisted events, skips malformed payloads, and stops on done", async () => {
+    const legacyPayload = {
+      type: "delta",
+      sessionId: "session-1",
+      eventId: "event-2",
+      sequence: 2,
+      turnId: "turn-1",
+      messageId: "message-1",
+      delta:
+        'part {\\"DATABASE_PASSWORD\\":\\"legacy-stream-secret\\",\\"webhookUrl\\":\\"https://hooks.example.test/services/team/legacy-stream-hook\\"}',
+    };
     const gateway = createGatewayHarness({
       storage: {
         chatStreamEvents: {
@@ -131,15 +186,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
                 { sequence: 1, payload: { type: "delta", sessionId: "session-1" } },
                 {
                   sequence: 2,
-                  payload: {
-                    type: "delta",
-                    sessionId: "session-1",
-                    eventId: "event-2",
-                    sequence: 2,
-                    turnId: "turn-1",
-                    messageId: "message-1",
-                    delta: "part",
-                  },
+                  payload: legacyPayload,
                 },
               ];
             }
@@ -169,9 +216,17 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
 
     expect(chunks).toEqual([
-      expect.objectContaining({ type: "delta", eventId: "event-2", sequence: 2, delta: "part" }),
+      expect.objectContaining({
+        type: "delta",
+        eventId: "event-2",
+        sequence: 2,
+        delta: expect.stringContaining("[REDACTED]"),
+      }),
       expect.objectContaining({ type: "done", eventId: "event-3", sequence: 3 }),
     ]);
+    expect(JSON.stringify(chunks)).not.toContain("legacy-stream-secret");
+    expect(JSON.stringify(chunks)).not.toContain("legacy-stream-hook");
+    expect(legacyPayload.delta).toContain("legacy-stream-secret");
   });
 
   it("replays memory citation provenance from persisted stream events", async () => {
@@ -370,8 +425,20 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
   });
 
   it("adds ephemeral stream envelopes without retaining them", async () => {
+    const toolRun = {
+      toolRunId: "tool-secret-ephemeral",
+      turnId: "turn-1",
+      sessionId: "session-1",
+      toolName: "docs.search",
+      status: "executed",
+      args: { webhookUrl: "https://hooks.example.test/send?token=short-token" },
+      result: { authorization: "Bearer short", DATABASE_PASSWORD: "tiny-secret" },
+      startedAt: "2026-03-22T12:00:00.000Z",
+      finishedAt: "2026-03-22T12:00:01.000Z",
+    };
     async function* source() {
       yield { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "a" } as never;
+      yield { type: "tool_result", sessionId: "session-1", turnId: "turn-1", toolRun } as never;
       yield { type: "done", sessionId: "session-1", turnId: "turn-1", messageId: "message-1" } as never;
     }
 
@@ -381,11 +448,17 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
 
     expect(chunks).toEqual([
       expect.objectContaining({ type: "delta", sequence: 1, runId: "run-1" }),
-      expect.objectContaining({ type: "done", sequence: 2, runId: "run-1" }),
+      expect.objectContaining({ type: "tool_result", sequence: 2, runId: "run-1" }),
+      expect.objectContaining({ type: "done", sequence: 3, runId: "run-1" }),
     ]);
+    expect(JSON.stringify(chunks[1])).not.toContain("short-token");
+    expect(JSON.stringify(chunks[1])).not.toContain("Bearer short");
+    expect(JSON.stringify(chunks[1])).not.toContain("tiny-secret");
+    expect(JSON.stringify(toolRun)).toContain("short-token");
     expect(chunks[0]?.eventId).toEqual(expect.any(String));
     expect(chunks[1]?.eventId).toEqual(expect.any(String));
-    expect(chunks[0]?.eventId).not.toBe(chunks[1]?.eventId);
+    expect(chunks[2]?.eventId).toEqual(expect.any(String));
+    expect(new Set(chunks.map((chunk) => chunk.eventId)).size).toBe(3);
   });
 
   it("applies Firecrawl defaults to docs ingest URL reads without touching unrelated requests", () => {

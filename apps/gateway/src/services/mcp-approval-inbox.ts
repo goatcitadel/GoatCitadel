@@ -13,6 +13,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import type { ApprovalInboxRepository } from "@goatcitadel/storage";
+import { projectMcpPublicValue } from "./mcp-public-projection.js";
 
 export const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
 export const MCP_APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.list";
@@ -417,7 +418,9 @@ async function resolveInboxItem(
     });
     return {
       item: deps.approvalInbox.get(inboxItemId),
-      approval: result.approval,
+      // The inbox item intentionally retains its tokenId and already-redacted one-time
+      // token marker. Only the resolved approval is projected for the remote caller.
+      approval: projectMcpPublicValue(result.approval),
     };
   } catch (error) {
     if (shouldDeferInboxTerminalization(error)) {

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { LlmConfigFile } from "@goatcitadel/contracts";
+import type { LlmConfigFile, LlmProviderConfig } from "@goatcitadel/contracts";
 import { Agent, ProxyAgent } from "undici";
 import {
   absorbCompletionStreamChunk,
@@ -10,6 +10,7 @@ import {
   createCompletionStreamAggregate,
 } from "./chat-agent-completion-adapters.js";
 import { LlmService } from "./llm-service.js";
+import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
 describe("LlmService", () => {
@@ -134,6 +135,83 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const exported = service.exportConfigFile();
     expect(exported.providers[0]?.apiKey).toBeUndefined();
+  });
+
+  it("preserves hidden provider transport credentials during public config edits", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "custom",
+      providers: [
+        {
+          providerId: "custom",
+          label: "Custom",
+          baseUrl: "https://provider.example.test/token/status",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "custom-model",
+          headers: {
+            Authorization: "Bearer top-level-secret",
+            "X-Tenant": "acme",
+          },
+          request: {
+            headers: {
+              Authorization: "Bearer request-secret",
+              "X-Trace": "trace-1",
+            },
+            auth: { type: "bearer", token: "inline-auth-secret" },
+            proxy: {
+              url: "https://proxy.example.test/token/path-secret?token=query-secret",
+              bypassHosts: ["old.example.test"],
+              auth: { type: "bearer", token: "proxy-auth-secret" },
+              tls: { clientCertPath: "cert.pem", clientKeyPath: "key.pem", serverName: "proxy.example.test" },
+            },
+          },
+        },
+      ],
+    };
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const displayed = projectLlmConfigPublicValue(service.exportConfigFile());
+    const displayedProvider = displayed.providers[0]!;
+
+    service.updateRuntimeConfig({
+      upsertProvider: {
+        ...displayedProvider,
+        label: "Renamed",
+        apiKey: "[REDACTED]",
+        request: {
+          ...displayedProvider.request,
+          proxy: {
+            ...displayedProvider.request?.proxy,
+            url: displayedProvider.request!.proxy!.url,
+            bypassHosts: ["new.example.test"],
+          },
+        },
+      },
+    });
+
+    const raw = (service as unknown as { providers: Map<string, LlmProviderConfig> }).providers.get("custom")!;
+    expect(raw).toMatchObject({
+      label: "Renamed",
+      baseUrl: "https://provider.example.test/token/status/v1",
+      headers: undefined,
+      request: {
+        headers: {
+          Authorization: "Bearer request-secret",
+          "X-Trace": "trace-1",
+          "X-Tenant": "acme",
+        },
+        auth: { type: "bearer", token: "inline-auth-secret" },
+        proxy: {
+          url: "https://proxy.example.test/token/path-secret?token=query-secret",
+          bypassHosts: ["new.example.test"],
+          auth: { type: "bearer", token: "proxy-auth-secret" },
+          tls: {
+            clientCertPath: "cert.pem",
+            clientKeyPath: "key.pem",
+            serverName: "proxy.example.test",
+          },
+        },
+      },
+    });
+    expect(raw.apiKey).not.toBe("[REDACTED]");
   });
 
   it("restores and exports the configured active model for the active provider", () => {

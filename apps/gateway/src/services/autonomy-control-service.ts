@@ -34,7 +34,7 @@ import type {
   AutonomyRevertEntryResult,
   AutonomyRevertSummary,
 } from "@goatcitadel/contracts";
-import { AUTONOMY_AUDIT_KINDS } from "@goatcitadel/contracts";
+import { AUTONOMY_AUDIT_KINDS, redactStructuredSecrets } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
 type AutonomyControlStorage = Pick<Storage, "autonomyAudit">;
@@ -260,7 +260,7 @@ export class AutonomyControlService {
       totalEntries,
       unrevertedEntries: totalEntries - revertedEntries,
       byKind,
-      recent: this.storage.autonomyAudit.listRecent(recentLimit),
+      recent: this.storage.autonomyAudit.listRecent(recentLimit).map((entry) => redactStructuredSecrets(entry).value),
     };
   }
 }

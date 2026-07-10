@@ -14,17 +14,27 @@ describe("chat message routes", () => {
   });
 
   it("lists chat messages with cursor and limit", async () => {
-    const listChatMessages = vi.fn(async () => [
+    const rawMessages = [
       {
         messageId: "m1",
         sessionId: "sess-1",
         role: "user",
         actorType: "user",
         actorId: "operator",
-        content: "hello",
+        content: "User supplied Authorization: Bearer user-owned-secret",
         timestamp: "2026-03-05T01:00:00.000Z",
       },
-    ]);
+      {
+        messageId: "m2",
+        sessionId: "sess-1",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: "Tool returned Authorization: Bearer assistant-leaked-secret",
+        timestamp: "2026-03-05T01:00:01.000Z",
+      },
+    ] as const;
+    const listChatMessages = vi.fn(async () => rawMessages);
     app = Fastify();
     app.decorate("services", { chatMessages: { listChatMessages } } as never);
     await app.register(chatRoutes);
@@ -40,9 +50,16 @@ describe("chat message routes", () => {
         {
           messageId: "m1",
           sessionId: "sess-1",
+          content: "User supplied Authorization: Bearer user-owned-secret",
+        },
+        {
+          messageId: "m2",
+          sessionId: "sess-1",
+          content: "Tool returned Authorization: [REDACTED]",
         },
       ],
     });
+    expect(rawMessages[1].content).toContain("assistant-leaked-secret");
   });
 
   it("requests compact decision trace hydration only when explicitly included", async () => {

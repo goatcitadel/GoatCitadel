@@ -92,7 +92,7 @@ describe("integrations Slack OAuth routes", () => {
     const payload = response.json();
     expect(payload.configured).toBe(true);
     expect(payload.connections).toHaveLength(1);
-    expect(payload.connections[0].connection.config.botToken).toBe("[redacted]");
+    expect(payload.connections[0].connection.config.botToken).toBe("[REDACTED]");
     expect(payload.connections[0].install).toMatchObject({ teamId: "T123", teamName: "Citadel" });
     expect(JSON.stringify(payload)).not.toContain("xoxb-secret");
   });
@@ -197,7 +197,7 @@ describe("integrations Slack OAuth routes", () => {
         }),
       }),
     );
-    expect(payload.connection.config.botToken).toBe("[redacted]");
+    expect(payload.connection.config.botToken).toBe("[REDACTED]");
     expect(JSON.stringify(payload)).not.toContain("xoxb-secret");
     expect(payload.install.teamName).toBe("Citadel");
   });
@@ -253,7 +253,9 @@ describe("integrations Slack OAuth routes", () => {
     expect(response.body).toContain("Citadel &lt;Ops&gt; &amp; &quot;QA&quot;");
     expect(response.body).toContain("goatcitadel.slackOAuth.connected");
     expect(response.body).not.toContain("<Ops>");
-    expect(response.body).toContain('window.opener.postMessage({"type":"goatcitadel.slackOAuth.connected","connectionId":"11111111-1111-1111-1111-111111111111","teamName":"Citadel \\u003cOps> & \\"QA\\"","teamId":"T123"}, "http://localhost:5173");');
+    expect(response.body).toContain(
+      'window.opener.postMessage({"type":"goatcitadel.slackOAuth.connected","connectionId":"11111111-1111-1111-1111-111111111111","teamName":"Citadel \\u003cOps> & \\"QA\\"","teamId":"T123"}, "http://localhost:5173");',
+    );
   });
 
   it("surfaces Slack OAuth exchange failures as gateway errors", async () => {
@@ -470,7 +472,7 @@ describe("integrations Slack OAuth routes", () => {
       status: "disconnected",
       lastError: undefined,
     });
-    expect(disconnected.json().connection.config.botToken).toBe("[redacted]");
+    expect(disconnected.json().connection.config.botToken).toBe("[REDACTED]");
 
     const missing = await app.inject({
       method: "POST",

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { ValidationError } from "@goatcitadel/contracts";
+import { redactSecretText, redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
@@ -32,14 +32,18 @@ export async function persistChatToolArtifact(
   contentType?: string;
   snippet?: string;
 }> {
+  const projectedContent = projectToolArtifactContent(input.content, input.contentType);
+  const projectedSnippet = input.snippet
+    ? projectToolArtifactContent(input.snippet, input.contentType).content.slice(0, 4000)
+    : undefined;
   const artifactId = randomUUID();
-  const digest = createHash("sha256").update(input.content, "utf8").digest("hex");
+  const digest = createHash("sha256").update(projectedContent.content, "utf8").digest("hex");
   const extension = inferToolArtifactExtension(input.contentType);
   const storageRelPath = path.join("tool-artifacts", digest.slice(0, 2), `${digest}${extension}`);
   const absolutePath = path.resolve(deps.config.rootDir, deps.config.assistant.dataDir, storageRelPath);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   if (!fsSync.existsSync(absolutePath)) {
-    await fs.writeFile(absolutePath, input.content, "utf8");
+    await fs.writeFile(absolutePath, projectedContent.content, "utf8");
   }
   const record = deps.storage.chatToolArtifacts.create({
     artifactId,
@@ -48,8 +52,8 @@ export async function persistChatToolArtifact(
     toolRunId: input.toolRunId,
     toolName: input.toolName,
     contentType: input.contentType,
-    byteLength: Buffer.byteLength(input.content, "utf8"),
-    snippet: input.snippet?.slice(0, 4000),
+    byteLength: Buffer.byteLength(projectedContent.content, "utf8"),
+    snippet: projectedSnippet,
     storageRelPath,
     createdAt: input.createdAt ?? new Date().toISOString(),
   });
@@ -80,6 +84,11 @@ export async function getChatToolArtifactContent(
     createdAt: string;
   };
   content: string;
+  publicProjection?: {
+    contentRedacted: true;
+    redactionCount: number;
+    canonicalArtifactRemainsStored: true;
+  };
 }> {
   const workspaceId = options.workspaceId.trim();
   if (!workspaceId) {
@@ -101,10 +110,52 @@ export async function getChatToolArtifactContent(
     throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
   }
   const content = await fs.readFile(absolutePath, "utf8");
-  return {
-    artifact,
-    content,
+  const projectedContent = projectToolArtifactContent(content, artifact.contentType);
+  const projectedArtifact = {
+    ...artifact,
+    ...(artifact.snippet
+      ? { snippet: projectToolArtifactContent(artifact.snippet, artifact.contentType).content }
+      : {}),
   };
+  return {
+    artifact: projectedArtifact,
+    content: projectedContent.content,
+    ...(projectedContent.redactionCount > 0
+      ? {
+          publicProjection: {
+            contentRedacted: true as const,
+            redactionCount: projectedContent.redactionCount,
+            canonicalArtifactRemainsStored: true as const,
+          },
+        }
+      : {}),
+  };
+}
+
+function projectToolArtifactContent(
+  content: string,
+  contentType?: string,
+): { content: string; redactionCount: number } {
+  if (contentType?.toLowerCase().includes("json") || /^\s*[[{]/.test(content)) {
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      const projected = redactStructuredSecrets(parsed);
+      if (projected.redactionCount > 0) {
+        return {
+          content: JSON.stringify(projected.value),
+          redactionCount: projected.redactionCount,
+        };
+      }
+    } catch (error) {
+      // Captured tool output is often JSON-like rather than valid JSON. The
+      // text projector below still protects explicit credential labels.
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+    }
+  }
+  const projected = redactSecretText(content);
+  return { content: projected.value, redactionCount: projected.redactionCount };
 }
 
 function inferToolArtifactExtension(contentType?: string): string {

@@ -34,6 +34,7 @@ import {
   getChatTurnRecoveryAction,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   NotFoundError,
+  redactStructuredSecrets,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
@@ -765,7 +766,7 @@ export class ChatTurnAgentRunner {
       trace,
     };
 
-    const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
+    const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
     const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
     // Eval-integrity mode: this turn is a Prompt Lab evaluation. The persisted
     // assistant text must be the model's own output, the controller must not
@@ -1059,7 +1060,10 @@ export class ChatTurnAgentRunner {
             expiresAt: syntheticRun.approvalExpiresAt,
           });
         } else if (syntheticRun.record.status === "executed") {
-          assistantContent = buildLocalFileAccessProbeSuccess(accessCheckPath, syntheticRun.record.result);
+          assistantContent = buildLocalFileAccessProbeSuccess(
+            accessCheckPath,
+            projectToolResultForModel(syntheticRun.record.result),
+          );
         } else {
           assistantContent = buildLocalFileAccessProbeFailure(accessCheckPath, syntheticRun.record);
         }
@@ -1153,7 +1157,9 @@ export class ChatTurnAgentRunner {
       conversationMessages.push({
         role: "tool",
         tool_call_id: toolMessageId,
-        content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+        content: serializeToolResultForModel(
+          syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
+        ),
       } as ChatCompletionMessage);
     }
 
@@ -1213,7 +1219,9 @@ export class ChatTurnAgentRunner {
       conversationMessages.push({
         role: "tool",
         tool_call_id: toolMessageId,
-        content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+        content: serializeToolResultForModel(
+          syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
+        ),
       } as ChatCompletionMessage);
     }
 
@@ -1293,7 +1301,7 @@ export class ChatTurnAgentRunner {
           conversationMessages.push({
             role: "tool",
             tool_call_id: toolMessageId,
-            content: JSON.stringify(prefetchResultPayload),
+            content: serializeToolResultForModel(prefetchResultPayload),
           } as ChatCompletionMessage);
           for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
             citations.push(citation);
@@ -1403,7 +1411,7 @@ export class ChatTurnAgentRunner {
               conversationMessages.push({
                 role: "tool",
                 tool_call_id: fileReadToolMessageId,
-                content: JSON.stringify(fileReadPayload),
+                content: serializeToolResultForModel(fileReadPayload),
               } as ChatCompletionMessage);
               for (const citation of inferCitationsFromToolResult(fileReadRun.record)) {
                 citations.push(citation);
@@ -1529,7 +1537,7 @@ export class ChatTurnAgentRunner {
             conversationMessages.push({
               role: "tool",
               tool_call_id: toolMessageId,
-              content: JSON.stringify(
+              content: serializeToolResultForModel(
                 syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
               ),
             } as ChatCompletionMessage);
@@ -1584,7 +1592,7 @@ export class ChatTurnAgentRunner {
               conversationMessages.push({
                 role: "tool",
                 tool_call_id: fallbackToolMessageId,
-                content: JSON.stringify(
+                content: serializeToolResultForModel(
                   fallbackRun.record.result ?? { error: fallbackRun.record.error ?? "Tool failed." },
                 ),
               } as ChatCompletionMessage);
@@ -1690,7 +1698,7 @@ export class ChatTurnAgentRunner {
                 conversationMessages.push({
                   role: "tool",
                   tool_call_id: fileReadToolMessageId,
-                  content: JSON.stringify(fileReadPayload),
+                  content: serializeToolResultForModel(fileReadPayload),
                 } as ChatCompletionMessage);
                 for (const citation of inferCitationsFromToolResult(fileReadRun.record)) {
                   citations.push(citation);
@@ -1811,7 +1819,7 @@ export class ChatTurnAgentRunner {
           conversationMessages.push({
             role: "tool",
             tool_call_id: toolMessageId,
-            content: JSON.stringify(
+            content: serializeToolResultForModel(
               syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
             ),
           } as ChatCompletionMessage);
@@ -1885,7 +1893,9 @@ export class ChatTurnAgentRunner {
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolMessageId,
-          content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+          content: serializeToolResultForModel(
+            syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
+          ),
         } as ChatCompletionMessage);
         quickWebSynthesisOnly = true;
         for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
@@ -1950,7 +1960,7 @@ export class ChatTurnAgentRunner {
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolMessageId,
-          content: JSON.stringify(syntheticRun.record.result),
+          content: serializeToolResultForModel(syntheticRun.record.result),
         } as ChatCompletionMessage);
       }
       for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
@@ -2071,7 +2081,7 @@ export class ChatTurnAgentRunner {
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolMessageId,
-          content: JSON.stringify(syntheticRun.record.result),
+          content: serializeToolResultForModel(syntheticRun.record.result),
         } as ChatCompletionMessage);
 
         if (
@@ -2138,7 +2148,7 @@ export class ChatTurnAgentRunner {
               conversationMessages.push({
                 role: "tool",
                 tool_call_id: navigateToolMessageId,
-                content: JSON.stringify(navigateRun.record.result),
+                content: serializeToolResultForModel(navigateRun.record.result),
               } as ChatCompletionMessage);
             }
             for (const citation of inferCitationsFromToolResult(navigateRun.record)) {
@@ -2508,7 +2518,7 @@ export class ChatTurnAgentRunner {
               promptLabSynthesisOnly = true;
               conversationMessages.push({
                 role: "system",
-                content: buildPromptLabPartialToolCallSynthesisInstruction(toolRuns),
+                content: buildPromptLabPartialToolCallSynthesisInstruction(projectToolRunsForModel(toolRuns)),
               } as ChatCompletionMessage);
               completionState = {
                 ...completionState,
@@ -2603,7 +2613,7 @@ export class ChatTurnAgentRunner {
                   executionProfile,
                   completionOutcome,
                   assistantContent,
-                  toolRuns,
+                  toolRuns: projectToolRunsForModel(toolRuns),
                 })
               ) {
                 completionState = {
@@ -2746,7 +2756,7 @@ export class ChatTurnAgentRunner {
                 conversationMessages.push({
                   role: "tool",
                   tool_call_id: pendingToolCall.id,
-                  content: JSON.stringify({
+                  content: serializeToolResultForModel({
                     ...(preExecuted.executed.record.result ?? {
                       error: preExecuted.executed.record.error ?? "Tool failed.",
                     }),
@@ -2880,7 +2890,10 @@ export class ChatTurnAgentRunner {
                 );
                 conversationMessages.push({
                   role: "system",
-                  content: buildPromptLabToolBudgetSynthesisInstruction(executionBudget.maxToolRunsPerTurn, toolRuns),
+                  content: buildPromptLabToolBudgetSynthesisInstruction(
+                    executionBudget.maxToolRunsPerTurn,
+                    projectToolRunsForModel(toolRuns),
+                  ),
                 } as ChatCompletionMessage);
                 break;
               }
@@ -2891,7 +2904,7 @@ export class ChatTurnAgentRunner {
               );
               assistantContent = buildTurnBudgetExceededFallbackMessage({
                 turnInput: input,
-                toolRuns,
+                toolRuns: projectToolRunsForModel(toolRuns),
                 turnBudgetMs: effectiveTurnBudgetMs,
                 fallbackBuilders: {
                   buildFetchedContentBudgetFallback,
@@ -2946,7 +2959,7 @@ export class ChatTurnAgentRunner {
               if (remainingBeforeTool <= minimumRemainingBeforeTool) {
                 assistantContent = buildTurnBudgetExceededFallbackMessage({
                   turnInput: input,
-                  toolRuns,
+                  toolRuns: projectToolRunsForModel(toolRuns),
                   turnBudgetMs: effectiveTurnBudgetMs,
                   fallbackBuilders: {
                     buildFetchedContentBudgetFallback,
@@ -3109,7 +3122,7 @@ export class ChatTurnAgentRunner {
             conversationMessages.push({
               role: "tool",
               tool_call_id: toolCall.id,
-              content: JSON.stringify(toolResultPayload),
+              content: serializeToolResultForModel(toolResultPayload),
             } as ChatCompletionMessage);
             const researchListSourceFailureInstruction = buildResearchListSourceFailureInstruction({
               researchListIntent: intents.researchList,
@@ -3167,7 +3180,11 @@ export class ChatTurnAgentRunner {
           }
 
           if (circuitBreakerReason) {
-            assistantContent = buildToolFailureFallbackMessage(input.content, toolRuns, circuitBreakerReason);
+            assistantContent = buildToolFailureFallbackMessage(
+              input.content,
+              projectToolRunsForModel(toolRuns),
+              projectToolResultForModel(circuitBreakerReason),
+            );
             finalStatus = "completed";
             finalFailure = buildChatTurnFailureRecord(
               circuitBreakerFailureClass ??
@@ -3233,7 +3250,11 @@ export class ChatTurnAgentRunner {
                 ...routingState,
                 fallbackReason: repeatedLoopReason,
               };
-              assistantContent = buildToolFailureFallbackMessage(input.content, toolRuns, repeatedLoopReason);
+              assistantContent = buildToolFailureFallbackMessage(
+                input.content,
+                projectToolRunsForModel(toolRuns),
+                repeatedLoopReason,
+              );
               finalStatus = "completed";
               finalFailure = buildChatTurnFailureRecord("tool_loop_guard", repeatedLoopReason);
               break;
@@ -3264,7 +3285,7 @@ export class ChatTurnAgentRunner {
           finalStatus = "completed";
           assistantContent = buildTurnBudgetExceededFallbackMessage({
             turnInput: input,
-            toolRuns,
+            toolRuns: projectToolRunsForModel(toolRuns),
             turnBudgetMs: error.turnBudgetMs,
             fallbackBuilders: {
               buildFetchedContentBudgetFallback,
@@ -3289,7 +3310,7 @@ export class ChatTurnAgentRunner {
             finalStatus = "completed";
             assistantContent = buildTurnBudgetExceededFallbackMessage({
               turnInput: input,
-              toolRuns,
+              toolRuns: projectToolRunsForModel(toolRuns),
               turnBudgetMs: effectiveTurnBudgetMs,
               fallbackBuilders: {
                 buildFetchedContentBudgetFallback,
@@ -3455,7 +3476,7 @@ export class ChatTurnAgentRunner {
     ) {
       const repairedFallback = await this.synthesizeToolOutcomeFallback({
         input,
-        toolRuns,
+        toolRuns: projectToolRunsForModel(toolRuns),
         circuitBreakerReason: finalFailure?.message ?? circuitBreakerReason,
         turnBudgetDeadline,
         allowOverBudget: true,
@@ -3577,7 +3598,7 @@ export class ChatTurnAgentRunner {
       const repairedCoworkContent = normalizeCoworkRoleContractOutput({
         prompt: input.content,
         responseText: assistantContent,
-        toolRuns,
+        toolRuns: projectToolRunsForModel(toolRuns),
       });
       if (repairedCoworkContent !== assistantContent) {
         const preRepairContent = assistantContent;
@@ -3586,7 +3607,11 @@ export class ChatTurnAgentRunner {
       }
     }
     if (finalStatus !== "cancelled" && !promptLabEvalIntegrityTurn) {
-      assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
+      assistantContent = appendToolFailureConstraints(
+        assistantContent,
+        projectToolRunsForModel(toolRuns),
+        input.content,
+      );
     }
     // origin/main: record local-business research evidence on the pre-footer
     // answer (must run before the P0-B footer mutates assistantContent).
@@ -5168,10 +5193,11 @@ export class ChatTurnAgentRunner {
     // A genuine re-ask of the model below is allowed (it is still model output);
     // the deterministic template fallback is not. Profile-only by design.
     const evalIntegrityTurn = input.input.normalizationProfile === "prompt_pack_harness";
+    const projectedToolRuns = projectToolRunsForModel(input.toolRuns);
     const deterministic = evalIntegrityTurn
       ? ""
-      : buildDeterministicToolSynthesisFallback(input.input.content, input.toolRuns, input.circuitBreakerReason);
-    const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
+      : buildDeterministicToolSynthesisFallback(input.input.content, projectedToolRuns, input.circuitBreakerReason);
+    const toolSummary = summarizeToolRunsForSynthesis(projectedToolRuns, input.input.content);
     const synthesisTimeoutMs = input.allowOverBudget
       ? FINAL_PASS_COMPLETION_TIMEOUT_MS
       : input.turnBudgetDeadline
@@ -5260,7 +5286,7 @@ export class ChatTurnAgentRunner {
     const timeoutMs = input.turnBudgetDeadline
       ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
       : FINAL_PASS_COMPLETION_TIMEOUT_MS;
-    const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
+    const toolSummary = summarizeToolRunsForSynthesis(projectToolRunsForModel(input.toolRuns), input.input.content);
     const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
     let providerCalls = 0;
     let usage: ChatStreamUsageRecord | null = null;
@@ -12317,6 +12343,24 @@ function createOrRefreshAgentStreamTrace(
     }
     throw error;
   }
+}
+
+function projectToolResultForModel<T>(value: T): T {
+  return redactStructuredSecrets(value).value;
+}
+
+function projectHistoryMessagesForModel(
+  messages: ChatCompletionRequest["messages"],
+): ChatCompletionRequest["messages"] {
+  return messages.map((message) => (message.role === "user" ? message : projectToolResultForModel(message)));
+}
+
+function projectToolRunsForModel(toolRuns: ChatToolRunRecord[]): ChatToolRunRecord[] {
+  return projectToolResultForModel(toolRuns);
+}
+
+function serializeToolResultForModel(value: unknown): string {
+  return JSON.stringify(projectToolResultForModel(value));
 }
 
 function createAbortError(message: string): Error {

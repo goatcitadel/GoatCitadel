@@ -32,6 +32,10 @@ import {
 } from "./settings-auth-service.js";
 import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
 import { DeviceTokenVault } from "./device-token-vault.js";
+import {
+  preserveSettingsSecretsForPublicUpdate,
+  projectSettingsPublicValue,
+} from "./provider-settings-public-projection.js";
 
 interface AuthHarness {
   deps: SettingsAuthRuntimeDependencies;
@@ -694,6 +698,175 @@ describe("settings-auth-service durable settings", () => {
     } finally {
       delete process.env.GOATCITADEL_MESH_JOIN_TOKEN;
     }
+  });
+
+  it("preserves hidden llama.cpp command credentials during a public settings round trip", () => {
+    const host = buildHost();
+    host.config.assistant.llamaCpp.server.command = "llama-server --api-key command-secret";
+    host.config.assistant.llamaCpp.server.extraArgs = ["--api-key", "argument-secret", "--port", "8080"];
+    const displayed = projectSettingsPublicValue(getSettings(host));
+
+    const updated = updateSettings(host, {
+      llamaCpp: {
+        ...displayed.llamaCpp,
+        threads: 8,
+      },
+    });
+
+    expect(host.config.assistant.llamaCpp.server.command).toBe("llama-server --api-key command-secret");
+    expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual(["--api-key", "argument-secret", "--port", "8080"]);
+    expect(updated.llamaCpp.threads).toBe(8);
+  });
+
+  it("restores projected settings secrets without losing partial sibling edits or mutating the patch", () => {
+    const host = buildHost();
+    host.config.assistant.web.firecrawl.baseUrl =
+      "https://firecrawl.example.test/token/firecrawl-path-secret?token=firecrawl-query-secret&mode=read";
+    host.config.assistant.mesh.discovery.staticPeers = [
+      "https://peer-a.example.test/password/peer-a-secret?token=peer-a-query&mode=sync",
+      "https://peer-b.example.test/v1",
+    ];
+    host.config.assistant.npu.sidecar.baseUrl =
+      "https://npu.example.test/access-token/npu-path-secret?token=npu-query-secret&mode=accelerate";
+    host.config.assistant.llamaCpp.server.baseUrl =
+      "https://llama.example.test/access-token/llama-path-secret?token=llama-query-secret&mode=chat";
+    host.config.assistant.llamaCpp.server.command = "llama-server --api-key command-secret --port 8080";
+    host.config.assistant.llamaCpp.server.extraArgs = ["--api-key", "argument-secret", "--threads", "4"];
+    host.config.assistant.llamaCpp.launch.modelsRootPath = "https://models.example.test/token/models-root-secret";
+    host.config.assistant.llamaCpp.launch.modelPath = "https://models.example.test/password/model-path-secret";
+    host.config.assistant.llamaCpp.launch.alias = "token=alias-secret";
+
+    const displayed = projectSettingsPublicValue(getSettings(host));
+    const patch = {
+      web: {
+        firecrawl: {
+          baseUrl: displayed.web.firecrawl.baseUrl.replace("mode=read", "mode=write"),
+          timeoutMs: 31_000,
+        },
+      },
+      mesh: {
+        staticPeers: displayed.mesh.staticPeers,
+        mdns: false,
+      },
+      npu: {
+        sidecarUrl: displayed.npu.sidecarUrl,
+        autoStart: true,
+      },
+      llamaCpp: {
+        baseUrl: displayed.llamaCpp.baseUrl,
+        command: displayed.llamaCpp.command,
+        extraArgs: displayed.llamaCpp.extraArgs,
+        modelsRootPath: displayed.llamaCpp.modelsRootPath,
+        modelPath: displayed.llamaCpp.modelPath,
+        alias: displayed.llamaCpp.alias,
+        threads: 8,
+      },
+    };
+    const patchSnapshot = structuredClone(patch);
+
+    const updated = updateSettings(host, patch);
+
+    expect(host.config.assistant.web.firecrawl.baseUrl).toBe(
+      "https://firecrawl.example.test/token/firecrawl-path-secret?token=firecrawl-query-secret&mode=write",
+    );
+    expect(host.config.assistant.web.firecrawl.timeoutMs).toBe(31_000);
+    expect(host.config.assistant.mesh.discovery.staticPeers).toEqual([
+      "https://peer-a.example.test/password/peer-a-secret?token=peer-a-query&mode=sync",
+      "https://peer-b.example.test/v1",
+    ]);
+    expect(host.config.assistant.mesh.discovery.mdns).toBe(false);
+    expect(host.config.assistant.npu.sidecar.baseUrl).toBe(
+      "https://npu.example.test/access-token/npu-path-secret?token=npu-query-secret&mode=accelerate",
+    );
+    expect(host.config.assistant.npu.autoStart).toBe(false);
+    expect(host.config.assistant.llamaCpp.server.baseUrl).toBe(
+      "https://llama.example.test/access-token/llama-path-secret?token=llama-query-secret&mode=chat",
+    );
+    expect(host.config.assistant.llamaCpp.server.command).toBe("llama-server --api-key command-secret --port 8080");
+    expect(host.config.assistant.llamaCpp.server.extraArgs).toEqual(["--api-key", "argument-secret", "--threads", "4"]);
+    expect(host.config.assistant.llamaCpp.launch).toMatchObject({
+      modelsRootPath: "https://models.example.test/token/models-root-secret",
+      modelPath: "https://models.example.test/password/model-path-secret",
+      alias: "token=alias-secret",
+    });
+    expect(updated.llamaCpp.threads).toBe(8);
+    expect(patch).toEqual(patchSnapshot);
+    expect(JSON.stringify(host.config.assistant)).not.toContain("[REDACTED]");
+  });
+
+  it("keeps omitted projected fields omitted and accepts explicit non-marker replacements", () => {
+    const host = buildHost();
+    host.config.assistant.web.firecrawl.baseUrl = "https://firecrawl.example.test/token/firecrawl-secret";
+    host.config.assistant.mesh.discovery.staticPeers = ["https://peer.example.test/token/peer-secret"];
+    host.config.assistant.npu.sidecar.baseUrl = "https://npu.example.test/token/npu-secret";
+    host.config.assistant.llamaCpp.server.baseUrl = "https://llama.example.test/token/llama-secret";
+    host.config.assistant.llamaCpp.server.command = "llama-server --api-key command-secret";
+    host.config.assistant.llamaCpp.server.extraArgs = ["--api-key", "argument-secret"];
+    host.config.assistant.llamaCpp.launch.modelsRootPath = "https://models.example.test/token/models-root-secret";
+    host.config.assistant.llamaCpp.launch.modelPath = "https://models.example.test/password/model-path-secret";
+    host.config.assistant.llamaCpp.launch.alias = "token=alias-secret";
+    const current = getSettings(host);
+    const currentSnapshot = structuredClone(current);
+    const partialPatch = {
+      web: { firecrawl: { timeoutMs: 19_000 } },
+      mesh: { mdns: false },
+      npu: { autoStart: true },
+      llamaCpp: { threads: 6 },
+    };
+    const partialPatchSnapshot = structuredClone(partialPatch);
+
+    expect(preserveSettingsSecretsForPublicUpdate(current, partialPatch)).toEqual(partialPatch);
+    expect(current).toEqual(currentSnapshot);
+    expect(partialPatch).toEqual(partialPatchSnapshot);
+
+    updateSettings(host, {
+      web: { firecrawl: { baseUrl: "https://firecrawl-new.example.test/v2" } },
+      mesh: { staticPeers: ["https://peer-new.example.test/v1"] },
+      npu: { sidecarUrl: "https://npu-new.example.test/v1" },
+      llamaCpp: {
+        baseUrl: "https://llama-new.example.test/v1",
+        command: "llama-server --port 9090",
+        extraArgs: ["--threads", "8"],
+        modelsRootPath: "D:/Models",
+        modelPath: "D:/Models/model.gguf",
+        alias: "llama-new",
+      },
+    });
+
+    expect(host.config.assistant.web.firecrawl.baseUrl).toBe("https://firecrawl-new.example.test/v2");
+    expect(host.config.assistant.mesh.discovery.staticPeers).toEqual(["https://peer-new.example.test/v1"]);
+    expect(host.config.assistant.npu.sidecar.baseUrl).toBe("https://npu-new.example.test/v1");
+    expect(host.config.assistant.llamaCpp.server).toMatchObject({
+      baseUrl: "https://llama-new.example.test/v1",
+      command: "llama-server --port 9090",
+      extraArgs: ["--threads", "8"],
+    });
+    expect(host.config.assistant.llamaCpp.launch).toMatchObject({
+      modelsRootPath: "D:/Models",
+      modelPath: "D:/Models/model.gguf",
+      alias: "llama-new",
+    });
+  });
+
+  it("does not persist a public API-key projection marker as a provider credential", () => {
+    const host = buildHost();
+
+    updateSettings(host, {
+      llm: {
+        upsertProvider: {
+          providerId: "custom",
+          apiKey: "[REDACTED]",
+        },
+      },
+    });
+
+    expect(host.llmService.setProviderApiKey).not.toHaveBeenCalled();
+    expect(host.llmService.updateRuntimeConfig).toHaveBeenCalledWith({
+      upsertProvider: {
+        providerId: "custom",
+        apiKey: undefined,
+      },
+    });
   });
 
   it("stops disabled NPU and llama.cpp runtimes after settings updates", () => {

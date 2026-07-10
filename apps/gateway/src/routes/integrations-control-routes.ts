@@ -1,5 +1,12 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ExternalSideEffectRunHealthSummary, ExternalSideEffectRunRecord } from "@goatcitadel/contracts";
+import {
+  preserveIntegrationConnectionSecretsForPublicUpdate,
+  projectExternalSideEffectRunsForPublicResponse,
+  projectIntegrationConnectionForPublicResponse,
+  projectIntegrationConnectionsForPublicResponse,
+} from "../services/integration-connection-public-projection.js";
+import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import {
   catalogParamsSchema,
   catalogQuerySchema,
@@ -74,7 +81,9 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.integrations.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
+      items: projectIntegrationConnectionsForPublicResponse(
+        fastify.services.integrations.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
+      ),
     });
   });
 
@@ -85,7 +94,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     const items = fastify.services.integrations.listExternalSideEffectRuns(parsed.data);
     return reply.send({
-      items,
+      items: projectExternalSideEffectRunsForPublicResponse(items),
       summary: buildExternalSideEffectHealthSummary(items),
     });
   });
@@ -256,7 +265,8 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.integrations.createIntegrationConnection(parsed.data));
+      const created = fastify.services.integrations.createIntegrationConnection(parsed.data);
+      return reply.code(201).send(projectIntegrationConnectionForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -274,9 +284,15 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       });
     }
     try {
-      return reply.send(
-        fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, parsed.data),
-      );
+      const update =
+        parsed.data.config === undefined
+          ? parsed.data
+          : preserveIntegrationConnectionSecretsForPublicUpdate(
+              fastify.services.integrations.getIntegrationConnection(params.data.connectionId),
+              parsed.data,
+            );
+      const updated = fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, update);
+      return reply.send(projectIntegrationConnectionForPublicResponse(updated));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -308,10 +324,12 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       try {
         const idempotencyKey = parsed.data.idempotencyKey ?? request.idempotencyKey;
         return reply.send(
-          await fastify.services.integrations.invokeIntegrationConnectionAction(
-            params.data.connectionId,
-            params.data.actionId,
-            idempotencyKey ? { ...parsed.data, idempotencyKey } : parsed.data,
+          projectPublicSecretValue(
+            await fastify.services.integrations.invokeIntegrationConnectionAction(
+              params.data.connectionId,
+              params.data.actionId,
+              idempotencyKey ? { ...parsed.data, idempotencyKey } : parsed.data,
+            ),
           ),
         );
       } catch (error) {
@@ -319,7 +337,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         const lowered = message.toLowerCase();
         const notFound = lowered.includes("unknown integration connection");
         const unsupported = lowered.includes("unsupported integration action");
-        return reply.code(notFound || unsupported ? 404 : 409).send({ error: message });
+        return sendProjectedIntegrationError(reply, notFound || unsupported ? 404 : 409, message);
       }
     },
   );
@@ -333,10 +351,12 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         return reply.code(400).send({ error: params.error.flatten() });
       }
       try {
-        return reply.send(fastify.services.integrations.listDiscordPairings(params.data.connectionId));
+        return reply.send(
+          projectPublicSecretValue(fastify.services.integrations.listDiscordPairings(params.data.connectionId)),
+        );
       } catch (error) {
         const message = (error as Error).message;
-        return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+        return sendProjectedIntegrationError(reply, message.toLowerCase().includes("unknown") ? 404 : 409, message);
       }
     },
   );
@@ -351,11 +371,13 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       }
       try {
         return reply.send(
-          fastify.services.integrations.approveDiscordPairing(params.data.connectionId, params.data.pairingId),
+          projectPublicSecretValue(
+            fastify.services.integrations.approveDiscordPairing(params.data.connectionId, params.data.pairingId),
+          ),
         );
       } catch (error) {
         const message = (error as Error).message;
-        return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+        return sendProjectedIntegrationError(reply, message.toLowerCase().includes("unknown") ? 404 : 409, message);
       }
     },
   );
@@ -370,11 +392,13 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       }
       try {
         return reply.send(
-          fastify.services.integrations.revokeDiscordPairing(params.data.connectionId, params.data.pairingId),
+          projectPublicSecretValue(
+            fastify.services.integrations.revokeDiscordPairing(params.data.connectionId, params.data.pairingId),
+          ),
         );
       } catch (error) {
         const message = (error as Error).message;
-        return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+        return sendProjectedIntegrationError(reply, message.toLowerCase().includes("unknown") ? 404 : 409, message);
       }
     },
   );
@@ -385,17 +409,21 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.integrations.reconnectDiscordRuntime(params.data.connectionId));
+      return reply.send(
+        projectPublicSecretValue(await fastify.services.integrations.reconnectDiscordRuntime(params.data.connectionId)),
+      );
     } catch (error) {
       const message = (error as Error).message;
-      return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+      return sendProjectedIntegrationError(reply, message.toLowerCase().includes("unknown") ? 404 : 409, message);
     }
   });
 
   fastify.get("/api/v1/integrations/plugins", async (_request, reply) => {
-    return reply.send({
-      items: fastify.services.integrations.listIntegrationPlugins(),
-    });
+    return reply.send(
+      projectPublicSecretValue({
+        items: fastify.services.integrations.listIntegrationPlugins(),
+      }),
+    );
   });
 
   fastify.post("/api/v1/integrations/plugins/install", async (request, reply) => {
@@ -404,7 +432,9 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.integrations.installIntegrationPlugin(parsed.data));
+      return reply
+        .code(201)
+        .send(projectPublicSecretValue(fastify.services.integrations.installIntegrationPlugin(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -416,7 +446,9 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, true));
+      return reply.send(
+        projectPublicSecretValue(fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, true)),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -428,7 +460,11 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, false));
+      return reply.send(
+        projectPublicSecretValue(
+          fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, false),
+        ),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -441,14 +477,20 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     try {
       return reply.send(
-        await fastify.services.integrations.runIntegrationConnectionDiagnostics(params.data.connectionId),
+        projectPublicSecretValue(
+          await fastify.services.integrations.runIntegrationConnectionDiagnostics(params.data.connectionId),
+        ),
       );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendProjectedIntegrationError(reply, notFound ? 404 : 409, message);
     }
   });
+}
+
+function sendProjectedIntegrationError(reply: FastifyReply, statusCode: number, message: string) {
+  return reply.code(statusCode).send(projectPublicSecretValue({ error: message }));
 }
 
 function buildExternalSideEffectHealthSummary(

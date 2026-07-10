@@ -56,14 +56,16 @@ describe("demo routes", () => {
         workspace: true,
         project: true,
         chatSession: true,
-        coworkSession: true,
-        codeSession: true,
+        coworkSession: false,
+        codeSession: false,
         coworkTask: true,
         codeTask: true,
         memorySeed: true,
       },
     });
-    expect(first.json().sessions).toHaveLength(3);
+    expect(first.json().sessions).toEqual([expect.objectContaining({ mode: "chat" })]);
+    expect(first.json().starterPrompts.every((prompt: { surface?: string }) => prompt.surface === "chat")).toBe(true);
+    expect(first.json().nextRoute).toBe("/chat?sessionId=session-1");
     expect(first.json().tasks).toHaveLength(2);
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({
@@ -81,7 +83,7 @@ describe("demo routes", () => {
     });
     expect(services.__state.workspaces).toHaveLength(1);
     expect(services.__state.projects).toHaveLength(1);
-    expect(services.__state.sessions).toHaveLength(3);
+    expect(services.__state.sessions).toHaveLength(1);
     expect(services.__state.tasks).toHaveLength(2);
     expect(services.knowledge.knowledgeMemoryWrite).toHaveBeenCalledTimes(1);
     expect(services.approvals.createApproval).toHaveBeenCalledTimes(1);
@@ -91,11 +93,57 @@ describe("demo routes", () => {
       agenticContext: {
         runId: "approval-wait-run-1",
         durableRunId: "approval-wait-run-1",
-        parentSessionId: "session-2",
-        surface: "cowork",
+        parentSessionId: "session-1",
+        surface: "chat",
         status: "approval_required",
       },
     });
+  });
+
+  it("stays idempotent when the canonical session owner normalizes legacy modes to Chat", async () => {
+    const services = createDemoServices({ normalizeLegacyModes: true });
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const first = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+    const second = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(services.__state.sessions).toHaveLength(1);
+    expect(first.json()).toMatchObject({
+      sessions: [{ mode: "chat" }],
+      nextRoute: "/chat?sessionId=session-1",
+      created: {
+        chatSession: true,
+        coworkSession: false,
+        codeSession: false,
+      },
+    });
+    expect(second.json()).toMatchObject({
+      created: {
+        chatSession: false,
+        coworkSession: false,
+        codeSession: false,
+      },
+    });
+  });
+
+  it("projects reused demo session titles without mutating stored session state", async () => {
+    const services = createDemoServices();
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+    await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+    services.__state.sessions[0]!.title = "Authorization: Bearer demo-session-secret";
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/demo/state" });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.stringify(response.json())).not.toContain("demo-session-secret");
+    expect(JSON.stringify(response.json())).toContain("[REDACTED]");
+    expect(services.__state.sessions[0]!.title).toContain("demo-session-secret");
   });
 
   it("reuses the existing approval wait run when checkpoint task linking is retried", async () => {
@@ -226,16 +274,16 @@ describe("demo routes", () => {
         workspace: false,
         project: true,
         chatSession: true,
-        coworkSession: true,
-        codeSession: true,
+        coworkSession: false,
+        codeSession: false,
       },
     });
 
     services.__state.sessions.pop();
-    const stateAfterMissingCodeSession = await app.inject({ method: "GET", url: "/api/v1/demo/state" });
-    expect(stateAfterMissingCodeSession.json()).toMatchObject({
+    const stateAfterMissingChatSession = await app.inject({ method: "GET", url: "/api/v1/demo/state" });
+    expect(stateAfterMissingChatSession.json()).toMatchObject({
       status: "partial",
-      nextRoute: "/cowork?sessionId=session-2",
+      nextRoute: "/settings/onboarding",
       notes: ["Demo state is read-only until you press Start demo."],
     });
   });
@@ -256,8 +304,8 @@ describe("demo routes", () => {
         workspace: true,
         project: true,
         chatSession: true,
-        coworkSession: true,
-        codeSession: true,
+        coworkSession: false,
+        codeSession: false,
         coworkTask: true,
         codeTask: true,
         memorySeed: false,
@@ -267,7 +315,7 @@ describe("demo routes", () => {
   });
 });
 
-function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean } = {}) {
+function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean; normalizeLegacyModes?: boolean } = {}) {
   const linkApprovalsToDurableRuns = options.linkApprovalsToDurableRuns ?? true;
   const state = {
     workspaces: [] as Array<Record<string, unknown>>,
@@ -340,6 +388,7 @@ function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean } = 
           tokenTotal: 0,
           costUsdTotal: 0,
           ...input,
+          ...(options.normalizeLegacyModes ? { mode: "chat" } : {}),
         };
         state.sessions.push(session);
         return session;

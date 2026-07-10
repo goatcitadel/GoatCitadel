@@ -24,6 +24,7 @@ import {
   updateChatSession,
   updateChatSessionPrefs,
 } from "./chat-session-service.js";
+import { projectChatSessionForPublic } from "./chat-secret-projection.js";
 
 const NOW = "2026-05-03T16:00:00.000Z";
 
@@ -78,6 +79,85 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("does not persist public projection markers during editable session round trips", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const created = createChatSession(deps, {
+        workspaceId: "default",
+        title: "Deploy Authorization: Bearer title-secret to prod",
+        folderId: "safe-folder-id",
+        folderName: "password=folder-secret prod",
+        tags: ["Bearer tag-secret prod", "keep"],
+      });
+      const displayed = projectChatSessionForPublic(created);
+
+      expect(JSON.stringify(displayed)).not.toContain("title-secret");
+      expect(JSON.stringify(displayed)).not.toContain("folder-secret");
+      expect(JSON.stringify(displayed)).not.toContain("tag-secret");
+
+      const updated = updateChatSession(deps, created.sessionId, {
+        title: displayed.title,
+        folderName: displayed.folderName,
+        tags: displayed.tags,
+      });
+
+      expect(updated.title).toBe("Deploy Authorization: Bearer title-secret to prod");
+      expect(updated.folderName).toBe("password=folder-secret prod");
+      expect(updated.tags).toEqual(["Bearer tag-secret prod", "keep"]);
+      expect(JSON.stringify(storage.chatSessionMeta.get(created.sessionId))).not.toContain("[REDACTED]");
+
+      expect(() =>
+        updateChatSession(deps, created.sessionId, {
+          tags: [displayed.tags?.[1] ?? "", displayed.tags?.[0] ?? ""],
+        }),
+      ).toThrow("Projected session tags with hidden values cannot be reordered or resized.");
+      expect(storage.chatSessionMeta.get(created.sessionId)?.tags).toEqual(["Bearer tag-secret prod", "keep"]);
+
+      const surroundingTextEdited = updateChatSession(deps, created.sessionId, {
+        title: displayed.title?.replace("prod", "staging"),
+        folderName: displayed.folderName?.replace("prod", "staging"),
+        tags: [displayed.tags?.[0]?.replace("prod", "staging") ?? "", "changed"],
+      });
+      expect(surroundingTextEdited.title).toBe("Deploy Authorization: Bearer title-secret to staging");
+      expect(surroundingTextEdited.folderName).toBe("password=folder-secret staging");
+      expect(surroundingTextEdited.tags).toEqual(["Bearer tag-secret staging", "changed"]);
+
+      const safelyEdited = updateChatSession(deps, created.sessionId, {
+        title: "Safe replacement",
+        folderName: displayed.folderName,
+      });
+      expect(safelyEdited.title).toBe("Safe replacement");
+      expect(safelyEdited.folderName).toBe("password=folder-secret prod");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects reordering multiple marker-bearing session tags", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const created = createChatSession(deps, {
+        workspaceId: "default",
+        tags: ["Bearer first-secret prod", "Bearer second-secret staging"],
+      });
+      const displayed = projectChatSessionForPublic(created);
+
+      expect(() =>
+        updateChatSession(deps, created.sessionId, {
+          tags: [displayed.tags?.[1] ?? "", displayed.tags?.[0] ?? ""],
+        }),
+      ).toThrow("Projected session tags with hidden values cannot be reordered or resized.");
+      expect(storage.chatSessionMeta.get(created.sessionId)?.tags).toEqual([
+        "Bearer first-secret prod",
+        "Bearer second-secret staging",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("creates one hidden durable side chat per parent session", () => {
     const { storage, cleanup } = createStorage();
     try {

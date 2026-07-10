@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, type DurableRunRecord, type ExternalSideEffectRunRecord } from "@goatcitadel/contracts";
 import { evidenceReceiptsRoutes } from "./evidence-receipts.js";
 import {
   EvidenceReceiptService,
@@ -84,6 +84,77 @@ describe("evidence-receipts routes", () => {
     expect(body.contentHash).toMatch(/^[0-9a-f]{64}$/);
     expect(body.signature.length).toBeGreaterThan(0);
     expect(body.publicKey.length).toBeGreaterThan(0);
+  });
+
+  it("signs and returns a detached public projection of runtime errors and external references", async () => {
+    const rawLastError =
+      "Provider rejected Authorization: Bearer receipt-error-secret at https://user:password@example.test/fail?token=receipt-query-secret";
+    const rawExternalReference =
+      "url:https://ref-user:ref-password@example.test/result?access_token=receipt-external-secret";
+    const run: DurableRunRecord = {
+      runId: "run-secret",
+      workflowKey: "chat.turn",
+      status: "failed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 2,
+      payload: { workspaceId: "workspace-secret" },
+      lastError: rawLastError,
+      createdAt: FIXED_NOW,
+      updatedAt: FIXED_NOW,
+    };
+    const sideEffect: ExternalSideEffectRunRecord = {
+      runId: "extfx-secret",
+      workspaceId: "workspace-secret",
+      boundary: "integration.write",
+      routePath: "/api/v1/integrations/webhook/send",
+      actorScope: "operator",
+      idempotencyKey: "idem-secret-projection",
+      payloadHash: "payload-hash-secret-projection",
+      status: "completed",
+      replayPolicy: "audit_only",
+      resumeState: "completed",
+      externalReferenceId: rawExternalReference,
+      attemptCount: 1,
+      completedAt: FIXED_NOW,
+      createdAt: FIXED_NOW,
+      updatedAt: FIXED_NOW,
+    };
+    const safeSideEffect: ExternalSideEffectRunRecord = {
+      ...sideEffect,
+      runId: "extfx-safe-reference",
+      idempotencyKey: "idem-safe-reference",
+      externalReferenceId: "messageId:provider-message-123",
+    };
+    const service = buildService({
+      getDurableRun: () => run,
+      findCodeModeRun: () => undefined,
+      listApprovalEffects: () => [],
+      listSideEffectsForWorkspace: () => [sideEffect, safeSideEffect],
+    });
+    app = await makeApp(service);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/runs/run-secret/evidence-receipt",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as EvidenceReceipt;
+    expect(body.manifest.lineage.lastError).toBe(
+      "Provider rejected Authorization: [REDACTED] at https://[REDACTED]@example.test/fail?token=[REDACTED]",
+    );
+    expect(body.manifest.sideEffects[0]?.externalReferenceId).toBe(
+      "url:https://[REDACTED]@example.test/result?access_token=[REDACTED]",
+    );
+    expect(body.manifest.sideEffects[1]?.externalReferenceId).toBe("messageId:provider-message-123");
+    expect(response.body).not.toContain("receipt-error-secret");
+    expect(response.body).not.toContain("receipt-query-secret");
+    expect(response.body).not.toContain("receipt-external-secret");
+    expect(service.verifyEvidenceReceipt(body).valid).toBe(true);
+    expect(run.lastError).toBe(rawLastError);
+    expect(sideEffect.externalReferenceId).toBe(rawExternalReference);
+    expect(safeSideEffect.externalReferenceId).toBe("messageId:provider-message-123");
   });
 
   it("returns 404 when the run does not exist", async () => {

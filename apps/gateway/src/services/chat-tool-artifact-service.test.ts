@@ -93,6 +93,58 @@ describe("chat tool artifact service", () => {
       "Artifact path escapes the configured data directory.",
     );
   });
+
+  it("persists and serves secret-safe evidence while leaving source and legacy files unchanged", async () => {
+    const host = fakeHost(rootDir);
+    const source = JSON.stringify({
+      webhookUrl: "https://hooks.example.test/services/team/artifact-secret",
+      authorization: "Bearer short",
+      DATABASE_PASSWORD: "hunter2",
+      tokenEnv: "ARTIFACT_TOKEN",
+      tokenId: "artifact-token-id",
+      tokenBudget: 512,
+    });
+
+    const persisted = await persistChatToolArtifact(host, {
+      ...input("application/json"),
+      content: source,
+      snippet: source,
+    });
+    const storedContent = await fs.readFile(path.join(rootDir, "data", persisted.storageRelPath), "utf8");
+    const loaded = await getChatToolArtifactContent(host, persisted.artifactId, { workspaceId: "workspace-1" });
+
+    for (const value of [storedContent, loaded.content, loaded.artifact.snippet ?? ""]) {
+      expect(value).not.toContain("artifact-secret");
+      expect(value).not.toContain("Bearer short");
+      expect(value).not.toContain("hunter2");
+      expect(value).toContain("ARTIFACT_TOKEN");
+      expect(value).toContain("artifact-token-id");
+    }
+    expect(source).toContain("artifact-secret");
+
+    const legacyContent =
+      '{\\"DATABASE_PASSWORD\\":\\"legacy-artifact-secret\\",\\"webhookUrl\\":\\"https://hooks.example.test/services/team/legacy-hook-secret\\"}';
+    const legacyPath = "tool-artifacts/legacy/raw.txt";
+    await fs.mkdir(path.join(rootDir, "data", "tool-artifacts", "legacy"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, "data", legacyPath), legacyContent, "utf8");
+    host.storage.chatToolArtifacts.get.mockReturnValueOnce(
+      record({
+        artifactId: "artifact-legacy",
+        byteLength: Buffer.byteLength(legacyContent, "utf8"),
+        snippet: legacyContent,
+        storageRelPath: legacyPath,
+      }),
+    );
+
+    const legacy = await getChatToolArtifactContent(host, "artifact-legacy", { workspaceId: "workspace-1" });
+
+    expect(JSON.stringify(legacy)).not.toContain("legacy-artifact-secret");
+    expect(JSON.stringify(legacy)).not.toContain("legacy-hook-secret");
+    expect(legacy.publicProjection).toEqual(
+      expect.objectContaining({ contentRedacted: true, canonicalArtifactRemainsStored: true }),
+    );
+    await expect(fs.readFile(path.join(rootDir, "data", legacyPath), "utf8")).resolves.toBe(legacyContent);
+  });
 });
 
 function input(contentType?: string, snippet = "short snippet") {

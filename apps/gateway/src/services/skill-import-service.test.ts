@@ -164,6 +164,25 @@ describe("SkillImportService lookup", () => {
     });
   });
 
+  it("keeps credential-bearing direct source references raw inside the import service", async () => {
+    const rawSourceUrl =
+      "https://skill-user:internal-source-secret@github.com/example/private-skill.git?token=internal-source-secret";
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.lookupSources(rawSourceUrl, 5);
+
+    expect(result.query).toBe(rawSourceUrl);
+    expect(result.parsedSource).toMatchObject({
+      sourceUrl: rawSourceUrl,
+      repositoryUrl: rawSourceUrl,
+      upstreamUrl: rawSourceUrl,
+    });
+    expect(result.bestMatch).toMatchObject({
+      sourceUrl: rawSourceUrl,
+      repositoryUrl: rawSourceUrl,
+      upstreamUrl: rawSourceUrl,
+    });
+  });
+
   it("treats hosted skill.md URLs as direct installable bundles", async () => {
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     const result = await service.lookupSources("https://www.moltbook.com/skill.md", 5);
@@ -389,6 +408,7 @@ describe("SkillImportService validation", () => {
     expect(result.provenance).toMatchObject({
       sourceProvider: "local",
       sourceType: "local_path",
+      sourceRef: skillDir,
       nonCallableUntilActivated: true,
     });
     expect(result.scriptDisposition).toMatchObject({
@@ -403,7 +423,7 @@ describe("SkillImportService validation", () => {
       ]),
     );
     expect(service.listHistory(1)[0]?.details).toMatchObject({
-      provenance: expect.objectContaining({ nonCallableUntilActivated: true }),
+      provenance: expect.objectContaining({ sourceRef: skillDir, nonCallableUntilActivated: true }),
       scriptDisposition: expect.objectContaining({ action: "blocked_until_activation" }),
     });
   });

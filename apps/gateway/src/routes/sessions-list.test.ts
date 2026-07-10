@@ -13,6 +13,186 @@ describe("sessions routes", () => {
     app = null;
   });
 
+  it("projects legacy session operational responses while preserving raw user-authored transcript payloads", async () => {
+    const session = {
+      sessionId: "session-secret",
+      sessionKey: "mission:operator:secret",
+      kind: "dm",
+      channel: "mission",
+      account: "operator",
+      displayName: "Authorization: Bearer display-secret",
+      routingHints: {
+        authorization: "Bearer routing-secret",
+        tokenEnv: "SESSION_ROUTE_TOKEN",
+        secretRef: "keychain:session-route-token",
+      },
+      lastActivityAt: "2026-07-09T12:00:00.000Z",
+      updatedAt: "2026-07-09T12:00:00.000Z",
+      health: "healthy",
+      tokenInput: 11,
+      tokenOutput: 7,
+      tokenCachedInput: 3,
+      tokenTotal: 18,
+      costUsdTotal: 0.02,
+      budgetState: "ok",
+    };
+    const userEvent = {
+      eventId: "event-user",
+      actionId: "action-user",
+      idempotencyKey: "idem-user",
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      timestamp: "2026-07-09T12:00:01.000Z",
+      type: "message.user",
+      actorType: "user",
+      actorId: "operator",
+      payload: {
+        message: { role: "user", content: "User intentionally supplied Bearer user-message-secret" },
+      },
+      tokenInput: 11,
+    };
+    const assistantEvent = {
+      ...userEvent,
+      eventId: "event-assistant",
+      actionId: "action-assistant",
+      idempotencyKey: "idem-assistant",
+      type: "message.assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      payload: {
+        message: { role: "assistant", content: "Assistant repeated Bearer assistant-message-secret" },
+        errorMetadata: {
+          authorization: "Bearer assistant-error-secret",
+          webhookUrl: "https://hooks.example.test/services/team/assistant-path-secret?token=assistant-query-secret",
+        },
+      },
+    };
+    const toolEvent = {
+      ...assistantEvent,
+      eventId: "event-tool",
+      type: "tool.result",
+      payload: {
+        result: {
+          DATABASE_PASSWORD: "tool-password-secret",
+          tokenEnv: "TOOL_TOKEN",
+          secretRef: "keychain:tool-token",
+        },
+      },
+    };
+    const approvalEvent = {
+      ...assistantEvent,
+      eventId: "event-approval",
+      type: "approval.required",
+      payload: { preview: { authorization: "Bearer approval-secret" } },
+    };
+    const orchestrationEvent = {
+      ...assistantEvent,
+      eventId: "event-orchestration",
+      type: "orchestration.phase",
+      payload: { error: { webhookUrl: "https://example.test/hook?token=orchestration-secret" } },
+    };
+    const transcript = [userEvent, assistantEvent, toolEvent, approvalEvent, orchestrationEvent];
+    const summary = {
+      session,
+      transcriptEventCount: transcript.length,
+      latestEventType: "orchestration.phase",
+      lastMessagePreview: "Assistant repeated Bearer summary-secret",
+      countsByType: { "message.user": 1, "message.assistant": 1 },
+      errorMetadata: { authorization: "Bearer summary-error-secret" },
+    };
+    const timeline = [
+      {
+        eventId: userEvent.eventId,
+        timestamp: userEvent.timestamp,
+        type: userEvent.type,
+        actorType: userEvent.actorType,
+        actorId: userEvent.actorId,
+        preview: "User preview Authorization: Bearer user-preview-secret",
+        payload: userEvent.payload,
+        tokenInput: 11,
+      },
+      {
+        eventId: assistantEvent.eventId,
+        timestamp: assistantEvent.timestamp,
+        type: assistantEvent.type,
+        actorType: assistantEvent.actorType,
+        actorId: assistantEvent.actorId,
+        preview: "Assistant preview Bearer timeline-preview-secret",
+        payload: assistantEvent.payload,
+        tokenOutput: 7,
+      },
+    ];
+    const sessionsList = {
+      listSessions: vi.fn(() => [session]),
+      getSession: vi.fn(() => session),
+      getTranscript: vi.fn(async () => transcript),
+      getSessionSummary: vi.fn(async () => summary),
+      listSessionTimeline: vi.fn(async () => timeline),
+    };
+    app = Fastify();
+    app.decorate("services", {
+      sessionsList,
+      runtimeLifecycle: { getLifecycle: vi.fn(), exportLifecycle: vi.fn(), exportLifecycleSiemNdjson: vi.fn() },
+    } as never);
+    await app.register(sessionsListRoute);
+
+    const listed = await app.inject({ method: "GET", url: "/api/v1/sessions?limit=1" });
+    const detail = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.sessionId}` });
+    const transcriptResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${session.sessionId}/transcript`,
+    });
+    const summaryResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${session.sessionId}/summary`,
+    });
+    const timelineResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${session.sessionId}/timeline?limit=2`,
+    });
+
+    for (const response of [listed, detail, transcriptResponse, summaryResponse, timelineResponse]) {
+      expect(response.statusCode).toBe(200);
+    }
+    const listedJson = listed.json();
+    const detailJson = detail.json();
+    for (const payload of [listedJson, detailJson]) {
+      expect(JSON.stringify(payload)).not.toContain("display-secret");
+      expect(JSON.stringify(payload)).not.toContain("routing-secret");
+      expect(payload.items?.[0]?.tokenInput ?? payload.tokenInput).toBe(11);
+      expect(payload.items?.[0]?.routingHints?.tokenEnv ?? payload.routingHints?.tokenEnv).toBe("SESSION_ROUTE_TOKEN");
+    }
+    const transcriptJson = transcriptResponse.json();
+    expect(JSON.stringify(transcriptJson)).toContain("user-message-secret");
+    for (const secret of [
+      "assistant-message-secret",
+      "assistant-error-secret",
+      "assistant-path-secret",
+      "assistant-query-secret",
+      "tool-password-secret",
+      "approval-secret",
+      "orchestration-secret",
+    ]) {
+      expect(JSON.stringify(transcriptJson)).not.toContain(secret);
+    }
+    expect(transcriptJson.items[0].tokenInput).toBe(11);
+    expect(transcriptJson.items[2].payload.result.tokenEnv).toBe("TOOL_TOKEN");
+    expect(transcriptJson.items[2].payload.result.secretRef).toBe("keychain:tool-token");
+    expect(JSON.stringify(summaryResponse.json())).not.toContain("summary-secret");
+    expect(JSON.stringify(summaryResponse.json())).not.toContain("summary-error-secret");
+    const timelineJson = timelineResponse.json();
+    expect(JSON.stringify(timelineJson)).toContain("user-message-secret");
+    expect(JSON.stringify(timelineJson)).not.toContain("user-preview-secret");
+    expect(JSON.stringify(timelineJson)).not.toContain("timeline-preview-secret");
+    expect(JSON.stringify(timelineJson)).not.toContain("assistant-message-secret");
+    expect(timelineJson.items[0].tokenInput).toBe(11);
+    expect(timelineJson.items[1].tokenOutput).toBe(7);
+    expect(session.displayName).toContain("display-secret");
+    expect(session.routingHints.authorization).toContain("routing-secret");
+    expect(userEvent.payload.message.content).toContain("user-message-secret");
+    expect(assistantEvent.payload.message.content).toContain("assistant-message-secret");
+  });
+
   it("returns a runtime lifecycle projection for linked entities", async () => {
     const getRuntimeLifecycle = vi.fn(async () => ({
       query: {
@@ -319,17 +499,16 @@ describe("sessions routes", () => {
   });
 
   it("exports SIEM-ready runtime lifecycle NDJSON", async () => {
-    const exportLifecycleSiemNdjson = vi.fn(
-      async () =>
-        [
-          JSON.stringify({
-            schemaVersion: "goatcitadel.siem.runtime.v1",
-            eventType: "runtime.export",
-            timestamp: "2026-04-22T00:00:00.000Z",
-            payload: { ok: true },
-          }),
-          "",
-        ].join("\n"),
+    const exportLifecycleSiemNdjson = vi.fn(async () =>
+      [
+        JSON.stringify({
+          schemaVersion: "goatcitadel.siem.runtime.v1",
+          eventType: "runtime.export",
+          timestamp: "2026-04-22T00:00:00.000Z",
+          payload: { ok: true },
+        }),
+        "",
+      ].join("\n"),
     );
 
     app = Fastify();
@@ -360,6 +539,6 @@ describe("sessions routes", () => {
       sessionId: "session-1",
       format: "siem_ndjson",
     });
-    expect(response.body).toContain("\"eventType\":\"runtime.export\"");
+    expect(response.body).toContain('"eventType":"runtime.export"');
   });
 });

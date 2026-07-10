@@ -254,6 +254,89 @@ describe("chat session routes", () => {
     ).resolves.toMatchObject({ statusCode: 200 });
   });
 
+  it("projects public session titles and assistant or system search previews without mutating service state", async () => {
+    const listedSession = {
+      sessionId: "sess-secret",
+      updatedAt: "2026-05-14T00:00:00.000Z",
+      title: "Deploy with Bearer list-secret",
+      searchHits: [
+        {
+          messageId: "assistant-message",
+          excerpt: "Assistant observed Authorization: Bearer assistant-secret",
+          matchedText: "observed",
+          score: 4,
+        },
+      ],
+    };
+    const searchResponse = {
+      query: "deploy",
+      mode: "discovery",
+      generatedAt: "2026-05-14T00:00:01.000Z",
+      items: [
+        {
+          session: {
+            ...listedSession,
+            title: "DATABASE_PASSWORD=tiny-title-secret",
+          },
+          hits: [
+            {
+              messageId: "system-message",
+              excerpt: "System context used https://example.test/hook?token=system-query-secret",
+              matchedText: "context",
+              score: 2,
+            },
+          ],
+          matchedFields: ["title"],
+          score: 10,
+        },
+      ],
+    };
+    const recentSession = {
+      sessionId: "sess-secret",
+      projectId: "project-1",
+      projectLabel: "Gateway",
+      title: "Authorization: Bearer recent-secret",
+      sessionKey: "mission:operator:secret",
+      mode: "chat",
+      lastActivityAt: "2026-05-14T00:00:00.000Z",
+      lifecycleStatus: "active",
+    };
+    const chatSessions = createChatSessionsService({
+      listChatSessions: vi.fn(() => [listedSession]),
+      searchChatSessions: vi.fn(() => searchResponse),
+      listRecentCrossProjectSessions: vi.fn(() => [recentSession]),
+    });
+    app = buildApp(chatSessions);
+
+    const listed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?limit=1" });
+    const searched = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/session-search?query=deploy&mode=discovery",
+    });
+    const recents = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/recents?workspaceId=default",
+    });
+
+    expect(listed.statusCode).toBe(200);
+    expect(searched.statusCode).toBe(200);
+    expect(recents.statusCode).toBe(200);
+    for (const payload of [listed.json(), searched.json(), recents.json()]) {
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain("list-secret");
+      expect(serialized).not.toContain("assistant-secret");
+      expect(serialized).not.toContain("tiny-title-secret");
+      expect(serialized).not.toContain("system-query-secret");
+      expect(serialized).not.toContain("recent-secret");
+      expect(serialized).toContain("[REDACTED]");
+    }
+    expect(listedSession.title).toContain("list-secret");
+    expect(listedSession.searchHits[0]?.excerpt).toContain("assistant-secret");
+    expect(searchResponse.items[0]?.session.title).toContain("tiny-title-secret");
+    expect(searchResponse.items[0]?.hits[0]?.excerpt).toContain("system-query-secret");
+    expect(recentSession.title).toContain("recent-secret");
+  });
+
   it("returns validation and service errors without invoking invalid mutations", async () => {
     const chatSessions = createChatSessionsService({
       createChatSession: vi.fn(() => {

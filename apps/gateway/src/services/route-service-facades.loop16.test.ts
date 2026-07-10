@@ -138,6 +138,75 @@ describe("gateway route service facades", () => {
     expect(service.runMcpServerHealthCheck("server-1")).toEqual({ serverId: "server-1", status: "ok" });
   });
 
+  it("reconciles redacted MCP public updates before calling the raw admin port", () => {
+    const rawServer = {
+      serverId: "server-secret",
+      label: "Secret server",
+      transport: "stdio",
+      command: "node",
+      args: ["server.mjs", "--password", "short-pass", "--api-key=short-key", "--port", "3000"],
+      url: "https://mcp.example.test/token/path-secret?token=query-secret&mode=safe",
+      authType: "none",
+      enabled: true,
+      status: "disconnected",
+      category: "development",
+      trustTier: "restricted",
+      costTier: "free",
+      policy: {
+        requireFirstToolApproval: true,
+        redactionMode: "strict",
+        allowedToolPatterns: ["*"],
+        blockedToolPatterns: [],
+        notes: "Authorization: Bearer short-policy-secret",
+      },
+      createdAt: "2026-07-09T12:00:00.000Z",
+      updatedAt: "2026-07-09T12:00:00.000Z",
+    } as const;
+    const updateMcpServer = vi.fn((_serverId: string, input: Record<string, unknown>) => ({
+      ...rawServer,
+      ...input,
+    }));
+    const updateMcpServerPolicy = vi.fn((_serverId: string, policy: Record<string, unknown>) => ({
+      ...rawServer,
+      policy: { ...rawServer.policy, ...policy },
+    }));
+    const service = new McpRouteService({
+      listMcpServers: vi.fn(() => [rawServer]),
+      updateMcpServer,
+      updateMcpServerPolicy,
+    } as never);
+    const projected = service.listMcpServers()[0]!;
+
+    service.updateMcpServer(rawServer.serverId, {
+      label: "Renamed server",
+      args: projected.args?.map((entry) => (entry === "3000" ? "4000" : entry)),
+      url: projected.url?.replace("mode=safe", "mode=fast"),
+    });
+
+    expect(updateMcpServer).toHaveBeenCalledWith(
+      rawServer.serverId,
+      expect.objectContaining({
+        label: "Renamed server",
+        args: ["server.mjs", "--password", "short-pass", "--api-key=short-key", "--port", "4000"],
+        url: "https://mcp.example.test/token/path-secret?token=query-secret&mode=fast",
+      }),
+    );
+    expect(rawServer.args[2]).toBe("short-pass");
+
+    service.updateMcpServerPolicy(rawServer.serverId, {
+      ...projected.policy,
+      redactionMode: "basic",
+    });
+
+    expect(updateMcpServerPolicy).toHaveBeenCalledWith(
+      rawServer.serverId,
+      expect.objectContaining({
+        notes: rawServer.policy.notes,
+        redactionMode: "basic",
+      }),
+    );
+  });
+
   it("keeps workspace route mutations explicit and realtime-backed", async () => {
     const published: Array<{ eventType: string; source: string; payload?: Record<string, unknown> }> = [];
     const port = createWorkspacesRoutePort({

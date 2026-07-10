@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { A2AJsonRpcResponse, TaskRecord } from "@goatcitadel/contracts";
+import type { A2AJsonRpcResponse, TaskDeliverableRecord, TaskRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
+import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { A2ARouteService } from "./a2a-route-service.js";
 
 describe("A2ARouteService", () => {
@@ -133,6 +134,7 @@ describe("A2ARouteService", () => {
     );
     const taskId = readResultTask(created).id;
 
+    const rawPushUrl = "https://peer.example/a2a/push/path-secret?token=query-secret";
     const configured = await harness.service.handleJsonRpc(
       { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
       {
@@ -142,7 +144,7 @@ describe("A2ARouteService", () => {
         params: {
           taskId,
           pushNotificationConfig: {
-            url: "https://peer.example/a2a/push",
+            url: rawPushUrl,
             events: ["task.status"],
             authentication: { token: "notify-token" },
             maxAttempts: 2,
@@ -156,14 +158,17 @@ describe("A2ARouteService", () => {
     expect(config).toMatchObject({
       taskId,
       peerId: "peer-1",
-      url: "https://peer.example/a2a/push",
+      url: "[REDACTED]",
       lastDeliveryStatus: "delivered",
       auth: { scheme: "bearer", tokenPreview: "noti...oken" },
     });
     expect(JSON.stringify(config)).not.toContain("notify-token");
+    expect(JSON.stringify(config)).not.toContain("path-secret");
+    expect(JSON.stringify(config)).not.toContain("query-secret");
     expect(harness.storage.a2aTaskPushConfigs.get(taskId, "peer-1").authToken).toBe("notify-token");
+    expect(harness.storage.a2aTaskPushConfigs.get(taskId, "peer-1").url).toBe(rawPushUrl);
     expect(pushDeliveryFetch).toHaveBeenCalledWith(
-      "https://peer.example/a2a/push",
+      rawPushUrl,
       expect.objectContaining({
         allowlist: ["peer.example"],
         init: expect.objectContaining({
@@ -237,11 +242,188 @@ describe("A2ARouteService", () => {
     }
   });
 
+  it("projects local deliverables across JSON-RPC, HTTP+JSON, events, push payloads, and side-effect evidence", async () => {
+    const rawDeliverable: TaskDeliverableRecord = {
+      deliverableId: "deliverable-1",
+      taskId: "task-1",
+      deliverableType: "url",
+      title: "Credentialed local artifact",
+      path: "https://discord.com/api/webhooks/team-id/discord-short",
+      description:
+        "Authorization: Bearer tiny; inspect https://api.telegram.org/bottelegram-short/sendMessage and https://local.example/token/generic-short",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const pushDeliveryFetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 202 }));
+    const harness = createService({
+      bindings: ["JSONRPC", "HTTP_JSON"],
+      deliverables: [rawDeliverable],
+      pushDeliveryFetch,
+      networkAllowlist: ["peer.example"],
+    });
+    const authoredText = "Peer-authored Authorization: Bearer keep-this-message";
+
+    const created = await harness.service.handleJsonRpc(
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      {
+        jsonrpc: "2.0",
+        id: "rpc-local-artifact",
+        method: "SendMessage",
+        params: {
+          contextId: "ctx-local-artifact",
+          messageId: "message-local-artifact",
+          message: { role: "user", parts: [{ kind: "text", text: authoredText }] },
+        },
+      },
+      "2026-06-01T00:00:00.000Z",
+    );
+    const jsonRpcTask = readResultTask(created);
+    const httpTask = harness.service.getHttpJsonTask(
+      { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      { taskId: jsonRpcTask.id },
+      "2026-06-01T00:00:01.000Z",
+    );
+    const httpEvents = harness.service.getHttpJsonTaskEvents(
+      { peerId: "peer-1", scopes: ["a2a:http-json"] },
+      { taskId: jsonRpcTask.id, lastEventSequence: 0 },
+      "2026-06-01T00:00:01.000Z",
+    );
+
+    await harness.service.setTaskPushNotificationConfig(
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      {
+        taskId: jsonRpcTask.id,
+        pushNotificationConfig: {
+          url: "https://peer.example/webhooks/team/push-short",
+          events: ["task.artifact"],
+          authentication: { token: "tiny" },
+        },
+      },
+      "2026-06-01T00:00:02.000Z",
+    );
+
+    for (const outward of [jsonRpcTask, httpTask, httpEvents]) {
+      const serialized = JSON.stringify(outward);
+      expect(serialized).not.toContain("discord-short");
+      expect(serialized).not.toContain("telegram-short");
+      expect(serialized).not.toContain("generic-short");
+      expect(serialized).not.toContain("Bearer tiny");
+      expect(serialized).toContain(authoredText);
+    }
+    const pushBody = JSON.parse(
+      String((pushDeliveryFetch.mock.calls[0]?.[1] as { init?: { body?: unknown } } | undefined)?.init?.body ?? "{}"),
+    ) as Record<string, unknown>;
+    expect(JSON.stringify(pushBody)).not.toContain("discord-short");
+    expect(JSON.stringify(pushBody)).not.toContain("telegram-short");
+    expect(JSON.stringify(pushBody)).not.toContain("generic-short");
+    expect(JSON.stringify(pushBody)).not.toContain("Bearer tiny");
+    expect(JSON.stringify(pushBody)).toContain(authoredText);
+    expect(JSON.stringify(harness.storage.externalSideEffectRuns.listByConnection("peer-1"))).not.toContain(
+      "discord-short",
+    );
+    expect(rawDeliverable.path).toContain("discord-short");
+    expect(rawDeliverable.description).toContain("telegram-short");
+    expect(harness.tasks.listTaskDeliverables).toHaveReturnedWith([rawDeliverable]);
+  });
+
+  it("projects outbound previews without changing the executable authored input", () => {
+    const harness = createService();
+    const authoredText = "Peer-authored Authorization: Bearer keep-this-message";
+    const params = {
+      message: { role: "user", parts: [{ kind: "text", text: authoredText }] },
+      artifact: {
+        description: "Authorization: Bearer tiny",
+        uri: "https://discord.com/api/webhooks/team-id/preview-discord-short",
+        fallback: "https://local.example/token/preview-generic-short",
+      },
+    };
+
+    const preview = harness.service.previewOutbound({
+      peerId: "peer-missing",
+      method: "SendMessage",
+      params,
+    });
+
+    expect(JSON.stringify(preview)).not.toContain("Bearer tiny");
+    expect(JSON.stringify(preview)).not.toContain("preview-discord-short");
+    expect(JSON.stringify(preview)).not.toContain("preview-generic-short");
+    expect(preview.envelope.params?.message).toMatchObject({
+      role: "user",
+      parts: [expect.objectContaining({ kind: "text" })],
+    });
+    expect(JSON.stringify(preview)).not.toContain("keep-this-message");
+    expect(JSON.stringify(params)).toContain("preview-discord-short");
+  });
+
+  it("projects push failures before they enter delivery results or side-effect evidence", async () => {
+    const failure =
+      "Authorization: Bearer tiny at https://api.telegram.org/botpush-error-short/sendMessage and https://local.example/token/push-generic-short";
+    const postDispatchError = Object.assign(new Error(failure), {
+      externalOutcome: "unknown_after_send" as const,
+      manualReconciliationRequired: true,
+    });
+    const pushDeliveryFetch = vi.fn(async () => {
+      throw postDispatchError;
+    });
+    const harness = createService({ pushDeliveryFetch, networkAllowlist: ["peer.example"] });
+    const created = await harness.service.handleJsonRpc(
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      {
+        jsonrpc: "2.0",
+        id: "rpc-push-error-task",
+        method: "SendMessage",
+        params: { contextId: "ctx-push-error", messageId: "message-push-error", text: "Run push." },
+      },
+      "2026-06-01T00:00:00.000Z",
+    );
+    const taskId = readResultTask(created).id;
+
+    const configured = await harness.service.handleJsonRpc(
+      { peerId: "peer-1", scopes: ["a2a:jsonrpc"] },
+      {
+        jsonrpc: "2.0",
+        id: "rpc-push-error-config",
+        method: "SetTaskPushNotificationConfig",
+        params: {
+          taskId,
+          pushNotificationConfig: {
+            url: "https://peer.example/webhooks/team/push-url-short",
+            authentication: { token: "notify-short" },
+          },
+        },
+      },
+      "2026-06-01T00:00:01.000Z",
+    );
+
+    const publicConfig = readResult(configured).config;
+    const rawEvidence = harness.storage.externalSideEffectRuns.listByConnection("peer-1");
+    const publicEvidence = projectA2AExternalValue(rawEvidence);
+    expect(JSON.stringify(publicConfig)).not.toContain("Bearer tiny");
+    expect(JSON.stringify(publicConfig)).not.toContain("push-error-short");
+    expect(JSON.stringify(publicConfig)).not.toContain("push-generic-short");
+    expect(JSON.stringify(publicConfig)).toContain("[REDACTED]");
+    expect(JSON.stringify(publicEvidence)).not.toContain("Bearer tiny");
+    expect(JSON.stringify(publicEvidence)).not.toContain("push-error-short");
+    expect(JSON.stringify(publicEvidence)).not.toContain("push-generic-short");
+    expect(rawEvidence[0]).toMatchObject({
+      status: "unknown_external_outcome",
+      errorText: failure,
+    });
+    expect(postDispatchError).toMatchObject({
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+    });
+    expect(harness.storage.a2aTaskPushConfigs.get(taskId, "peer-1")).toMatchObject({
+      url: "https://peer.example/webhooks/team/push-url-short",
+      authToken: "notify-short",
+    });
+  });
+
   function createService(
     options: {
       bindings?: Array<"JSONRPC" | "HTTP_JSON">;
       pushDeliveryFetch?: A2ARouteServiceDependencies["pushDeliveryFetch"];
       networkAllowlist?: string[];
+      deliverables?: TaskDeliverableRecord[];
     } = {},
   ) {
     storage = new Storage({
@@ -263,7 +445,7 @@ describe("A2ARouteService", () => {
       createTask: vi.fn((input: Partial<TaskRecord>) => ({ ...task, ...input })),
       getTask: vi.fn(() => task),
       invokeAgenticControl: vi.fn(),
-      listTaskDeliverables: vi.fn(() => []),
+      listTaskDeliverables: vi.fn(() => options.deliverables ?? []),
       updateTask: vi.fn((_taskId: string, input: Partial<TaskRecord>) => ({ ...task, ...input })),
     };
     const chatTurnRuntime = {
@@ -318,6 +500,8 @@ function readResultTask(response: A2AJsonRpcResponse) {
     id: string;
     contextId: string;
     metadata: Record<string, unknown>;
+    messages: Array<Record<string, unknown>>;
+    artifacts: Array<Record<string, unknown>>;
   };
 }
 

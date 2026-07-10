@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
+import { projectDurableRouteResponse } from "../services/durable-public-projection.js";
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
@@ -67,68 +68,70 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   const durable = fastify.services.durable;
 
   fastify.get("/api/v1/durable/diagnostics", operatorOnly, async () => {
-    return durable.getDiagnostics();
+    return projectDurableRouteResponse(durable.getDiagnostics());
   });
 
   fastify.get("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+      return reply.code(400).send(projectDurableRouteResponse({ error: parsed.error.flatten() }));
     }
-    return {
+    return projectDurableRouteResponse({
       items: durable.listRuns(parsed.data.limit),
-    };
+    });
   });
 
   fastify.get("/api/v1/durable/dead-letters", operatorOnly, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+      return reply.code(400).send(projectDurableRouteResponse({ error: parsed.error.flatten() }));
     }
-    return {
+    return projectDurableRouteResponse({
       items: durable.listDeadLetters(parsed.data.limit),
-    };
+    });
   });
 
   fastify.get("/api/v1/durable/runs/:runId/checkpoints", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const query = listQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          query: query.success ? undefined : query.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        }),
+      );
     }
-    return {
+    return projectDurableRouteResponse({
       items: durable.listRunCheckpoints(params.data.runId, query.data.limit),
-    };
+    });
   });
 
   fastify.post("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
     const body = createRunBodySchema.safeParse(request.body);
     if (!body.success) {
-      return reply.code(400).send({ error: body.error.flatten() });
+      return reply.code(400).send(projectDurableRouteResponse({ error: body.error.flatten() }));
     }
     try {
-      return reply.code(201).send(durable.createRun(body.data));
+      return reply.code(201).send(projectDurableRouteResponse(durable.createRun(body.data)));
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
     }
   });
 
   fastify.get("/api/v1/durable/runs/:runId", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+      return reply.code(400).send(projectDurableRouteResponse({ error: params.error.flatten() }));
     }
     try {
-      return reply.send(durable.getRun(params.data.runId));
+      return reply.send(projectDurableRouteResponse(durable.getRun(params.data.runId)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
     }
   });
 
@@ -136,19 +139,23 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = runParamsSchema.safeParse(request.params);
     const query = listQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          query: query.success ? undefined : query.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        }),
+      );
     }
     try {
-      return reply.send({ items: durable.listRunTimeline(params.data.runId, query.data.limit) });
+      return reply.send(
+        projectDurableRouteResponse({ items: durable.listRunTimeline(params.data.runId, query.data.limit) }),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
     }
   });
 
@@ -156,17 +163,19 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = actorBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
     }
     try {
-      return reply.send(durable.pauseRun(params.data.runId, resolveActorId(request)));
+      return reply.send(projectDurableRouteResponse(durable.pauseRun(params.data.runId, resolveActorId(request))));
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
     }
   });
 
@@ -174,17 +183,19 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = actorBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
     }
     try {
-      return reply.send(durable.resumeRun(params.data.runId, resolveActorId(request)));
+      return reply.send(projectDurableRouteResponse(durable.resumeRun(params.data.runId, resolveActorId(request))));
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
     }
   });
 
@@ -192,17 +203,19 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = actorBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
     }
     try {
-      return reply.send(durable.cancelRun(params.data.runId, resolveActorId(request)));
+      return reply.send(projectDurableRouteResponse(durable.cancelRun(params.data.runId, resolveActorId(request))));
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
     }
   });
 
@@ -210,17 +223,21 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = retryBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
     }
     try {
-      return reply.send(durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request)));
+      return reply.send(
+        projectDurableRouteResponse(durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request))),
+      );
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
     }
   });
 
@@ -228,17 +245,19 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = wakeBodySchema.safeParse(request.body);
     if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
     }
     try {
-      return reply.send(durable.wakeRun(params.data.runId, body.data));
+      return reply.send(projectDurableRouteResponse(durable.wakeRun(params.data.runId, body.data)));
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
     }
   });
 
@@ -246,25 +265,29 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     const params = deadLetterParamsSchema.safeParse(request.params);
     const body = deadLetterRecoverBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
     }
     try {
       return reply.send(
-        durable.recoverDeadLetter(
-          params.data.entryId,
-          resolveActorId(request),
-          body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,
+        projectDurableRouteResponse(
+          durable.recoverDeadLetter(
+            params.data.entryId,
+            resolveActorId(request),
+            body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,
+          ),
         ),
       );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
     }
   });
 };

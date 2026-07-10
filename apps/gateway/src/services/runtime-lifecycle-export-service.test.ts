@@ -43,7 +43,10 @@ describe("RuntimeLifecycleExportService", () => {
           type: "message.user",
           actorType: "user",
           actorId: "operator",
-          payload: {},
+          payload: {
+            webhookUrl: "https://hooks.example.test/events?token=transcript-short",
+            tokenEnv: "TRANSCRIPT_TOKEN",
+          },
         },
       ]),
       listSessionTimeline: vi.fn(async () => [
@@ -54,7 +57,10 @@ describe("RuntimeLifecycleExportService", () => {
           actorType: "user",
           actorId: "operator",
           preview: "hello",
-          payload: {},
+          payload: {
+            authorization: "Bearer timeline-short",
+            tokenBudget: 512,
+          },
         },
       ]),
     });
@@ -97,6 +103,12 @@ describe("RuntimeLifecycleExportService", () => {
       decisionTraceCount: 1,
       transcriptEventCount: 1,
       timelineEventCount: 1,
+    });
+    expect(JSON.stringify(result)).not.toContain("transcript-short");
+    expect(JSON.stringify(result)).not.toContain("timeline-short");
+    expect(result).toMatchObject({
+      transcript: [{ payload: { tokenEnv: "TRANSCRIPT_TOKEN" } }],
+      timeline: [{ payload: { tokenBudget: 512 } }],
     });
   });
 
@@ -232,7 +244,10 @@ describe("RuntimeLifecycleExportService", () => {
     });
 
     const ndjson = await service.exportSiemNdjson({ sessionId: "session-1" });
-    const lines = ndjson.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const lines = ndjson
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
 
     expect(lines[0]).toMatchObject({
       schemaVersion: "goatcitadel.siem.runtime.v1",
@@ -244,8 +259,8 @@ describe("RuntimeLifecycleExportService", () => {
     );
     expect(ndjson).not.toContain("should-not-escape");
     expect(ndjson).not.toContain("also-secret");
-    expect(ndjson).toContain("\"accessToken\":\"[redacted]\"");
-    expect(ndjson).toContain("\"visible\":\"ok\"");
+    expect(ndjson).toContain('"accessToken":"[redacted]"');
+    expect(ndjson).toContain('"visible":"ok"');
   });
 
   it("attaches a shareable trust report when requested", async () => {

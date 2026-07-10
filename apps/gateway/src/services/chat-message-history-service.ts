@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import type { ChatCompletionRequest, ChatInputPart, ChatMessageRecord, TranscriptEvent } from "@goatcitadel/contracts";
+import {
+  redactStructuredSecrets,
+  type ChatCompletionRequest,
+  type ChatInputPart,
+  type ChatMessageRecord,
+  type TranscriptEvent,
+} from "@goatcitadel/contracts";
 import { estimateTokensFromText, truncateByTokenEstimate } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
 import { buildConversationCompactionSummary, trimNewestContextMessagesForPromptCache } from "./chat-compaction.js";
@@ -78,7 +84,7 @@ export async function buildLlmMessagesFromTranscript(
         }
         return {
           role: "assistant" as const,
-          content: baseContent,
+          content: redactStructuredSecrets(baseContent).value,
         };
       }),
   );
@@ -208,13 +214,13 @@ async function buildLlmMessagesFromRecords(
       if (message.role === "assistant") {
         return {
           role: "assistant" as const,
-          content: message.content,
+          content: redactStructuredSecrets(message.content).value,
         };
       }
       if (message.role === "system") {
         return {
           role: "system" as const,
-          content: message.content,
+          content: redactStructuredSecrets(message.content).value,
         };
       }
       return {

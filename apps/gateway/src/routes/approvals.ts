@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { redactStructuredSecrets } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -139,7 +140,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
           ...approvalInput,
           ...(Object.keys(linkage).length > 0 ? { linkage } : {}),
         });
-        return reply.code(201).send(approval);
+        return reply.code(201).send(projectApprovalPublicResponse(approval));
       } catch (error) {
         return sendRouteError(reply, error, request.log);
       }
@@ -162,16 +163,18 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         }) => { items: unknown[]; nextCursor?: string };
       };
       return reply.send(
-        pagedApprovals.listApprovalsPage
-          ? pagedApprovals.listApprovalsPage({
-              status: parsed.data.status,
-              limit: parsed.data.limit,
-              cursor: parsed.data.cursor,
-              workspaceId: parsed.data.workspaceId,
-            })
-          : {
-              items: approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId),
-            },
+        projectApprovalPublicResponse(
+          pagedApprovals.listApprovalsPage
+            ? pagedApprovals.listApprovalsPage({
+                status: parsed.data.status,
+                limit: parsed.data.limit,
+                cursor: parsed.data.cursor,
+                workspaceId: parsed.data.workspaceId,
+              })
+            : {
+                items: approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId),
+              },
+        ),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -189,7 +192,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         resolvedBy: resolveActorId(request),
       });
-      return reply.send(result);
+      return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -211,7 +214,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         resolvedBy: resolveActorId(request),
       });
-      return reply.send(result);
+      return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -247,7 +250,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const result = await approvals.resolveApprovalWithRemoteToken(parsed.data);
-      return reply.send(result);
+      return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -260,12 +263,18 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const approvalId = params.data.approvalId;
     try {
-      return reply.send(approvals.getApprovalReplay(approvalId, resolveActorId(request)));
+      return reply.send(
+        projectApprovalPublicResponse(approvals.getApprovalReplay(approvalId, resolveActorId(request))),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 };
+
+function projectApprovalPublicResponse<T>(value: T): T {
+  return redactStructuredSecrets(value).value;
+}
 
 function isLoopbackRequest(request: {
   ip?: string;

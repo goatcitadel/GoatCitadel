@@ -25,6 +25,7 @@ import {
   buildChannelSetupRecentTestSignature,
   type ChannelSetupRecentTestCacheEntry,
 } from "./channel-setup-test-cache.js";
+import { preserveChannelSetupDraftSecretsForPublicUpdate } from "./channel-setup-public-projection.js";
 
 export interface ChannelSetupHost {
   readonly storage: {
@@ -153,12 +154,16 @@ export function updateChannelSetupDraft(
   host: ChannelSetupHost,
   draftId: string,
   input: ChannelSetupDraftUpdateInput,
+  options: { reconcilePublicProjection?: boolean } = {},
 ): ChannelSetupDraft {
   const current = host.storage.channelSetupDrafts.get(draftId);
+  const effectiveInput = options.reconcilePublicProjection
+    ? preserveChannelSetupDraftSecretsForPublicUpdate(current, input)
+    : input;
   const runtime = requireChannelSetupDefinition(current.catalogId);
   host.recentChannelSetupTests.delete(draftId);
   const updated = host.storage.channelSetupDrafts.update(draftId, {
-    ...input,
+    ...effectiveInput,
     contentVersion: runtime.definition.wizard.contentVersion,
     adapterVersion: runtime.definition.adapter.adapterVersion,
     validationVersion: runtime.definition.validation.validationVersion,

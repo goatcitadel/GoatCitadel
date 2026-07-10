@@ -10,6 +10,7 @@ import {
   type WorkspaceRecord,
 } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
+import { projectHookRecordForPublicResponse } from "./hooks-public-projection.js";
 import type { ServiceContext } from "./service-context.js";
 import { HooksService } from "./hooks-service.js";
 
@@ -507,6 +508,59 @@ describe("HooksService", () => {
         },
       }),
     ).toThrow(/observe hooks/i);
+  });
+
+  it("reconciles public hook actions without changing the internal raw update contract", () => {
+    const { service, workspaceId } = createHarness();
+    const created = service.createWorkspaceHook({
+      workspaceId,
+      label: "credentialed hook",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: {
+        type: "webhook",
+        webhook: {
+          url: "https://hooks.example.test/events?token=hook-short&mode=events",
+          secret: "signing-short",
+        },
+      },
+    });
+
+    const publicUpdate = service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
+      label: "credentialed hook renamed",
+      action: projectHookRecordForPublicResponse(created).action,
+    });
+    expect(publicUpdate.label).toBe("credentialed hook renamed");
+    expect(publicUpdate.action.webhook).toEqual({
+      url: "https://hooks.example.test/events?token=hook-short&mode=events",
+      secret: "signing-short",
+    });
+    expect(service.listWorkspaceHooks(workspaceId)[0]?.action.webhook).toEqual(publicUpdate.action.webhook);
+
+    const blockedTransplant = service.updateWorkspaceHookFromPublicProjection(workspaceId, created.hookId, {
+      action: {
+        type: "webhook",
+        webhook: {
+          url: "https://evil.example/events?token=[REDACTED]&mode=alerts",
+        },
+      },
+    });
+    expect(blockedTransplant.action.webhook.url).toBe("https://hooks.example.test/events?token=hook-short&mode=events");
+    expect(blockedTransplant.action.webhook.secret).toBe("signing-short");
+
+    const internalUpdate = service.updateWorkspaceHook(workspaceId, created.hookId, {
+      action: {
+        type: "webhook",
+        webhook: {
+          url: "https://hooks.example.test/events?token=replacement-short&mode=alerts",
+          secret: "replacement-signing-short",
+        },
+      },
+    });
+    expect(internalUpdate.action.webhook).toEqual({
+      url: "https://hooks.example.test/events?token=replacement-short&mode=alerts",
+      secret: "replacement-signing-short",
+    });
   });
 });
 

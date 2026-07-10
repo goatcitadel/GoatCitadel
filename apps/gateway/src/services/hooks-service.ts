@@ -19,6 +19,7 @@ import {
 import type { Storage } from "@goatcitadel/storage";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { preserveHookSecretsForPublicUpdate } from "./hooks-public-projection.js";
 
 const DEFAULT_HOOK_DELIVERY_RETRY_POLICY = {
   maxAttempts: 3,
@@ -188,6 +189,16 @@ export class HooksService {
       enabled: updated.enabled,
     });
     return updated;
+  }
+
+  public updateWorkspaceHookFromPublicProjection(
+    workspaceId: string,
+    hookId: string,
+    input: HookUpdateInput,
+  ): HookRecord {
+    const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
+    const current = this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    return this.updateWorkspaceHook(normalizedWorkspaceId, hookId, preserveHookSecretsForPublicUpdate(current, input));
   }
 
   public deleteWorkspaceHook(workspaceId: string, hookId: string): boolean {

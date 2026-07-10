@@ -73,6 +73,65 @@ describe("gateway events route", () => {
     expect(response.statusCode).toBe(400);
     expect(ingestEvent).not.toHaveBeenCalled();
   });
+
+  it("projects event-ingress result state without changing the raw user payload or stored result", async () => {
+    const result = {
+      accepted: true,
+      deduped: false,
+      session: {
+        sessionId: "session-secret",
+        sessionKey: "mission:operator:secret",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        routingHints: {
+          authorization: "Bearer ingress-routing-secret",
+          tokenEnv: "INGRESS_TOKEN",
+          secretRef: "keychain:ingress-token",
+        },
+        lastActivityAt: "2026-07-09T12:00:00.000Z",
+        updatedAt: "2026-07-09T12:00:00.000Z",
+        health: "healthy",
+        tokenInput: 2,
+        tokenOutput: 3,
+        tokenCachedInput: 1,
+        tokenTotal: 5,
+        costUsdTotal: 0.001,
+        budgetState: "ok",
+      },
+      transcriptOffset: 10,
+      errorMetadata: { DATABASE_PASSWORD: "ingress-error-secret" },
+    };
+    const ingestEvent = vi.fn(async () => result);
+    app = Fastify();
+    app.addHook("preHandler", async (request) => {
+      (request as typeof request & { idempotencyKey: string }).idempotencyKey = "ingress-projection-key";
+    });
+    app.decorate("services", { gatewayEvents: { ingestEvent } } as never);
+    await app.register(gatewayEventsRoute);
+    const payload = createGatewayEventPayload();
+    payload.message.content = "User intentionally supplied Bearer ingress-user-secret";
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/gateway/events", payload });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.stringify(response.json())).not.toContain("ingress-routing-secret");
+    expect(JSON.stringify(response.json())).not.toContain("ingress-error-secret");
+    expect(response.json().session).toMatchObject({
+      tokenInput: 2,
+      tokenOutput: 3,
+      tokenCachedInput: 1,
+      tokenTotal: 5,
+      routingHints: {
+        tokenEnv: "INGRESS_TOKEN",
+        secretRef: "keychain:ingress-token",
+      },
+    });
+    expect(ingestEvent).toHaveBeenCalledWith("ingress-projection-key", payload);
+    expect(payload.message.content).toContain("ingress-user-secret");
+    expect(result.session.routingHints.authorization).toContain("ingress-routing-secret");
+    expect(result.errorMetadata.DATABASE_PASSWORD).toBe("ingress-error-secret");
+  });
 });
 
 function createGatewayEventPayload() {

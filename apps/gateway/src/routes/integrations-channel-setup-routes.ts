@@ -1,5 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import {
+  projectChannelSetupDraftForPublicResponse,
+  projectChannelSetupDraftsForPublicResponse,
+  projectChannelSetupFinalizeResultForPublicResponse,
+  projectChannelSetupTestResultForPublicResponse,
+  projectChannelSetupValidationResultForPublicResponse,
+} from "../services/channel-setup-public-projection.js";
+import {
   catalogParamsSchema,
   channelDraftListQuerySchema,
   channelDraftParamsSchema,
@@ -15,7 +22,9 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.services.channelSetup.listChannelSetupDrafts(parsed.data),
+      items: projectChannelSetupDraftsForPublicResponse(
+        fastify.services.channelSetup.listChannelSetupDrafts(parsed.data),
+      ),
     });
   });
 
@@ -43,7 +52,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.channelSetup.createChannelSetupDraft(parsed.data));
+      const created = fastify.services.channelSetup.createChannelSetupDraft(parsed.data);
+      return reply.code(201).send(projectChannelSetupDraftForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -61,7 +71,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       });
     }
     try {
-      return reply.send(fastify.services.channelSetup.updateChannelSetupDraft(params.data.draftId, parsed.data));
+      const updated = fastify.services.channelSetup.updateChannelSetupDraft(params.data.draftId, parsed.data);
+      return reply.send(projectChannelSetupDraftForPublicResponse(updated));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -73,7 +84,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.channelSetup.validateChannelSetupDraft(params.data.draftId));
+      const result = fastify.services.channelSetup.validateChannelSetupDraft(params.data.draftId);
+      return reply.send(projectChannelSetupValidationResultForPublicResponse(result));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -85,7 +97,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.channelSetup.testChannelSetupDraft(params.data.draftId));
+      const result = await fastify.services.channelSetup.testChannelSetupDraft(params.data.draftId);
+      return reply.send(projectChannelSetupTestResultForPublicResponse(result));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -97,7 +110,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.channelSetup.finalizeChannelSetupDraft(params.data.draftId));
+      const finalized = await fastify.services.channelSetup.finalizeChannelSetupDraft(params.data.draftId);
+      return reply.send(projectChannelSetupFinalizeResultForPublicResponse(finalized));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -109,9 +123,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply
-        .code(201)
-        .send(fastify.services.channelSetup.createChannelSetupRepairDraft(params.data.connectionId));
+      const created = fastify.services.channelSetup.createChannelSetupRepairDraft(params.data.connectionId);
+      return reply.code(201).send(projectChannelSetupDraftForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -123,9 +136,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply
-        .code(201)
-        .send(fastify.services.channelSetup.createChannelSetupRotateSecretDraft(params.data.connectionId));
+      const created = fastify.services.channelSetup.createChannelSetupRotateSecretDraft(params.data.connectionId);
+      return reply.code(201).send(projectChannelSetupDraftForPublicResponse(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -137,7 +149,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.channelSetup.retestChannelConnection(params.data.connectionId));
+      const result = await fastify.services.channelSetup.retestChannelConnection(params.data.connectionId);
+      return reply.send(projectChannelSetupTestResultForPublicResponse(result));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

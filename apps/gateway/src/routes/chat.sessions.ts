@@ -1,5 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import {
+  projectChatGeneratedArtifactForPublic,
+  projectChatSessionForPublic,
+  projectChatSessionSearchResponseForPublic,
+  projectChatWorkbenchExecutionForPublic,
+  projectRecentCrossProjectSessionForPublic,
+} from "../services/chat-secret-projection.js";
 
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
@@ -173,7 +180,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.services.chatSessions.listChatGeneratedArtifacts(parsed.data),
+        items: fastify.services.chatSessions
+          .listChatGeneratedArtifacts(parsed.data)
+          .map(projectChatGeneratedArtifactForPublic),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -193,10 +202,12 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        item: fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId, {
-          workspaceId: query.data.workspaceId,
-          citadelId: query.data.citadelId,
-        }),
+        item: projectChatGeneratedArtifactForPublic(
+          fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId, {
+            workspaceId: query.data.workspaceId,
+            citadelId: query.data.citadelId,
+          }),
+        ),
       });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -209,7 +220,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatSessions.searchChatSessions(parsed.data));
+      return reply.send(
+        projectChatSessionSearchResponseForPublic(fastify.services.chatSessions.searchChatSessions(parsed.data)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -223,7 +236,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     const items = fastify.services.chatSessions.listChatSessions(parsed.data);
     const last = items.at(-1);
     const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
-    return reply.send({ items, nextCursor });
+    return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor });
   });
 
   fastify.post("/api/v1/chat/sessions", async (request, reply) => {
@@ -233,7 +246,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       const created = fastify.services.chatSessions.createChatSession(parsed.data);
-      return reply.code(201).send(created);
+      return reply.code(201).send(projectChatSessionForPublic(created));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -257,11 +270,13 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const workspaceId = parsed.data.workspaceId;
-    const items = fastify.services.chatSessions.listRecentCrossProjectSessions({
-      citadelId: parsed.data.citadelId,
-      workspaceId,
-      limit: parsed.data.limit,
-    });
+    const items = fastify.services.chatSessions
+      .listRecentCrossProjectSessions({
+        citadelId: parsed.data.citadelId,
+        workspaceId,
+        limit: parsed.data.limit,
+      })
+      .map(projectRecentCrossProjectSessionForPublic);
     return reply.send({
       items,
       workspaceId,
@@ -281,7 +296,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(fastify.services.chatSessions.updateChatSession(params.data.sessionId, body.data));
+      return reply.send(
+        projectChatSessionForPublic(fastify.services.chatSessions.updateChatSession(params.data.sessionId, body.data)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -305,7 +322,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatSessions.pinChatSession(params.data.sessionId));
+      return reply.send(
+        projectChatSessionForPublic(fastify.services.chatSessions.pinChatSession(params.data.sessionId)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -317,7 +336,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatSessions.unpinChatSession(params.data.sessionId));
+      return reply.send(
+        projectChatSessionForPublic(fastify.services.chatSessions.unpinChatSession(params.data.sessionId)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -329,7 +350,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatSessions.archiveChatSession(params.data.sessionId));
+      return reply.send(
+        projectChatSessionForPublic(fastify.services.chatSessions.archiveChatSession(params.data.sessionId)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -341,7 +364,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatSessions.restoreChatSession(params.data.sessionId));
+      return reply.send(
+        projectChatSessionForPublic(fastify.services.chatSessions.restoreChatSession(params.data.sessionId)),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -360,7 +385,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.services.chatSessions.assignChatSessionProject(params.data.sessionId, body.data.projectId),
+        projectChatSessionForPublic(
+          fastify.services.chatSessions.assignChatSessionProject(params.data.sessionId, body.data.projectId),
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -373,7 +400,11 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatSessions.getChatSideChat(params.data.sessionId));
+      const result = fastify.services.chatSessions.getChatSideChat(params.data.sessionId);
+      return reply.send({
+        ...result,
+        ...(result.childSession ? { childSession: projectChatSessionForPublic(result.childSession) } : {}),
+      });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -391,7 +422,11 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.code(201).send(fastify.services.chatSessions.createChatSideChat(params.data.sessionId, body.data));
+      const result = fastify.services.chatSessions.createChatSideChat(params.data.sessionId, body.data);
+      return reply.code(201).send({
+        ...result,
+        childSession: projectChatSessionForPublic(result.childSession),
+      });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -578,7 +613,11 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.chatSessions.getChatSessionWorkbenchOutput(params.data.sessionId));
+      return reply.send(
+        projectChatWorkbenchExecutionForPublic(
+          await fastify.services.chatSessions.getChatSessionWorkbenchOutput(params.data.sessionId),
+        ),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -597,7 +636,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        await fastify.services.chatSessions.runChatSessionWorkbenchCommand(params.data.sessionId, body.data),
+        projectChatWorkbenchExecutionForPublic(
+          await fastify.services.chatSessions.runChatSessionWorkbenchCommand(params.data.sessionId, body.data),
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -681,10 +722,12 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.services.chatSessions.listChatGeneratedArtifacts({
-          ...query.data,
-          sessionId: params.data.sessionId,
-        }),
+        items: fastify.services.chatSessions
+          .listChatGeneratedArtifacts({
+            ...query.data,
+            sessionId: params.data.sessionId,
+          })
+          .map(projectChatGeneratedArtifactForPublic),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -704,11 +747,13 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.code(201).send({
-        item: fastify.services.chatSessions.createChatGeneratedArtifactFromTurn({
-          sessionId: params.data.sessionId,
-          turnId: params.data.turnId,
-          supersedeLatest: body.data.supersedeLatest,
-        }),
+        item: projectChatGeneratedArtifactForPublic(
+          fastify.services.chatSessions.createChatGeneratedArtifactFromTurn({
+            sessionId: params.data.sessionId,
+            turnId: params.data.turnId,
+            supersedeLatest: body.data.supersedeLatest,
+          }),
+        ),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

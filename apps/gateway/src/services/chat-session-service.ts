@@ -37,6 +37,7 @@ import {
   toChatSessionRecord,
 } from "./chat-session-utils.js";
 import { buildGeneratedArtifactReference } from "./chat-generated-artifact-service.js";
+import { preserveChatSessionSecretsForPublicUpdate } from "./chat-secret-projection.js";
 
 const log = logger.child("chat-session-service");
 const MISSING_CHAT_SESSION_META_WORKSPACE_ID = "__legacy_unknown__";
@@ -422,11 +423,13 @@ export function updateChatSession(
   input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
 ): ChatSessionRecord {
   deps.getSession(sessionId);
+  const current = deps.requireChatSession(sessionId);
+  const reconciled = preserveChatSessionSecretsForPublicUpdate(current, input);
   deps.storage.chatSessionMeta.patch(sessionId, {
-    title: input.title,
-    folderId: input.folderId,
-    folderName: input.folderName,
-    tags: input.tags,
+    title: reconciled.title,
+    folderId: reconciled.folderId,
+    folderName: reconciled.folderName,
+    tags: reconciled.tags,
   });
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime("chat_session_title_updated", "chat", {

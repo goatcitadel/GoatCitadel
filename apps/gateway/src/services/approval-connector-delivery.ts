@@ -1,8 +1,9 @@
-import type {
-  ApprovalRequest,
-  ConnectorDeliveryWorkflowPayload,
-  ConnectorCapabilityId,
-  ConnectorRecord,
+import {
+  redactStructuredSecrets,
+  type ApprovalRequest,
+  type ConnectorDeliveryWorkflowPayload,
+  type ConnectorCapabilityId,
+  type ConnectorRecord,
 } from "@goatcitadel/contracts";
 
 const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
@@ -126,14 +127,15 @@ function buildApprovalDeliveryEnvelope(input: {
   tokenId: string;
   expiresAt: string;
 }): Record<string, unknown> {
-  const governance = buildApprovalDeliveryGovernance(input.approval);
+  const publicApproval = redactStructuredSecrets(input.approval).value;
+  const governance = buildApprovalDeliveryGovernance(publicApproval);
   return {
-    approvalId: input.approval.approvalId,
-    kind: input.approval.kind,
-    riskLevel: input.approval.riskLevel,
-    status: input.approval.status,
-    preview: input.approval.preview,
-    linkage: buildApprovalDeliveryLinkage(input.approval),
+    approvalId: publicApproval.approvalId,
+    kind: publicApproval.kind,
+    riskLevel: publicApproval.riskLevel,
+    status: publicApproval.status,
+    preview: publicApproval.preview,
+    linkage: buildApprovalDeliveryLinkage(publicApproval),
     governance,
     tokenId: input.tokenId,
     token: input.token,
@@ -233,17 +235,18 @@ function buildIntegrationApprovalDeliveryMessage(
   },
   includesInteractiveActions: boolean,
 ): string {
-  const summary = summarizeApprovalPreview(input.approval.preview);
-  const requester = summarizeApprovalRequester(input.approval);
+  const publicApproval = redactStructuredSecrets(input.approval).value;
+  const summary = summarizeApprovalPreview(publicApproval.preview);
+  const requester = summarizeApprovalRequester(publicApproval);
   const rollback =
-    readApprovalScopedString(input.approval.rollbackNote ?? input.approval.payload?.rollbackNote) ?? "n/a";
+    readApprovalScopedString(publicApproval.rollbackNote ?? publicApproval.payload?.rollbackNote) ?? "n/a";
   const lines = [
     "GoatCitadel approval action requested.",
-    `Approval ID: ${input.approval.approvalId}`,
+    `Approval ID: ${publicApproval.approvalId}`,
     `Requester: ${requester}`,
-    `Kind: ${input.approval.kind}`,
-    `Risk: ${input.approval.riskLevel}`,
-    `Status: ${input.approval.status}`,
+    `Kind: ${publicApproval.kind}`,
+    `Risk: ${publicApproval.riskLevel}`,
+    `Status: ${publicApproval.status}`,
     `Rollback: ${rollback}`,
     summary ? `Preview: ${summary}` : undefined,
     `Action token ID: ${input.tokenId}`,

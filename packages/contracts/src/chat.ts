@@ -220,6 +220,13 @@ export interface ChatGeneratedArtifactRecord {
   model?: string;
   sourceBlockIndex?: number;
   contentHash?: string;
+  publicProjection?: {
+    artifactRedacted?: true;
+    contentRedacted: boolean;
+    redactionCount?: number;
+    redactedPaths: string[];
+    canonicalContentHashRefersToStoredArtifact: true;
+  };
   createdAt: string;
   updatedAt: string;
 }

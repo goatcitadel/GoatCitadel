@@ -27,6 +27,55 @@ describe("RealtimeEventService", () => {
     expect(storage.realtimeEvents.listAfterSequence).toHaveBeenNthCalledWith(2, 2, 7);
   });
 
+  it("projects new and legacy realtime payloads without mutating caller or storage truth", () => {
+    const rawPayload = {
+      webhookUrl: "https://hooks.example.test/services/team/realtime-secret",
+      authorization: "Bearer short",
+      DATABASE_PASSWORD: "hunter2",
+      tokenId: "realtime-token-id",
+      tokenBudget: 128,
+    };
+    const legacyEvent = {
+      eventId: "event-legacy-1",
+      sequence: 7,
+      eventType: "legacy_event",
+      source: "legacy",
+      timestamp: "2026-07-09T12:00:00.000Z",
+      payload: rawPayload,
+    } as RealtimeEvent;
+    const storage = fakeStorage();
+    storage.realtimeEvents.append.mockImplementation((_eventType, _source, payload) => ({
+      ...legacyEvent,
+      payload,
+    }));
+    storage.realtimeEvents.list.mockReturnValue([legacyEvent] as never);
+    storage.realtimeEvents.listAfterSequence.mockReturnValue([legacyEvent] as never);
+    const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
+
+    const published = service.publishRealtime("legacy_event", "legacy", rawPayload);
+    const listed = service.listRealtimeEvents();
+    const after = service.listRealtimeEventsAfterSequence(0);
+
+    for (const event of [published, listed[0], after[0]]) {
+      expect(event?.payload).toEqual({
+        webhookUrl: "[REDACTED]",
+        authorization: "[REDACTED]",
+        DATABASE_PASSWORD: "[REDACTED]",
+        tokenId: "realtime-token-id",
+        tokenBudget: 128,
+      });
+    }
+    expect(storage.realtimeEvents.append).toHaveBeenCalledWith(
+      "legacy_event",
+      "legacy",
+      expect.objectContaining({ webhookUrl: "[REDACTED]", authorization: "[REDACTED]" }),
+      undefined,
+    );
+    expect(rawPayload.webhookUrl).toContain("realtime-secret");
+    expect(rawPayload.authorization).toBe("Bearer short");
+    expect(legacyEvent.payload).toBe(rawPayload);
+  });
+
   it("requires explicit metadata for protected realtime events", () => {
     const storage = fakeStorage();
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });

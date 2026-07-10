@@ -1,3 +1,4 @@
+import { redactStructuredSecrets } from "@goatcitadel/contracts";
 import type {
   EgressDecision,
   InternalToolCallV1,
@@ -171,25 +172,16 @@ export function collectLeakDetections(value: unknown): string[] {
       detections.add(label);
     }
   }
+  const projected = redactStructuredSecrets(value);
+  const containsStructuredSecret = projected.redactions.some((redaction) => redaction.reason !== "circular_reference");
+  if (containsStructuredSecret && detections.size === 0) {
+    detections.add("structured_secret");
+  }
   return Array.from(detections.values()).sort();
 }
 
 export function sanitizeForModel<T>(value: T): T {
-  if (typeof value === "string") {
-    return sanitizeString(value) as T;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeForModel(entry)) as T;
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const input = value as Record<string, unknown>;
-  const output: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(input)) {
-    output[key] = sanitizeForModel(entry);
-  }
-  return output as T;
+  return redactStructuredSecrets(value).value;
 }
 
 export const sanitizeForAudit = sanitizeForModel;
@@ -280,15 +272,6 @@ export function buildToolAuditRecord(input: {
     approvalMode: input.approvalMode,
     errorKind: input.errorKind,
   };
-}
-
-function sanitizeString(value: string): string {
-  let scrubbed = value;
-  for (const { pattern } of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    scrubbed = scrubbed.replace(pattern, "[REDACTED]");
-  }
-  return scrubbed;
 }
 
 function normalizeToolTrustLevel(value: unknown): ToolExecutionTrustLevel | undefined {

@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
+import { redactStructuredSecrets } from "@goatcitadel/contracts";
 import type {
   EvidenceEnvelope,
   EvidenceEnvelopeEventKind,
@@ -27,9 +28,6 @@ export interface EvidenceEnvelopeServiceDependencies {
   publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
 }
 
-const SECRET_KEY_PATTERN = /(?:api[_-]?key|auth|bearer|cookie|credential|password|secret|token)/i;
-const SECRET_VALUE_PATTERN =
-  /(?:sk-[a-z0-9_-]{16,}|ghp_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,}|bearer\s+[a-z0-9._-]{16,})/i;
 const EVIDENCE_DIGEST_DOMAIN_KEY = "goatcitadel:evidence-envelope-digest:v1";
 
 export class EvidenceEnvelopeService {
@@ -42,7 +40,7 @@ export class EvidenceEnvelopeService {
 
   public createEnvelope(input: EvidenceEnvelopeCreateRequest): EvidenceEnvelope {
     const createdAt = input.createdAt ?? new Date().toISOString();
-    const metadata = redactEvidenceValue(input.metadata ?? {}) as Record<string, unknown>;
+    const metadata = redactStructuredSecrets(input.metadata ?? {}, { marker: "[redacted]" }).value;
     const workspaceId = input.workspaceId?.trim() || undefined;
     const latest = this.deps.storage.evidenceEnvelopes.latest({ workspaceId });
     const previousEnvelopeHash = latest?.contentHash;
@@ -104,7 +102,22 @@ export class EvidenceEnvelopeService {
   }
 
   public listEnvelopes(query: EvidenceEnvelopeListQuery = {}): EvidenceEnvelope[] {
-    return this.deps.storage.evidenceEnvelopes.list(query);
+    return this.deps.storage.evidenceEnvelopes.list(query).map((envelope) => {
+      const projected = redactStructuredSecrets(envelope.metadata, { marker: "[redacted]" });
+      return {
+        ...envelope,
+        metadata: projected.value,
+        ...(projected.redactionCount > 0
+          ? {
+              publicProjection: {
+                metadataRedacted: true,
+                redactedPaths: projected.redactedPaths,
+                canonicalHashesReferToStoredEnvelope: true as const,
+              },
+            }
+          : {}),
+      };
+    });
   }
 }
 
@@ -131,24 +144,4 @@ export function sha256(value: string): string {
 
 function normalizeStringList(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))].sort();
-}
-
-function redactEvidenceValue(value: unknown, keyHint?: string): unknown {
-  if (typeof value === "string") {
-    if ((keyHint && SECRET_KEY_PATTERN.test(keyHint)) || SECRET_VALUE_PATTERN.test(value)) {
-      return "[redacted]";
-    }
-    return value;
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactEvidenceValue(item, keyHint));
-  }
-  const output: Record<string, unknown> = {};
-  for (const [key, entryValue] of Object.entries(value)) {
-    output[key] = redactEvidenceValue(entryValue, key);
-  }
-  return output;
 }

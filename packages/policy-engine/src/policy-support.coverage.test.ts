@@ -14,6 +14,8 @@ import {
   collectLeakDetections,
   deriveToolCapabilityPolicy,
   resolveToolTrustLevel,
+  sanitizeForAudit,
+  sanitizeForModel,
 } from "./tool-security.js";
 
 const tempDirs: string[] = [];
@@ -322,6 +324,89 @@ describe("tool security support", () => {
 
     expect(collectLeakDetections("Bearer abcdefghijklmnopqrstuvwxyz")).toEqual(["bearer_token"]);
     expect(collectLeakDetections(circular)).toEqual([]);
+  });
+
+  it("contains short and key-scoped secrets while preserving safe references and legacy labels", () => {
+    const input = {
+      webhookUrl: "https://example.test/hook?token=short-token",
+      authorization: "Bearer short",
+      DATABASE_PASSWORD: "tiny-secret",
+    };
+    const safeReferences = {
+      tokenEnv: "WEBHOOK_TOKEN",
+      secretRef: "keychain:webhook-token",
+      tokenBudget: 4_096,
+      tokenId: "runtime-token-identifier-123456",
+    };
+
+    expect(collectLeakDetections(input)).toEqual(["structured_secret"]);
+    expect(collectLeakDetections("Bearer abcdefghijklmnopqrstuvwxyz")).toEqual(["bearer_token"]);
+    expect(collectLeakDetections("keychain:webhook-token")).toEqual(["keychain_ref"]);
+    expect(sanitizeForModel(input)).toEqual({
+      webhookUrl: "[REDACTED]",
+      authorization: "[REDACTED]",
+      DATABASE_PASSWORD: "[REDACTED]",
+    });
+    expect(sanitizeForModel(safeReferences)).toEqual(safeReferences);
+    expect(input.webhookUrl).toContain("short-token");
+    expect(input.authorization).toBe("Bearer short");
+    expect(input.DATABASE_PASSWORD).toBe("tiny-secret");
+  });
+
+  it("projects credential syntax hidden in safe metadata and channel URL paths without mutating input", () => {
+    const codePreview = [
+      "const tokenBudget = 1000;",
+      "const tokenCount = 5;",
+      "const passwordPolicy = true;",
+      "const accessToken = getToken();",
+    ].join("\n");
+    const input = {
+      secretRef: "password=hunter2",
+      tokenId: "api_key=tiny-secret",
+      sourceRef: "Authorization: Basic dXNlcjpwYXNz",
+      cursor: "password=cursor-secret",
+      error: "failure https://hooks.slack.com/services/T000/B000/abc12345",
+      safeSecretRef: "keychain:webhook-token",
+      runId: "run-secret-projection",
+      nextCursor: "eyJwYWdlIjoyLCJ0b2tlbiI6InByb2plY3Rpb24ifQ==",
+      codePreview,
+      oauthMetadata: {
+        authorizationUrl: "https://identity.example.test/oauth/authorize",
+        tokenUrl: "https://identity.example.test/oauth/token",
+      },
+    };
+    const original = structuredClone(input);
+    const expected = {
+      secretRef: "[REDACTED]",
+      tokenId: "[REDACTED]",
+      sourceRef: "Authorization: [REDACTED]",
+      cursor: "password=[REDACTED]",
+      error: "failure https://hooks.slack.com/services/[REDACTED]/[REDACTED]/[REDACTED]",
+      safeSecretRef: "keychain:webhook-token",
+      runId: "run-secret-projection",
+      nextCursor: "eyJwYWdlIjoyLCJ0b2tlbiI6InByb2plY3Rpb24ifQ==",
+      codePreview,
+      oauthMetadata: {
+        authorizationUrl: "https://identity.example.test/oauth/authorize",
+        tokenUrl: "https://identity.example.test/oauth/token",
+      },
+    };
+
+    expect(sanitizeForModel(input)).toEqual(expected);
+    expect(sanitizeForAudit(input)).toEqual(expected);
+    expect(input).toEqual(original);
+  });
+
+  it("does not classify typed binary assets or channel address schemes as secrets", () => {
+    const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+    expect(
+      collectLeakDetections({
+        target: "imessage:group@example.com",
+        attachments: [{ mimeType: "image/png", dataBase64: pngBase64 }],
+        visualAsset: { mimeType: "image/png", bytesBase64: pngBase64 },
+      }),
+    ).toEqual([]);
   });
 
   it("derives capability families for category-only and browser-control tools", () => {

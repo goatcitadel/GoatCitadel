@@ -1,9 +1,15 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { A2AJsonRpcResponse, A2AOutboundPeerConfig, TaskRecord } from "@goatcitadel/contracts";
+import type {
+  A2AJsonRpcResponse,
+  A2AOutboundPeerConfig,
+  TaskDeliverableRecord,
+  TaskRecord,
+} from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./a2a-grpc-server.js";
+import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2ARouteService } from "./a2a-route-service.js";
 
 describe("A2A gRPC transport", () => {
@@ -87,6 +93,78 @@ describe("A2A gRPC transport", () => {
     ).rejects.toThrow(/bearer credentials/i);
   });
 
+  it("projects local artifacts in unary and streaming gRPC while preserving peer-authored messages", async () => {
+    const rawDeliverable: TaskDeliverableRecord = {
+      deliverableId: "deliverable-grpc",
+      taskId: "task-1",
+      deliverableType: "url",
+      title: "gRPC artifact",
+      path: "https://discord.com/api/webhooks/team-id/grpc-discord-short",
+      description:
+        "Authorization: Bearer tiny; https://api.telegram.org/botgrpc-telegram-short/sendMessage; https://local.example/secret/grpc-generic-short",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const harness = createService({ bindings: ["GRPC"], deliverables: [rawDeliverable] });
+    const handle = await startA2AGrpcServer({ config: harness.config, a2a: harness.service });
+    grpcHandles.push(handle);
+    const authoredText = "Peer-authored Authorization: Bearer keep-this-message";
+
+    const response = await new A2AGrpcClient().call({
+      grpcUrl: handle.address!,
+      method: "SendStreamingMessage",
+      id: "grpc-stream-secrets",
+      params: {
+        contextId: "ctx-grpc-secrets",
+        messageId: "message-grpc-secrets",
+        message: { role: "user", parts: [{ kind: "text", text: authoredText }] },
+      },
+      peer: { token: "peer-token" },
+      allowlist: ["127.0.0.1"],
+    });
+
+    const serialized = JSON.stringify(response);
+    expect(serialized).not.toContain("grpc-discord-short");
+    expect(serialized).not.toContain("grpc-telegram-short");
+    expect(serialized).not.toContain("grpc-generic-short");
+    expect(serialized).not.toContain("Bearer tiny");
+    expect(serialized).toContain(authoredText);
+    expect(rawDeliverable.path).toContain("grpc-discord-short");
+    expect(rawDeliverable.description).toContain("grpc-telegram-short");
+  });
+
+  it("projects credential-bearing gRPC error details while preserving the status code", async () => {
+    const harness = createService({ bindings: ["GRPC"] });
+    const a2a = {
+      authenticatePeerRequest: vi.fn(() => ({ peerId: "peer-1", scopes: ["a2a:grpc"] })),
+      getGrpcTask: vi.fn(() => {
+        throw new A2AJsonRpcServiceError(
+          -32004,
+          "Authorization: Bearer tiny at https://api.telegram.org/botgrpc-error-short/sendMessage",
+        );
+      }),
+    } as unknown as A2ARouteService;
+    const handle = await startA2AGrpcServer({ config: harness.config, a2a });
+    grpcHandles.push(handle);
+
+    let failure: unknown;
+    try {
+      await new A2AGrpcClient().call({
+        grpcUrl: handle.address!,
+        method: "GetTask",
+        params: { taskId: "task-error" },
+        peer: { token: "peer-token" },
+        allowlist: ["127.0.0.1"],
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ code: 5 });
+    expect(String(failure)).toContain("[REDACTED]");
+    expect(String(failure)).not.toContain("tiny");
+    expect(String(failure)).not.toContain("grpc-error-short");
+  });
+
   it("uses Agent Card gRPC discovery before configured fallback and records the outbound side effect", async () => {
     const agentCard = await startAgentCardServer({
       supportedInterfaces: [
@@ -98,11 +176,23 @@ describe("A2A gRPC transport", () => {
         },
       ],
     });
+    const rawPeerResponse: A2AJsonRpcResponse = {
+      jsonrpc: "2.0",
+      id: "grpc-outbound-1",
+      result: {
+        accepted: true,
+        transport: "GRPC",
+        artifact: {
+          description: "Authorization: Bearer tiny",
+          uri: "https://discord.com/api/webhooks/team-id/outbound-grpc-short",
+        },
+      },
+    };
     const grpcClient: A2AGrpcClientPort = {
       call: vi.fn(async (input) => ({
+        ...rawPeerResponse,
         jsonrpc: "2.0",
         id: input.id ?? null,
-        result: { accepted: true, transport: "GRPC" },
       })),
     };
     const harness = createService({
@@ -136,6 +226,10 @@ describe("A2A gRPC transport", () => {
       transport: "GRPC",
       auditRef: expect.stringMatching(/^extfx_/),
     });
+    expect(JSON.stringify(response)).not.toContain("Bearer tiny");
+    expect(JSON.stringify(response)).not.toContain("outbound-grpc-short");
+    expect(JSON.stringify(response)).toContain("[REDACTED]");
+    expect(JSON.stringify(rawPeerResponse)).toContain("outbound-grpc-short");
     expect(grpcClient.call).toHaveBeenCalledWith(
       expect.objectContaining({
         grpcUrl: "grpc://grpc.peer.example:9443",
@@ -144,9 +238,64 @@ describe("A2A gRPC transport", () => {
         peer: expect.objectContaining({ token: "remote-token" }),
       }),
     );
-    expect(harness.storage.externalSideEffectRuns.listByConnection("peer-remote")[0]).toMatchObject({
+    const storedRun = harness.storage.externalSideEffectRuns.listByConnection("peer-remote")[0];
+    expect(storedRun).toMatchObject({
       boundary: "a2a_grpc_outbound",
       status: "completed",
+    });
+    expect(JSON.stringify(storedRun?.responsePayload)).not.toContain("Bearer tiny");
+    expect(JSON.stringify(storedRun?.responsePayload)).not.toContain("outbound-grpc-short");
+    expect(JSON.stringify(rawPeerResponse)).toContain("outbound-grpc-short");
+  });
+
+  it("preserves post-dispatch external-outcome errors while recording an ambiguous gRPC result", async () => {
+    const agentCard = await startAgentCardServer({
+      supportedInterfaces: [
+        {
+          protocolBinding: "GRPC",
+          protocolVersion: "1.0",
+          enabled: true,
+          url: "grpc://grpc.peer.example:9443",
+        },
+      ],
+    });
+    const failureText =
+      "unknown_after_send Authorization: Bearer tiny at https://api.telegram.org/botgrpc-outcome-short/sendMessage";
+    const postDispatchError = Object.assign(new Error(failureText), {
+      externalOutcome: "unknown_after_send" as const,
+      manualReconciliationRequired: true,
+    });
+    const grpcClient: A2AGrpcClientPort = {
+      call: vi.fn(async () => {
+        throw postDispatchError;
+      }),
+    };
+    const harness = createService({
+      grpcClient,
+      networkAllowlist: ["127.0.0.1"],
+      outboundEnabled: true,
+      outboundPeers: [{ peerId: "peer-remote", agentCardUrl: agentCard.url }],
+    });
+
+    const response = await harness.service.sendOutbound(
+      {
+        peerId: "peer-remote",
+        method: "SendMessage",
+        transport: "GRPC",
+        params: { text: "Post-dispatch error." },
+        idempotencyKey: "grpc-outbound-ambiguous",
+      },
+      "operator-1",
+      "2026-06-01T00:00:00.000Z",
+    );
+    const run = harness.storage.externalSideEffectRuns.listByConnection("peer-remote")[0];
+
+    expect(response).toMatchObject({ status: "blocked", transport: "GRPC" });
+    expect(grpcClient.call).toHaveBeenCalledTimes(1);
+    expect(run).toMatchObject({ status: "unknown_external_outcome", errorText: failureText });
+    expect(postDispatchError).toMatchObject({
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
     });
   });
 
@@ -235,6 +384,7 @@ describe("A2A gRPC transport", () => {
       networkAllowlist?: string[];
       outboundEnabled?: boolean;
       outboundPeers?: A2AOutboundPeerConfig[];
+      deliverables?: TaskDeliverableRecord[];
     } = {},
   ) {
     storage = new Storage({
@@ -256,7 +406,7 @@ describe("A2A gRPC transport", () => {
       createTask: vi.fn((input: Partial<TaskRecord>) => ({ ...task, ...input })),
       getTask: vi.fn(() => task),
       invokeAgenticControl: vi.fn(),
-      listTaskDeliverables: vi.fn(() => []),
+      listTaskDeliverables: vi.fn(() => options.deliverables ?? []),
       updateTask: vi.fn((_taskId: string, input: Partial<TaskRecord>) => ({ ...task, ...input })),
     };
     const chatTurnRuntime = {

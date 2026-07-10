@@ -1107,6 +1107,239 @@ describe("mcp routes", () => {
     expect(discoveryResponse.json()).toEqual({ items: [{ templateId: "filesystem", category: "development" }] });
   });
 
+  it("projects secret-bearing MCP admin records and diagnostics without mutating runtime-owned values", async () => {
+    const rawServer = {
+      serverId: "srv-secret",
+      label: "Secret-bearing MCP",
+      transport: "stdio",
+      command: "node",
+      args: ["server.mjs", "--token", "argv-short", "--client-secret=inline-short", "--label", "safe"],
+      url: "https://mcp.example.test/token/path-short?token=query-short&mode=safe",
+      authType: "token",
+      oauth: {
+        authorizationUrl: "https://auth.example.test/authorize",
+        tokenUrl: "https://auth.example.test/token/client-secret/path-short?client_secret=query-short",
+        clientIdEnv: "MCP_CLIENT_ID",
+        clientSecretEnv: "MCP_CLIENT_SECRET",
+      },
+      enabled: true,
+      status: "connected",
+      category: "development",
+      trustTier: "restricted",
+      costTier: "unknown",
+      policy: {
+        requireFirstToolApproval: true,
+        redactionMode: "strict",
+        allowedToolPatterns: [],
+        blockedToolPatterns: [],
+      },
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+    };
+    const rawTemplate = {
+      ...rawServer,
+      templateId: "template-secret",
+      description: "Connect with https://mcp.example.test/api-key/template-short?token=template-query",
+      enabledByDefault: false,
+      installed: false,
+    };
+    const rawDiscovery = {
+      templateId: "template-secret",
+      readiness: "ready",
+      dependencyChecks: [
+        {
+          key: "url",
+          status: "pass",
+          message: "Endpoint https://mcp.example.test/secret/discovery-short?token=discovery-query provided.",
+        },
+      ],
+    };
+    const rawDiagnostic = {
+      connectorType: "mcp_server",
+      connectorId: "srv-secret",
+      status: "ok",
+      checks: [
+        {
+          key: "url",
+          status: "pass",
+          message: "URL https://mcp.example.test/access-token/health-short?token=health-query configured.",
+        },
+      ],
+      checkedAt: "2026-07-09T00:00:00.000Z",
+    };
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [rawServer]),
+      listMcpTemplates: vi.fn(() => [rawTemplate]),
+      listMcpTemplateDiscovery: vi.fn(() => [rawDiscovery]),
+      connectMcpServer: vi.fn(async () => rawServer),
+      updateMcpServerPolicy: vi.fn(() => rawServer),
+      listMcpTools: vi.fn(() => [
+        {
+          serverId: "srv-secret",
+          toolName: "tool.secret",
+          inputSchema: { type: "object", properties: { password: { default: "schema-short" } } },
+          enabled: true,
+          updatedAt: "2026-07-09T00:00:00.000Z",
+        },
+      ]),
+      runMcpServerHealthCheck: vi.fn(() => rawDiagnostic),
+    });
+
+    const responses = await Promise.all([
+      app!.inject({ method: "GET", url: "/api/v1/mcp/servers" }),
+      app!.inject({ method: "GET", url: "/api/v1/mcp/templates" }),
+      app!.inject({ method: "GET", url: "/api/v1/mcp/templates/discovery" }),
+      app!.inject({ method: "POST", url: "/api/v1/mcp/servers/srv-secret/connect" }),
+      app!.inject({ method: "GET", url: "/api/v1/mcp/servers/srv-secret/tools" }),
+      app!.inject({
+        method: "PATCH",
+        url: "/api/v1/mcp/servers/srv-secret/policy",
+        payload: { redactionMode: "strict" },
+      }),
+      app!.inject({ method: "POST", url: "/api/v1/mcp/servers/srv-secret/health-check" }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain("argv-short");
+      expect(response.body).not.toContain("inline-short");
+      expect(response.body).not.toContain("path-short");
+      expect(response.body).not.toContain("query-short");
+      expect(response.body).not.toContain("template-query");
+      expect(response.body).not.toContain("discovery-query");
+      expect(response.body).not.toContain("health-query");
+      expect(response.body).not.toContain("schema-short");
+    }
+    expect(responses[0]!.json()).toMatchObject({
+      items: [
+        {
+          args: ["server.mjs", "--token", "[REDACTED]", "--client-secret=[REDACTED]", "--label", "safe"],
+          url: "https://mcp.example.test/token/[REDACTED]?token=[REDACTED]&mode=safe",
+          oauth: {
+            authorizationUrl: "https://auth.example.test/authorize",
+            clientIdEnv: "MCP_CLIENT_ID",
+            clientSecretEnv: "MCP_CLIENT_SECRET",
+          },
+        },
+      ],
+    });
+    expect(responses[4]!.json()).toMatchObject({
+      items: [{ inputSchema: { properties: { password: { default: "[REDACTED]" } } } }],
+    });
+    expect(service.connectMcpServer).toHaveBeenCalledWith("srv-secret");
+    expect(rawServer.args).toEqual([
+      "server.mjs",
+      "--token",
+      "argv-short",
+      "--client-secret=inline-short",
+      "--label",
+      "safe",
+    ]);
+    expect(rawServer.url).toContain("path-short");
+    expect(rawTemplate.description).toContain("template-query");
+    expect(rawDiscovery.dependencyChecks[0]!.message).toContain("discovery-query");
+    expect(rawDiagnostic.checks[0]!.message).toContain("health-query");
+  });
+
+  it("projects MCP invocation and server-mode outputs while preserving raw results", async () => {
+    const rawDirectResult = {
+      ok: true,
+      output: {
+        webhookUrl: "https://hooks.example.test/token/direct-short?token=direct-query",
+        authorization: "Bearer direct-short",
+        tokenId: "direct-token-id",
+      },
+    };
+    const rawServerModeResult = {
+      content: "See https://tools.example.test/secret/server-mode-short?token=server-mode-query",
+      metadata: { password: "server-mode-password", secretRef: "vault:mcp/server-mode" },
+    };
+    const invokeMcpTool = vi.fn(async () => rawDirectResult);
+    const invokeTool = vi.fn(async () => ({
+      outcome: "executed",
+      policyReason: "allowed by test profile",
+      result: rawServerModeResult,
+    }));
+    const catalog = [
+      {
+        capabilityId: "tool:fs.read",
+        kind: "tool",
+        category: "built_in",
+        title: "Read file",
+        summary: "Read via https://catalog.example.test/token/catalog-short?token=catalog-query",
+        callable: true,
+        toolName: "fs.read",
+        wrapperVisibility: { readOnly: true, deterministic: true, codeModeAllowed: true },
+      },
+    ];
+    app = Fastify();
+    app.decorate("services", {
+      mcp: createMcpService({
+        invokeMcpTool,
+        listMcpServers: vi.fn(() => [{ serverId: "srv-1", label: "Server", status: "connected" }]),
+        listMcpTools: vi.fn(() => [{ serverId: "srv-1", toolName: "tool.echo", enabled: true }]),
+      }),
+      capabilities: { listCapabilityCatalog: vi.fn(() => catalog) },
+      tools: { resolveToolPolicyContext: vi.fn(() => ({ operatorId: "operator", surface: "mcp" })) },
+      toolsInvoke: { invokeTool },
+    } as never);
+    await registerMcpRoutesForTest(app);
+
+    const direct = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-1", toolName: "tool.echo" },
+    });
+    const manifest = await app.inject({ method: "GET", url: "/api/v1/mcp/server-mode/manifest" });
+    const serverMode = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp/server-mode/call",
+      payload: {
+        descriptorName: "goatcitadel.fs.read",
+        agentId: "agent-1",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(direct.statusCode).toBe(200);
+    expect(manifest.statusCode).toBe(200);
+    expect(serverMode.statusCode).toBe(200);
+    for (const response of [direct, manifest, serverMode]) {
+      expect(response.body).not.toContain("direct-short");
+      expect(response.body).not.toContain("direct-query");
+      expect(response.body).not.toContain("catalog-short");
+      expect(response.body).not.toContain("catalog-query");
+      expect(response.body).not.toContain("server-mode-short");
+      expect(response.body).not.toContain("server-mode-query");
+      expect(response.body).not.toContain("server-mode-password");
+    }
+    expect(direct.json()).toMatchObject({ output: { authorization: "[REDACTED]", tokenId: "direct-token-id" } });
+    expect(serverMode.json()).toMatchObject({
+      result: { metadata: { password: "[REDACTED]", secretRef: "vault:mcp/server-mode" } },
+    });
+    expect(rawDirectResult.output.authorization).toBe("Bearer direct-short");
+    expect(rawDirectResult.output.webhookUrl).toContain("direct-query");
+    expect(rawServerModeResult.metadata.password).toBe("server-mode-password");
+    expect(rawServerModeResult.content).toContain("server-mode-query");
+  });
+
+  it("preserves OAuth start state and authorization URL as an intentional one-time handoff", async () => {
+    const handoff = {
+      authorizeUrl:
+        "https://auth.example.test/oauth/authorize?response_type=code&state=oauth-state&client_id=public-client",
+      state: "oauth-state",
+    };
+    await registerMcpService({ startMcpOAuth: vi.fn(() => handoff) });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/servers/srv-1/oauth/start",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(handoff);
+  });
+
   it("serves a read-only remote MCP preview with supported remote transports callable", async () => {
     const service = await registerMcpService({
       listMcpServers: vi.fn(() => [
@@ -1605,6 +1838,27 @@ describe("mcp routes", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ error: "discovery disabled" });
+  });
+
+  it("projects credential-bearing MCP service errors before returning them", async () => {
+    const rawMessage =
+      "Probe failed for https://mcp.example.test/client-secret/error-short?token=error-query with Bearer error-short";
+    await registerMcpService({
+      listMcpTemplateDiscovery: vi.fn(() => {
+        throw new Error(rawMessage);
+      }),
+    });
+
+    const response = await app!.inject({ method: "GET", url: "/api/v1/mcp/templates/discovery" });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).not.toContain("error-short");
+    expect(response.body).not.toContain("error-query");
+    expect(response.json()).toEqual({
+      error:
+        "Probe failed for https://mcp.example.test/client-secret/[REDACTED]?token=[REDACTED] with Bearer [REDACTED]",
+    });
+    expect(rawMessage).toContain("error-short");
   });
 
   it("updates, deletes, disconnects, and OAuth-completes MCP servers", async () => {

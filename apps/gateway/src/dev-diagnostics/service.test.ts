@@ -36,6 +36,46 @@ describe("gateway dev diagnostics service", () => {
     expect(service.list({ limit: 10 }).items.some((item) => item.event === "first")).toBe(false);
   });
 
+  it("uses canonical structured redaction while preserving diagnostic caps, argv handling, and safe refs", () => {
+    const service = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    const source = {
+      webhookUrl: "https://hooks.example.test/services/team/path-secret?token=query-secret",
+      authorization: "Bearer short",
+      DATABASE_PASSWORD: "tiny-secret",
+      tokenEnv: "DIAGNOSTICS_TOKEN",
+      secretRef: "keychain:diagnostics-token",
+      tokenBudget: 1_024,
+      tokenId: "diagnostics-token-id",
+      argv: ["node", "script.mjs", "--password", "hunter2", "--token=query-secret", "--verbose"],
+      deep: { one: { two: { three: { four: { visible: "beyond-cap" } } } } },
+    };
+
+    const event = service.record({
+      level: "info",
+      category: "gateway",
+      event: "structured_redaction",
+      message: "structured redaction failed with Bearer short",
+      context: source,
+    });
+
+    expect(event?.message).toBe("structured redaction failed with [redacted]");
+    expect(event?.context).toEqual({
+      webhookUrl: "[redacted]",
+      authorization: "[redacted]",
+      DATABASE_PASSWORD: "[redacted]",
+      tokenEnv: "DIAGNOSTICS_TOKEN",
+      secretRef: "keychain:diagnostics-token",
+      tokenBudget: 1_024,
+      tokenId: "diagnostics-token-id",
+      argv: ["node", "script.mjs", "--password", "[redacted]", "--token=[redacted]", "--verbose"],
+      deep: { one: { two: { three: { four: "[max-depth]" } } } },
+    });
+    expect(source.webhookUrl).toContain("path-secret");
+    expect(source.authorization).toBe("Bearer short");
+    expect(source.argv[3]).toBe("hunter2");
+    expect(source.deep.one.two.three.four.visible).toBe("beyond-cap");
+  });
+
   it("logs structured diagnostics to the attached logger when verbose or non-debug", () => {
     const logger = {
       debug: vi.fn(),

@@ -257,6 +257,14 @@ export interface ContextManifestEntryRecord {
   contentHash: string;
   metadata: Record<string, unknown>;
   createdAt: string;
+  publicProjection?: {
+    entryRedacted: true;
+    contentRedacted: boolean;
+    metadataRedacted: boolean;
+    titleRedacted: boolean;
+    sourceRefRedacted: boolean;
+    canonicalContentHashRefersToStoredEntry: true;
+  };
 }
 
 export interface ContextManifestDetail {

@@ -196,19 +196,22 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         })
         .catch(() => cleanup("stream_write_error"));
     };
-    unsubscribe = fastify.services.realtimeEvents.subscribeRealtime((event: RealtimeEvent) => {
-      if (replayFlushed) {
-        deliverLiveEvent(event);
-        return;
-      }
-      liveBuffer.push(event);
-      if (liveBuffer.length > MAX_LIVE_BUFFER_EVENTS) {
-        // Replay flush is stalling; tear down rather than buffer unbounded. The
-        // client reconnects and replays from its cursor (a sequence gap it already
-        // detects and recovers from), instead of one stuck stream leaking memory.
-        cleanup("stream_replay_buffer_overflow");
-      }
-    });
+    unsubscribe = fastify.services.realtimeEvents.subscribeRealtime(
+      (event: RealtimeEvent) => {
+        if (replayFlushed) {
+          deliverLiveEvent(event);
+          return;
+        }
+        liveBuffer.push(event);
+        if (liveBuffer.length > MAX_LIVE_BUFFER_EVENTS) {
+          // Replay flush is stalling; tear down rather than buffer unbounded. The
+          // client reconnects and replays from its cursor (a sequence gap it already
+          // detects and recovers from), instead of one stuck stream leaking memory.
+          cleanup("stream_replay_buffer_overflow");
+        }
+      },
+      { includeApprovalActionTokens: canReceiveApprovalActionTokens(request) },
+    );
 
     raw.on("close", () => cleanup("client_disconnect"));
     request.raw.on("aborted", () => cleanup("client_aborted"));
@@ -230,7 +233,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const replay =
+    const replay: RealtimeEvent[] =
       requestedCursor !== undefined
         ? fastify.services.realtimeEvents.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
         : fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.replay).reverse();
@@ -253,11 +256,17 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       reply.hijack();
       return;
     }
-    for (const event of replay) {
+    // Prefer a live-buffered copy when the same event also appears in the
+    // retained snapshot. Most payloads are identical, but narrowly authorized
+    // transient approval capabilities exist only on the live copy by design.
+    const bufferedReplayEvents = new Map<number, RealtimeEvent>(liveBuffer.map((event) => [event.sequence, event]));
+    const replayForDelivery = replay.map((event) => bufferedReplayEvents.get(event.sequence) ?? event);
+    for (const event of replayForDelivery) {
       await send(event, event.sequence);
     }
-    if (latestReplayEvent !== undefined) {
-      lastDeliveredSequence = latestReplayEvent.sequence;
+    const latestDeliveredReplayEvent = replayForDelivery[replayForDelivery.length - 1];
+    if (latestDeliveredReplayEvent !== undefined) {
+      lastDeliveredSequence = latestDeliveredReplayEvent.sequence;
     }
 
     // Flush events that arrived while the snapshot was being read/written.
@@ -296,7 +305,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
 
-    const lastSentEvent = lastFlushedEvent ?? latestReplayEvent;
+    const lastSentEvent = lastFlushedEvent ?? latestDeliveredReplayEvent;
     fastify.services.realtimeEvents.touchRealtimeStreamLease({
       leaseId: lease.leaseId,
       requestedCursor,
@@ -329,6 +338,28 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     reply.hijack();
   });
 };
+
+export function canReceiveApprovalActionTokens(request: {
+  authActorSource?: string;
+  headers: Record<string, unknown>;
+  ip?: string;
+  ips?: string[];
+  raw: { socket: { remoteAddress?: string | null } };
+}): boolean {
+  if (["token", "basic", "loopback", "sse"].includes(request.authActorSource ?? "")) {
+    return true;
+  }
+  if (request.authActorSource !== "none" && request.authActorSource !== undefined) {
+    return false;
+  }
+  const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
+  if ("x-forwarded-for" in request.headers || "forwarded" in request.headers || proxyHopCount > 1) {
+    return false;
+  }
+  const remoteAddress = request.raw.socket.remoteAddress ?? request.ip ?? "";
+  const normalized = remoteAddress.replace("::ffff:", "").trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1";
+}
 
 function parseSequenceCursor(cursor?: string): number | undefined {
   if (!cursor) {

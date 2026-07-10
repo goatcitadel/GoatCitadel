@@ -1,6 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { isGoatError, type ChatDelegateRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
+import {
+  projectChatDelegateResponseForPublic,
+  projectChatDelegateSuggestionForPublic,
+  projectChatDelegationRunForPublic,
+  projectChatDelegationStreamValueForPublic,
+} from "../services/chat-secret-projection.js";
 import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
@@ -82,9 +88,11 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        await fastify.services.chatDelegate.runChatDelegation(
-          params.data.sessionId,
-          stampDelegateOperatorContext(request, body.data),
+        projectChatDelegateResponseForPublic(
+          await fastify.services.chatDelegate.runChatDelegation(
+            params.data.sessionId,
+            stampDelegateOperatorContext(request, body.data),
+          ),
         ),
       );
     } catch (error) {
@@ -155,7 +163,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         if (controller.signal.aborted) {
           break;
         }
-        const wrote = await send(chunk);
+        const wrote = await send(projectChatDelegationStreamValueForPublic(chunk));
         if (!wrote) {
           break;
         }
@@ -183,7 +191,11 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.chatDelegate.getChatDelegationRun(params.data.sessionId, params.data.runId));
+      return reply.send(
+        projectChatDelegationRunForPublic(
+          fastify.services.chatDelegate.getChatDelegationRun(params.data.sessionId, params.data.runId),
+        ),
+      );
     } catch (error) {
       if (isGoatError(error)) {
         return reply.code(error.httpStatus).send(error.toJSON());
@@ -206,7 +218,11 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.services.chatDelegate.suggestChatDelegation(params.data.sessionId, body.data));
+      return reply.send(
+        projectChatDelegateSuggestionForPublic(
+          await fastify.services.chatDelegate.suggestChatDelegation(params.data.sessionId, body.data),
+        ),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -225,9 +241,11 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        await fastify.services.chatDelegate.acceptChatDelegation(
-          params.data.sessionId,
-          stampDelegateOperatorContext(request, body.data),
+        projectChatDelegateResponseForPublic(
+          await fastify.services.chatDelegate.acceptChatDelegation(
+            params.data.sessionId,
+            stampDelegateOperatorContext(request, body.data),
+          ),
         ),
       );
     } catch (error) {

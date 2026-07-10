@@ -14,6 +14,8 @@ describe("dashboard observe aggregate routes", () => {
   });
 
   it("returns the unified timeline aggregate", async () => {
+    const rawJob = { jobId: "job-1", actionConfig: { apiKey: "timeline-job-secret" } };
+    const rawReview = { itemId: "review-1", summary: "Authorization: Bearer timeline-review-secret" };
     app = Fastify();
     app.decorate("services", {
       dashboard: {
@@ -22,8 +24,8 @@ describe("dashboard observe aggregate routes", () => {
         listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
       },
       cron: {
-        listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
-        listCronReviewQueue: vi.fn(() => [{ itemId: "review-1" }]),
+        listCronJobs: vi.fn(() => [rawJob]),
+        listCronReviewQueue: vi.fn(() => [rawReview]),
       },
       improvement: {
         listImprovementReports: vi.fn(() => [{ reportId: "report-1" }]),
@@ -42,14 +44,16 @@ describe("dashboard observe aggregate routes", () => {
       events: { items: [{ eventId: "evt-1", sequence: 1 }] },
       sessions: { items: [{ sessionId: "session-1" }] },
       scheduler: {
-        jobs: [{ jobId: "job-1" }],
-        reviewQueue: [{ itemId: "review-1" }],
+        jobs: [{ jobId: "job-1", actionConfig: { apiKey: "[REDACTED]" } }],
+        reviewQueue: [{ itemId: "review-1", summary: "Authorization: [REDACTED]" }],
       },
       improvement: {
         reports: [{ reportId: "report-1" }],
         replayRuns: [{ runId: "run-1" }],
       },
     });
+    expect(rawJob.actionConfig.apiKey).toBe("timeline-job-secret");
+    expect(rawReview.summary).toContain("timeline-review-secret");
   });
 
   it("returns an empty review queue when the cron review feature flag is disabled", async () => {

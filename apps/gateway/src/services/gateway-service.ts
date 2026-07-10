@@ -43,6 +43,7 @@ import {
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
+import { projectChatStreamChunkForPublic } from "./chat-secret-projection.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
@@ -3375,8 +3376,9 @@ export class GatewayService {
   ): AsyncGenerator<ChatStreamChunk> {
     let sequence = 1;
     for await (const chunk of source) {
+      const projectedChunk = projectChatStreamChunkForPublic(chunk);
       yield {
-        ...chunk,
+        ...projectedChunk,
         eventId: randomUUID(),
         sequence,
         ...(runId ? { runId } : {}),

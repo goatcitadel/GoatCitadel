@@ -5,7 +5,8 @@
 - Review base: `c28b54bf1276482067f36bcfd12429ceca1f76c4` (`origin/main` at review start)
 - Serial delivery:
   - `codex/review-00-proof-integrity` merged as PR #205 at `df0b3576ac1c4ae32efb44f6d94593b0886c7949`
-  - `codex/review-01-network-side-effects` is the current security branch
+  - `codex/review-01-network-side-effects` merged as PR #206 at `4df18536833a453c0e31f3a164c8d988abb14bc4`
+  - `codex/review-02-secret-projection-containment` is the current security branch
 - Canonical product surface: one Chat surface backed by the Gateway runtime
 - Finding priorities: correctness, security, data durability, orchestration/agentic behavior, performance, runtime truth, and operator-facing UX behavior
 - Excluded local state: `.env`, runtime databases, transcripts, audit logs, backups, dependency trees, build output, generated verification artifacts, and ignored legacy Mission Control residue
@@ -176,7 +177,7 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: redirect destinations are network-validated, but request authority is not rebound to the new origin.
 - Fix: centralize redirect authority policy and default-deny credential-bearing or body-carrying cross-origin redirects.
 - Focused proof: two-origin policy-engine regressions; broad proof: security evals, channel/MCP/A2A tests, and fast lane.
-- Status: `fixed and proven on review-01 — one shared redirect-authority policy now blocks cross-origin credentials, bodies, and mutation methods before contact; same-origin authenticated and anonymous allowlisted GET redirects remain supported; central and both duplicate redirect loops are covered`
+- Status: `fixed, proven, and merged in PR #206 — one shared redirect-authority policy now blocks cross-origin credentials, bodies, and mutation methods before contact; same-origin authenticated and anonymous allowlisted GET redirects remain supported; central and both duplicate redirect loops are covered`
 
 ### FR-102 — Retry policy can duplicate ambiguous external writes
 
@@ -186,7 +187,7 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: transport retryability is decided from status alone rather than HTTP method plus provider idempotency semantics.
 - Fix: retry safe methods only by default; allow POST retry only when a stable provider-supported idempotency key is actually sent, otherwise enter manual reconciliation.
 - Focused proof: ambiguous-success adapter tests; broad proof: external replay, channel runtime, and security eval lanes.
-- Status: `fixed and proven on review-01 — automatic retry is limited to GET/HEAD; ambiguous mutations issue once, become manual-reconciliation-required, retain that structured state through Gateway delivery, and cannot enter durable retry`
+- Status: `fixed, proven, and merged in PR #206 — automatic retry is limited to GET/HEAD; ambiguous mutations issue once, become manual-reconciliation-required, retain that structured state through Gateway delivery, and cannot enter durable retry`
 
 #### Review-01 closure evidence
 
@@ -198,6 +199,7 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Owning suites: Gateway passed 5,291 Vitest tests plus 17 Node tests; policy engine passed 627 tests; contracts passed 317 tests; storage passed 694 tests with 2 skips. Contracts, storage, policy-engine, and Gateway typechecks passed, as did zero-warning lint over every changed source/test file.
 - Named proof: `verify:api:compat` (`2026-07-09T22-50-28-663Z-api-compat-08cd53f1`), `verify:channels:runtime` (`2026-07-09T23-25-22-112Z-agentic-channels-runtime-77c0f039`), `verify:runtime:truth` (`2026-07-09T23-25-22-065Z-runtime-truth-a47c084a`), `verify:mcp:conformance` (6/6), and `verify:security:evals` (`2026-07-09T23-25-22-065Z-security-evals-f5c4ada1`) passed on the final source.
 - Broad proof: `docs:check` passed; `verify:fast` passed as `2026-07-09T23-25-53-533Z-fast-9ebfbb57`. The architecture guard initially rejected 29 new facade lines; the logic was moved into the existing channel-delivery helper owner, leaving GatewayService at the verifier's authoritative 8,292 lines (43 below the 8,335 baseline), 900 typed host callbacks (zero delta), and a passing `2026-07-09T23-25-22-060Z-architecture-metrics-76332783` artifact without a baseline ratchet.
+- Hosted merge proof: PR #206's final head `1bbf7e4504a856a5f9e02d07223c66e28321febf` passed hosted fast verification (including fresh production coverage, real PostgreSQL, and artifact-redaction gates), JavaScript/TypeScript, C#, and Actions CodeQL, lint, Trivy, and both Code Mode canaries. Every automated review thread was rechecked and confirmed addressed before squash merge `4df18536833a453c0e31f3a164c8d988abb14bc4`.
 - Hosted-review closure: automated review found three adjacent boundary errors and each was reproduced with a failing regression before correction. Safe attachment/preflight GET responses could falsely mark a later pre-dispatch failure as an ambiguous channel mutation; request tracking now accumulates mutation-started and mutation-response boundaries separately. Explicit MCP `pre_dispatch` truth could be overridden by expired-session wording; that phase is now authoritative and is not projected as unknown/manual. An already-aborted `http.post` could reach fetch and become unknown; it now exits before dispatch, while a paired abort-after-fetch regression remains `unknown_after_send`. Attachment 404s, response-stream failures, and pre-dispatch policy blocks remain `not_available`/`blocked`, while successful upload followed by a later attachment failure remains manual. The boundary suites, the 25-test channel-failure suite, and the full owning suites passed.
 - Independent closure: three adversarial passes and a post-review boundary re-review separately returned safe-to-merge verdicts after testing redirected mutation authority, delayed delivery losers, stale-runtime fencing, provider-ID retention, nullable PostgreSQL predicates, MCP replay, preflight-versus-mutation boundaries, and adjacent failure paths. Their only shared residual proof caveat was live PostgreSQL execution; the 2/2 live PostgreSQL run above closed it before publication.
 
@@ -209,7 +211,22 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: executable configuration, persisted evidence, and public/model DTOs share raw objects; redaction is neither key-aware enough nor URL/string-aware.
 - Fix: reject inline secrets where secret references are required, introduce sanitized public/evidence/model projections, migrate persisted credentials forward to secret references, and preserve only resolvable references in executable state.
 - Focused proof: storage/API/explainer redaction regressions; broad proof: artifact redaction, auth matrix, migration parity, and channel/A2A lanes.
-- Status: `open — secret-boundary security branch`
+- Status: `in progress on review-02 — broad response/model/evidence containment and safe editable-projection round trips are implemented with focused proof; the forward secret-reference migration and the explicitly queued secondary public surfaces remain open, so FR-103 is not closed by this branch`
+
+#### Review-02 containment scope and evidence
+
+- Canonical ownership: contracts own context-aware structured/text redaction; the Gateway owns detached public/model projections and URL/argv/schema-specific shapes; storage/runtime owners retain raw executable state only where execution still requires it. Public projections never mutate service or repository objects.
+- Response/model containment: approval REST/explainer/connector delivery, Chat threads/messages/streams/delegation/workbench execution, durable/orchestration/session/runtime exports, direct tool invocation, retained realtime, integrations/channels/hooks/comms, MCP, provider/settings/local-runtime status, agent/skill provenance, capability proposals/candidates/Code Mode, cron/Observe, A2A HTTP/JSON-RPC/gRPC/push, audit, evidence envelopes, and generated/tool artifacts now have regression-backed projection boundaries.
+- Editable projections: integration/channel/hook settings, MCP argv/URLs/policy, llama.cpp command/args, provider request auth/headers/proxy/TLS/base URL, and cron config/output round trips restore only the current record's hidden leaves. Stable-ID arrays preserve per-record identity; ambiguous or moved markers fail closed; explicit empty arrays remain explicit. One-time auth, SSE, device/session, vault reveal, OAuth, remote-approval, and realtime-voice issuance responses remain intentionally unprojected.
+- Truthful artifacts: newly stored evidence metadata is sanitized before hashing/writing. Legacy evidence and Code Mode/tool/generated-artifact reads are projected without rewriting the canonical bytes; additive `publicProjection` metadata states when content changed and that canonical hashes refer to stored artifacts.
+- Realtime approval recovery: retained/list/default events contain no action token. Only an exact approval-resolution live event can carry the one-time browser token, and only to an operator-authenticated or direct loopback SSE subscriber; replay/live overlap prefers that authorized transient copy. Operator-only token reissue remains the reload/recovery path.
+- Regression-first closure: every confirmed sink received a failing regression before its canonical projector/reconciliation fix. Late adversarial regressions covered real image `b64Json`, settings GET-to-PATCH restoration, signed evidence manifests, schema-aware capability projection, context-manifest hash semantics, Chat metadata marker movement, and one- versus multi-tag reorder behavior. The final independent matrix passed 13 direct scenarios and 36 assertions plus 15 focused tests, including two- and three-tag permutations, nested secret-bearing JSON Schema values, legacy dependencies, adjacent combinators, and raw-input immutability.
+- Owning suites on the final source: contracts 338/338; policy engine 630/630; storage 695 passed with 2 intentional skips; Gateway 5,400/5,400 Vitest tests plus 17/17 Node tests (5,417 total). Gateway typecheck, strict repository lint with zero warnings, and `git diff --check` passed.
+- Security/data proof: artifact redaction 5/5; auth matrix `2026-07-10T05-23-10-346Z-auth-matrix-1e8eb045`; security evals `2026-07-10T05-23-40-712Z-security-evals-82c974a0`; repository hygiene 118/118; supply chain 6/6. No source path changed during the read-only proof fan-out.
+- Runtime/integration proof: runtime truth `2026-07-10T05-23-41-354Z-runtime-truth-8a7b0b9e`; realtime truth `2026-07-10T05-24-21-969Z-realtime-truth-2e11bfdf`; durable recovery `2026-07-10T05-24-42-859Z-durable-recovery-45d89579`; API compatibility `2026-07-10T05-25-20-413Z-api-compat-87af019e`; channels runtime `2026-07-10T05-25-49-801Z-agentic-channels-runtime-9c0ae13d`; MCP conformance 6/6; A2A full `2026-07-10T05-26-15-745Z-a2a-full-980ca63f` with 42/42 route tests.
+- Release/proof integrity: install smoke `2026-07-10T05-23-26-007Z-install-smoke-8064204d` passed 7/7 and operator proof `2026-07-10T05-23-57-805Z-operator-proof-4fb85c0c` passed 3/3. Architecture metrics passed as `2026-07-10T05-24-46-411Z-architecture-metrics-3679b29f` with GatewayService at 8,291 lines (44 below baseline) and exactly 900 typed callbacks (zero delta); `docs:check` passed; final fast proof passed as `2026-07-10T05-24-53-644Z-fast-f2adec06`.
+- Review-02 local verdict: containment is safe for hosted review, but FR-103 intentionally remains open until the forward vault/secret-reference migration and residual sink queue are completed on subsequent serial branches.
+- Residual FR-103 queue for the next security branch: forward vault/secret references and historical plaintext quarantine; memory structured metadata and maintenance output; Assembly/MatterGoat/prompt-pack/dev-verification model output; mesh replication payloads; legacy mobile audit reads; local-AI/onboarding/media/connector/voice/workspace structured diagnostics; remaining editable user-authored DTO round-trip review. These are confirmed containment gaps, not claims of closure or accepted risk.
 
 ### FR-104 — Approval effects can commit after the API reports failure
 
@@ -330,6 +347,16 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Fix: top-level durable delegation parent with idempotent child completion events, checkpointed fan-in/synthesis, passive disconnect detach, and explicit parent/child cancellation.
 - Focused proof: approval and user-input disconnect/restart scenarios; broad proof: durable recovery, agentic proof, operator proof, and runtime truth.
 - Status: `open — durable delegation branch`
+
+### FR-116 — Safe demo bootstrap and install proof retain retired surface semantics
+
+- Severity: `medium`; confidence: `high`; release tier: `shipped`; certainty: `confirmed`.
+- Evidence: the demo bootstrap still seeded separate Chat/Cowork/Code sessions while the canonical owner normalized every mode to Chat; a second bootstrap therefore accumulated five sessions instead of reusing one. The install verifier simultaneously required retired Cowork and Code primary-surface anchors.
+- Reproduction: invoke safe demo bootstrap twice, then inspect canonical sessions and run `verify:install`; normalized sessions duplicate and the verifier asserts product semantics that no longer exist.
+- Root cause: bootstrap identity and release proof were keyed to legacy input modes rather than the one-Chat canonical stored/runtime mode.
+- Fix: seed one reusable Chat session, place agentic and governed code starter tasks inside Chat, return `/chat`, retain compatibility flags as false, and assert current product truth in install proof.
+- Focused proof: demo route 9/9; broad proof: install smoke 7/7 and operator proof 3/3 on the final Review-02 source.
+- Status: `fixed on review-02 — one canonical Chat demo session is idempotent and release proof no longer requires retired primary surfaces`
 
 ## Confirmed Medium Queue
 

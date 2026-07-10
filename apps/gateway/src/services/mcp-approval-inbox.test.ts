@@ -45,19 +45,25 @@ describe("mcp approval inbox", () => {
 
   it("receives, lists, and returns pending inbox state until follow-up effects finalize it", async () => {
     const approvalInbox = createRepo();
-    const resolveApprovalWithRemoteTokenId = vi.fn(async () => ({
-      approval: {
-        approvalId: "apr-1",
-        kind: "tool.invoke",
-        riskLevel: "danger" as const,
-        status: "approved" as const,
-        payload: {},
-        preview: { summary: "Approve deploy" },
-        createdAt: "2026-03-21T12:00:00.000Z",
-        resolvedAt: "2026-03-21T12:05:00.000Z",
-        resolvedBy: "connector:mcp:srv-1",
-        explanationStatus: "not_requested" as const,
+    const rawApproval = {
+      approvalId: "apr-1",
+      kind: "tool.invoke",
+      riskLevel: "danger" as const,
+      status: "approved" as const,
+      payload: {
+        authorization: "Bearer approval-short",
+        webhookUrl: "https://hooks.example.test/token/approval-path?token=approval-query",
+        tokenId: "approval-token-id",
+        secretRef: "vault:approval/resolve",
       },
+      preview: { summary: "Approve deploy", password: "preview-short" },
+      createdAt: "2026-03-21T12:00:00.000Z",
+      resolvedAt: "2026-03-21T12:05:00.000Z",
+      resolvedBy: "connector:mcp:srv-1",
+      explanationStatus: "not_requested" as const,
+    };
+    const resolveApprovalWithRemoteTokenId = vi.fn(async () => ({
+      approval: rawApproval,
     }));
     const server = createServer();
 
@@ -137,11 +143,26 @@ describe("mcp approval inbox", () => {
     expect(resolved.ok).toBe(true);
     expect(resolved.output?.item).toMatchObject({
       state: "pending",
+      tokenId: "tok-1",
+      token: "redacted:tok-1",
     });
     expect(resolved.output?.approval).toMatchObject({
       approvalId: "apr-1",
       status: "approved",
+      payload: {
+        authorization: "[REDACTED]",
+        tokenId: "approval-token-id",
+        secretRef: "vault:approval/resolve",
+      },
+      preview: { password: "[REDACTED]" },
     });
+    expect(JSON.stringify(resolved.output?.approval)).not.toContain("approval-short");
+    expect(JSON.stringify(resolved.output?.approval)).not.toContain("approval-path");
+    expect(JSON.stringify(resolved.output?.approval)).not.toContain("approval-query");
+    expect(JSON.stringify(resolved.output?.approval)).not.toContain("preview-short");
+    expect(rawApproval.payload.authorization).toBe("Bearer approval-short");
+    expect(rawApproval.payload.webhookUrl).toContain("approval-query");
+    expect(rawApproval.preview.password).toBe("preview-short");
   });
 
   it("returns the winning terminal state when a second resolver loses the race", async () => {

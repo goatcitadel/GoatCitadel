@@ -7,7 +7,7 @@ import type {
   ChatSessionRecord,
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
-import { ValidationError } from "@goatcitadel/contracts";
+import { redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
 export interface ChatGeneratedArtifactDependencies {
@@ -155,7 +155,7 @@ export function createChatGeneratedArtifactFromTurn(
 }
 
 export function buildGeneratedArtifactReference(artifact: ChatGeneratedArtifactRecord): ChatGeneratedArtifactReference {
-  return {
+  return redactStructuredSecrets({
     artifactId: artifact.artifactId,
     kind: artifact.kind,
     title: artifact.title,
@@ -170,7 +170,7 @@ export function buildGeneratedArtifactReference(artifact: ChatGeneratedArtifactR
     sourceBlockIndex: artifact.sourceBlockIndex,
     contentHash: artifact.contentHash,
     createdAt: artifact.createdAt,
-  };
+  }).value;
 }
 
 export function attachGeneratedArtifactsToThreadTurns(

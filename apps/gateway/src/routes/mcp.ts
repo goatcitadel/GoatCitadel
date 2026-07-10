@@ -29,6 +29,7 @@ import {
   parseNamespacedMcpToolName,
 } from "../services/mcp-tool-namespace.js";
 import { McpElicitationServiceError } from "../services/mcp-elicitation-service.js";
+import { projectMcpPublicValue } from "../services/mcp-public-projection.js";
 import {
   buildMcpServerModeBlockedResponse,
   buildMcpServerModeCallResponse,
@@ -209,27 +210,29 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorMutationRoute = withRouteAccess(fastify, "operator", MUTATION_ROUTE_OPTIONS);
 
   fastify.get("/api/v1/mcp/servers", operatorReadRoute, async (_request, reply) => {
-    return reply.send({ items: fastify.services.mcp.listMcpServers() });
+    return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpServers() }));
   });
 
   fastify.get("/api/v1/mcp/templates", operatorReadRoute, async (_request, reply) => {
-    return reply.send({ items: fastify.services.mcp.listMcpTemplates() });
+    return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpTemplates() }));
   });
 
   fastify.get("/api/v1/mcp/templates/discovery", operatorReadRoute, async (_request, reply) => {
     try {
-      return reply.send({ items: fastify.services.mcp.listMcpTemplateDiscovery() });
+      return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpTemplateDiscovery() }));
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 409, error);
     }
   });
 
   fastify.get("/api/v1/mcp/remote-preview", operatorReadRoute, async (_request, reply) => {
     return reply.send(
-      buildMcpRemotePreview({
-        servers: fastify.services.mcp.listMcpServers(),
-        templates: fastify.services.mcp.listMcpTemplates(),
-      }),
+      projectMcpPublicValue(
+        buildMcpRemotePreview({
+          servers: fastify.services.mcp.listMcpServers(),
+          templates: fastify.services.mcp.listMcpTemplates(),
+        }),
+      ),
     );
   });
 
@@ -238,12 +241,14 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
     }
-    return reply.send({
-      items: mcpElicitations.listRequests({
-        ...query.data,
-        owner: resolveElicitationCallerOwner(request),
+    return reply.send(
+      projectMcpPublicValue({
+        items: mcpElicitations.listRequests({
+          ...query.data,
+          owner: resolveElicitationCallerOwner(request),
+        }),
       }),
-    });
+    );
   });
 
   fastify.post("/api/v1/mcp/elicitations", operatorMutationRoute, async (request, reply) => {
@@ -253,11 +258,13 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.code(201).send(
-        mcpElicitations.createRequest({
-          ...parsed.data,
-          prompt: parsed.data.prompt ?? parsed.data.message ?? "",
-          owner: resolveElicitationCallerOwner(request, parsed.data.owner),
-        }),
+        projectMcpPublicValue(
+          mcpElicitations.createRequest({
+            ...parsed.data,
+            prompt: parsed.data.prompt ?? parsed.data.message ?? "",
+            owner: resolveElicitationCallerOwner(request, parsed.data.owner),
+          }),
+        ),
       );
     } catch (error) {
       return sendMcpElicitationError(reply, error);
@@ -277,10 +284,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        mcpElicitations.respondToRequest(params.data.elicitationId, {
-          ...body.data,
-          owner: resolveElicitationCallerOwner(request, body.data.owner),
-        }),
+        projectMcpPublicValue(
+          mcpElicitations.respondToRequest(params.data.elicitationId, {
+            ...body.data,
+            owner: resolveElicitationCallerOwner(request, body.data.owner),
+          }),
+        ),
       );
     } catch (error) {
       return sendMcpElicitationError(reply, error);
@@ -289,11 +298,13 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/mcp/server-mode/manifest", operatorReadRoute, async (_request, reply) => {
     return reply.send(
-      buildMcpServerModeManifest({
-        inspectableCatalog: fastify.services.capabilities.listCapabilityCatalog("inspectable"),
-        callableCatalog: fastify.services.capabilities.listCapabilityCatalog("callable"),
-        callPreviewAvailable: isMcpServerModeCallPreviewAvailable(fastify.services),
-      }),
+      projectMcpPublicValue(
+        buildMcpServerModeManifest({
+          inspectableCatalog: fastify.services.capabilities.listCapabilityCatalog("inspectable"),
+          callableCatalog: fastify.services.capabilities.listCapabilityCatalog("callable"),
+          callPreviewAvailable: isMcpServerModeCallPreviewAvailable(fastify.services),
+        }),
+      ),
     );
   });
 
@@ -303,25 +314,23 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     if (!isMcpServerModeCallPreviewAvailable(fastify.services)) {
-      return reply.code(409).send({
-        error: "MCP server-mode call preview is not available in this Gateway runtime.",
-      });
+      return sendMcpPublicError(reply, 409, "MCP server-mode call preview is not available in this Gateway runtime.");
     }
 
     const callableCatalog = fastify.services.capabilities.listCapabilityCatalog("callable");
     const descriptor = findServerModeToolDescriptor(callableCatalog, parsed.data.descriptorName);
     if (!descriptor) {
-      return reply.code(404).send({
-        error: `Unknown MCP server-mode descriptor ${parsed.data.descriptorName}.`,
-      });
+      return sendMcpPublicError(reply, 404, `Unknown MCP server-mode descriptor ${parsed.data.descriptorName}.`);
     }
     if (!isServerModeDescriptorCallablePreview(descriptor)) {
       return reply
         .code(409)
         .send(
-          buildMcpServerModeBlockedResponse(parsed.data.descriptorName, descriptor, [
-            "Server-mode call preview only executes read-only, closed-world Gateway tool descriptors.",
-          ]),
+          projectMcpPublicValue(
+            buildMcpServerModeBlockedResponse(parsed.data.descriptorName, descriptor, [
+              "Server-mode call preview only executes read-only, closed-world Gateway tool descriptors.",
+            ]),
+          ),
         );
     }
 
@@ -331,9 +340,11 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply
         .code(409)
         .send(
-          buildMcpServerModeBlockedResponse(parsed.data.descriptorName, descriptor, [
-            "Descriptor does not map to a Gateway toolName that can be invoked by the tool coordinator.",
-          ]),
+          projectMcpPublicValue(
+            buildMcpServerModeBlockedResponse(parsed.data.descriptorName, descriptor, [
+              "Descriptor does not map to a Gateway toolName that can be invoked by the tool coordinator.",
+            ]),
+          ),
         );
     }
 
@@ -378,9 +389,11 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
         },
         policyContext,
       });
-      return reply.send(buildMcpServerModeCallResponse(parsed.data.descriptorName, descriptor, result, toolName));
+      return reply.send(
+        projectMcpPublicValue(buildMcpServerModeCallResponse(parsed.data.descriptorName, descriptor, result, toolName)),
+      );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -396,9 +409,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error });
     }
     try {
-      return reply.code(201).send(fastify.services.mcp.createMcpServer(parsed.data));
+      return reply.code(201).send(projectMcpPublicValue(fastify.services.mcp.createMcpServer(parsed.data)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -414,9 +427,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.services.mcp.updateMcpServer(params.data.serverId, body.data));
+      return reply.send(projectMcpPublicValue(fastify.services.mcp.updateMcpServer(params.data.serverId, body.data)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -425,7 +438,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    return reply.send(fastify.services.mcp.deleteMcpServer(params.data.serverId));
+    return reply.send(projectMcpPublicValue(fastify.services.mcp.deleteMcpServer(params.data.serverId)));
   });
 
   fastify.post("/api/v1/mcp/servers/:serverId/connect", operatorMutationRoute, async (request, reply) => {
@@ -434,9 +447,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.mcp.connectMcpServer(params.data.serverId));
+      return reply.send(projectMcpPublicValue(await fastify.services.mcp.connectMcpServer(params.data.serverId)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -446,9 +459,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mcp.disconnectMcpServer(params.data.serverId));
+      return reply.send(projectMcpPublicValue(fastify.services.mcp.disconnectMcpServer(params.data.serverId)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -460,7 +473,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.services.mcp.startMcpOAuth(params.data.serverId));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -477,10 +490,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        await fastify.services.mcp.completeMcpOAuth(params.data.serverId, body.data.code, body.data.state),
+        projectMcpPublicValue(
+          await fastify.services.mcp.completeMcpOAuth(params.data.serverId, body.data.code, body.data.state),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -490,9 +505,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: fastify.services.mcp.listMcpTools(params.data.serverId) });
+      return reply.send(projectMcpPublicValue({ items: fastify.services.mcp.listMcpTools(params.data.serverId) }));
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 404, error);
     }
   });
 
@@ -505,13 +520,13 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     // namespacing and rejecting ambiguous bare-name collisions BEFORE dispatch.
     const target = resolveMcpInvokeTarget(fastify.services.mcp, parsed.data.serverId, parsed.data.toolName);
     if (!target.ok) {
-      return reply.code(target.statusCode).send({ error: target.error });
+      return sendMcpPublicError(reply, target.statusCode, target.error);
     }
     // Fail closed on stale / missing OAuth: never reach invokeMcpTool when the
     // server still needs (re)authentication.
     const authBlock = evaluateMcpInvokeAuthGate(fastify.services.mcp, target.serverId);
     if (authBlock) {
-      return reply.code(401).send({ error: authBlock });
+      return sendMcpPublicError(reply, 401, authBlock);
     }
     try {
       const actorId = request.authActorId?.trim() || parsed.data.agentId?.trim() || "operator";
@@ -539,20 +554,22 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
         localOperatorOverrideId: parsed.data.localOperatorOverrideId,
       };
       return reply.send(
-        await fastify.services.mcp.invokeMcpTool({
-          ...parsed.data,
-          serverId: target.serverId,
-          toolName: target.toolName,
-          policyContext,
-          consentContext: {
-            operatorId: actorId,
-            source: "ui",
-            reason: "mcp.invoke",
-          },
-        }),
+        projectMcpPublicValue(
+          await fastify.services.mcp.invokeMcpTool({
+            ...parsed.data,
+            serverId: target.serverId,
+            toolName: target.toolName,
+            policyContext,
+            consentContext: {
+              operatorId: actorId,
+              source: "ui",
+              reason: "mcp.invoke",
+            },
+          }),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 400, error);
     }
   });
 
@@ -568,9 +585,11 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data));
+      return reply.send(
+        projectMcpPublicValue(fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data)),
+      );
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendMcpPublicError(reply, 404, error);
     }
   });
 
@@ -580,11 +599,11 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.mcp.runMcpServerHealthCheck(params.data.serverId));
+      return reply.send(projectMcpPublicValue(fastify.services.mcp.runMcpServerHealthCheck(params.data.serverId)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown mcp server");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendMcpPublicError(reply, notFound ? 404 : 409, message);
     }
   });
 };
@@ -605,9 +624,14 @@ function resolveElicitationCallerOwner(
 
 function sendMcpElicitationError(reply: FastifyReply, error: unknown) {
   if (error instanceof McpElicitationServiceError) {
-    return reply.code(error.statusCode).send({ error: error.message });
+    return sendMcpPublicError(reply, error.statusCode, error.message);
   }
-  return reply.code(400).send({ error: (error as Error).message });
+  return sendMcpPublicError(reply, 400, error);
+}
+
+function sendMcpPublicError(reply: FastifyReply, statusCode: number, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return reply.code(statusCode).send(projectMcpPublicValue({ error: message }));
 }
 
 /** Minimal read surface of the MCP service used by the invoke-time gates. */

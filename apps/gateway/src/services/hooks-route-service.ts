@@ -32,7 +32,7 @@ export function createHooksRoutePort(deps: HooksRoutePortDependencies): HooksRou
     listWorkspaceHooks: (workspaceId, limit) =>
       deps.hooksService.listWorkspaceHooks(deps.normalizeWorkspaceId(workspaceId), limit),
     updateWorkspaceHook: (workspaceId, hookId, input) =>
-      deps.hooksService.updateWorkspaceHook(deps.normalizeWorkspaceId(workspaceId), hookId, input),
+      deps.hooksService.updateWorkspaceHookFromPublicProjection(deps.normalizeWorkspaceId(workspaceId), hookId, input),
   };
 }
 

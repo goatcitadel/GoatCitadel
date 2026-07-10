@@ -89,7 +89,9 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.retestChannelConnection(channelSetupDeps, connectionId),
     testChannelSetupDraft: (draftId) => channelSetupService.testChannelSetupDraft(channelSetupDeps, draftId),
     updateChannelSetupDraft: (draftId, input) =>
-      channelSetupService.updateChannelSetupDraft(channelSetupDeps, draftId, input),
+      channelSetupService.updateChannelSetupDraft(channelSetupDeps, draftId, input, {
+        reconcilePublicProjection: true,
+      }),
     validateChannelSetupDraft: (draftId) => channelSetupService.validateChannelSetupDraft(channelSetupDeps, draftId),
   });
   const commsDeps = createCommsHostForGateway(gateway, integrationChannel);

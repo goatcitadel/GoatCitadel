@@ -866,10 +866,39 @@ describe("orchestration-lifecycle-service", () => {
     expect(() => getOrchestrationRun(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
   });
 
-  it("projects orchestration checkpoints and run events into a sanitized decision trace", () => {
+  it("projects all orchestration trace sources through bounded structured secret containment", () => {
     const base = createHost();
+    const rawRuntimeDecision = {
+      decisionId: "runtime-decision-1",
+      kind: "routing_choice" as const,
+      scope: {
+        runId: "run-1",
+        planId: "plan-1",
+        stepId: "phase-1",
+      },
+      selected: "https://router.example.test/select?token=short-token",
+      rationale: "Bearer short",
+      alternatives: [
+        {
+          label: "safe fallback",
+          outcome: "not_chosen" as const,
+          reasonNotChosen: "DATABASE_PASSWORD=tiny-secret",
+        },
+      ],
+      signals: [
+        {
+          source: "orchestration" as const,
+          key: "tokenBudget",
+          value: 4_096,
+        },
+      ],
+      evidenceRefs: [{ refType: "run" as const, refId: "run-1", label: "safe evidence" }],
+      createdAt: "2026-04-12T00:00:03.000Z",
+    };
+    const oversizedDetails = Object.fromEntries(Array.from({ length: 55 }, (_, index) => [`safe${index}`, index]));
     const host = createHost({
       storage: {
+        ...base.storage,
         orchestration: {
           ...base.storage.orchestration,
           getRun: vi.fn(() => ({
@@ -882,7 +911,14 @@ describe("orchestration-lifecycle-service", () => {
               runId: "run-1",
               planId: "plan-1",
               checkpointKind: "run_started",
-              details: { apiKey: "secret-value", status: "running" },
+              details: {
+                webhookUrl: "https://hooks.slack.com/services/T000/B000/shortsecret",
+                status: "running",
+                tokenBudget: 4_096,
+                nested: { level2: { level3: { level4: "must not escape" } } },
+                samples: Array.from({ length: 25 }, (_, index) => index),
+                ...oversizedDetails,
+              },
               createdAt: "2026-04-12T00:00:01.000Z",
             },
           ]),
@@ -894,21 +930,54 @@ describe("orchestration-lifecycle-service", () => {
               payload: {
                 phaseId: "phase-1",
                 model: "fast-model",
+                callback: "https://example.test/hook?token=short-token&ok=1",
+                authorizationHint: "Bearer short",
+                DATABASE_PASSWORD: "tiny-secret",
                 outputText: "x".repeat(700),
               },
               createdAt: "2026-04-12T00:00:02.000Z",
             },
           ]),
         },
+        runtimeDecisionTraces: {
+          list: vi.fn(() => [rawRuntimeDecision]),
+        },
       } as OrchestrationLifecycleHost["storage"],
     });
 
     const trace = getRunTrace(host, "run-1", "workspace-a");
 
-    expect(trace.decisions.map((decision) => decision.kind)).toEqual(["run_started", "phase_completed"]);
-    expect(trace.checkpoints[0]?.details.apiKey).toBe("[redacted]");
+    expect(trace.decisions.map((decision) => decision.kind)).toEqual(["run_started", "phase_completed", "unknown"]);
+    expect(trace.checkpoints[0]?.details).toMatchObject({
+      webhookUrl: "[redacted]",
+      status: "running",
+      tokenBudget: 4_096,
+      nested: { level2: { level3: { level4: "[Max depth]" } } },
+      samples: Array.from({ length: 20 }, (_, index) => index),
+    });
+    expect(Object.keys(trace.checkpoints[0]?.details ?? {})).toHaveLength(50);
+    expect(trace.runEvents[0]?.payload).toMatchObject({
+      callback: "https://example.test/hook?token=[redacted]&ok=1",
+      authorizationHint: "[redacted]",
+      DATABASE_PASSWORD: "[redacted]",
+    });
     expect(trace.runEvents[0]?.payload.outputText).toContain("[truncated]");
     expect(trace.decisions[1]?.summary).toContain("phase phase-1");
+    expect(trace.runtimeDecisions?.[0]).toMatchObject({
+      decisionId: "runtime-decision-1",
+      kind: "routing_choice",
+      scope: { runId: "run-1", planId: "plan-1", stepId: "phase-1" },
+      selected: "https://router.example.test/select?token=[redacted]",
+      rationale: "[redacted]",
+      alternatives: [{ reasonNotChosen: "DATABASE_PASSWORD=[redacted]" }],
+      signals: [{ key: "tokenBudget", value: 4_096 }],
+    });
+    expect(trace.decisions[2]?.details).toMatchObject({
+      selected: "https://router.example.test/select?token=[redacted]",
+      rationale: "[redacted]",
+    });
+    expect(rawRuntimeDecision.selected).toBe("https://router.example.test/select?token=short-token");
+    expect(rawRuntimeDecision.rationale).toBe("Bearer short");
   });
 
   it("denies trace reads for a run owned by another workspace", () => {

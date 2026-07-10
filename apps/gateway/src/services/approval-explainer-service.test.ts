@@ -147,18 +147,26 @@ describe("ApprovalExplainerService", () => {
 
   it("redacts sensitive fields before sending to LLM", async () => {
     const ctx = createService();
+    const webhookSecret = "hook-short";
+    const bearerSecret = "tiny";
+    const databasePassword = "db-short";
     const approval: ApprovalRequest = {
       ...defaultApproval,
       payload: {
-        command: "curl ...",
+        command: `curl -H "Authorization: Bearer ${bearerSecret}" https://example.test`,
+        webhookUrl: `https://hooks.example.test/inbound?token=${webhookSecret}`,
+        environment: { DATABASE_PASSWORD: databasePassword },
         apiKey: "SECRET123",
         nested: {
           password: "hunter2",
           token: "abc123",
         },
+        tokenId: "rat_123",
+        secretRef: "env:DATABASE_PASSWORD",
+        status: "pending",
       },
       preview: {
-        authorization: "Bearer token",
+        authorization: `Bearer ${bearerSecret}`,
       },
     };
 
@@ -168,10 +176,25 @@ describe("ApprovalExplainerService", () => {
     const prompt = request.messages[1]?.content;
     expect(typeof prompt).toBe("string");
     const promptText = String(prompt);
+    expect(promptText).not.toContain(webhookSecret);
+    expect(promptText).not.toContain(bearerSecret);
+    expect(promptText).not.toContain(databasePassword);
     expect(promptText.includes("SECRET123")).toBe(false);
     expect(promptText.includes("hunter2")).toBe(false);
     expect(promptText.includes("abc123")).toBe(false);
     expect(promptText.includes("[REDACTED]")).toBe(true);
+    expect(promptText).toContain('"tokenId": "rat_123"');
+    expect(promptText).toContain('"secretRef": "env:DATABASE_PASSWORD"');
+    expect(promptText).toContain('"status": "pending"');
+
+    expect(approval.payload).toMatchObject({
+      command: `curl -H "Authorization: Bearer ${bearerSecret}" https://example.test`,
+      webhookUrl: `https://hooks.example.test/inbound?token=${webhookSecret}`,
+      environment: { DATABASE_PASSWORD: databasePassword },
+      tokenId: "rat_123",
+      secretRef: "env:DATABASE_PASSWORD",
+      status: "pending",
+    });
   });
 
   it("skips safe risk approvals by default threshold", async () => {

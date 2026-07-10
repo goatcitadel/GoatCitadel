@@ -1,5 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { projectSettingsPublicValue } from "../services/provider-settings-public-projection.js";
+import { projectPublicSecretValue } from "../services/public-secret-projection.js";
+import { preserveKnownPublicProjectionSecretsForUpdate } from "../services/integration-connection-public-projection.js";
 import { LlmProviderRequestConfigSchema } from "@goatcitadel/contracts";
 
 const memoryQuerySchema = z.object({
@@ -307,11 +310,11 @@ const opsQualityQuerySchema = z.object({
 
 export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/dashboard/state", async (_request, reply) => {
-    return reply.send(fastify.services.dashboard.getDashboardState());
+    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getDashboardState()));
   });
 
   fastify.get("/api/v1/system/vitals", async (_request, reply) => {
-    return reply.send(fastify.services.dashboard.getSystemVitals());
+    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getSystemVitals()));
   });
 
   fastify.get("/api/v1/observe/timeline", async (request, reply) => {
@@ -322,23 +325,25 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const reviewQueue = fastify.services.dashboard.isFeatureEnabled("cronReviewQueueV1Enabled")
       ? fastify.services.cron.listCronReviewQueue(parsed.data.cronReviewLimit)
       : [];
-    return reply.send({
-      generatedAt: new Date().toISOString(),
-      events: {
-        items: fastify.services.dashboard.listRealtimeEvents(parsed.data.eventLimit),
-      },
-      sessions: {
-        items: fastify.services.dashboard.listSessions(parsed.data.sessionLimit),
-      },
-      scheduler: {
-        jobs: fastify.services.cron.listCronJobs(),
-        reviewQueue,
-      },
-      improvement: {
-        reports: fastify.services.improvement.listImprovementReports(parsed.data.improvementLimit),
-        replayRuns: fastify.services.improvement.listDecisionReplayRuns(parsed.data.improvementLimit),
-      },
-    });
+    return reply.send(
+      projectPublicSecretValue({
+        generatedAt: new Date().toISOString(),
+        events: {
+          items: fastify.services.dashboard.listRealtimeEvents(parsed.data.eventLimit),
+        },
+        sessions: {
+          items: fastify.services.dashboard.listSessions(parsed.data.sessionLimit),
+        },
+        scheduler: {
+          jobs: fastify.services.cron.listCronJobs(),
+          reviewQueue,
+        },
+        improvement: {
+          reports: fastify.services.improvement.listImprovementReports(parsed.data.improvementLimit),
+          replayRuns: fastify.services.improvement.listDecisionReplayRuns(parsed.data.improvementLimit),
+        },
+      }),
+    );
   });
 
   fastify.get("/api/v1/ops/quality", async (request, reply) => {
@@ -346,7 +351,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.services.dashboard.getOpsQualitySnapshot(parsed.data));
+    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getOpsQualitySnapshot(parsed.data)));
   });
 
   fastify.get("/api/v1/ops/quality/export", async (request, reply) => {
@@ -354,7 +359,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.services.dashboard.getOpsQualityExport(parsed.data));
+    return reply.send(projectPublicSecretValue(fastify.services.dashboard.getOpsQualityExport(parsed.data)));
   });
 
   fastify.get("/api/v1/observe/health", async (request, reply) => {
@@ -366,28 +371,30 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const to = now.toISOString();
     const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const backups = await fastify.services.dashboard.listBackups(parsed.data.backupLimit);
-    return reply.send({
-      generatedAt: to,
-      systemVitals: fastify.services.dashboard.getSystemVitals(),
-      daemonStatus: fastify.services.daemon.getDaemonStatus(),
-      daemonLogs: {
-        items: fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
-      },
-      costs: {
-        summary: {
-          items: fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
-          scope: parsed.data.costScope,
-          from,
-          to,
-          usageAvailability: fastify.services.dashboard.costUsageAvailability(from, to),
+    return reply.send(
+      projectPublicSecretValue({
+        generatedAt: to,
+        systemVitals: fastify.services.dashboard.getSystemVitals(),
+        daemonStatus: fastify.services.daemon.getDaemonStatus(),
+        daemonLogs: {
+          items: fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
         },
-        qmd: fastify.services.dashboard.getMemoryQmdStats(from, to),
-      },
-      backups: {
-        items: backups,
-        latest: backups[0] ?? null,
-      },
-    });
+        costs: {
+          summary: {
+            items: fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
+            scope: parsed.data.costScope,
+            from,
+            to,
+            usageAvailability: fastify.services.dashboard.costUsageAvailability(from, to),
+          },
+          qmd: fastify.services.dashboard.getMemoryQmdStats(from, to),
+        },
+        backups: {
+          items: backups,
+          latest: backups[0] ?? null,
+        },
+      }),
+    );
   });
 
   fastify.get("/api/v1/observe/runs/:runId/trace", async (request, reply) => {
@@ -396,7 +403,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.dashboard.getObserveRunTrace(parsed.data.runId));
+      return reply.send(
+        projectPublicSecretValue(await fastify.services.dashboard.getObserveRunTrace(parsed.data.runId)),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -410,7 +419,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.dashboard.getObserveRunTraceExport(parsed.data.runId));
+      return reply.send(
+        projectPublicSecretValue(await fastify.services.dashboard.getObserveRunTraceExport(parsed.data.runId)),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -419,7 +430,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/cron/jobs", async (_request, reply) => {
-    return reply.send({ items: fastify.services.cron.listCronJobs() });
+    return reply.send(projectPublicSecretValue({ items: fastify.services.cron.listCronJobs() }));
   });
 
   fastify.get("/api/v1/cron/jobs/:jobId", async (request, reply) => {
@@ -428,7 +439,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.cron.getCronJob(parsed.data.jobId));
+      return reply.send(projectPublicSecretValue(fastify.services.cron.getCronJob(parsed.data.jobId)));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -441,7 +452,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const job = fastify.services.cron.createCronJob(parsed.data);
-      return reply.code(201).send(job);
+      return reply.code(201).send(projectPublicSecretValue(job));
     } catch (error) {
       const message = (error as Error).message;
       return reply.code(isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
@@ -461,7 +472,13 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "No update fields were provided." });
     }
     try {
-      return reply.send(fastify.services.cron.updateCronJob(parsedParams.data.jobId, parsedBody.data));
+      const update = containsPublicProjectionMarker(parsedBody.data)
+        ? reconcileCronPublicUpdate(
+            fastify.services.cron.getCronJob(parsedParams.data.jobId) as unknown as Record<string, unknown>,
+            parsedBody.data as Record<string, unknown>,
+          )
+        : parsedBody.data;
+      return reply.send(projectPublicSecretValue(fastify.services.cron.updateCronJob(parsedParams.data.jobId, update)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -475,7 +492,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.cron.setCronJobEnabled(parsed.data.jobId, true));
+      return reply.send(projectPublicSecretValue(fastify.services.cron.setCronJobEnabled(parsed.data.jobId, true)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -489,7 +506,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.cron.setCronJobEnabled(parsed.data.jobId, false));
+      return reply.send(projectPublicSecretValue(fastify.services.cron.setCronJobEnabled(parsed.data.jobId, false)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -511,11 +528,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         parsedBody.data.force === true || parsedBody.data.reason
           ? { force: parsedBody.data.force === true, reason: parsedBody.data.reason }
           : undefined;
-      return reply.send(
-        options
-          ? await fastify.services.cron.runCronJobNow(parsed.data.jobId, options)
-          : await fastify.services.cron.runCronJobNow(parsed.data.jobId),
-      );
+      const result = options
+        ? await fastify.services.cron.runCronJobNow(parsed.data.jobId, options)
+        : await fastify.services.cron.runCronJobNow(parsed.data.jobId);
+      return reply.send(projectPublicSecretValue(result));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -551,7 +567,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: fastify.services.cron.listCronReviewQueue(parsed.data.limit) });
+      return reply.send(
+        projectPublicSecretValue({ items: fastify.services.cron.listCronReviewQueue(parsed.data.limit) }),
+      );
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -563,7 +581,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.cron.retryCronReviewQueueItem(parsed.data.itemId));
+      return reply.send(projectPublicSecretValue(fastify.services.cron.retryCronReviewQueueItem(parsed.data.itemId)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -577,7 +595,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.cron.getCronRunDiff(parsed.data.runId));
+      return reply.send(projectPublicSecretValue(fastify.services.cron.getCronRunDiff(parsed.data.runId)));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -600,7 +618,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/settings", async (_request, reply) => {
-    return reply.send(fastify.services.settings.getSettings());
+    return reply.send(projectSettingsPublicValue(fastify.services.settings.getSettings()));
   });
 
   fastify.patch("/api/v1/settings", async (request, reply) => {
@@ -614,7 +632,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(fastify.services.settings.updateSettings(parsed.data));
+      return reply.send(projectSettingsPublicValue(fastify.services.settings.updateSettings(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -702,4 +720,29 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
 function isUnsupportedCronActionError(message: string): boolean {
   return message.includes("GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON");
+}
+
+function reconcileCronPublicUpdate(
+  current: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  const currentSubmittedFields = Object.fromEntries(Object.keys(incoming).map((key) => [key, current[key]]));
+  return preserveKnownPublicProjectionSecretsForUpdate(
+    currentSubmittedFields,
+    projectPublicSecretValue(currentSubmittedFields),
+    incoming,
+  );
+}
+
+function containsPublicProjectionMarker(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (typeof value === "string") {
+    return value.toUpperCase().includes("[REDACTED]");
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  return (Array.isArray(value) ? value : Object.values(value)).some((item) =>
+    containsPublicProjectionMarker(item, seen),
+  );
 }

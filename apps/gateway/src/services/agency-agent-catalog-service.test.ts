@@ -119,8 +119,10 @@ describe("agency-agent-catalog-service", () => {
     expect(imported.divisions).toEqual(["engineering", "marketing"]);
     expect(imported.parseCounts.supported).toBe(1);
     expect(imported.parseCounts.supported_with_warnings).toBe(1);
+    expect(imported.repoUrl).toBe(repoRoot);
     expect(catalogEntries).toHaveLength(2);
     expect(catalogEntries[0]?.definition.provenance.path).toMatch(/\.md$/);
+    expect(catalogEntries.every((entry) => entry.definition.provenance.repoUrl === repoRoot)).toBe(true);
     expect(storage.agentProfiles.list()).toEqual([]);
     expect(storage.chatSpecialistCandidates.listBySession()).toEqual([]);
   });

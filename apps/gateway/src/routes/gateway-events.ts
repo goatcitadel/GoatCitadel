@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { projectGatewayEventResultForPublic } from "../services/session-operational-public-projection.js";
 
 const bodySchema = z.object({
   eventId: z.string().min(1),
@@ -48,6 +49,6 @@ export const gatewayEventsRoute: FastifyPluginAsync = async (fastify) => {
 
     const idempotencyKey = (request as typeof request & { idempotencyKey: string }).idempotencyKey;
     const result = await fastify.services.gatewayEvents.ingestEvent(idempotencyKey, parsed.data);
-    return reply.code(200).send(result);
+    return reply.code(200).send(projectGatewayEventResultForPublic(result));
   });
 };

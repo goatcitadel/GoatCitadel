@@ -30,6 +30,11 @@ export interface EvidenceEnvelope {
   signatureStatus: EvidenceEnvelopeSignatureStatus;
   signature?: string;
   metadata: Record<string, unknown>;
+  publicProjection?: {
+    metadataRedacted: boolean;
+    redactedPaths: string[];
+    canonicalHashesReferToStoredEnvelope: true;
+  };
   createdAt: string;
 }
 

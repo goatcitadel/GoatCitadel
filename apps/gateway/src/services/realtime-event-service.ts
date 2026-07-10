@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { RealtimeEvent } from "@goatcitadel/contracts";
+import { redactStructuredSecrets, type RealtimeEvent } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
 export interface RealtimePublisher {
@@ -13,6 +13,19 @@ export interface RealtimePublisher {
 
 export interface RealtimeEventListener {
   (event: RealtimeEvent): void;
+}
+
+export interface RealtimeSubscriptionOptions {
+  /**
+   * Receive the one-time remote approval token on the live browser-delivery
+   * event. Retained events and all other subscribers remain redacted.
+   */
+  includeApprovalActionTokens?: boolean;
+}
+
+interface RealtimeLiveEmission {
+  publicEvent: RealtimeEvent;
+  approvalActionEvent?: RealtimeEvent;
 }
 
 export interface RealtimeEventServiceDependencies {
@@ -40,24 +53,36 @@ export class RealtimeEventService implements RealtimePublisher {
     if (requiresExplicitRealtimeMetadata(eventType, source) && !hasExplicitRealtimeMetadata(options)) {
       throw new Error(`Explicit realtime metadata is required for protected event ${source}:${eventType}.`);
     }
-    const event = this.deps.storage.realtimeEvents.append(eventType, source, payload, options);
-    this.events.emit("event", event);
+    const projectedPayload = redactStructuredSecrets(payload).value;
+    const event = this.deps.storage.realtimeEvents.append(eventType, source, projectedPayload, options);
+    const emission: RealtimeLiveEmission = {
+      publicEvent: event,
+      approvalActionEvent: buildApprovalActionLiveEvent(eventType, source, payload, event, options),
+    };
+    this.events.emit("event", emission);
     return event;
   }
 
-  public subscribeRealtime(listener: RealtimeEventListener): () => void {
-    this.events.on("event", listener);
+  public subscribeRealtime(listener: RealtimeEventListener, options: RealtimeSubscriptionOptions = {}): () => void {
+    const liveListener = (emission: RealtimeLiveEmission): void => {
+      listener(
+        options.includeApprovalActionTokens && emission.approvalActionEvent
+          ? emission.approvalActionEvent
+          : emission.publicEvent,
+      );
+    };
+    this.events.on("event", liveListener);
     return () => {
-      this.events.off("event", listener);
+      this.events.off("event", liveListener);
     };
   }
 
   public listRealtimeEvents(limit = 100, cursor?: string): RealtimeEvent[] {
-    return this.deps.storage.realtimeEvents.list(limit, cursor);
+    return this.deps.storage.realtimeEvents.list(limit, cursor).map(projectRealtimeEventPayload);
   }
 
   public listRealtimeEventsAfterSequence(afterSequence: number, limit = 100): RealtimeEvent[] {
-    return this.deps.storage.realtimeEvents.listAfterSequence(afterSequence, limit);
+    return this.deps.storage.realtimeEvents.listAfterSequence(afterSequence, limit).map(projectRealtimeEventPayload);
   }
 
   public getRealtimeEventSequenceBounds(): { oldestSequence?: number; newestSequence?: number } {
@@ -92,6 +117,53 @@ export class RealtimeEventService implements RealtimePublisher {
   public closeRealtimeStreamLease(input: { leaseId: string; closedAt?: string; closeReason?: string }) {
     return this.deps.storage.realtimeStreamLeases.close(input);
   }
+}
+
+function projectRealtimeEventPayload(event: RealtimeEvent): RealtimeEvent {
+  return {
+    ...event,
+    payload: redactStructuredSecrets(event.payload).value,
+  };
+}
+
+function buildApprovalActionLiveEvent(
+  eventType: string,
+  source: string,
+  rawPayload: Record<string, unknown>,
+  publicEvent: RealtimeEvent,
+  options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+): RealtimeEvent | undefined {
+  const token = readNonEmptyString(rawPayload.token);
+  const approvalId = readNonEmptyString(rawPayload.approvalId);
+  const connectorId = readNonEmptyString(rawPayload.connectorId);
+  const tokenId = readNonEmptyString(rawPayload.tokenId);
+  if (
+    eventType !== "approval_remote_action_ready" ||
+    source !== "approvals" ||
+    rawPayload.action !== "realtime.emit" ||
+    rawPayload.actionType !== "approval.resolve" ||
+    !token?.startsWith("grat_") ||
+    !approvalId ||
+    !connectorId?.startsWith("browser:") ||
+    !tokenId ||
+    options?.eventClass !== "operational_signal" ||
+    options.eventAuthority !== "retained_stream" ||
+    options.links?.approvalId !== approvalId ||
+    options.links.connectorId !== connectorId
+  ) {
+    return undefined;
+  }
+  return {
+    ...publicEvent,
+    payload: {
+      ...publicEvent.payload,
+      token,
+    },
+  };
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function hasExplicitRealtimeMetadata(
