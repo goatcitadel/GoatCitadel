@@ -27,6 +27,14 @@ describe("RealtimeEventService", () => {
     expect(storage.realtimeEvents.listAfterSequence).toHaveBeenNthCalledWith(2, 2, 7);
   });
 
+  it("rejects invalid listeners before registering a deferred callback", () => {
+    const storage = fakeStorage();
+    const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
+
+    expect(() => service.subscribeRealtime("not-a-listener" as never)).toThrow(TypeError);
+    expect(() => service.publishRealtime("heartbeat", "system", { ok: true })).not.toThrow();
+  });
+
   it("projects new and legacy realtime payloads without mutating caller or storage truth", () => {
     const rawPayload = {
       webhookUrl: "https://hooks.example.test/services/team/realtime-secret",

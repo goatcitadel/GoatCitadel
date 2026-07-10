@@ -64,6 +64,9 @@ export class RealtimeEventService implements RealtimePublisher {
   }
 
   public subscribeRealtime(listener: RealtimeEventListener, options: RealtimeSubscriptionOptions = {}): () => void {
+    if (typeof listener !== "function") {
+      throw new TypeError("Realtime event listener must be a function.");
+    }
     const liveListener = (emission: RealtimeLiveEmission): void => {
       listener(
         options.includeApprovalActionTokens && emission.approvalActionEvent
