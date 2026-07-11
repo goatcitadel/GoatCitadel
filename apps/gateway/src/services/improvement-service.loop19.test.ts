@@ -116,13 +116,57 @@ describe("ImprovementService activation ledger coverage", () => {
     });
     harness.state.failActivationAppliedPublish = true;
 
-    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(/audit publish unavailable/);
+    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(
+      /was applied but its lifecycle audit is still pending.*audit publish unavailable/,
+    );
     expect(harness.service.getImprovementActivation(activation.activationId)).toMatchObject({ status: "active" });
     expect(harness.routingPolicies[candidate.targetKey]).toBeDefined();
+
+    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(
+      /was applied but its lifecycle audit is still pending.*audit publish unavailable/,
+    );
 
     harness.state.failActivationAppliedPublish = false;
     expect(harness.service.handleActivationApprovalResolution(approval)).toMatchObject({ status: "active" });
     expect(harness.published.some((event) => event.eventType === "improvement_activation_applied")).toBe(true);
+  });
+
+  it("keeps a committed activation retryable when its first post-commit reload fails", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "reload-retry");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+    const prepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
+    let failCommittedReload = true;
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (/FROM improvement_activations\s+WHERE activation_id = \?/m.test(sql)) {
+        return {
+          run: (...params: unknown[]) => statement.run(...params),
+          get: (...params: unknown[]) => {
+            if (failCommittedReload) {
+              failCommittedReload = false;
+              throw new Error("activation reload unavailable");
+            }
+            return statement.get(...params);
+          },
+          all: (...params: unknown[]) => statement.all(...params),
+        };
+      }
+      return statement;
+    });
+
+    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(
+      /was applied but its committed state could not be reloaded.*activation reload unavailable/,
+    );
+    expect(harness.service.getImprovementActivation(activation.activationId)).toMatchObject({ status: "active" });
+    expect(harness.published.some((event) => event.eventType === "improvement_activation_applied")).toBe(false);
+
+    expect(harness.service.handleActivationApprovalResolution(approval)).toMatchObject({ status: "active" });
+    expect(harness.published.filter((event) => event.eventType === "improvement_activation_applied")).toHaveLength(1);
   });
 
   it("publishes one retained applied event across repeated active retries", async () => {
@@ -266,9 +310,12 @@ describe("ImprovementService activation ledger coverage", () => {
       return prepare(sql);
     });
 
-    const applied = harness.service.handleActivationApprovalResolution(approval);
+    harness.state.failActivationAppliedPublish = true;
 
-    expect(applied).toMatchObject({ status: "active" });
+    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(
+      /was applied but its lifecycle audit is still pending.*audit publish unavailable/,
+    );
+    expect(harness.service.getImprovementActivation(activation.activationId)).toMatchObject({ status: "active" });
     expect(applyRoutingPolicyCandidate).not.toHaveBeenCalled();
   });
 

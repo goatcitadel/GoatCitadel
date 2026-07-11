@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { ExternalSideEffectBoundaryClaimLostError } from "@goatcitadel/storage";
 import {
   claimIdempotentExternalSideEffect,
   deriveExternalSideEffectReversibility,
@@ -973,6 +974,113 @@ describe("external-side-effect-runner-service", () => {
         status: "unknown_external_outcome",
         errorText: "external system returned 502 after send",
       },
+      "2026-05-31T00:00:00.000Z",
+    );
+  });
+
+  it("fails strict durable callers before provider invocation when the boundary marker cannot persist", async () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    sideEffectRunStore.markExternalCallStarted.mockImplementation(() => {
+      throw new Error("started mirror unavailable");
+    });
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "new" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "strict-key",
+          actorScope: "conn-1",
+          payloadHash: "hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const provider = vi.fn(async () => ({ ok: true }));
+
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "durable_connector_delivery",
+      connectionId: "conn-1",
+      actionId: "run-1",
+      idempotencyKey: "strict-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { message: "sent" },
+      label: "Durable connector delivery",
+      requireDurableBoundaryRecord: true,
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
+        return provider();
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(provider).not.toHaveBeenCalled();
+    expect(mutationStore.markFailed).toHaveBeenCalled();
+    expect(sideEffectRunStore.markFailure).toHaveBeenCalledWith(
+      "extfx-1",
+      expect.objectContaining({ status: "failed_before_boundary" }),
+      "2026-05-31T00:00:00.000Z",
+    );
+  });
+
+  it("does not reopen idempotency when a strict caller loses its durable boundary claim", async () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    sideEffectRunStore.markExternalCallStarted.mockImplementation(() => {
+      throw new ExternalSideEffectBoundaryClaimLostError("extfx-1", "unknown_external_outcome");
+    });
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "new" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "strict-key",
+          actorScope: "conn-1",
+          payloadHash: "hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const provider = vi.fn(async () => ({ ok: true }));
+
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "approved_external_runtime",
+      connectionId: "conn-1",
+      actionId: "approval-1",
+      idempotencyKey: "strict-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { message: "sent" },
+      label: "Approved external runtime action",
+      requireDurableBoundaryRecord: true,
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
+        return provider();
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      claim: { resumeState: "manual_review_unknown_external_outcome" },
+    });
+    expect(provider).not.toHaveBeenCalled();
+    expect(mutationStore.markFailed).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.markFailure).toHaveBeenCalledWith(
+      "extfx-1",
+      expect.objectContaining({ status: "unknown_external_outcome" }),
       "2026-05-31T00:00:00.000Z",
     );
   });

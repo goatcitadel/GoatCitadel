@@ -48,6 +48,10 @@ import {
 import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
+const LEGACY_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN = /grat_[A-Za-z0-9_-]{43}/g;
+const LEGACY_REMOTE_APPROVAL_BEARER_VALUE_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
+const LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE = 250;
 
 /**
  * Quote a SQLite identifier (table/index name) for safe interpolation into
@@ -1707,7 +1711,17 @@ function scrubLegacyDeviceTokenPlaintext(db: DatabaseSync): void {
 function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {
   const now = new Date().toISOString();
   if (tableExists(db, "durable_runs")) {
-    db.prepare(
+    const listCandidates = db.prepare(`
+      SELECT rowid AS row_id, run_id, payload_json
+      FROM durable_runs
+      WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+        AND workflow_key = 'connector.delivery'
+        AND payload_json LIKE '%grat\\_%' ESCAPE '\\'
+        AND status IN ('queued', 'running', 'waiting', 'paused')
+      ORDER BY rowid
+      LIMIT @limit
+    `);
+    const failRun = db.prepare(
       `
       UPDATE durable_runs
       SET status = 'failed',
@@ -1716,16 +1730,44 @@ function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {
             last_error,
             'Legacy remote approval bearer was removed from durable state; issue a new remote action token.'
           ),
+          lease_owner_id = NULL,
+          lease_expires_at = NULL,
+          lease_heartbeat_at = NULL,
           updated_at = @now,
           version = version + 1
-      WHERE workflow_key = 'connector.delivery'
-        AND payload_json LIKE '%grat_%'
+      WHERE run_id = @runId
+        AND workflow_key = 'connector.delivery'
         AND status IN ('queued', 'running', 'waiting', 'paused')
     `,
-    ).run({ now });
+    );
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const candidates = listCandidates.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; run_id: string; payload_json: string }>;
+      if (candidates.length === 0) {
+        break;
+      }
+      for (const candidate of candidates) {
+        if (LEGACY_REMOTE_APPROVAL_BEARER_PATTERN.test(candidate.payload_json)) {
+          failRun.run({ runId: candidate.run_id, now });
+        }
+      }
+      afterRowId = candidates.at(-1)!.row_id;
+    }
   }
   if (tableExists(db, "comms_deliveries")) {
-    db.prepare(
+    const listCandidates = db.prepare(`
+      SELECT rowid AS row_id, delivery_id, payload_json
+      FROM comms_deliveries
+      WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+        AND payload_json LIKE '%grat\\_%' ESCAPE '\\'
+        AND status IN ('queued', 'running', 'retrying')
+      ORDER BY rowid
+      LIMIT @limit
+    `);
+    const failDelivery = db.prepare(
       `
       UPDATE comms_deliveries
       SET status = 'failed',
@@ -1736,10 +1778,26 @@ function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {
             'Legacy remote approval bearer was removed before delivery; issue a new remote action token.'
           ),
           updated_at = @now
-      WHERE payload_json LIKE '%grat_%'
+      WHERE delivery_id = @deliveryId
         AND status IN ('queued', 'running', 'retrying')
     `,
-    ).run({ now });
+    );
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const candidates = listCandidates.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; delivery_id: string; payload_json: string }>;
+      if (candidates.length === 0) {
+        break;
+      }
+      for (const candidate of candidates) {
+        if (LEGACY_REMOTE_APPROVAL_BEARER_PATTERN.test(candidate.payload_json)) {
+          failDelivery.run({ deliveryId: candidate.delivery_id, now });
+        }
+      }
+      afterRowId = candidates.at(-1)!.row_id;
+    }
   }
 
   const textColumns: ReadonlyArray<{ table: string; columns: readonly string[] }> = [
@@ -1775,13 +1833,33 @@ function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {
     scrubLegacyRemoteApprovalBearerColumns(db, target.table, target.columns);
   }
   if (tableExists(db, "approval_inbox_items")) {
-    db.prepare(
-      `
-      UPDATE approval_inbox_items
-      SET token = 'redacted:' || token_id
-      WHERE token LIKE '%grat_%'
-    `,
-    ).run();
+    const listCandidates = db.prepare(
+      `SELECT rowid AS row_id, inbox_item_id, token
+       FROM approval_inbox_items
+       WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+         AND token LIKE '%grat\\_%' ESCAPE '\\'
+       ORDER BY rowid
+       LIMIT @limit`,
+    );
+    const redactToken = db.prepare(
+      `UPDATE approval_inbox_items SET token = 'redacted:' || token_id WHERE inbox_item_id = ?`,
+    );
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const candidates = listCandidates.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; inbox_item_id: string; token: string }>;
+      if (candidates.length === 0) {
+        break;
+      }
+      for (const candidate of candidates) {
+        if (LEGACY_REMOTE_APPROVAL_BEARER_VALUE_PATTERN.test(candidate.token)) {
+          redactToken.run(candidate.inbox_item_id);
+        }
+      }
+      afterRowId = candidates.at(-1)!.row_id;
+    }
   }
 }
 
@@ -1804,12 +1882,31 @@ function scrubLegacyRemoteApprovalBearerColumns(
     }
     const table = quoteSqliteIdentifier(tableName);
     const column = quoteSqliteIdentifier(columnName);
-    const rows = db
-      .prepare(`SELECT rowid AS row_id, ${column} AS value FROM ${table} WHERE ${column} LIKE '%grat_%'`)
-      .all() as Array<{ row_id: number | bigint; value: string }>;
+    const listRows = db.prepare(
+      `SELECT rowid AS row_id, ${column} AS value
+       FROM ${table}
+       WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+         AND ${column} LIKE '%grat\\_%' ESCAPE '\\'
+       ORDER BY rowid
+       LIMIT @limit`,
+    );
     const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
-    for (const row of rows) {
-      update.run(row.value.replace(/\bgrat_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]"), row.row_id);
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const rows = listRows.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; value: string }>;
+      if (rows.length === 0) {
+        break;
+      }
+      for (const row of rows) {
+        const scrubbed = row.value.replace(LEGACY_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN, "[REDACTED]");
+        if (scrubbed !== row.value) {
+          update.run(scrubbed, row.row_id);
+        }
+      }
+      afterRowId = rows.at(-1)!.row_id;
     }
   }
 }

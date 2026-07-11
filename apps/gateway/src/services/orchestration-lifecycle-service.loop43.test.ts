@@ -433,6 +433,179 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
     );
   });
 
+  it("fences a late phase result after durable lease takeover", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreeStatus: "ready",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      },
+    });
+    let replacement!: DurableRunRecord;
+    vi.mocked(harness.runtime.phaseExecutor.execute).mockImplementation(async () => {
+      replacement = {
+        ...harness.getDurableRun(),
+        status: "running",
+        leaseOwnerId: "worker-b",
+        leaseHeartbeatAt: "2026-05-15T12:00:30.000Z",
+        leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+        metadata: { replacementWorker: true },
+        version: harness.getDurableRun().version + 1,
+      };
+      harness.setDurableRun(replacement);
+      return {
+        phaseId: "phase-1",
+        ownerAgentId: "agent-1",
+        status: "completed",
+        startedAt: "2026-05-15T12:00:01.000Z",
+        finishedAt: "2026-05-15T12:00:30.000Z",
+        outputSummary: "stale worker result",
+        costUsd: 0.5,
+      };
+    });
+
+    await expect(
+      executeDurableOrchestrationRun(harness.host, harness.runtime, buildDurableRun()),
+    ).rejects.toMatchObject({ name: "DurableWorkerInterruptionError" });
+
+    expect(harness.getDurableRun()).toEqual(replacement);
+    expect(harness.getRun()).toMatchObject({
+      status: "running",
+      executionState: "running",
+      currentPhaseId: "phase-1",
+    });
+    expect(vi.mocked(harness.host.createCheckpoint).mock.calls.map(([input]) => input.checkpointKind)).not.toContain(
+      "phase_executed",
+    );
+    expect(harness.host.pauseDurableRun).not.toHaveBeenCalled();
+    expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+    expect(harness.runtime.worktrees.release).not.toHaveBeenCalled();
+  });
+
+  it("fences a child-dispatch breadcrumb after durable lease takeover", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreeStatus: "ready",
+      },
+    });
+    let replacement!: DurableRunRecord;
+    vi.mocked(harness.runtime.phaseExecutor.execute).mockImplementation(async (input) => {
+      replacement = {
+        ...harness.getDurableRun(),
+        leaseOwnerId: "worker-b",
+        leaseHeartbeatAt: "2026-05-15T12:00:05.000Z",
+        leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+        metadata: { replacementWorker: true },
+        version: harness.getDurableRun().version + 1,
+      };
+      harness.setDurableRun(replacement);
+      input.onChildDispatched?.({
+        phaseId: "phase-1",
+        childSessionId: "child-session-1",
+        childTurnId: "child-turn-1",
+        childRunId: "child-run-1",
+      });
+      throw new Error("unreachable after fenced child dispatch");
+    });
+
+    await expect(
+      executeDurableOrchestrationRun(harness.host, harness.runtime, buildDurableRun()),
+    ).rejects.toMatchObject({ name: "DurableWorkerInterruptionError" });
+
+    expect(harness.getDurableRun()).toEqual(replacement);
+    expect(harness.host.storage.orchestration.appendRunEvent).not.toHaveBeenCalledWith(
+      "run-1",
+      "phase.child_dispatched",
+      expect.anything(),
+    );
+    expect(harness.runtime.worktrees.release).not.toHaveBeenCalled();
+  });
+
+  it("rolls back approval-wait state when its durable timeline commit fails", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreeStatus: "ready",
+      },
+    });
+    vi.mocked(harness.runtime.phaseExecutor.execute).mockResolvedValue({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "waiting",
+      startedAt: "2026-05-15T12:00:01.000Z",
+      finishedAt: "2026-05-15T12:00:02.000Z",
+      outputSummary: "Waiting for approval.",
+      childSessionId: "child-session-1",
+      childTurnId: "child-turn-1",
+      childRunId: "child-run-1",
+      approvalId: "approval-1",
+      costUsd: 0,
+    });
+    vi.mocked(harness.host.recordDurableTimelineEvent).mockImplementation((_runId, eventType) => {
+      if (eventType === "run_waiting") {
+        throw new Error("timeline store unavailable");
+      }
+    });
+
+    await expect(executeDurableOrchestrationRun(harness.host, harness.runtime, buildDurableRun())).rejects.toThrow(
+      "timeline store unavailable",
+    );
+
+    expect(harness.getDurableRun()).toMatchObject({ status: "running", leaseOwnerId: "worker-a" });
+    expect(harness.getRun()).toMatchObject({
+      status: "running",
+      executionState: "running",
+      currentPhaseId: "phase-1",
+    });
+    expect(
+      harness.host.storage.orchestration.listCheckpoints("run-1").map((item) => item.checkpointKind),
+    ).not.toContain("run_paused_for_approval");
+    expect(harness.runtime.worktrees.release).not.toHaveBeenCalled();
+  });
+
+  it("records durable workflow timeouts as orchestration failures instead of cancellations", async () => {
+    const controller = new AbortController();
+    const timeout = Object.assign(new Error("Durable workflow durable-run-1 exceeded its 1000ms timeout."), {
+      name: "DurableWorkflowTimeoutError",
+    });
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreeStatus: "ready",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      },
+    });
+    vi.mocked(harness.runtime.phaseExecutor.execute).mockImplementation(async () => {
+      controller.abort(timeout);
+      throw timeout;
+    });
+
+    const result = await executeDurableOrchestrationRun(harness.host, harness.runtime, buildDurableRun(), {
+      signal: controller.signal,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(harness.getRun()).toMatchObject({
+      status: "failed",
+      executionState: "failed",
+      lastError: expect.stringContaining("exceeded its 1000ms timeout"),
+    });
+    expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "failed" }),
+      reason: "failed",
+    });
+  });
+
   it("fails durable execution when the engine points at a phase outside the plan", async () => {
     const harness = createHarness({
       run: {
@@ -472,13 +645,28 @@ type HarnessOptions = {
 function createHarness(options: HarnessOptions = {}): {
   host: OrchestrationLifecycleHost;
   runtime: OrchestrationLifecycleRuntimeDeps;
+  getRun(): OrchestrationRun;
+  getDurableRun(): DurableRunRecord;
+  setDurableRun(next: DurableRunRecord): void;
 } {
   const checkpoints: OrchestrationCheckpoint[] = [];
   let plan = options.plan ?? buildPlan();
   let run = options.run ?? buildRun();
   let durableRun = options.durableRun ?? buildDurableRun();
   const storage = {
-    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => callback()),
+    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => {
+      const runSnapshot = run;
+      const durableRunSnapshot = durableRun;
+      const checkpointCount = checkpoints.length;
+      try {
+        return callback();
+      } catch (error) {
+        run = runSnapshot;
+        durableRun = durableRunSnapshot;
+        checkpoints.splice(checkpointCount);
+        throw error;
+      }
+    }),
     orchestration: {
       upsertPlan: vi.fn((next: OrchestrationPlan) => {
         plan = next;
@@ -575,6 +763,17 @@ function createHarness(options: HarnessOptions = {}): {
       return durableRun;
     }),
     updateDurableRunState: vi.fn((input) => {
+      if (
+        input.expectedLeaseOwnerId &&
+        (durableRun.status !== "running" ||
+          durableRun.leaseOwnerId !== input.expectedLeaseOwnerId ||
+          !durableRun.leaseExpiresAt ||
+          Date.parse(durableRun.leaseExpiresAt) <= Date.now())
+      ) {
+        const error = new Error("durable lease lost");
+        error.name = "DurableWorkerInterruptionError";
+        throw error;
+      }
       durableRun = {
         ...durableRun,
         ...(input.status ? { status: input.status } : {}),
@@ -583,6 +782,9 @@ function createHarness(options: HarnessOptions = {}): {
         ...(input.clearLastError ? { lastError: undefined } : {}),
         ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
         ...(input.clearFinishedAt ? { finishedAt: undefined } : {}),
+        ...(input.clearLease
+          ? { leaseOwnerId: undefined, leaseHeartbeatAt: undefined, leaseExpiresAt: undefined }
+          : {}),
         version: durableRun.version + 1,
       };
       return durableRun;
@@ -612,7 +814,15 @@ function createHarness(options: HarnessOptions = {}): {
       ...options.runtime?.phaseExecutor,
     },
   };
-  return { host, runtime };
+  return {
+    host,
+    runtime,
+    getRun: () => run,
+    getDurableRun: () => durableRun,
+    setDurableRun: (next) => {
+      durableRun = next;
+    },
+  };
 }
 
 function buildPlan(): OrchestrationPlan {
@@ -686,7 +896,7 @@ function buildDurableRun(overrides: Partial<DurableRunRecord> = {}): DurableRunR
   return {
     runId: "durable-run-1",
     workflowKey: "orchestration.plan.execute",
-    status: "queued",
+    status: "running",
     attemptCount: 0,
     maxAttempts: 3,
     version: 1,
@@ -698,6 +908,9 @@ function buildDurableRun(overrides: Partial<DurableRunRecord> = {}): DurableRunR
       requestedAt: "2026-05-15T12:00:00.000Z",
     },
     metadata: {},
+    leaseOwnerId: "worker-a",
+    leaseHeartbeatAt: "2026-05-15T12:00:00.000Z",
+    leaseExpiresAt: "2099-12-31T23:59:59.999Z",
     createdAt: "2026-05-15T12:00:00.000Z",
     updatedAt: "2026-05-15T12:00:00.000Z",
     ...overrides,

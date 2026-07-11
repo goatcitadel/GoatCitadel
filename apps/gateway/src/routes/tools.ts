@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { DeploymentProfile, LocalOperatorOverrideRecord, PermissionProfileRecord } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
-import { markMutationCommitted } from "../plugins/idempotency.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const RATE_LIMIT_GENERAL_MAX = 500;
 const RATE_LIMIT_MUTATION_MAX = 180;
@@ -345,16 +345,17 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         if (scope === "workspace" && !parsed.data.scopeRef) {
           return reply.code(400).send({ error: "Workspace-scoped permission profiles require scopeRef." });
         }
-        return reply.code(201).send(
-          fastify.services.tools.createPermissionProfile({
-            ...parsed.data,
-            scope,
-            scopeRef: scope === "operator" ? request.authActorId : parsed.data.scopeRef,
-            createdBy: request.authActorId,
-          }),
-        );
+        const created = fastify.services.tools.createPermissionProfile({
+          ...parsed.data,
+          scope,
+          scopeRef: scope === "operator" ? request.authActorId : parsed.data.scopeRef,
+          createdBy: request.authActorId,
+        });
+        markMutationCommitted(request);
+        return reply.code(201).send(created);
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
   );
@@ -387,14 +388,15 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
             .code(403)
             .send({ error: `Permission profile ${params.data.profileId} is not editable by this operator.` });
         }
-        return reply.send(
-          fastify.services.tools.updatePermissionProfile(params.data.profileId, {
-            ...body.data,
-            updatedBy: request.authActorId,
-          }),
-        );
+        const updated = fastify.services.tools.updatePermissionProfile(params.data.profileId, {
+          ...body.data,
+          updatedBy: request.authActorId,
+        });
+        markMutationCommitted(request);
+        return reply.send(updated);
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
   );
@@ -422,13 +424,17 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
             .send({ error: `Permission profile ${params.data.profileId} is not editable by this operator.` });
         }
         const archived = fastify.services.tools.archivePermissionProfile(params.data.profileId, request.authActorId);
+        if (archived) {
+          markMutationCommitted(request);
+        }
         return archived
           ? reply.send({ archived: true, profileId: params.data.profileId })
           : reply
               .code(404)
               .send({ error: `Permission profile ${params.data.profileId} not found or already archived` });
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
   );
@@ -450,15 +456,16 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         if (!profile) {
           return reply.code(404).send({ error: `Permission profile ${parsed.data.profileId} not found` });
         }
-        return reply.send(
-          fastify.services.tools.activatePermissionProfile({
-            ...parsed.data,
-            operatorId: profile?.scope === "workspace" ? undefined : request.authActorId,
-            createdBy: request.authActorId,
-          }),
-        );
+        const activation = fastify.services.tools.activatePermissionProfile({
+          ...parsed.data,
+          operatorId: profile?.scope === "workspace" ? undefined : request.authActorId,
+          createdBy: request.authActorId,
+        });
+        markMutationCommitted(request);
+        return reply.send(activation);
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
   );
@@ -477,15 +484,16 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "Scoped Local Operator Override requires scopeRef." });
       }
       try {
-        return reply.code(201).send(
-          fastify.services.tools.createLocalOperatorOverride({
-            ...parsed.data,
-            operatorId: request.authActorId,
-            createdBy: request.authActorId,
-          }),
-        );
+        const override = fastify.services.tools.createLocalOperatorOverride({
+          ...parsed.data,
+          operatorId: request.authActorId,
+          createdBy: request.authActorId,
+        });
+        markMutationCommitted(request);
+        return reply.code(201).send(override);
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
   );
@@ -510,17 +518,28 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           .code(404)
           .send({ error: `Local operator override ${params.data.overrideId} not found or inactive` });
       }
-      const override = fastify.services.tools.revokeLocalOperatorOverride(params.data.overrideId, request.authActorId);
-      return override
-        ? reply.send({
-            revoked: true,
-            overrideId: params.data.overrideId,
-            status: override.status,
-            revokedAt: override.revokedAt,
-            revokedBy: override.revokedBy ?? request.authActorId,
-            override,
-          })
-        : reply.code(404).send({ error: `Local operator override ${params.data.overrideId} not found or inactive` });
+      try {
+        const override = fastify.services.tools.revokeLocalOperatorOverride(
+          params.data.overrideId,
+          request.authActorId,
+        );
+        if (override) {
+          markMutationCommitted(request);
+        }
+        return override
+          ? reply.send({
+              revoked: true,
+              overrideId: params.data.overrideId,
+              status: override.status,
+              revokedAt: override.revokedAt,
+              revokedBy: override.revokedBy ?? request.authActorId,
+              override,
+            })
+          : reply.code(404).send({ error: `Local operator override ${params.data.overrideId} not found or inactive` });
+      } catch (error) {
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
+      }
     },
   );
 

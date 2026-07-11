@@ -116,11 +116,19 @@ function createHarness(options: HarnessOptions = {}) {
     now: () => new Date("2026-06-22T00:00:00.000Z"),
   };
   const service = new BackgroundReviewService(deps);
-  return { service, createChatCompletion, recordOperatorProfileFacts, draftSkillMutation, recordedFacts, draftedSkills };
+  return {
+    service,
+    createChatCompletion,
+    recordOperatorProfileFacts,
+    draftSkillMutation,
+    recordedFacts,
+    draftedSkills,
+  };
 }
 
 const ELIGIBLE: BackgroundReviewTurnInput = {
   sessionId: "session-1",
+  sourceTurnId: "turn-current",
   workspaceId: "default",
   userText: "I always want concise answers and I'm building a SaaS for dentists.",
   assistantText: "Got it — I'll keep it concise.",
@@ -295,7 +303,7 @@ describe("BackgroundReviewService — skill authoring", () => {
     const result = await service.runBackgroundReview(ELIGIBLE);
     expect(draftSkillMutation).toHaveBeenCalledTimes(1);
     expect(draftedSkills[0]?.skillId).toBe("summarize-csv-exports");
-    expect(draftedSkills[0]?.sourceTurnId).toBe(ELIGIBLE.parentTurnId);
+    expect(draftedSkills[0]?.sourceTurnId).toBe("turn-current");
     expect(result.skillProposed).toBe(true);
     expect(result.skillMutation?.skillId).toBe("summarize-csv-exports");
     expect(result.summaryMarker).toContain('drafted skill "summarize-csv-exports"');
@@ -373,9 +381,7 @@ describe("BackgroundReviewService — autonomy-off propose-only + best-effort sa
   it("tolerates prose around the JSON object", async () => {
     const { service, recordedFacts } = createHarness({
       responses: [
-        modelResponse(
-          'Sure: {"facts":[{"kind":"goal","content":"Launch the dentist SaaS","confidence":0.85}]} done',
-        ),
+        modelResponse('Sure: {"facts":[{"kind":"goal","content":"Launch the dentist SaaS","confidence":0.85}]} done'),
       ],
     });
     const result = await service.runBackgroundReview(ELIGIBLE);

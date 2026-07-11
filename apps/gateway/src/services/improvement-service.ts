@@ -1646,7 +1646,7 @@ export class ImprovementService {
       return undefined;
     }
     if (activation.status === "active" || activation.watchStartedAt) {
-      this.emitActivationAppliedAudit(activation, approval);
+      this.emitActivationAppliedAuditOrThrow(activation, approval);
     }
     if (activation.status === "active") {
       return activation;
@@ -4009,10 +4009,23 @@ export class ImprovementService {
       }
       throw error;
     }
-    const applied = this.readImprovementActivation(activation.activationId);
+    let applied: ImprovementActivationRecord;
+    try {
+      applied = this.readImprovementActivation(activation.activationId);
+    } catch (error) {
+      if (!mutationApplied) {
+        throw error;
+      }
+      throw new ImprovementActivationPostCommitError(
+        `Activation ${activation.activationId} was applied but its committed state could not be reloaded: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
     if (!mutationApplied) {
       if (applied.status === "active") {
-        this.emitActivationAppliedAudit(applied, approval);
+        this.emitActivationAppliedAuditOrThrow(applied, approval);
         return applied;
       }
       if (applied.status !== "pending") {
@@ -4022,16 +4035,7 @@ export class ImprovementService {
         `Activation ${activation.activationId} could not acquire its pending-state claim.`,
       );
     }
-    try {
-      this.emitActivationAppliedAudit(applied, approval);
-    } catch (error) {
-      throw new ImprovementActivationPostCommitError(
-        `Activation ${activation.activationId} was applied but its lifecycle audit is still pending: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        { cause: error },
-      );
-    }
+    this.emitActivationAppliedAuditOrThrow(applied, approval);
     return applied;
   }
 
@@ -4067,6 +4071,19 @@ export class ImprovementService {
       status: "active",
       watchStatus: "watching",
     });
+  }
+
+  private emitActivationAppliedAuditOrThrow(activation: ImprovementActivationRecord, approval: ApprovalRequest): void {
+    try {
+      this.emitActivationAppliedAudit(activation, approval);
+    } catch (error) {
+      throw new ImprovementActivationPostCommitError(
+        `Activation ${activation.activationId} was applied but its lifecycle audit is still pending: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
   }
 
   private isPendingActivationCandidateEligible(candidate: ImprovementCandidateRecord): boolean {

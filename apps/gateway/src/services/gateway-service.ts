@@ -482,7 +482,11 @@ import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
-import { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
+import {
+  ToolInvocationCoordinatorService,
+  type ToolInvocationRuntimeOptions,
+} from "./tool-invocation-coordinator-service.js";
+import { executeApprovedExternalRuntimeSideEffect } from "./approved-external-runtime-side-effect-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -518,7 +522,6 @@ import {
 } from "./gateway/runtime-settings-guards.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 import {
-  approvedExternalRuntimeRequestMatches,
   isApprovedExternalRuntimePendingAction,
   readAuthActorSource,
   readPermissionSurfaceValue,
@@ -1082,10 +1085,10 @@ export class GatewayService {
       createChatCompletion: (request) => this.createChatCompletion(request),
       createChatCompletionStream: (request) => this.createChatCompletionStream(request),
       generateImage: (request) => this.llmService.generateImage(request),
-      invokeTool: (request) => this.invokeTool(request),
+      invokeTool: (request, options) => this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: (request) => this.evaluateToolAccess(request),
-      invokeMcpTool: (request) => this.invokeMcpTool(request),
+      invokeMcpTool: (request, options) => this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
@@ -1269,7 +1272,7 @@ export class GatewayService {
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
       workflowRegistry: {
-        executeWorkflow: (run) => this.durableWorkflowRegistry.executeWorkflow(run),
+        executeWorkflow: (run, context) => this.durableWorkflowRegistry.executeWorkflow(run, context),
         isWorkflowRecoverable: (run) => this.durableWorkflowRegistry.isWorkflowRecoverable(run),
         markWorkflowUnrecoverable: (run, reason) => this.durableWorkflowRegistry.markWorkflowUnrecoverable(run, reason),
       },
@@ -1279,6 +1282,10 @@ export class GatewayService {
           message,
         });
       },
+      onAutonomousChatPostCommit: (run) =>
+        durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run),
+      onGeneralChatPostCommit: (run, progress) =>
+        durableExecutionService.executeGeneralChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, progress),
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
       taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
@@ -1338,6 +1345,8 @@ export class GatewayService {
       executeApprovedPendingAction: (approvalId, signal) => this.executeApprovedPendingAction(approvalId, signal),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
+      recordDurableTimelineEvent: (runId, eventType, payload) =>
+        this.recordDurableTimelineEvent(runId, eventType, payload),
       recordApprovalResolutionSignals: (approval) => {
         this.improvementService.recordApprovalResolutionSignal(approval);
         this.improvementService.handleActivationApprovalResolution(approval);
@@ -1503,8 +1512,6 @@ export class GatewayService {
           }),
         ),
       scheduleApprovalExplanationById: (approvalId) => this.scheduleApprovalExplanationById(approvalId),
-      recordApprovedExternalRuntimeToolResult: (input) =>
-        this.recordApprovedExternalRuntimeToolResult(input.approvalId, input.request, input.result),
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       requireMcpServer: (serverId) => this.requireMcpServer(serverId),
@@ -1842,8 +1849,15 @@ export class GatewayService {
           executeDurableOrchestrationRun: (run, context) => this.executeDurableOrchestrationRun(run, context),
         },
         curatorTick: {
+          storage: this.storage,
           curatorService: this.curatorService,
-          publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
       }),
     );
@@ -1955,7 +1969,8 @@ export class GatewayService {
         this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
-      finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
+      finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
+        this.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
       getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
       getActiveChatTurnStream: (turnId) => this.getActiveChatTurnStream(turnId),
       getSession: (sessionId) => this.getSession(sessionId),
@@ -1996,8 +2011,7 @@ export class GatewayService {
       resolveThreadKnowledgeContext: (sessionId, query) => this.resolveThreadKnowledgeContext(sessionId, query),
       routeFromSession: (session) => this.routeFromSession(session),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
-      scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
-        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleMemoryMaintenancePostTurnEvaluation: (input) => this.scheduleMemoryMaintenancePostTurnEvaluation(input),
       scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       subagentFanout: this.subagentFanout,
@@ -2089,8 +2103,7 @@ export class GatewayService {
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       recordTurnCommitments: (input) => this.recordTurnCommitments(input),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
-      scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
-        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleMemoryMaintenancePostTurnEvaluation: (input) => this.scheduleMemoryMaintenancePostTurnEvaluation(input),
       scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       markChatTurnCancelled: (sessionId, turnId) => this.markChatTurnCancelled(sessionId, turnId),
@@ -2105,7 +2118,8 @@ export class GatewayService {
         this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
       },
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
-      finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
+      finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
+        this.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
       completeActiveChatTurnStream: (turnId, registrationId) =>
         this.completeActiveChatTurnStream(turnId, registrationId),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
@@ -2121,6 +2135,8 @@ export class GatewayService {
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
       enqueueAutonomousChannelDelivery: (input) => this.enqueueAutonomousChannelDelivery(input),
       cleanupSilentHeartbeatTurn: (input) => this.cleanupSilentHeartbeatTurn(input),
+      reconcileAutonomousChatPostCommit: (runId) => this.durableRunService.reconcileAutonomousChatPostCommit(runId),
+      reconcileGeneralChatPostCommit: (runId) => this.durableRunService.reconcileGeneralChatPostCommit(runId),
     };
   }
 
@@ -3037,23 +3053,27 @@ export class GatewayService {
     });
   }
 
-  public scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
-    if (this.closing || parentTurnId) {
+  public scheduleMemoryMaintenancePostTurnEvaluation(input: {
+    sessionId: string;
+    turnId: string;
+    delegatedChild: boolean;
+  }): void {
+    if (this.closing || input.delegatedChild) {
       return;
     }
-    const task = this.memoryLifecycleService.noteSuccessfulRootTurn(sessionId).catch((error) => {
+    const task = this.memoryLifecycleService.noteSuccessfulRootTurn(input.sessionId).catch((error) => {
       log.error("memory maintenance post-turn evaluation failed", error);
     });
     this.registerBackgroundTask(task);
   }
 
   /**
-   * P2-S1 — schedule the self-improvement background review for a successful root
+   * P2-S1 — schedule the self-improvement background review for a successful eligible
    * turn, counter-gated to run every {@link BACKGROUND_REVIEW_TURN_INTERVAL}
    * eligible turns. Sibling of {@link scheduleMemoryMaintenancePostTurnEvaluation}
-   * — skips child turns and runs fire-and-forget after a successful root turn.
+   * — skips delegated child turns and runs fire-and-forget after a successful turn.
    *
-   * Guards (master-autonomy / eval-integrity / non-human / closing / child-turn)
+   * Guards (master-autonomy / eval-integrity / non-human / closing / delegated-child)
    * are resolved here and re-asserted inside the service; the counter only
    * advances for eligible turns. The review is a tracked background task that can
    * never throw out of the turn path.
@@ -3061,14 +3081,15 @@ export class GatewayService {
   public scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
     workspaceId: string;
+    turnId: string;
     userText: string;
     assistantText: string;
-    parentTurnId?: string;
+    delegatedChild: boolean;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
   }): void {
-    // Skip child turns (mirror the memory-maintenance sibling) and a closing gateway.
-    if (this.closing || input.parentTurnId) {
+    // Skip delegated children (mirror the memory-maintenance sibling) and a closing gateway.
+    if (this.closing || input.delegatedChild) {
       return;
     }
     // Skip autonomous turns: a cron/heartbeat/commitment self-wake runs inside a
@@ -3099,10 +3120,10 @@ export class GatewayService {
     const task = this.backgroundReviewService
       .runBackgroundReview({
         sessionId: input.sessionId,
+        sourceTurnId: input.turnId,
         workspaceId: input.workspaceId,
         userText: input.userText,
         assistantText: input.assistantText,
-        parentTurnId: input.parentTurnId,
         autonomyEnabled,
         evalIntegrityTurn,
         humanSession,
@@ -4934,9 +4955,11 @@ export class GatewayService {
     runId: string,
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     trace: ChatTurnTraceRecord,
+    expectedLeaseOwnerId?: string,
   ): void {
     chatDurableRunService.finalizeDurableChatRun(
       {
+        runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
         durableRuns: this.storage.durableRuns,
         chatToolRuns: this.storage.chatToolRuns,
         chatToolArtifacts: this.storage.chatToolArtifacts,
@@ -4948,6 +4971,7 @@ export class GatewayService {
       runId,
       prepared,
       trace,
+      expectedLeaseOwnerId,
     );
   }
 
@@ -4961,6 +4985,7 @@ export class GatewayService {
     options: {
       streamRegistration: ActiveChatTurnStreamExecution;
       skipMessageStart?: boolean;
+      durableLeaseOwnerId?: string;
     },
   ): Promise<void> {
     return chatTurnDispatchService.executePreparedAgentChatTurnBackground(
@@ -5085,39 +5110,11 @@ export class GatewayService {
     return this.databaseCutoverService.verify(input);
   }
 
-  public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
-    return this.toolInvocationCoordinator.invokeTool(request);
-  }
-
-  private recordApprovedExternalRuntimeToolResult(
-    approvalId: string,
+  public async invokeTool(
     request: ToolInvokeRequest,
-    result: ToolInvokeResult,
-  ): void {
-    const pending = this.storage.pendingApprovalActions.find(approvalId);
-    if (
-      !isApprovedExternalRuntimePendingAction(pending) ||
-      !approvedExternalRuntimeRequestMatches(pending.request, request)
-    ) {
-      return;
-    }
-    this.storage.pendingApprovalActions.markResolved(
-      approvalId,
-      result.outcome === "executed" ? "executed" : "failed",
-      toolInvokeResultRecord(result),
-    );
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "approved_action_executed",
-      actorId: "system",
-      payload: {
-        toolName: request.toolName,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        auditEventId: result.auditEventId,
-        externalRuntime: true,
-      },
-    });
+    options?: ToolInvocationRuntimeOptions,
+  ): Promise<ToolInvokeResult> {
+    return this.toolInvocationCoordinator.invokeTool(request, options);
   }
 
   private async executeApprovedPendingAction(
@@ -5128,12 +5125,14 @@ export class GatewayService {
       this.refreshApprovedPendingToolPolicyContext(approvalId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Approved action policy context could not be refreshed.";
-      this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-      this.storage.approvalEvents.append({
-        approvalId,
-        eventType: "approved_action_executed",
-        actorId: "system",
-        payload: { outcome: "blocked", reason },
+      this.storage.runImmediateTransaction(() => {
+        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+        this.storage.approvalEvents.append({
+          approvalId,
+          eventType: "approved_action_executed",
+          actorId: "system",
+          payload: { outcome: "blocked", reason },
+        });
       });
       return undefined;
     }
@@ -5252,34 +5251,21 @@ export class GatewayService {
     }
 
     const request = withExternalRuntimePolicyContext(toToolInvokeRequest(pending.request, signal), policyResult);
-    let runtimeResult: ToolInvokeResult;
-    if (request.toolName === "mcp.invoke") {
-      const mcpResult = await this.toolInvocationCoordinator.invokeApprovedMcpRuntime(
-        this.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
-      );
-      runtimeResult = toolInvokeResultFromMcpApproval(policyResult, mcpResult);
-    } else {
-      runtimeResult = await this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request);
-    }
-
-    this.storage.pendingApprovalActions.markResolved(
+    return executeApprovedExternalRuntimeSideEffect({
+      storage: this.storage,
       approvalId,
-      runtimeResult.outcome === "executed" ? "executed" : "failed",
-      toolInvokeResultRecord(runtimeResult),
-    );
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "approved_action_executed",
-      actorId: "system",
-      payload: {
-        toolName: request.toolName,
-        outcome: runtimeResult.outcome,
-        policyReason: runtimeResult.policyReason,
-        auditEventId: runtimeResult.auditEventId,
-        externalRuntime: true,
+      request,
+      execute: async (markExternalCallStarted) => {
+        if (request.toolName === "mcp.invoke") {
+          const mcpResult = await this.toolInvocationCoordinator.invokeApprovedMcpRuntime(
+            this.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
+            markExternalCallStarted,
+          );
+          return toolInvokeResultFromMcpApproval(policyResult, mcpResult);
+        }
+        return this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted);
       },
     });
-    return runtimeResult;
   }
 
   private refreshApprovedPendingToolPolicyContext(approvalId: string): void {
@@ -5625,11 +5611,14 @@ export class GatewayService {
 
   public createPermissionProfile(input: PermissionProfileCreateInput): PermissionProfileRecord {
     this.assertPermissionProfileApprovalModeAllowed(input.approvalMode);
-    const profile = this.storage.permissionProfiles.createProfile(input);
-    if (profile.defaultForSurfaces?.length) {
-      this.reconcilePermissionProfileDefaultActivations(profile);
-    }
-    this.publishRealtime("permission_profile_created", "tools", {
+    let profile!: PermissionProfileRecord;
+    this.storage.gatewaySql.runImmediateTransaction(() => {
+      profile = this.storage.permissionProfiles.createProfile(input);
+      if (profile.defaultForSurfaces?.length) {
+        this.reconcilePermissionProfileDefaultActivations(profile);
+      }
+    });
+    this.publishToolConfigurationRealtimeSafely("permission_profile_created", {
       profileId: profile.profileId,
       label: profile.label,
       approvalMode: profile.approvalMode,
@@ -5645,11 +5634,14 @@ export class GatewayService {
       throw new ConflictError({ message: `Permission profile ${profileId} is not editable by this operator.` });
     }
     this.assertPermissionProfileApprovalModeAllowed(input.approvalMode ?? existing.approvalMode);
-    const profile = this.storage.permissionProfiles.updateProfile(profileId, input);
-    if (input.defaultForSurfaces !== undefined) {
-      this.reconcilePermissionProfileDefaultActivations(profile);
-    }
-    this.publishRealtime("permission_profile_updated", "tools", {
+    let profile!: PermissionProfileRecord;
+    this.storage.gatewaySql.runImmediateTransaction(() => {
+      profile = this.storage.permissionProfiles.updateProfile(profileId, input);
+      if (input.defaultForSurfaces !== undefined) {
+        this.reconcilePermissionProfileDefaultActivations(profile);
+      }
+    });
+    this.publishToolConfigurationRealtimeSafely("permission_profile_updated", {
       profileId: profile.profileId,
       label: profile.label,
       approvalMode: profile.approvalMode,
@@ -5689,7 +5681,7 @@ export class GatewayService {
     }
     const archived = this.storage.permissionProfiles.archiveProfile(profileId);
     if (archived) {
-      this.publishRealtime("permission_profile_archived", "tools", { profileId });
+      this.publishToolConfigurationRealtimeSafely("permission_profile_archived", { profileId });
     }
     return archived;
   }
@@ -5697,11 +5689,13 @@ export class GatewayService {
   public activatePermissionProfile(input: PermissionProfileActivationInput): PermissionProfileActivationRecord {
     const profile = this.storage.permissionProfiles.getProfile(input.profileId);
     this.assertPermissionProfileApprovalModeAllowed(profile.approvalMode);
-    const activation = this.storage.permissionProfiles.activateProfile({
-      ...input,
-      operatorId: profile.scope === "workspace" ? undefined : input.operatorId,
-    });
-    this.publishRealtime("permission_profile_activated", "tools", {
+    const activation = this.storage.gatewaySql.runImmediateTransaction(() =>
+      this.storage.permissionProfiles.activateProfile({
+        ...input,
+        operatorId: profile.scope === "workspace" ? undefined : input.operatorId,
+      }),
+    );
+    this.publishToolConfigurationRealtimeSafely("permission_profile_activated", {
       profileId: activation.profileId,
       operatorId: activation.operatorId,
       workspaceId: activation.workspaceId,
@@ -5723,8 +5717,10 @@ export class GatewayService {
         message: "Local Operator Override is unavailable in remote_hardened deployment profile.",
       });
     }
-    const override = this.storage.permissionProfiles.createLocalOperatorOverride(input);
-    this.publishRealtime("local_operator_override_started", "tools", {
+    const override = this.storage.gatewaySql.runImmediateTransaction(() =>
+      this.storage.permissionProfiles.createLocalOperatorOverride(input),
+    );
+    this.publishToolConfigurationRealtimeSafely("local_operator_override_started", {
       overrideId: override.overrideId,
       operatorId: override.operatorId,
       scope: override.scope,
@@ -5747,18 +5743,47 @@ export class GatewayService {
     if (existing.operatorId !== revokedBy) {
       return undefined;
     }
-    const revoked = this.storage.permissionProfiles.revokeLocalOperatorOverride(overrideId, undefined, revokedBy);
-    if (!revoked) {
+    let record: LocalOperatorOverrideRecord | undefined;
+    this.storage.gatewaySql.runImmediateTransaction(() => {
+      const revoked = this.storage.permissionProfiles.revokeLocalOperatorOverride(overrideId, undefined, revokedBy);
+      if (revoked) {
+        record = this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
+      }
+    });
+    if (!record) {
       return undefined;
     }
-    const record = this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
-    this.publishRealtime("local_operator_override_revoked", "tools", {
+    this.publishToolConfigurationRealtimeSafely("local_operator_override_revoked", {
       overrideId,
       revokedBy: record.revokedBy,
       revokedAt: record.revokedAt,
       status: record.status,
     });
     return record;
+  }
+
+  private publishToolConfigurationRealtimeSafely(eventType: string, payload: Record<string, unknown>): void {
+    try {
+      this.publishRealtime(eventType, "tools", payload);
+    } catch (error) {
+      try {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "tools",
+          event: "tools.configuration.realtime_projection_failed",
+          message: "Tool configuration committed before retained realtime publication failed",
+          runtimeKind: "tools.configuration",
+          runtimeStatus: "failed",
+          runtimeError: {
+            message: error instanceof Error ? error.message : String(error),
+            retryable: true,
+          },
+          context: { eventType, mutationCommitted: true },
+        });
+      } catch {
+        // Configuration truth is already durable; diagnostics are advisory.
+      }
+    }
   }
 
   public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
@@ -5934,6 +5959,11 @@ export class GatewayService {
   /** @internal */ public enqueueAutonomousChannelDelivery(
     input: durableExecutionService.AutonomousChannelDeliveryRequest,
   ): string | undefined {
+    const deliveryRunId = `autonomous-delivery:${input.runId}`;
+    const existing = this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
+    if (existing) {
+      return existing.runId;
+    }
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       return undefined;
     }
@@ -5961,7 +5991,8 @@ export class GatewayService {
     }
     const operatorId = input.systemActorId ?? "system-cron";
     const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
-    const run = this.createDurableRun({
+    const createInput: DurableRunCreateRequest = {
+      runId: deliveryRunId,
       workflowKey: "connector.delivery",
       payload: {
         version: "connector.delivery.v1",
@@ -5987,38 +6018,122 @@ export class GatewayService {
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
       },
-    });
+    };
+    let run: DurableRunRecord;
+    try {
+      run = this.createDurableRun(createInput);
+    } catch (error) {
+      const raced = this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
+      if (!raced) {
+        throw error;
+      }
+      run = raced;
+    }
     return run.runId;
+  }
+
+  private findAutonomousChannelDeliveryRun(deliveryRunId: string, sourceRunId: string): DurableRunRecord | undefined {
+    let existing: DurableRunRecord;
+    try {
+      existing = this.storage.durableRuns.getRun(deliveryRunId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (
+      existing.workflowKey !== "connector.delivery" ||
+      existing.metadata?.deliveryKind !== "autonomous.assistant_message" ||
+      existing.metadata?.sourceRunId !== sourceRunId ||
+      existing.payload?.runId !== sourceRunId
+    ) {
+      throw new ConflictError({
+        message: `Durable run id ${deliveryRunId} is already owned by a different workflow handoff.`,
+      });
+    }
+    return existing;
   }
 
   /**
    * Prune a silent heartbeat turn from a human transcript (P1-F4 invisibility).
    * Removes the seed user message + `{notify:false}` assistant message and the
    * turn trace, reverting the active branch leaf to the pre-heartbeat leaf, in a
-   * single transaction (mirroring the undo path). Best-effort: a heartbeat is a
-   * silent background tick, so cleanup failures must never surface — they are
-   * logged and swallowed. Only invoked for non-notifying heartbeat turns.
+   * single transaction (mirroring the undo path). Returns explicit recovery
+   * truth so retryable storage failures remain pending while an advanced branch
+   * becomes operator-visible manual reconciliation instead of being rewound.
    */
   /** @internal */ public cleanupSilentHeartbeatTurn(
     input: durableExecutionService.SilentHeartbeatCleanupRequest,
-  ): void {
+  ): durableExecutionService.SilentHeartbeatCleanupResult {
+    let removed = false;
+    let resolution: durableExecutionService.SilentHeartbeatCleanupResult = { status: "already_completed" };
     try {
       const messageIds = [input.userMessageId, input.assistantMessageId].filter(
         (id): id is string => typeof id === "string" && id.trim().length > 0,
       );
       this.storage.runImmediateTransaction(() => {
+        const activeLeafTurnId = this.storage.chatSessionBranchState.get(input.sessionId)?.activeLeafTurnId;
+        const hasMessages = messageIds.some((messageId) => Boolean(this.storage.chatMessages.get(messageId)));
+        let hasTrace = true;
+        try {
+          this.storage.chatTurnTraces.get(input.turnId);
+        } catch (error) {
+          if (error instanceof NotFoundError) {
+            hasTrace = false;
+          } else {
+            throw error;
+          }
+        }
+        if (!hasMessages && !hasTrace) {
+          return;
+        }
+        if (activeLeafTurnId !== input.turnId) {
+          resolution = {
+            status: "manual_reconciliation",
+            reason:
+              `Silent heartbeat ${input.turnId} was retained because the active leaf advanced to ` +
+              `${activeLeafTurnId ?? "none"}; automatic cleanup would corrupt newer branch truth.`,
+          };
+          return;
+        }
         this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
         this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
         if (input.parentTurnId) {
-          this.storage.chatSessionBranchState.setActiveLeaf(
+          const reverted = this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
             input.sessionId,
+            input.turnId,
             input.parentTurnId,
             new Date().toISOString(),
           );
+          if (!reverted) {
+            throw new Error(`Silent heartbeat ${input.turnId} lost active-leaf ownership during cleanup.`);
+          }
         } else {
           this.storage.chatSessionBranchState.clear(input.sessionId);
         }
+        removed = true;
+        resolution = { status: "completed" };
       });
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "chat.heartbeat.cleanup_failed",
+        message: "Failed to prune a silent heartbeat turn from the transcript.",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+      return {
+        status: "retryable_failure",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (!removed) {
+      return resolution;
+    }
+    try {
       this.publishRealtime(
         "chat_thread_updated",
         "chat",
@@ -6042,13 +6157,14 @@ export class GatewayService {
       this.recordDevDiagnostic({
         level: "warn",
         category: "chat",
-        event: "chat.heartbeat.cleanup_failed",
-        message: "Failed to prune a silent heartbeat turn from the transcript.",
+        event: "chat.heartbeat.cleanup_projection_failed",
+        message: "Silent heartbeat cleanup committed, but its realtime projection failed.",
         sessionId: input.sessionId,
         turnId: input.turnId,
         context: { error: error instanceof Error ? error.message : String(error) },
       });
     }
+    return { status: "completed" };
   }
 
   /** @internal */ public getCurrentRequestAttribution(): {
@@ -6685,11 +6801,14 @@ export class GatewayService {
     );
   }
 
-  public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
+  public async invokeMcpTool(
+    input: McpInvokeRequest,
+    options?: ToolInvocationRuntimeOptions,
+  ): Promise<McpInvokeResponse> {
     // Capability-scope enforcement happens at the coordinator's executeMcpRuntime choke point
     // (via host.assertMcpServerInScope), which also covers the model approval-replay path and
     // internal servers. Enrich here so the gate sees the resolved workspaceId.
-    return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input));
+    return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input), options);
   }
 
   private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
@@ -7112,6 +7231,8 @@ export class GatewayService {
     clearLastError?: boolean;
     finishedAt?: string;
     clearFinishedAt?: boolean;
+    clearLease?: boolean;
+    expectedLeaseOwnerId?: string;
   }): DurableRunRecord {
     return this.durableRunService.updateRunState(input);
   }

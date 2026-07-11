@@ -227,6 +227,7 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
         "run-1",
         expect.objectContaining({ turnId: "turn-1" }),
         trace,
+        undefined,
       );
       expect(streamRegistration.completed).toBe(true);
       expect(host.getActiveChatTurnStream("turn-1")).toBe(streamRegistration);
@@ -314,6 +315,115 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
       expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
       expect(host.completeActiveChatTurnStream).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["DurableWorkerInterruptionError", "DurableRunPausedError"])(
+    "preserves an active trace for durable recovery on %s",
+    async (errorName) => {
+      vi.useFakeTimers();
+      const interruption = Object.assign(new Error(`${errorName} test interruption`), { name: errorName });
+      streamPreparedAgentChatTurn.mockImplementation(async function* () {
+        yield* [];
+        throw interruption;
+      });
+      const trace = {
+        turnId: "turn-1",
+        sessionId: "session-1",
+        status: "running",
+        routing: {},
+      } as ChatTurnTraceRecord;
+      const host = createHost({ traceState: trace });
+      const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+      try {
+        await expect(
+          dispatchService.executePreparedAgentChatTurnBackground(
+            host,
+            "session-1",
+            { content: "hello" },
+            createPrepared(),
+            "chat_thread_turn_appended",
+            "run-1",
+            undefined,
+            { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+          ),
+        ).rejects.toBe(interruption);
+
+        expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalled();
+        expect(host.persistChatStreamChunk).not.toHaveBeenCalledWith(
+          expect.objectContaining({ type: "error" }),
+          expect.anything(),
+          expect.anything(),
+        );
+        expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
+        expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("records durable cancellation as cancellation instead of a retryable chat failure", async () => {
+    vi.useFakeTimers();
+    const cancellation = Object.assign(new Error("operator cancelled durable run"), {
+      name: "DurableRunCancelledError",
+    });
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw cancellation;
+    });
+    const trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "running",
+      routing: {},
+      durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+    } as ChatTurnTraceRecord;
+    const host = createHost({ traceState: trace });
+    const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+    try {
+      await expect(
+        dispatchService.executePreparedAgentChatTurnBackground(
+          host,
+          "session-1",
+          { content: "hello" },
+          createPrepared(),
+          "chat_thread_turn_appended",
+          "run-1",
+          undefined,
+          { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+        ),
+      ).rejects.toBe(cancellation);
+
+      expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({
+          status: "cancelled",
+          completion: expect.objectContaining({ status: "interrupted" }),
+          durable: expect.objectContaining({ status: "cancelled", checkpointKind: "run_cancelled" }),
+        }),
+      );
+      expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "trace_update",
+          trace: expect.objectContaining({ status: "cancelled" }),
+        }),
+        "run-1",
+        registration,
+      );
+      expect(host.persistChatStreamChunk).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
+      expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();

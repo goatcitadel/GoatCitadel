@@ -4,6 +4,7 @@ import type {
   ChannelSendInput,
   ConnectorRecord,
   DurableRunRecord,
+  ExternalSideEffectRunRecord,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
@@ -169,6 +170,7 @@ describe("browser approval realtime delivery", () => {
         invokeMcpTool: vi.fn(),
         resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
         storage: {
+          ...createStrictSideEffectStores(),
           durableRuns: {
             getRun: vi.fn(() => run),
             updateRun,
@@ -241,6 +243,70 @@ function createRealtimeStorage(rows: RealtimeEvent[]) {
       close: vi.fn(),
     },
   };
+}
+
+function createStrictSideEffectStores() {
+  let mutationStatus: "pending" | "completed" | "failed" | undefined;
+  let sideEffect: ExternalSideEffectRunRecord | undefined;
+  return {
+    runImmediateTransaction: <T>(callback: () => T): T => callback(),
+    mutationIdempotency: {
+      claim: (input: { payloadHash: string }) => {
+        if (!mutationStatus) {
+          mutationStatus = "pending";
+          return {
+            outcome: "claimed" as const,
+            claimKind: "new" as const,
+            record: { payloadHash: input.payloadHash, status: mutationStatus },
+          };
+        }
+        return {
+          outcome: mutationStatus === "completed" ? ("duplicate" as const) : ("in_progress" as const),
+          record: { payloadHash: input.payloadHash, status: mutationStatus },
+        };
+      },
+      markCompleted: () => {
+        mutationStatus = "completed";
+      },
+      markFailed: () => {
+        mutationStatus = "failed";
+      },
+    },
+    externalSideEffectRuns: {
+      createOrGet: (input: Record<string, unknown>, createdAt = new Date().toISOString()) => {
+        sideEffect ??= {
+          runId: "side-effect-approval-delivery",
+          workspaceId: String(input.workspaceId ?? "default"),
+          boundary: String(input.boundary),
+          routePath: String(input.routePath),
+          catalogId: typeof input.catalogId === "string" ? input.catalogId : undefined,
+          connectionId: typeof input.connectionId === "string" ? input.connectionId : undefined,
+          actionId: typeof input.actionId === "string" ? input.actionId : undefined,
+          actorScope: String(input.actorScope ?? ""),
+          idempotencyKey: String(input.idempotencyKey),
+          payloadHash: String(input.payloadHash),
+          status: (input.status ?? "claimed_not_sent") as ExternalSideEffectRunRecord["status"],
+          replayPolicy: "idempotent_external",
+          replayOutcome: input.replayOutcome as ExternalSideEffectRunRecord["replayOutcome"],
+          replayAttempt: input.replayAttempt as ExternalSideEffectRunRecord["replayAttempt"],
+          resumeState: "not_resumable",
+          attemptCount: 0,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        return sideEffect;
+      },
+      markExternalCallStarted: () => updateStrictSideEffect("external_call_started"),
+      markCompleted: () => updateStrictSideEffect("completed"),
+      markFailure: (_runId: string, input: { status: "failed_before_boundary" | "unknown_external_outcome" }) =>
+        updateStrictSideEffect(input.status),
+    },
+  };
+
+  function updateStrictSideEffect(status: ExternalSideEffectRunRecord["status"]): ExternalSideEffectRunRecord {
+    sideEffect = { ...sideEffect!, status, updatedAt: new Date().toISOString() };
+    return sideEffect;
+  }
 }
 
 function createApproval(): ApprovalRequest {

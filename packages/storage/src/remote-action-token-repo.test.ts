@@ -297,6 +297,19 @@ describe("RemoteActionTokenRepository", () => {
     assert.equal(repo.expirePendingAtOrBefore(legacy.tokenId, "2026-03-20T10:00:00.000Z").state, "expired");
   });
 
+  it("rejects an invalid expiry boundary without mutating a pending token", () => {
+    const repo = createRepo();
+    const pending = repo.create({
+      tokenHash: "hash-invalid-expiry-boundary",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2099-03-20T10:00:00.000Z",
+    });
+
+    assert.throws(() => repo.expirePendingAtOrBefore(pending.tokenId, "not-a-date"), /valid timestamp/);
+    assert.equal(repo.get(pending.tokenId).state, "pending");
+  });
+
   it("lists bounded pending expiry candidates without returning terminal tokens", () => {
     const repo = createRepo();
     const first = repo.create({

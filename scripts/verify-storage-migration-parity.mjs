@@ -44,6 +44,7 @@ const PROTECTED_POSTGRES_MIGRATIONS = Object.freeze([
   { version: 26, name: "skill_evaluation_runs", sha256: "d2f5c4e90515fc4767ecc6274ab2c32f6ecd8c2b132ccfe673be45871655f980" },
   { version: 27, name: "skill_evaluation_runs", sha256: "d2f5c4e90515fc4767ecc6274ab2c32f6ecd8c2b132ccfe673be45871655f980" },
   { version: 28, name: "chat_operator_control_prefs", sha256: "319b6b187afb1bfa4fe15dd5dfeb1efcd258aced789705b12fe1652a1bba2c4e" },
+  { version: 81, name: "scrub_legacy_remote_approval_bearers", sha256: "4187b1a0cc73330480192ee66650990775c53c35fe2c54a01559ab4af6631b0a" },
 ]);
 
 export function extractMigrationNames(source) {
@@ -54,12 +55,13 @@ export function extractMigrationRecords(source) {
   const stringConstants = extractStringConstants(source);
   return [...source.matchAll(/\{\s*version:\s*(\d+),\s*name:\s*"([^"]+)"\s*(?:,([\s\S]*?))?\s*\}(?=\s*,|\s*\])/g)].map(
     (match) => {
+      const integrityMatch = match[3]?.match(/integritySha256:\s*"([a-f0-9]{64})"/);
       const sqlMatch = match[3]?.match(/sql:\s*`([\s\S]*?)`/);
       const sql = sqlMatch ? resolveTemplateConstants(sqlMatch[1], stringConstants) : null;
       return {
         version: Number(match[1]),
         name: match[2],
-        sha256: sql ? hashSql(sql) : null,
+        sha256: integrityMatch?.[1] ?? (sql ? hashSql(sql) : null),
       };
     },
   );

@@ -159,6 +159,35 @@ describe("protected approval action provider boundary", () => {
     expect(harness.resolveSecret).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("does not classify a benign token-like message as a raw approval bearer", async () => {
+    const harness = createHarness();
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1001 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.args.message = "Use grat_community_discount_code for the operator note.";
+
+    await expect(
+      executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+    ).resolves.toMatchObject({ status: "sent" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([`x${RAW_TOKEN}`, `${RAW_TOKEN}x`])("rejects recoverable decorated approval bearer %s", async (message) => {
+    const harness = createHarness();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.args.message = message;
+
+    await expect(
+      executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+    ).rejects.toThrow(/raw remote approval bearers/i);
+    expect(harness.resolveSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 function createHarness(

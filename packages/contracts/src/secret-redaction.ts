@@ -675,7 +675,7 @@ function looksLikeExplicitCredential(value: string): boolean {
     containsCredentialAssignmentText(value) ||
     containsCredentialChannelUrl(value) ||
     /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#\s]+@/.test(value) ||
-    /\bgrat_[A-Za-z0-9_-]{16,}\b/.test(value) ||
+    /grat_[A-Za-z0-9_-]{43}/.test(value) ||
     /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/.test(value) ||
     /(?:[?&](?:api[-_]?key|apikey|key|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|signature)=)[^&#\s]+/i.test(
       value,
@@ -1305,11 +1305,11 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     },
     ...(options.redactEnvAssignmentsAsWhole ? [envAssignmentPattern] : []),
     {
-      pattern: /\bgca:(grat_[A-Za-z0-9_-]{16,}):(a|r)\b/gi,
+      pattern: /\bgca:(grat_[A-Za-z0-9_-]{43}):(a|r)\b/gi,
       replace: (_match, _token, decision) => `gca:${marker}:${decision}`,
     },
     {
-      pattern: /\bgrat_[A-Za-z0-9_-]{16,}\b/g,
+      pattern: /grat_[A-Za-z0-9_-]{43}/g,
       replace: () => marker,
     },
     {

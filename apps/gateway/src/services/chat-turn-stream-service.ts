@@ -192,6 +192,10 @@ export interface ChatTurnStreamHost
   readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
 }
 
+export type ChatTurnCanonicalWriteFence = <T>(work: () => T) => T;
+
+const executeUnfencedChatTurnWrite: ChatTurnCanonicalWriteFence = <T>(work: () => T): T => work();
+
 /**
  * Build the user-role chat messages that should be appended to the next LLM call so the
  * model sees the operator's mid-turn steers. Returns an empty array when no steers are
@@ -228,10 +232,17 @@ export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: st
   return orderedToolRuns;
 }
 
-function recordRuntimeDecision(host: ChatTurnStreamHost, input: RuntimeDecisionTraceAppendInput): void {
+function recordRuntimeDecision(
+  host: ChatTurnStreamHost,
+  input: RuntimeDecisionTraceAppendInput,
+  canonicalWriteFence: ChatTurnCanonicalWriteFence = executeUnfencedChatTurnWrite,
+): void {
   try {
-    host.recordRuntimeDecision?.(input);
-  } catch {
+    canonicalWriteFence(() => host.recordRuntimeDecision?.(input));
+  } catch (error) {
+    if (isDurableControlError(error)) {
+      throw error;
+    }
     // Best-effort decision tracing is non-fatal and must not affect chat turn execution.
   }
 }
@@ -245,37 +256,42 @@ function recordStepRuntimeDecisions(
     step: OrchestrationStepExecutionResult;
     childToolRuns: ChatToolRunRecord[];
   },
+  canonicalWriteFence: ChatTurnCanonicalWriteFence = executeUnfencedChatTurnWrite,
 ): void {
   for (const toolRun of input.childToolRuns) {
     const kind = resolveToolDecisionKind(toolRun);
     if (!kind) {
       continue;
     }
-    recordRuntimeDecision(host, {
-      kind,
-      scope: {
-        workspaceId: prepared.workspaceId,
-        sessionId: prepared.session.sessionId,
-        turnId: prepared.turnId,
-        runId: input.runId,
-        planId: input.planId,
-        stepId: input.step.stepId,
-        toolRunId: toolRun.toolRunId,
-        approvalId: toolRun.approvalId,
+    recordRuntimeDecision(
+      host,
+      {
+        kind,
+        scope: {
+          workspaceId: prepared.workspaceId,
+          sessionId: prepared.session.sessionId,
+          turnId: prepared.turnId,
+          runId: input.runId,
+          planId: input.planId,
+          stepId: input.step.stepId,
+          toolRunId: toolRun.toolRunId,
+          approvalId: toolRun.approvalId,
+        },
+        selected: renderToolDecisionSelected(kind, toolRun),
+        rationale: renderToolDecisionRationale(kind, toolRun),
+        signals: [
+          { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
+          { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
+          { source: "tool_result", key: "reused", value: Boolean(toolRun.reused), weight: "informational" },
+          { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
+        ],
+        evidenceRefs: [
+          { refType: "tool_run", refId: toolRun.toolRunId },
+          ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
+        ],
       },
-      selected: renderToolDecisionSelected(kind, toolRun),
-      rationale: renderToolDecisionRationale(kind, toolRun),
-      signals: [
-        { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
-        { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
-        { source: "tool_result", key: "reused", value: Boolean(toolRun.reused), weight: "informational" },
-        { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
-      ],
-      evidenceRefs: [
-        { refType: "tool_run", refId: toolRun.toolRunId },
-        ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
-      ],
-    });
+      canonicalWriteFence,
+    );
   }
 }
 
@@ -340,6 +356,7 @@ export async function executePreparedModeOrchestration(
   onProgress?: (summary: NonNullable<ChatTurnTraceRecord["orchestration"]>) => Promise<void> | void,
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   finalDeltaSink?: FinalDeltaSink,
+  canonicalWriteFence: ChatTurnCanonicalWriteFence = executeUnfencedChatTurnWrite,
 ): Promise<
   OrchestrationExecutionResult & {
     summary: NonNullable<ChatTurnTraceRecord["orchestration"]>;
@@ -354,87 +371,97 @@ export async function executePreparedModeOrchestration(
   const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
   const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
   const runMode = orchestration.orchestrationPlan.routeDecision.parallelism === "parallel" ? "parallel" : "sequential";
-  const persistedExecutionPlan = host.storage.chatExecutionPlans.create({
-    sessionId: prepared.session.sessionId,
-    turnId: prepared.turnId,
-    mode: orchestration.routerInput.task.mode,
-    planningMode: prepared.prefs.planningMode,
-    source: orchestration.executionPlanDraft.source,
-    advisoryOnly: orchestration.executionPlanDraft.advisoryOnly,
-    objective: orchestration.executionPlanDraft.objective,
-    summary: orchestration.executionPlanDraft.summary,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    steps: orchestration.executionPlanDraft.steps,
-  });
-  recordRuntimeDecision(host, {
-    kind: "workflow_choice",
-    scope: {
-      workspaceId: prepared.workspaceId,
+  const persistedExecutionPlan = canonicalWriteFence(() =>
+    host.storage.chatExecutionPlans.create({
       sessionId: prepared.session.sessionId,
       turnId: prepared.turnId,
-      runId,
-      planId: persistedExecutionPlan.planId,
+      mode: orchestration.routerInput.task.mode,
+      planningMode: prepared.prefs.planningMode,
+      source: orchestration.executionPlanDraft.source,
+      advisoryOnly: orchestration.executionPlanDraft.advisoryOnly,
+      objective: orchestration.executionPlanDraft.objective,
+      summary: orchestration.executionPlanDraft.summary,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      steps: orchestration.executionPlanDraft.steps,
+    }),
+  );
+  recordRuntimeDecision(
+    host,
+    {
+      kind: "workflow_choice",
+      scope: {
+        workspaceId: prepared.workspaceId,
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        runId,
+        planId: persistedExecutionPlan.planId,
+      },
+      selected: `Use ${orchestration.orchestrationPlan.workflowTemplate} workflow`,
+      rationale: orchestration.orchestrationPlan.routeDecision.triggerReason,
+      alternatives: [
+        {
+          label: "Direct answer",
+          outcome: "not_chosen",
+          reasonNotChosen: "The mode router selected an inspectable workflow for this turn.",
+        },
+        {
+          label: "Single tool-backed response",
+          outcome: "deferred",
+          reasonNotChosen: "Tool invocation remains governed inside delegated steps and policy checks.",
+        },
+      ],
+      signals: [
+        { source: "routing", key: "mode", value: orchestration.routerInput.task.mode, weight: "strong" },
+        {
+          source: "orchestration",
+          key: "workflow_template",
+          value: orchestration.orchestrationPlan.workflowTemplate,
+          weight: "strong",
+        },
+        {
+          source: "orchestration",
+          key: "parallelism",
+          value: orchestration.orchestrationPlan.routeDecision.parallelism,
+          weight: "informational",
+        },
+        {
+          source: "model_router",
+          key: "decision",
+          value: prepared.modelRouterDecision.orchestration?.decision ?? "allowed",
+          weight: "informational",
+        },
+      ],
+      evidenceRefs: [
+        { refType: "turn", refId: prepared.turnId },
+        { refType: "run", refId: runId },
+        { refType: "plan", refId: persistedExecutionPlan.planId },
+      ],
     },
-    selected: `Use ${orchestration.orchestrationPlan.workflowTemplate} workflow`,
-    rationale: orchestration.orchestrationPlan.routeDecision.triggerReason,
-    alternatives: [
-      {
-        label: "Direct answer",
-        outcome: "not_chosen",
-        reasonNotChosen: "The mode router selected an inspectable workflow for this turn.",
+    canonicalWriteFence,
+  );
+  recordRuntimeDecision(
+    host,
+    {
+      kind: "execution_plan_created",
+      scope: {
+        workspaceId: prepared.workspaceId,
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        runId,
+        planId: persistedExecutionPlan.planId,
       },
-      {
-        label: "Single tool-backed response",
-        outcome: "deferred",
-        reasonNotChosen: "Tool invocation remains governed inside delegated steps and policy checks.",
-      },
-    ],
-    signals: [
-      { source: "routing", key: "mode", value: orchestration.routerInput.task.mode, weight: "strong" },
-      {
-        source: "orchestration",
-        key: "workflow_template",
-        value: orchestration.orchestrationPlan.workflowTemplate,
-        weight: "strong",
-      },
-      {
-        source: "orchestration",
-        key: "parallelism",
-        value: orchestration.orchestrationPlan.routeDecision.parallelism,
-        weight: "informational",
-      },
-      {
-        source: "model_router",
-        key: "decision",
-        value: prepared.modelRouterDecision.orchestration?.decision ?? "allowed",
-        weight: "informational",
-      },
-    ],
-    evidenceRefs: [
-      { refType: "turn", refId: prepared.turnId },
-      { refType: "run", refId: runId },
-      { refType: "plan", refId: persistedExecutionPlan.planId },
-    ],
-  });
-  recordRuntimeDecision(host, {
-    kind: "execution_plan_created",
-    scope: {
-      workspaceId: prepared.workspaceId,
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      runId,
-      planId: persistedExecutionPlan.planId,
+      selected: `Create ${persistedExecutionPlan.steps.length} step execution plan`,
+      rationale: persistedExecutionPlan.summary,
+      signals: [
+        { source: "execution_plan", key: "step_count", value: persistedExecutionPlan.steps.length },
+        { source: "execution_plan", key: "advisory_only", value: persistedExecutionPlan.advisoryOnly },
+        { source: "execution_plan", key: "source", value: persistedExecutionPlan.source },
+      ],
+      evidenceRefs: [{ refType: "plan", refId: persistedExecutionPlan.planId }],
     },
-    selected: `Create ${persistedExecutionPlan.steps.length} step execution plan`,
-    rationale: persistedExecutionPlan.summary,
-    signals: [
-      { source: "execution_plan", key: "step_count", value: persistedExecutionPlan.steps.length },
-      { source: "execution_plan", key: "advisory_only", value: persistedExecutionPlan.advisoryOnly },
-      { source: "execution_plan", key: "source", value: persistedExecutionPlan.source },
-    ],
-    evidenceRefs: [{ refType: "plan", refId: persistedExecutionPlan.planId }],
-  });
+    canonicalWriteFence,
+  );
   host.recordDevDiagnostic({
     level: "info",
     category: "orchestration",
@@ -462,39 +489,40 @@ export async function executePreparedModeOrchestration(
       orchestration.orchestrationPlan.steps.at(-1)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
     effectiveModel: orchestration.orchestrationPlan.steps.at(-1)?.model ?? input.model ?? prepared.prefs.model,
   } satisfies ChatTurnTraceRecord["routing"];
-  host.storage.chatDelegationRuns.create({
-    runId,
-    sessionId: prepared.session.sessionId,
-    taskId: `chat-orchestration:${prepared.turnId}`,
-    objective: prepared.content,
-    roles: orchestration.orchestrationPlan.routeDecision.selectedRoles,
-    mode: runMode,
-    providerId: input.providerId ?? prepared.prefs.providerId,
-    model: input.model ?? prepared.prefs.model,
-    status: "running",
-    visibility: orchestration.orchestrationPlan.routeDecision.visibility,
-    workflowTemplate: orchestration.orchestrationPlan.workflowTemplate,
-    executionPlanId: persistedExecutionPlan.planId,
-    routeDecision: orchestration.orchestrationPlan.routeDecision,
-    citations: [],
-    trace: runTrace,
-  });
-
   const persistedStepIds = new Map<string, string>();
-  for (const [index, step] of orchestration.orchestrationPlan.steps.entries()) {
-    const persistedStepId = `${runId}:${step.stepId}`;
-    persistedStepIds.set(step.stepId, persistedStepId);
-    host.storage.chatDelegationSteps.create({
-      stepId: persistedStepId,
+  canonicalWriteFence(() => {
+    host.storage.chatDelegationRuns.create({
       runId,
-      role: step.role,
-      label: step.label,
-      index,
-      status: "pending",
-      providerId: step.providerId,
-      model: step.model,
+      sessionId: prepared.session.sessionId,
+      taskId: `chat-orchestration:${prepared.turnId}`,
+      objective: prepared.content,
+      roles: orchestration.orchestrationPlan.routeDecision.selectedRoles,
+      mode: runMode,
+      providerId: input.providerId ?? prepared.prefs.providerId,
+      model: input.model ?? prepared.prefs.model,
+      status: "running",
+      visibility: orchestration.orchestrationPlan.routeDecision.visibility,
+      workflowTemplate: orchestration.orchestrationPlan.workflowTemplate,
+      executionPlanId: persistedExecutionPlan.planId,
+      routeDecision: orchestration.orchestrationPlan.routeDecision,
+      citations: [],
+      trace: runTrace,
     });
-  }
+    for (const [index, step] of orchestration.orchestrationPlan.steps.entries()) {
+      const persistedStepId = `${runId}:${step.stepId}`;
+      persistedStepIds.set(step.stepId, persistedStepId);
+      host.storage.chatDelegationSteps.create({
+        stepId: persistedStepId,
+        runId,
+        role: step.role,
+        label: step.label,
+        index,
+        status: "pending",
+        providerId: step.providerId,
+        model: step.model,
+      });
+    }
+  });
 
   let currentSteps: OrchestrationStepExecutionResult[] = [];
   const initialSummary = host.buildChatOrchestrationSummary({
@@ -524,39 +552,46 @@ export async function executePreparedModeOrchestration(
       finalized: true,
       advisoryOnly: true,
     });
-    host.storage.chatDelegationRuns.patch(runId, {
-      status: "completed",
-      visibility: advisorySummary.visibility,
-      workflowTemplate: advisorySummary.workflowTemplate,
-      routeDecision: advisorySummary.routeDecision,
-      finalSummary: orchestration.executionPlanDraft.summary,
-      stitchedOutput: advisoryOutput,
-      citations: [],
-      trace: runTrace,
-      finishedAt: new Date().toISOString(),
+    canonicalWriteFence(() => {
+      host.storage.chatDelegationRuns.patch(runId, {
+        status: "completed",
+        visibility: advisorySummary.visibility,
+        workflowTemplate: advisorySummary.workflowTemplate,
+        routeDecision: advisorySummary.routeDecision,
+        finalSummary: orchestration.executionPlanDraft.summary,
+        stitchedOutput: advisoryOutput,
+        citations: [],
+        trace: runTrace,
+        finishedAt: new Date().toISOString(),
+      });
+      host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+        status: "ready",
+        summary: orchestration.executionPlanDraft.summary,
+        finishedAt: new Date().toISOString(),
+      });
     });
-    host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-      status: "ready",
-      summary: orchestration.executionPlanDraft.summary,
-      finishedAt: new Date().toISOString(),
-    });
-    recordRuntimeDecision(host, {
-      kind: "execution_plan_revised",
-      scope: {
-        workspaceId: prepared.workspaceId,
-        sessionId: prepared.session.sessionId,
-        turnId: prepared.turnId,
-        runId,
-        planId: persistedExecutionPlan.planId,
+    recordRuntimeDecision(
+      host,
+      {
+        kind: "execution_plan_revised",
+        scope: {
+          workspaceId: prepared.workspaceId,
+          sessionId: prepared.session.sessionId,
+          turnId: prepared.turnId,
+          runId,
+          planId: persistedExecutionPlan.planId,
+        },
+        selected: "Finish advisory plan without tool execution",
+        rationale:
+          "Planning mode was advisory, so the runtime returned the drafted execution plan as the final answer.",
+        signals: [
+          { source: "execution_plan", key: "status", value: "ready", weight: "strong" },
+          { source: "operator_pref", key: "planning_mode", value: prepared.prefs.planningMode },
+        ],
+        evidenceRefs: [{ refType: "plan", refId: persistedExecutionPlan.planId }],
       },
-      selected: "Finish advisory plan without tool execution",
-      rationale: "Planning mode was advisory, so the runtime returned the drafted execution plan as the final answer.",
-      signals: [
-        { source: "execution_plan", key: "status", value: "ready", weight: "strong" },
-        { source: "operator_pref", key: "planning_mode", value: prepared.prefs.planningMode },
-      ],
-      evidenceRefs: [{ refType: "plan", refId: persistedExecutionPlan.planId }],
-    });
+      canonicalWriteFence,
+    );
     await onProgress?.(advisorySummary);
     return {
       finalOutput: advisoryOutput,
@@ -579,16 +614,29 @@ export async function executePreparedModeOrchestration(
           turnId: prepared.turnId,
         });
         for (const steerItem of orchestrationDrainedSteers) {
-          await host.ingestEvent(randomUUID(), {
-            eventId: randomUUID(),
-            route: prepared.route,
-            actor: { type: "user", id: "operator" },
-            message: {
-              role: "user",
-              content: steerItem.instruction,
-              steered: true,
+          let steerCommitted = false;
+          await host.ingestEvent(
+            randomUUID(),
+            {
+              eventId: randomUUID(),
+              route: prepared.route,
+              actor: { type: "user", id: "operator" },
+              message: {
+                role: "user",
+                content: steerItem.instruction,
+                steered: true,
+              },
             },
-          });
+            {
+              onCommit: () =>
+                canonicalWriteFence(() => {
+                  steerCommitted = true;
+                }),
+            },
+          );
+          if (!steerCommitted) {
+            throw new Error(`Chat turn ${prepared.turnId} steer ingest skipped its canonical write fence.`);
+          }
         }
         const composed =
           orchestrationDrainedSteers.length > 0
@@ -633,6 +681,7 @@ export async function executePreparedModeOrchestration(
           fullWebAccess: input.fullWebAccess,
           streamTerminalStep,
           finalDeltaSink: streamTerminalStep ? finalDeltaSink : undefined,
+          canonicalWriteFence,
         });
       },
       onStepResult: async (step, allSteps) => {
@@ -640,12 +689,17 @@ export async function executePreparedModeOrchestration(
         const childToolRuns = step.childTurnId
           ? (host.storage.chatToolRuns.listByTurnIds([step.childTurnId]).get(step.childTurnId) ?? [])
           : [];
-        recordStepRuntimeDecisions(host, prepared, {
-          runId,
-          planId: persistedExecutionPlan.planId,
-          step,
-          childToolRuns,
-        });
+        recordStepRuntimeDecisions(
+          host,
+          prepared,
+          {
+            runId,
+            planId: persistedExecutionPlan.planId,
+            step,
+            childToolRuns,
+          },
+          canonicalWriteFence,
+        );
         const activeToolWork = childToolRuns.some(
           (toolRun) => toolRun.status === "started" || toolRun.status === "approval_required",
         );
@@ -694,56 +748,62 @@ export async function executePreparedModeOrchestration(
             ).length,
           },
         });
-        host.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
-          status: step.status,
-          providerId: step.providerId,
-          model: step.model,
-          label: step.label,
-          summary: step.summary,
-          output: step.output,
-          error: step.error,
-          failureGuidance:
-            step.failureGuidance ?? (step.error ? buildDelegationFailureGuidance(step.error, step.role) : undefined),
-          degradedHandoffStepIds: step.degradedHandoffStepIds,
-          durableRunId: step.durableRunId,
-          childSessionId: step.childSessionId,
-          childTurnId: step.childTurnId,
-          citations: step.citations,
-          ...(step.finishedAt ? { finishedAt: step.finishedAt } : {}),
-          ...(typeof step.durationMs === "number" ? { durationMs: step.durationMs } : {}),
+        canonicalWriteFence(() => {
+          host.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
+            status: step.status,
+            providerId: step.providerId,
+            model: step.model,
+            label: step.label,
+            summary: step.summary,
+            output: step.output,
+            error: step.error,
+            failureGuidance:
+              step.failureGuidance ?? (step.error ? buildDelegationFailureGuidance(step.error, step.role) : undefined),
+            degradedHandoffStepIds: step.degradedHandoffStepIds,
+            durableRunId: step.durableRunId,
+            childSessionId: step.childSessionId,
+            childTurnId: step.childTurnId,
+            citations: step.citations,
+            ...(step.finishedAt ? { finishedAt: step.finishedAt } : {}),
+            ...(typeof step.durationMs === "number" ? { durationMs: step.durationMs } : {}),
+          });
+          host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+            steps: mergeExecutionPlanStepStatuses(
+              host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
+              allSteps,
+            ),
+          });
         });
-        host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-          steps: mergeExecutionPlanStepStatuses(
-            host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
-            allSteps,
-          ),
-        });
-        recordRuntimeDecision(host, {
-          kind: "execution_plan_revised",
-          scope: {
-            workspaceId: prepared.workspaceId,
-            sessionId: prepared.session.sessionId,
-            turnId: prepared.turnId,
-            runId,
-            planId: persistedExecutionPlan.planId,
-            stepId: step.stepId,
+        recordRuntimeDecision(
+          host,
+          {
+            kind: "execution_plan_revised",
+            scope: {
+              workspaceId: prepared.workspaceId,
+              sessionId: prepared.session.sessionId,
+              turnId: prepared.turnId,
+              runId,
+              planId: persistedExecutionPlan.planId,
+              stepId: step.stepId,
+            },
+            selected: `Step ${step.stepId} marked ${step.status}`,
+            rationale:
+              step.summary ??
+              step.error ??
+              step.waitStatus ??
+              "Execution plan step status changed after runtime evidence.",
+            signals: [
+              { source: "execution_plan", key: "step_status", value: step.status, weight: "strong" },
+              { source: "execution_plan", key: "wait_status", value: step.waitStatus ?? null },
+              { source: "tool_result", key: "child_tool_run_count", value: childToolRuns.length },
+            ],
+            evidenceRefs: [
+              { refType: "plan", refId: persistedExecutionPlan.planId },
+              { refType: "step", refId: step.stepId },
+            ],
           },
-          selected: `Step ${step.stepId} marked ${step.status}`,
-          rationale:
-            step.summary ??
-            step.error ??
-            step.waitStatus ??
-            "Execution plan step status changed after runtime evidence.",
-          signals: [
-            { source: "execution_plan", key: "step_status", value: step.status, weight: "strong" },
-            { source: "execution_plan", key: "wait_status", value: step.waitStatus ?? null },
-            { source: "tool_result", key: "child_tool_run_count", value: childToolRuns.length },
-          ],
-          evidenceRefs: [
-            { refType: "plan", refId: persistedExecutionPlan.planId },
-            { refType: "step", refId: step.stepId },
-          ],
-        });
+          canonicalWriteFence,
+        );
         const summary = host.buildChatOrchestrationSummary({
           runId,
           objective: prepared.content,
@@ -768,58 +828,64 @@ export async function executePreparedModeOrchestration(
     finalized: true,
   });
   const orchestrationFinishedAt = summary.status === "running" ? undefined : new Date().toISOString();
-  host.storage.chatDelegationRuns.patch(runId, {
-    status: summary.status,
-    visibility: summary.visibility,
-    workflowTemplate: summary.workflowTemplate,
-    routeDecision: summary.routeDecision,
-    finalSummary: result.finalSummary,
-    stitchedOutput: result.finalOutput,
-    citations: result.citations,
-    trace: {
-      ...runTrace,
-      effectiveProviderId:
-        result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId ?? runTrace.effectiveProviderId,
-      effectiveModel: result.finalStep?.model ?? result.stepResults.at(-1)?.model ?? runTrace.effectiveModel,
+  canonicalWriteFence(() => {
+    host.storage.chatDelegationRuns.patch(runId, {
+      status: summary.status,
+      visibility: summary.visibility,
+      workflowTemplate: summary.workflowTemplate,
+      routeDecision: summary.routeDecision,
+      finalSummary: result.finalSummary,
+      stitchedOutput: result.finalOutput,
+      citations: result.citations,
+      trace: {
+        ...runTrace,
+        effectiveProviderId:
+          result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId ?? runTrace.effectiveProviderId,
+        effectiveModel: result.finalStep?.model ?? result.stepResults.at(-1)?.model ?? runTrace.effectiveModel,
+      },
+      ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
+    });
+    host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+      status:
+        summary.status === "running"
+          ? "running"
+          : summary.status === "failed"
+            ? "failed"
+            : summary.status === "partial"
+              ? "partial"
+              : "completed",
+      summary: result.finalSummary,
+      ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
+      steps: mergeExecutionPlanStepStatuses(
+        host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
+        result.stepResults,
+      ),
+    });
+  });
+  recordRuntimeDecision(
+    host,
+    {
+      kind: "execution_plan_revised",
+      scope: {
+        workspaceId: prepared.workspaceId,
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        runId,
+        planId: persistedExecutionPlan.planId,
+      },
+      selected: `Execution plan ${summary.status}`,
+      rationale: result.finalSummary,
+      signals: [
+        { source: "execution_plan", key: "status", value: summary.status, weight: "strong" },
+        { source: "orchestration", key: "integrity_signal_count", value: result.integritySignals?.length ?? 0 },
+      ],
+      evidenceRefs: [
+        { refType: "plan", refId: persistedExecutionPlan.planId },
+        { refType: "run", refId: runId },
+      ],
     },
-    ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
-  });
-  host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-    status:
-      summary.status === "running"
-        ? "running"
-        : summary.status === "failed"
-          ? "failed"
-          : summary.status === "partial"
-            ? "partial"
-            : "completed",
-    summary: result.finalSummary,
-    ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
-    steps: mergeExecutionPlanStepStatuses(
-      host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
-      result.stepResults,
-    ),
-  });
-  recordRuntimeDecision(host, {
-    kind: "execution_plan_revised",
-    scope: {
-      workspaceId: prepared.workspaceId,
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      runId,
-      planId: persistedExecutionPlan.planId,
-    },
-    selected: `Execution plan ${summary.status}`,
-    rationale: result.finalSummary,
-    signals: [
-      { source: "execution_plan", key: "status", value: summary.status, weight: "strong" },
-      { source: "orchestration", key: "integrity_signal_count", value: result.integritySignals?.length ?? 0 },
-    ],
-    evidenceRefs: [
-      { refType: "plan", refId: persistedExecutionPlan.planId },
-      { refType: "run", refId: runId },
-    ],
-  });
+    canonicalWriteFence,
+  );
   await onProgress?.(summary);
   const lifecycleEvent =
     summary.status === "running"
@@ -878,41 +944,45 @@ export async function executeDelegatedPlanStep(
     fullWebAccess?: boolean;
     streamTerminalStep?: boolean;
     finalDeltaSink?: FinalDeltaSink;
+    canonicalWriteFence?: ChatTurnCanonicalWriteFence;
   },
 ): Promise<OrchestrationStepExecutionResult> {
   const startedAt = new Date().toISOString();
   const delegatedRole = input.step.delegatedRole ?? input.step.role;
   const orchestrationTaskId = `chat-orchestration:${prepared.turnId}`;
-  const parentProjectId = host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId;
-  const childSession = host.createChatSession({
-    workspaceId: prepared.workspaceId,
-    title: `Delegate · ${toTitleCase(delegatedRole)}`,
-    projectId: parentProjectId,
-    mode: input.task.mode,
-  });
-  host.inheritDelegatedSessionToolGrants(prepared.session.sessionId, childSession.sessionId);
-
-  host.updateChatSessionPrefs(childSession.sessionId, {
-    mode: input.task.mode,
-    planningMode: "off",
-    providerId: input.step.providerId ?? prepared.prefs.providerId,
-    model: input.step.model ?? prepared.prefs.model,
-    webMode: prepared.prefs.webMode,
-    memoryMode: prepared.prefs.memoryMode,
-    thinkingLevel: prepared.prefs.thinkingLevel,
-    speedMode: prepared.prefs.speedMode,
-    subagentPolicy: "off",
-    toolAutonomy: prepared.effectiveToolAutonomy,
-    orchestrationEnabled: false,
-    orchestrationIntensity: "minimal",
-    orchestrationVisibility: "explicit",
-    orchestrationProviderPreference: prepared.prefs.orchestrationProviderPreference,
-    orchestrationReviewDepth: prepared.prefs.orchestrationReviewDepth,
-    orchestrationParallelism: "sequential",
-    codeAutoApply: prepared.prefs.codeAutoApply,
-    proactiveMode: "off",
-    retrievalMode: prepared.autonomy.retrievalMode,
-    reflectionMode: "off",
+  const canonicalWriteFence = input.canonicalWriteFence ?? executeUnfencedChatTurnWrite;
+  const childSession = canonicalWriteFence(() => {
+    const parentProjectId = host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId;
+    const created = host.createChatSession({
+      workspaceId: prepared.workspaceId,
+      title: `Delegate · ${toTitleCase(delegatedRole)}`,
+      projectId: parentProjectId,
+      mode: input.task.mode,
+    });
+    host.inheritDelegatedSessionToolGrants(prepared.session.sessionId, created.sessionId);
+    host.updateChatSessionPrefs(created.sessionId, {
+      mode: input.task.mode,
+      planningMode: "off",
+      providerId: input.step.providerId ?? prepared.prefs.providerId,
+      model: input.step.model ?? prepared.prefs.model,
+      webMode: prepared.prefs.webMode,
+      memoryMode: prepared.prefs.memoryMode,
+      thinkingLevel: prepared.prefs.thinkingLevel,
+      speedMode: prepared.prefs.speedMode,
+      subagentPolicy: "off",
+      toolAutonomy: prepared.effectiveToolAutonomy,
+      orchestrationEnabled: false,
+      orchestrationIntensity: "minimal",
+      orchestrationVisibility: "explicit",
+      orchestrationProviderPreference: prepared.prefs.orchestrationProviderPreference,
+      orchestrationReviewDepth: prepared.prefs.orchestrationReviewDepth,
+      orchestrationParallelism: "sequential",
+      codeAutoApply: prepared.prefs.codeAutoApply,
+      proactiveMode: "off",
+      retrievalMode: prepared.autonomy.retrievalMode,
+      reflectionMode: "off",
+    });
+    return created;
   });
 
   const conversationContext = input.task.conversation
@@ -998,14 +1068,16 @@ export async function executeDelegatedPlanStep(
       localOperatorOverrideId: input.localOperatorOverrideId,
     });
     delegatedDispatchStarted = true;
-    patchActiveDelegationStep(host, {
-      stepId: `${input.runId}:${input.step.stepId}`,
-      childSessionId: childSession.sessionId,
-      role: delegatedRole,
-      label: input.step.label,
-      providerId: input.step.providerId ?? prepared.prefs.providerId,
-      model: input.step.model ?? prepared.prefs.model,
-    });
+    canonicalWriteFence(() =>
+      patchActiveDelegationStep(host, {
+        stepId: `${input.runId}:${input.step.stepId}`,
+        childSessionId: childSession.sessionId,
+        role: delegatedRole,
+        label: input.step.label,
+        providerId: input.step.providerId ?? prepared.prefs.providerId,
+        model: input.step.model ?? prepared.prefs.model,
+      }),
+    );
     const delegatedSendRequest = buildDelegatedChatSendRequest({
       content,
       providerId: input.step.providerId ?? prepared.prefs.providerId,
@@ -1542,6 +1614,9 @@ export async function* streamPreparedAgentChatTurn(
   options?: {
     skipMessageStart?: boolean;
     abortSignal?: AbortSignal;
+    canonicalWriteFence?: ChatTurnCanonicalWriteFence;
+    /** Durable runs reconcile general post-commit effects after terminal run finalization. */
+    deferGeneralPostCommit?: boolean;
   },
 ): AsyncGenerator<ChatStreamChunkDraft> {
   const inputPolicyContext = (input as ChatSendMessageRequestWithPolicyContext).policyContext;
@@ -1549,6 +1624,8 @@ export async function* streamPreparedAgentChatTurn(
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
   const chatTurnTraces = host.storage.chatTurnTraces;
+  const canonicalWriteFence = options?.canonicalWriteFence ?? executeUnfencedChatTurnWrite;
+  const deferGeneralPostCommit = options?.deferGeneralPostCommit === true;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   host.steerService?.registerActiveTurn?.({ sessionId, turnId });
@@ -1569,33 +1646,36 @@ export async function* streamPreparedAgentChatTurn(
     const modeOrchestration = resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared));
     if (modeOrchestration) {
       const mode = resolvePreparedTurnMode(prepared);
-      const initialTrace = createOrRefreshRunningChatTurnTrace(host, {
-        turnId,
-        sessionId,
-        userMessageId: prepared.userEventId,
-        parentTurnId: prepared.parentTurnId,
-        branchKind: prepared.branchKind,
-        sourceTurnId: prepared.sourceTurnId,
-        status: "running",
-        mode,
-        model: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-        webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-        memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-        thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-        speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-        subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
-        effectiveToolAutonomy: prepared.effectiveToolAutonomy,
-        routing: {
-          primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-          primaryModel: input.model ?? prepared.prefs.model,
-          effectiveProviderId:
-            modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
-            input.providerId ??
-            prepared.prefs.providerId,
-          effectiveModel: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-          modelRouter: prepared.modelRouterDecision,
-        },
-      });
+      const initialTrace = canonicalWriteFence(() =>
+        createOrRefreshRunningChatTurnTrace(host, {
+          turnId,
+          sessionId,
+          userMessageId: prepared.userEventId,
+          parentTurnId: prepared.parentTurnId,
+          branchKind: prepared.branchKind,
+          sourceTurnId: prepared.sourceTurnId,
+          status: "running",
+          mode,
+          model: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+          webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+          memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+          thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+          speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+          subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
+          effectiveToolAutonomy: prepared.effectiveToolAutonomy,
+          routing: {
+            primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+            primaryModel: input.model ?? prepared.prefs.model,
+            effectiveProviderId:
+              modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
+              input.providerId ??
+              prepared.prefs.providerId,
+            effectiveModel:
+              modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+            modelRouter: prepared.modelRouterDecision,
+          },
+        }),
+      );
       yield {
         type: "trace_update",
         sessionId,
@@ -1629,34 +1709,37 @@ export async function* streamPreparedAgentChatTurn(
         input,
         controller.signal,
         async (summary) => {
-          const progressTrace = host.storage.chatTurnTraces.patch(turnId, {
-            executionPlanId,
-            orchestration: summary,
-            model:
-              summary.steps.at(-1)?.model ??
-              modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
-              input.model ??
-              prepared.prefs.model,
-            routing: {
-              primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-              primaryModel: input.model ?? prepared.prefs.model,
-              effectiveProviderId:
-                summary.steps.at(-1)?.providerId ??
-                modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
-                input.providerId ??
-                prepared.prefs.providerId,
-              effectiveModel:
+          const progressTrace = canonicalWriteFence(() =>
+            host.storage.chatTurnTraces.patch(turnId, {
+              executionPlanId,
+              orchestration: summary,
+              model:
                 summary.steps.at(-1)?.model ??
                 modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
                 input.model ??
                 prepared.prefs.model,
-              modelRouter: prepared.modelRouterDecision,
-            },
-          });
+              routing: {
+                primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+                primaryModel: input.model ?? prepared.prefs.model,
+                effectiveProviderId:
+                  summary.steps.at(-1)?.providerId ??
+                  modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
+                  input.providerId ??
+                  prepared.prefs.providerId,
+                effectiveModel:
+                  summary.steps.at(-1)?.model ??
+                  modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
+                  input.model ??
+                  prepared.prefs.model,
+                modelRouter: prepared.modelRouterDecision,
+              },
+            }),
+          );
           progressQueue.push({ kind: "trace", trace: progressTrace });
         },
         modeOrchestration,
         finalDeltaSink,
+        canonicalWriteFence,
       ).finally(() => {
         progressQueue.close();
       });
@@ -1806,27 +1889,27 @@ export async function* streamPreparedAgentChatTurn(
         },
         {
           onCommit: () => {
-            committedTrace = patchChatTurnTraceIfStatus(
-              chatTurnTraces,
-              turnId,
-              CHAT_TURN_ACTIVE_STATUSES,
-              completionPatch,
-            );
+            committedTrace = canonicalWriteFence(() => {
+              const trace = patchChatTurnTraceIfStatus(
+                chatTurnTraces,
+                turnId,
+                CHAT_TURN_ACTIVE_STATUSES,
+                completionPatch,
+              );
+              host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+              return trace;
+            });
           },
         },
       );
-      committedTrace ??= patchChatTurnTraceIfStatus(
-        chatTurnTraces,
-        turnId,
-        [...CHAT_TURN_ACTIVE_STATUSES, orchestrationTraceStatus],
-        completionPatch,
-      );
+      if (!committedTrace) {
+        throw new Error(`Chat turn ${turnId} assistant ingest did not execute its canonical completion commit.`);
+      }
 
       let hydratedTrace: ChatTurnTraceRecord = {
         ...committedTrace,
         toolRuns: orchestrationToolRuns,
       };
-      host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
       // Skip the synthetic post-hoc split when the real terminal-synthesizer
       // tokens were already streamed live above and matched the authoritative
       // final text (no double emit). Otherwise fall back to splitting finalText.
@@ -1856,20 +1939,25 @@ export async function* streamPreparedAgentChatTurn(
         assistantText: finalText,
         trace: hydratedTrace,
       });
-      const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
-        sessionId,
-        mode: resolvePreparedTurnMode(prepared),
-        content: prepared.content,
-        capabilitySuggestions: capabilityUpgradeSuggestions,
-        trace: hydratedTrace,
-      });
+      canonicalWriteFence(() => undefined);
+      const specialistCandidateSuggestions = canonicalWriteFence(() =>
+        host.collectSpecialistCandidateSuggestions({
+          sessionId,
+          mode: resolvePreparedTurnMode(prepared),
+          content: prepared.content,
+          capabilitySuggestions: capabilityUpgradeSuggestions,
+          trace: hydratedTrace,
+        }),
+      );
       if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
         hydratedTrace = {
-          ...host.storage.chatTurnTraces.patch(turnId, {
-            capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-            specialistCandidateSuggestions:
-              specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-          }),
+          ...canonicalWriteFence(() =>
+            host.storage.chatTurnTraces.patch(turnId, {
+              capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
+              specialistCandidateSuggestions:
+                specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
+            }),
+          ),
           toolRuns: orchestrationToolRuns,
         };
         if (capabilityUpgradeSuggestions.length > 0) {
@@ -1887,69 +1975,79 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace: hydratedTrace,
       };
-      host.publishRealtime(
-        "chat_thread_updated",
-        "chat",
-        {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        },
-        buildChatTurnRealtimeOptions({ sessionId, turnId }),
-      );
-      host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-        role: "user",
-        sourceRef: prepared.userEventId,
-        trace: hydratedTrace,
-      });
-      host.extractAndPersistLearnedMemory(sessionId, finalText, {
-        role: "assistant",
-        sourceRef: assistantMessageId,
-        trace: hydratedTrace,
-      });
-      // P1-F3: infer future follow-up check-ins from a successful turn (streaming
-      // path). Fire-and-forget beside learned-memory; host applies all guards.
-      // Autonomous self-wake turns are excluded (no self-feeding loop on output).
-      if (hydratedTrace.status === "completed") {
-        const autonomousTurn = isAutonomousTurnRequest(input);
-        host.recordTurnCommitments({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          userText: prepared.content,
-          assistantText: finalText,
-          autonomous: autonomousTurn,
-        });
-        // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
-        // gates on master autonomy / eval-integrity / non-human + the turn counter.
-        host.scheduleBackgroundReviewIfDue({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          userText: prepared.content,
-          assistantText: finalText,
-          parentTurnId: prepared.parentTurnId,
-          autonomous: autonomousTurn,
+      if (!deferGeneralPostCommit) {
+        canonicalWriteFence(() => {
+          host.publishRealtime(
+            "chat_thread_updated",
+            "chat",
+            {
+              type: threadEventType,
+              sessionId,
+              turnId,
+              activeLeafTurnId: turnId,
+            },
+            buildChatTurnRealtimeOptions({ sessionId, turnId }),
+          );
+          host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
+            role: "user",
+            sourceRef: prepared.userEventId,
+            trace: hydratedTrace,
+          });
+          host.extractAndPersistLearnedMemory(sessionId, finalText, {
+            role: "assistant",
+            sourceRef: assistantMessageId,
+            trace: hydratedTrace,
+          });
+          // P1-F3: infer future follow-up check-ins from a successful turn (streaming
+          // path). Fire-and-forget beside learned-memory; host applies all guards.
+          // Autonomous self-wake turns are excluded (no self-feeding loop on output).
+          if (hydratedTrace.status === "completed") {
+            const autonomousTurn = isAutonomousTurnRequest(input);
+            const delegatedChild = Boolean(prepared.parentDelegationStepId);
+            host.recordTurnCommitments({
+              sessionId,
+              workspaceId: prepared.workspaceId,
+              userText: prepared.content,
+              assistantText: finalText,
+              autonomous: autonomousTurn,
+            });
+            // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
+            // gates on master autonomy / eval-integrity / non-human + the turn counter.
+            host.scheduleBackgroundReviewIfDue({
+              sessionId,
+              workspaceId: prepared.workspaceId,
+              turnId,
+              userText: prepared.content,
+              assistantText: finalText,
+              delegatedChild,
+              autonomous: autonomousTurn,
+            });
+          }
+          host.scheduleChatMemoryContextPrewarm({
+            sessionId,
+            prompt: finalText,
+            relationScope: "self",
+          });
+          host.scheduleMemoryMaintenancePostTurnEvaluation({
+            sessionId,
+            turnId,
+            delegatedChild: Boolean(prepared.parentDelegationStepId),
+          });
+          enqueueAgentEndHook(host, {
+            workspaceId: prepared.workspaceId,
+            sessionId,
+            turnId,
+            status: hydratedTrace.status,
+            toolRunCount: orchestrationToolRuns.length,
+            stream: true,
+            repaired: Boolean(hydratedTrace.completion?.repaired),
+            runId: orchestrationResult.summary.runId,
+            taskId: `chat-orchestration:${turnId}`,
+            providerId: hydratedTrace.routing?.effectiveProviderId ?? hydratedTrace.routing?.primaryProviderId,
+            model: hydratedTrace.routing?.effectiveModel ?? hydratedTrace.model,
+          });
         });
       }
-      host.scheduleChatMemoryContextPrewarm({
-        sessionId,
-        prompt: finalText,
-        relationScope: "self",
-      });
-      host.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
-      enqueueAgentEndHook(host, {
-        workspaceId: prepared.workspaceId,
-        sessionId,
-        turnId,
-        status: hydratedTrace.status,
-        toolRunCount: orchestrationToolRuns.length,
-        stream: true,
-        repaired: Boolean(hydratedTrace.completion?.repaired),
-        runId: orchestrationResult.summary.runId,
-        taskId: `chat-orchestration:${turnId}`,
-        providerId: hydratedTrace.routing?.effectiveProviderId ?? hydratedTrace.routing?.primaryProviderId,
-        model: hydratedTrace.routing?.effectiveModel ?? hydratedTrace.model,
-      });
       if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
         yield {
           type: "done",
@@ -1985,45 +2083,64 @@ export async function* streamPreparedAgentChatTurn(
     }));
     const historyWithSteers =
       drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
-    recordRuntimeDecision(host, {
-      kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
-      scope: {
-        workspaceId: prepared.workspaceId,
-        sessionId,
-        turnId,
+    recordRuntimeDecision(
+      host,
+      {
+        kind: prepared.modelRouterDecision.requiresTools ? "routing_choice" : "direct_answer",
+        scope: {
+          workspaceId: prepared.workspaceId,
+          sessionId,
+          turnId,
+        },
+        selected: prepared.modelRouterDecision.requiresTools
+          ? "Use direct tool-capable turn runtime"
+          : "Answer directly",
+        rationale:
+          prepared.modelRouterDecision.orchestration?.reason ??
+          "The turn did not enter the governed mode-orchestration workflow.",
+        alternatives: [
+          {
+            label: "Mode orchestration workflow",
+            outcome: "not_chosen",
+            reasonNotChosen:
+              prepared.modelRouterDecision.orchestration?.reason ??
+              "Router and preference signals did not require a multi-step workflow.",
+          },
+        ],
+        signals: [
+          { source: "routing", key: "mode", value: resolvePreparedTurnMode(prepared), weight: "strong" },
+          { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
+          { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
+          { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
+        ],
+        evidenceRefs: [{ refType: "turn", refId: turnId }],
       },
-      selected: prepared.modelRouterDecision.requiresTools ? "Use direct tool-capable turn runtime" : "Answer directly",
-      rationale:
-        prepared.modelRouterDecision.orchestration?.reason ??
-        "The turn did not enter the governed mode-orchestration workflow.",
-      alternatives: [
-        {
-          label: "Mode orchestration workflow",
-          outcome: "not_chosen",
-          reasonNotChosen:
-            prepared.modelRouterDecision.orchestration?.reason ??
-            "Router and preference signals did not require a multi-step workflow.",
-        },
-      ],
-      signals: [
-        { source: "routing", key: "mode", value: resolvePreparedTurnMode(prepared), weight: "strong" },
-        { source: "model_router", key: "route", value: prepared.modelRouterDecision.route, weight: "strong" },
-        { source: "model_router", key: "requires_tools", value: prepared.modelRouterDecision.requiresTools },
-        { source: "routing", key: "tool_autonomy", value: prepared.effectiveToolAutonomy },
-      ],
-      evidenceRefs: [{ refType: "turn", refId: turnId }],
-    });
+      canonicalWriteFence,
+    );
     for (const steerItem of drainedSteers) {
-      await host.ingestEvent(randomUUID(), {
-        eventId: randomUUID(),
-        route: prepared.route,
-        actor: { type: "user", id: "operator" },
-        message: {
-          role: "user",
-          content: steerItem.instruction,
-          steered: true,
+      let steerCommitted = false;
+      await host.ingestEvent(
+        randomUUID(),
+        {
+          eventId: randomUUID(),
+          route: prepared.route,
+          actor: { type: "user", id: "operator" },
+          message: {
+            role: "user",
+            content: steerItem.instruction,
+            steered: true,
+          },
         },
-      });
+        {
+          onCommit: () =>
+            canonicalWriteFence(() => {
+              steerCommitted = true;
+            }),
+        },
+      );
+      if (!steerCommitted) {
+        throw new Error(`Chat turn ${turnId} steer ingest skipped its canonical write fence.`);
+      }
     }
     for await (const chunk of runDirectTurnStreamWithSubagentFanout(
       host,
@@ -2037,6 +2154,7 @@ export async function* streamPreparedAgentChatTurn(
         localOperatorOverrideId: input.localOperatorOverrideId,
         policyContext: inputPolicyContext,
         fullWebAccess: input.fullWebAccess,
+        canonicalWriteFence,
       },
       () =>
         host.turnRuntime.runStream({
@@ -2070,6 +2188,7 @@ export async function* streamPreparedAgentChatTurn(
           historyMessages: historyWithSteers,
           modelRouter: prepared.modelRouterDecision,
           signal: controller.signal,
+          canonicalWriteFence,
         }),
     )) {
       if (chunk.type === "message_done" && chunk.content) {
@@ -2163,37 +2282,42 @@ export async function* streamPreparedAgentChatTurn(
     assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
     if (approvalRequired) {
-      host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-      host.publishRealtime(
-        "chat_thread_updated",
-        "chat",
-        {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        },
-        buildChatTurnRealtimeOptions({ sessionId, turnId }),
-      );
-      const traceWithMeta = host.storage.chatTurnTraces.patch(turnId, {
-        retrieval: prepared.retrievalTrace,
-        reflection: {
-          attempted: false,
-          attemptCount: 0,
-          outcome: "not_needed",
-        },
-        proactive: {
-          runId: prepared.autonomy.lastProactiveRunId,
-          mode: prepared.autonomy.proactiveMode,
-        },
-        guidance: {
-          workspaceId: prepared.workspaceId,
-          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-          truncated: prepared.resolvedGuidance.truncated,
-        },
-        citations: dedupeChatCitations(streamCitations),
+      const traceWithMeta = canonicalWriteFence(() => {
+        const trace = host.storage.chatTurnTraces.patch(turnId, {
+          retrieval: prepared.retrievalTrace,
+          reflection: {
+            attempted: false,
+            attemptCount: 0,
+            outcome: "not_needed",
+          },
+          proactive: {
+            runId: prepared.autonomy.lastProactiveRunId,
+            mode: prepared.autonomy.proactiveMode,
+          },
+          guidance: {
+            workspaceId: prepared.workspaceId,
+            globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+            workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+            truncated: prepared.resolvedGuidance.truncated,
+          },
+          citations: dedupeChatCitations(streamCitations),
+        });
+        host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+        return trace;
       });
+      if (!deferGeneralPostCommit) {
+        host.publishRealtime(
+          "chat_thread_updated",
+          "chat",
+          {
+            type: threadEventType,
+            sessionId,
+            turnId,
+            activeLeafTurnId: turnId,
+          },
+          buildChatTurnRealtimeOptions({ sessionId, turnId }),
+        );
+      }
       const approvalTraceBase: ChatTurnTraceRecord = {
         ...traceWithMeta,
         toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
@@ -2204,12 +2328,15 @@ export async function* streamPreparedAgentChatTurn(
         assistantText: finalText,
         trace: approvalTraceBase,
       });
+      canonicalWriteFence(() => undefined);
       const approvalTrace =
         capabilityUpgradeSuggestions.length > 0
           ? {
-              ...host.storage.chatTurnTraces.patch(turnId, {
-                capabilityUpgradeSuggestions,
-              }),
+              ...canonicalWriteFence(() =>
+                host.storage.chatTurnTraces.patch(turnId, {
+                  capabilityUpgradeSuggestions,
+                }),
+              ),
               toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
             }
           : approvalTraceBase;
@@ -2221,68 +2348,81 @@ export async function* streamPreparedAgentChatTurn(
           capabilityUpgradeSuggestions,
         };
       }
-      host.recordCapabilityGapFromTrace({
-        sessionId,
-        turnId,
-        content: prepared.content,
-        trace: approvalTrace,
-      });
+      if (!deferGeneralPostCommit) {
+        canonicalWriteFence(() =>
+          host.recordCapabilityGapFromTrace({
+            sessionId,
+            turnId,
+            content: prepared.content,
+            trace: approvalTrace,
+          }),
+        );
+      }
       yield {
         type: "trace_update",
         sessionId,
         turnId,
         trace: approvalTrace,
       };
-      enqueueAgentEndHook(host, {
-        workspaceId: prepared.workspaceId,
-        sessionId,
-        turnId,
-        status: approvalTrace.status,
-        toolRunCount: approvalTrace.toolRuns.length,
-        stream: true,
-        repaired: Boolean(approvalTrace.completion?.repaired),
-        runId: approvalTrace.durable?.runId,
-        approvalId: approvalTrace.toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
-        providerId: approvalTrace.routing?.effectiveProviderId ?? approvalTrace.routing?.primaryProviderId,
-        model: approvalTrace.routing?.effectiveModel ?? approvalTrace.model,
-      });
+      if (!deferGeneralPostCommit) {
+        canonicalWriteFence(() =>
+          enqueueAgentEndHook(host, {
+            workspaceId: prepared.workspaceId,
+            sessionId,
+            turnId,
+            status: approvalTrace.status,
+            toolRunCount: approvalTrace.toolRuns.length,
+            stream: true,
+            repaired: Boolean(approvalTrace.completion?.repaired),
+            runId: approvalTrace.durable?.runId,
+            approvalId: approvalTrace.toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
+            providerId: approvalTrace.routing?.effectiveProviderId ?? approvalTrace.routing?.primaryProviderId,
+            model: approvalTrace.routing?.effectiveModel ?? approvalTrace.model,
+          }),
+        );
+      }
       return;
     }
 
     if (userInputRequired && pendingUserInput) {
-      host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-      host.publishRealtime(
-        "chat_thread_updated",
-        "chat",
-        {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        },
-        buildChatTurnRealtimeOptions({ sessionId, turnId }),
-      );
-      const traceWithMeta = host.storage.chatTurnTraces.patch(turnId, {
-        status: "waiting_for_user_input",
-        pendingUserInput,
-        retrieval: prepared.retrievalTrace,
-        reflection: {
-          attempted: false,
-          attemptCount: 0,
-          outcome: "not_needed",
-        },
-        proactive: {
-          runId: prepared.autonomy.lastProactiveRunId,
-          mode: prepared.autonomy.proactiveMode,
-        },
-        guidance: {
-          workspaceId: prepared.workspaceId,
-          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-          truncated: prepared.resolvedGuidance.truncated,
-        },
-        citations: dedupeChatCitations(streamCitations),
+      const traceWithMeta = canonicalWriteFence(() => {
+        const trace = host.storage.chatTurnTraces.patch(turnId, {
+          status: "waiting_for_user_input",
+          pendingUserInput,
+          retrieval: prepared.retrievalTrace,
+          reflection: {
+            attempted: false,
+            attemptCount: 0,
+            outcome: "not_needed",
+          },
+          proactive: {
+            runId: prepared.autonomy.lastProactiveRunId,
+            mode: prepared.autonomy.proactiveMode,
+          },
+          guidance: {
+            workspaceId: prepared.workspaceId,
+            globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+            workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+            truncated: prepared.resolvedGuidance.truncated,
+          },
+          citations: dedupeChatCitations(streamCitations),
+        });
+        host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+        return trace;
       });
+      if (!deferGeneralPostCommit) {
+        host.publishRealtime(
+          "chat_thread_updated",
+          "chat",
+          {
+            type: threadEventType,
+            sessionId,
+            turnId,
+            activeLeafTurnId: turnId,
+          },
+          buildChatTurnRealtimeOptions({ sessionId, turnId }),
+        );
+      }
       const userInputTrace: ChatTurnTraceRecord = {
         ...traceWithMeta,
         toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
@@ -2293,18 +2433,22 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace: userInputTrace,
       };
-      enqueueAgentEndHook(host, {
-        workspaceId: prepared.workspaceId,
-        sessionId,
-        turnId,
-        status: userInputTrace.status,
-        toolRunCount: userInputTrace.toolRuns.length,
-        stream: true,
-        repaired: Boolean(userInputTrace.completion?.repaired),
-        runId: userInputTrace.durable?.runId,
-        providerId: userInputTrace.routing?.effectiveProviderId ?? userInputTrace.routing?.primaryProviderId,
-        model: userInputTrace.routing?.effectiveModel ?? userInputTrace.model,
-      });
+      if (!deferGeneralPostCommit) {
+        canonicalWriteFence(() =>
+          enqueueAgentEndHook(host, {
+            workspaceId: prepared.workspaceId,
+            sessionId,
+            turnId,
+            status: userInputTrace.status,
+            toolRunCount: userInputTrace.toolRuns.length,
+            stream: true,
+            repaired: Boolean(userInputTrace.completion?.repaired),
+            runId: userInputTrace.durable?.runId,
+            providerId: userInputTrace.routing?.effectiveProviderId ?? userInputTrace.routing?.primaryProviderId,
+            model: userInputTrace.routing?.effectiveModel ?? userInputTrace.model,
+          }),
+        );
+      }
       return;
     }
 
@@ -2374,21 +2518,26 @@ export async function* streamPreparedAgentChatTurn(
         },
         {
           onCommit: () => {
-            committedTrace = patchChatTurnTraceIfStatus(
-              chatTurnTraces,
-              turnId,
-              completionOwnerStatuses,
-              completionPatch,
-            );
+            committedTrace = canonicalWriteFence(() => {
+              const trace = patchChatTurnTraceIfStatus(
+                chatTurnTraces,
+                turnId,
+                completionOwnerStatuses,
+                completionPatch,
+              );
+              host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+              return trace;
+            });
           },
         },
       );
-      committedTrace ??= patchChatTurnTraceIfStatus(chatTurnTraces, turnId, completionOwnerStatuses, completionPatch);
+      if (!committedTrace) {
+        throw new Error(`Chat turn ${turnId} assistant ingest did not execute its canonical completion commit.`);
+      }
       let hydratedTrace: ChatTurnTraceRecord = {
         ...committedTrace,
         toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
       };
-      host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
       yield {
         type: "message_done",
         sessionId,
@@ -2404,20 +2553,25 @@ export async function* streamPreparedAgentChatTurn(
         assistantText: finalText,
         trace: hydratedTrace,
       });
-      const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
-        sessionId,
-        mode: resolvePreparedTurnMode(prepared),
-        content: prepared.content,
-        capabilitySuggestions: capabilityUpgradeSuggestions,
-        trace: hydratedTrace,
-      });
+      canonicalWriteFence(() => undefined);
+      const specialistCandidateSuggestions = canonicalWriteFence(() =>
+        host.collectSpecialistCandidateSuggestions({
+          sessionId,
+          mode: resolvePreparedTurnMode(prepared),
+          content: prepared.content,
+          capabilitySuggestions: capabilityUpgradeSuggestions,
+          trace: hydratedTrace,
+        }),
+      );
       if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
         hydratedTrace = {
-          ...host.storage.chatTurnTraces.patch(turnId, {
-            capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-            specialistCandidateSuggestions:
-              specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-          }),
+          ...canonicalWriteFence(() =>
+            host.storage.chatTurnTraces.patch(turnId, {
+              capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
+              specialistCandidateSuggestions:
+                specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
+            }),
+          ),
           toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
         };
         if (capabilityUpgradeSuggestions.length > 0) {
@@ -2429,83 +2583,103 @@ export async function* streamPreparedAgentChatTurn(
           };
         }
       }
-      host.recordCapabilityGapFromTrace({
-        sessionId,
-        turnId,
-        content: prepared.content,
-        trace: hydratedTrace,
-      });
+      if (!deferGeneralPostCommit) {
+        canonicalWriteFence(() =>
+          host.recordCapabilityGapFromTrace({
+            sessionId,
+            turnId,
+            content: prepared.content,
+            trace: hydratedTrace,
+          }),
+        );
+      }
       yield {
         type: "trace_update",
         sessionId,
         turnId,
         trace: hydratedTrace,
       };
-      host.publishRealtime(
-        "chat_thread_updated",
-        "chat",
-        {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        },
-        buildChatTurnRealtimeOptions({ sessionId, turnId }),
-      );
-      host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-        role: "user",
-        sourceRef: prepared.userEventId,
-        trace: hydratedTrace,
-      });
-      host.extractAndPersistLearnedMemory(sessionId, finalText, {
-        role: "assistant",
-        sourceRef: assistantMessageId,
-        trace: hydratedTrace,
-      });
-      // P1-F3: infer future follow-up check-ins from a successful turn (durable
-      // streaming path). Fire-and-forget beside learned-memory; host guards apply.
-      // Autonomous self-wake turns are excluded (no self-feeding loop on output).
-      if (hydratedTrace.status === "completed") {
-        const autonomousTurn = isAutonomousTurnRequest(input);
-        host.recordTurnCommitments({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          userText: prepared.content,
-          assistantText: finalText,
-          autonomous: autonomousTurn,
-        });
-        // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
-        // gates on master autonomy / eval-integrity / non-human + the turn counter.
-        host.scheduleBackgroundReviewIfDue({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          userText: prepared.content,
-          assistantText: finalText,
-          parentTurnId: prepared.parentTurnId,
-          autonomous: autonomousTurn,
+      if (!deferGeneralPostCommit) {
+        canonicalWriteFence(() => {
+          host.publishRealtime(
+            "chat_thread_updated",
+            "chat",
+            {
+              type: threadEventType,
+              sessionId,
+              turnId,
+              activeLeafTurnId: turnId,
+            },
+            buildChatTurnRealtimeOptions({ sessionId, turnId }),
+          );
+          host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
+            role: "user",
+            sourceRef: prepared.userEventId,
+            trace: hydratedTrace,
+          });
+          host.extractAndPersistLearnedMemory(sessionId, finalText, {
+            role: "assistant",
+            sourceRef: assistantMessageId,
+            trace: hydratedTrace,
+          });
+          // P1-F3: infer future follow-up check-ins from a successful turn (durable
+          // streaming path). Fire-and-forget beside learned-memory; host guards apply.
+          // Autonomous self-wake turns are excluded (no self-feeding loop on output).
+          if (hydratedTrace.status === "completed") {
+            const autonomousTurn = isAutonomousTurnRequest(input);
+            const delegatedChild = Boolean(prepared.parentDelegationStepId);
+            host.recordTurnCommitments({
+              sessionId,
+              workspaceId: prepared.workspaceId,
+              userText: prepared.content,
+              assistantText: finalText,
+              autonomous: autonomousTurn,
+            });
+            // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
+            // gates on master autonomy / eval-integrity / non-human + the turn counter.
+            host.scheduleBackgroundReviewIfDue({
+              sessionId,
+              workspaceId: prepared.workspaceId,
+              turnId,
+              userText: prepared.content,
+              assistantText: finalText,
+              delegatedChild,
+              autonomous: autonomousTurn,
+            });
+          }
+          host.scheduleChatMemoryContextPrewarm({
+            sessionId,
+            prompt: finalText,
+            relationScope: "self",
+          });
+          host.scheduleMemoryMaintenancePostTurnEvaluation({
+            sessionId,
+            turnId,
+            delegatedChild: Boolean(prepared.parentDelegationStepId),
+          });
         });
       }
-      host.scheduleChatMemoryContextPrewarm({
-        sessionId,
-        prompt: finalText,
-        relationScope: "self",
-      });
-      host.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
     }
 
-    const completedTrace = host.storage.chatTurnTraces.get(turnId);
-    enqueueAgentEndHook(host, {
-      workspaceId: prepared.workspaceId,
-      sessionId,
-      turnId,
-      status: completedTrace.status,
-      toolRunCount: host.storage.chatToolRuns.listByTurn(turnId).length,
-      stream: true,
-      repaired: Boolean(completedTrace.completion?.repaired),
-      runId: completedTrace.durable?.runId,
-      approvalId: host.storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.approvalId)?.approvalId,
-      providerId: completedTrace.routing?.effectiveProviderId ?? completedTrace.routing?.primaryProviderId,
-      model: completedTrace.routing?.effectiveModel ?? completedTrace.model,
+    const completedTrace = canonicalWriteFence(() => {
+      const trace = host.storage.chatTurnTraces.get(turnId);
+      const toolRuns = host.storage.chatToolRuns.listByTurn(turnId);
+      if (!deferGeneralPostCommit) {
+        enqueueAgentEndHook(host, {
+          workspaceId: prepared.workspaceId,
+          sessionId,
+          turnId,
+          status: trace.status,
+          toolRunCount: toolRuns.length,
+          stream: true,
+          repaired: Boolean(trace.completion?.repaired),
+          runId: trace.durable?.runId,
+          approvalId: toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
+          providerId: trace.routing?.effectiveProviderId ?? trace.routing?.primaryProviderId,
+          model: trace.routing?.effectiveModel ?? trace.model,
+        });
+      }
+      return trace;
     });
     if (completedTrace.completion?.status === "complete") {
       yield {
@@ -2516,6 +2690,10 @@ export async function* streamPreparedAgentChatTurn(
       };
     }
   } catch (error) {
+    const durableControlReason = readDurableControlReason(controller.signal, error);
+    if (durableControlReason) {
+      throw durableControlReason;
+    }
     if (controller.signal.aborted || isChatTurnCancelledError(error)) {
       const trace = host.markChatTurnCancelled(sessionId, turnId);
       yield {
@@ -2524,21 +2702,23 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace,
       };
-      enqueueAgentEndHook(host, {
-        workspaceId: prepared.workspaceId,
-        sessionId,
-        turnId,
-        status: trace.status,
-        toolRunCount: trace.toolRuns?.length ?? host.storage.chatToolRuns.listByTurn(turnId).length,
-        stream: true,
-        repaired: Boolean(trace.completion?.repaired),
-        runId: trace.durable?.runId,
-        approvalId:
-          trace.toolRuns?.find((toolRun) => toolRun.approvalId)?.approvalId ??
-          host.storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.approvalId)?.approvalId,
-        providerId: trace.routing?.effectiveProviderId ?? trace.routing?.primaryProviderId,
-        model: trace.routing?.effectiveModel ?? trace.model,
-      });
+      if (!deferGeneralPostCommit) {
+        enqueueAgentEndHook(host, {
+          workspaceId: prepared.workspaceId,
+          sessionId,
+          turnId,
+          status: trace.status,
+          toolRunCount: trace.toolRuns?.length ?? host.storage.chatToolRuns.listByTurn(turnId).length,
+          stream: true,
+          repaired: Boolean(trace.completion?.repaired),
+          runId: trace.durable?.runId,
+          approvalId:
+            trace.toolRuns?.find((toolRun) => toolRun.approvalId)?.approvalId ??
+            host.storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.approvalId)?.approvalId,
+          providerId: trace.routing?.effectiveProviderId ?? trace.routing?.primaryProviderId,
+          model: trace.routing?.effectiveModel ?? trace.model,
+        });
+      }
       return;
     }
     throw error;
@@ -2547,6 +2727,20 @@ export async function* streamPreparedAgentChatTurn(
     host.steerService?.unregisterActiveTurn?.({ sessionId, turnId });
     host.endActiveChatTurnExecution(turnId, controller);
   }
+}
+
+function readDurableControlReason(signal: AbortSignal, error: unknown): Error | undefined {
+  const candidate = signal.aborted ? signal.reason : error;
+  return isDurableControlError(candidate) ? candidate : undefined;
+}
+
+function isDurableControlError(candidate: unknown): candidate is Error {
+  return (
+    candidate instanceof Error &&
+    (candidate.name === "DurableWorkerInterruptionError" ||
+      candidate.name === "DurableRunPausedError" ||
+      candidate.name === "DurableRunCancelledError")
+  );
 }
 
 function assertChatStreamCompletionWritable(

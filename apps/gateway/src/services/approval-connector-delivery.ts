@@ -41,7 +41,13 @@ export function enqueueApprovalRemoteTokenConnectorDelivery(
     });
     if (!payload) {
       if (tokenRef) {
-        runtime.tokenSecrets.delete(tokenRef);
+        try {
+          runtime.tokenSecrets.delete(tokenRef);
+        } catch {
+          // Token issuance already committed before connector fan-out. Leave
+          // the orphaned keychain value for expiry reconciliation instead of
+          // turning a benign no-delivery result into a failed issuance.
+        }
       }
       return undefined;
     }
@@ -62,7 +68,11 @@ export function enqueueApprovalRemoteTokenConnectorDelivery(
       },
     });
   } catch (error) {
-    if (tokenRef) {
+    const committedRun = readCommittedDurableRun(error);
+    if (committedRun) {
+      return committedRun;
+    }
+    if (tokenRef && !isCommittedMutationError(error)) {
       try {
         runtime.tokenSecrets.delete(tokenRef);
       } catch {
@@ -72,6 +82,33 @@ export function enqueueApprovalRemoteTokenConnectorDelivery(
     }
     throw error;
   }
+}
+
+function isCommittedMutationError(error: unknown): error is { mutationCommitted: true } {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "mutationCommitted" in error &&
+    (error as { mutationCommitted?: unknown }).mutationCommitted === true
+  );
+}
+
+function readCommittedDurableRun(error: unknown): DurableRunRecord | undefined {
+  if (!isCommittedMutationError(error)) {
+    return undefined;
+  }
+  const durableRun =
+    "durableRun" in error
+      ? (error as { durableRun?: unknown }).durableRun
+      : "canonicalResult" in error
+        ? (error as { canonicalResult?: unknown }).canonicalResult
+        : undefined;
+  return durableRun !== null &&
+    typeof durableRun === "object" &&
+    "runId" in durableRun &&
+    typeof (durableRun as { runId?: unknown }).runId === "string"
+    ? (durableRun as DurableRunRecord)
+    : undefined;
 }
 
 export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
@@ -192,7 +229,7 @@ export function hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
   rawToken: string,
 ): ConnectorDeliveryWorkflowPayload {
   const token = rawToken.trim();
-  if (!/^grat_[A-Za-z0-9_-]{16,}$/.test(token)) {
+  if (!/^grat_[A-Za-z0-9_-]{43}$/.test(token)) {
     throw new Error("Approval remote-action token is unavailable or invalid.");
   }
   const actionPayload = payload.payload ?? {};

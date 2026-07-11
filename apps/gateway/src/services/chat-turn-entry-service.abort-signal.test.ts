@@ -236,7 +236,12 @@ describe("agentSendChatMessage abort signal coverage", () => {
           createBinding(),
           "chat_thread_turn_appended",
         ),
-      ).rejects.toThrow(/external delivery may already be committed/i);
+      ).rejects.toMatchObject({
+        name: "IntegrationDeliveryPostCommitError",
+        mutationCommitted: true,
+        turnId: "turn-1",
+        message: expect.stringMatching(/integration delivery.*committed/i),
+      });
 
       expect(host.ingestEvent).not.toHaveBeenCalled();
       expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(

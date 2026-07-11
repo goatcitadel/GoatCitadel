@@ -81,6 +81,7 @@ export interface ApprovalEffectsServiceDeps {
     payload: Record<string, unknown>;
   }): void;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
+  recordDurableTimelineEvent?(runId: string, eventType: "run_completed", payload?: Record<string, unknown>): void;
   recordApprovalResolutionSignals?(approval: ApprovalRequest): void;
   materializeApprovalWaitRun?(approvalId: string): DurableRunRecord | undefined;
   reconcileExpiredApprovals?(limit: number): number;
@@ -105,6 +106,7 @@ export interface ApprovalEffectsServiceContext {
     | "chatExecutionPlans"
     | "chatTurnTraces"
     | "durableRuns"
+    | "runImmediateTransaction"
     | "orchestration"
     | "audit"
   >;
@@ -1421,8 +1423,16 @@ export class ApprovalEffectsService {
     if (isTerminalDurableRunStatus(run.status)) {
       return run.status;
     }
-    if (!isTerminalDurableRunStatus(run.status)) {
-      try {
+    if (run.status !== "waiting") {
+      return run.status;
+    }
+    let completed = false;
+    try {
+      runApprovalEffectTransaction(this.ctx.storage, () => {
+        const latest = this.ctx.storage.durableRuns.getRun(runId);
+        if (latest.status !== "waiting") {
+          return;
+        }
         this.ctx.storage.durableRuns.updateRun({
           runId,
           status: "completed",
@@ -1430,31 +1440,32 @@ export class ApprovalEffectsService {
           finishedAt: input.now,
           clearLease: true,
           clearLastError: true,
-          expectedVersion: run.version,
+          expectedVersion: latest.version,
           metadata: {
-            ...(run.metadata ?? {}),
+            ...(latest.metadata ?? {}),
             outputText: input.outputText,
             finalOutput: input.outputText,
             outputSummary: summarizeText(input.outputText),
             finalSummary: summarizeText(input.outputText),
           },
         });
-      } catch (error) {
-        const latest = this.ctx.storage.durableRuns.getRun(runId);
-        if (isTerminalDurableRunStatus(latest.status)) {
-          return latest.status;
-        }
-        throw error;
-      }
-      this.ctx.storage.durableRuns.createCheckpoint({
-        runId,
-        checkpointKind: "run_completed",
-        state: input.checkpointState,
-        createdAt: input.now,
+        this.ctx.storage.durableRuns.createCheckpoint({
+          runId,
+          checkpointKind: "run_completed",
+          state: input.checkpointState,
+          createdAt: input.now,
+        });
+        this.deps.recordDurableTimelineEvent?.(runId, "run_completed", input.checkpointState);
+        completed = true;
       });
-      return "completed";
+    } catch (error) {
+      const latest = this.ctx.storage.durableRuns.getRun(runId);
+      if (isTerminalDurableRunStatus(latest.status)) {
+        return latest.status;
+      }
+      throw error;
     }
-    return run.status;
+    return completed ? "completed" : this.ctx.storage.durableRuns.getRun(runId).status;
   }
 
   private materializeDelegationParentsFromApprovedChild(input: {
@@ -2001,6 +2012,17 @@ export class ApprovalEffectsService {
 
     return undefined;
   }
+}
+
+function runApprovalEffectTransaction<T>(storage: ApprovalEffectsServiceContext["storage"], callback: () => T): T {
+  const transaction = (storage as { runImmediateTransaction?: <R>(work: () => R) => R }).runImmediateTransaction;
+  if (transaction) {
+    return transaction(callback);
+  }
+  if (process.env.NODE_ENV === "test") {
+    return callback();
+  }
+  throw new Error("Approval effect durable completion is missing immediate transaction ownership");
 }
 
 function isExpiredApprovalRequest(approval: ApprovalRequest): boolean {

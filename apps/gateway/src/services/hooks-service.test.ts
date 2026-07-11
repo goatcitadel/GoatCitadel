@@ -247,11 +247,12 @@ describe("HooksService", () => {
 
   it("queues after hooks and signs outbound delivery with an idempotency header", async () => {
     let capturedHeaders: Headers | undefined;
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
     const { service, workspaceId, requestedRunIds } = createHarness({
-      fetchImpl: async (_url, init) => {
-        capturedHeaders = new Headers(init?.headers);
-        return new Response(JSON.stringify({}), { status: 200 });
-      },
+      fetchImpl,
     });
 
     service.createWorkspaceHook({
@@ -284,7 +285,10 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([queued[0]?.durableRunId]);
 
     const delivered = await service.executeHookDelivery(queued[0]!.runId, 1);
+    const recovered = await service.executeHookDelivery(queued[0]!.runId, 2);
     expect(delivered.status).toBe("completed");
+    expect(recovered.status).toBe("completed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(capturedHeaders?.get("x-goatcitadel-idempotency-key")).toBeTruthy();
     expect(capturedHeaders?.get("x-goatcitadel-signature")).toMatch(/^sha256=/);
   });
@@ -327,7 +331,106 @@ describe("HooksService", () => {
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(1);
     expect(second[0]?.runId).toBe(first[0]?.runId);
+    expect(first[0]?.idempotencyKey).toBe("tool.call.after:tool_call:tool-after-dedupe");
     expect(requestedRunIds).toEqual([first[0]?.durableRunId, first[0]?.durableRunId]);
+  });
+
+  it("deduplicates agent-end retries per semantic status without suppressing pause-to-complete progression", () => {
+    const { service, workspaceId, requestedRunIds } = createHarness();
+
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "agent-end-lifecycle",
+      trigger: "agent_end",
+      mode: "observe",
+      action: {
+        type: "webhook",
+        webhook: {
+          url: "https://hooks.example.test/agent-end-lifecycle",
+        },
+      },
+    });
+
+    const enqueue = (status: "waiting_for_approval" | "completed") =>
+      service.enqueueAfterHooks({
+        workspaceId,
+        trigger: "agent_end",
+        entityType: "chat_turn",
+        entityId: "turn-agent-end-lifecycle",
+        idempotencyDiscriminator: status,
+        payload: { status },
+      });
+
+    const waiting = enqueue("waiting_for_approval");
+    const waitingRetry = enqueue("waiting_for_approval");
+    const completed = enqueue("completed");
+    const completedRetry = enqueue("completed");
+
+    expect(waitingRetry[0]?.runId).toBe(waiting[0]?.runId);
+    expect(completedRetry[0]?.runId).toBe(completed[0]?.runId);
+    expect(completed[0]?.runId).not.toBe(waiting[0]?.runId);
+    expect(waiting[0]?.durableRunId).not.toBe(completed[0]?.durableRunId);
+    expect(waiting[0]?.idempotencyKey).toBe("agent_end:chat_turn:turn-agent-end-lifecycle:waiting_for_approval");
+    expect(completed[0]?.idempotencyKey).toBe("agent_end:chat_turn:turn-agent-end-lifecycle:completed");
+    expect(requestedRunIds).toEqual([
+      waiting[0]?.durableRunId,
+      waiting[0]?.durableRunId,
+      completed[0]?.durableRunId,
+      completed[0]?.durableRunId,
+    ]);
+  });
+
+  it("delivers overlapping agent-end statuses without treating semantic progression as recursion", async () => {
+    let releaseWaiting!: () => void;
+    let markWaitingStarted!: () => void;
+    const waitingStarted = new Promise<void>((resolve) => {
+      markWaitingStarted = resolve;
+    });
+    const waitingGate = new Promise<void>((resolve) => {
+      releaseWaiting = resolve;
+    });
+    let callCount = 0;
+    const fetchImpl = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        markWaitingStarted();
+        await waitingGate;
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    const { service, workspaceId } = createHarness({ fetchImpl });
+
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "agent-end-overlap",
+      trigger: "agent_end",
+      mode: "observe",
+      action: {
+        type: "webhook",
+        webhook: { url: "https://hooks.example.test/agent-end-overlap" },
+      },
+    });
+    const enqueue = (status: "waiting_for_approval" | "completed") =>
+      service.enqueueAfterHooks({
+        workspaceId,
+        trigger: "agent_end",
+        entityType: "chat_turn",
+        entityId: "turn-agent-end-overlap",
+        idempotencyDiscriminator: status,
+        payload: { status },
+      })[0]!;
+    const waiting = enqueue("waiting_for_approval");
+    const completed = enqueue("completed");
+
+    const waitingDelivery = service.executeHookDelivery(waiting.runId, 1);
+    await waitingStarted;
+    const completedDelivery = await service.executeHookDelivery(completed.runId, 1);
+    releaseWaiting();
+    const waitingResult = await waitingDelivery;
+
+    expect(waitingResult.status).toBe("completed");
+    expect(completedDelivery.status).toBe("completed");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("aborts durable hook delivery without dead-lettering the hook run", async () => {
@@ -367,6 +470,64 @@ describe("HooksService", () => {
 
     await expect(runPromise).rejects.toThrow("lease lost");
     expect(service.listWorkspaceHookRuns(workspaceId)[0]?.status).toBe("running");
+  });
+
+  it("keeps a delivered hook completed when realtime projection fails", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    const { service, workspaceId } = createHarness({
+      fetchImpl,
+      publishRealtime: (eventType) => {
+        if (eventType === "hook_run_updated") {
+          throw new Error("retained stream unavailable");
+        }
+      },
+    });
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "after-commit-truth",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-commit-truth" } },
+    });
+    const [queued] = service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-after-commit-truth",
+      payload: { toolName: "shell.exec" },
+    });
+
+    await expect(service.executeHookDelivery(queued!.runId, 1)).resolves.toMatchObject({ status: "completed" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(service.listWorkspaceHookRuns(workspaceId)[0]?.status).toBe("completed");
+  });
+
+  it("records returned webhook success despite a late lease abort", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => {
+      controller.abort(new Error("lease expired after remote commit"));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    const { service, workspaceId } = createHarness({ fetchImpl });
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "after-late-abort",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/after-late-abort" } },
+    });
+    const [queued] = service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-after-late-abort",
+      payload: { toolName: "shell.exec" },
+    });
+
+    await expect(service.executeHookDelivery(queued!.runId, 1, { signal: controller.signal })).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("rejects hook creation for unknown workspaces even in observe mode", () => {
@@ -568,6 +729,7 @@ function createHarness(input?: {
   workspacePrefs?: Record<string, unknown>;
   fetchImpl?: typeof fetch;
   durableKernelEnabled?: boolean;
+  publishRealtime?: ServiceContext["publishRealtime"];
 }) {
   const workspaceId = "ws_test";
   const workspace: WorkspaceRecord = {
@@ -764,7 +926,7 @@ function createHarness(input?: {
     llmService: {} as never,
     policyEngine: {} as never,
     gatewaySql: {} as never,
-    publishRealtime: () => undefined,
+    publishRealtime: input?.publishRealtime ?? (() => undefined),
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: (flag) => (flag === "durableKernelV1Enabled" ? (input?.durableKernelEnabled ?? true) : true),
     normalizeWorkspaceId: (value?: string) => value?.trim() || workspaceId,

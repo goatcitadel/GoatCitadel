@@ -7,6 +7,7 @@
  */
 
 import {
+  CHAT_TURN_ACTIVE_STATUSES,
   type ChannelSendInput,
   type ChannelActivityInput,
   type ChannelActivityResult,
@@ -35,6 +36,9 @@ import {
   type ProactiveRunRecord,
   type RealtimeEvent,
   type ToolInvokeResult,
+  isChatTurnTerminalStatus,
+  isDurableRunTerminal,
+  redactStructuredSecrets,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
@@ -43,20 +47,38 @@ import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
+import { enqueueAgentEndHook } from "./chat-turn-stream-events.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
 import type { CuratorService } from "./curator-service.js";
+import {
+  hasAutonomousChatPostCommitPending,
+  type GeneralChatPostCommitEffect,
+  type GeneralChatPostCommitProgress,
+} from "./chat-durable-run-service.js";
 import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import {
   type IdempotentExternalSideEffectRunInput,
   type ExternalSideEffectReplayWorkerResult,
+  runIdempotentExternalSideEffect,
   runReplaySafeExternalSideEffectWorker,
 } from "./external-side-effect-runner-service.js";
 
 type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
-  Pick<Storage, "approvals" | "audit" | "chatMessages" | "externalSideEffectRuns" | "remoteActionTokens">;
+  Pick<
+    Storage,
+    | "approvals"
+    | "audit"
+    | "chatMessages"
+    | "externalSideEffectRuns"
+    | "mutationIdempotency"
+    | "remoteActionTokens"
+    | "runImmediateTransaction"
+  >;
 
 /** Channel routing recorded on an autonomous turn's `metadata.autonomous`. */
 export interface AutonomousTurnDeliveryChannel {
@@ -99,6 +121,10 @@ export interface SilentHeartbeatCleanupRequest {
   /** Active leaf to revert to (the leaf before the heartbeat seed turn). */
   parentTurnId?: string;
 }
+
+export type SilentHeartbeatCleanupResult =
+  | { status: "completed" | "already_completed" | "not_required" }
+  | { status: "manual_reconciliation" | "retryable_failure"; reason: string };
 
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
@@ -148,7 +174,9 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
    * transactional storage). Called only when a `kind:"heartbeat"` turn does not
    * notify, so heartbeats stay invisible unless they surface to the user.
    */
-  cleanupSilentHeartbeatTurn?(input: SilentHeartbeatCleanupRequest): void;
+  cleanupSilentHeartbeatTurn?(input: SilentHeartbeatCleanupRequest): SilentHeartbeatCleanupResult;
+  reconcileAutonomousChatPostCommit?(runId: string): Promise<boolean>;
+  reconcileGeneralChatPostCommit?(runId: string): Promise<boolean>;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
@@ -213,6 +241,8 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "persistChatStreamChunk"
     | "enqueueAutonomousChannelDelivery"
     | "cleanupSilentHeartbeatTurn"
+    | "reconcileAutonomousChatPostCommit"
+    | "reconcileGeneralChatPostCommit"
   >;
 
 type DurableProactiveTickWorkflowHost = Pick<
@@ -253,9 +283,8 @@ type DurableExternalSideEffectReplayWorkflowHost = DurableWorkflowCompletionHost
   ): IdempotentExternalSideEffectRunInput<Record<string, unknown>> | undefined;
 };
 
-type DurableCuratorTickWorkflowHost = {
+type DurableCuratorTickWorkflowHost = DurableWorkflowCompletionHost & {
   curatorService: Pick<CuratorService, "executeDurableCuratorTickRun">;
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
 };
 
 export interface DurableWorkflowExecutorHosts {
@@ -577,7 +606,7 @@ export function buildDurableWorkflowExecutors(
         throwIfDurableWorkflowAborted(context);
         completeDurableWorkflowRun(
           hosts.memoryMaintenance,
-          run.runId,
+          run,
           await hosts.memoryMaintenance.memoryLifecycleService.executeMaintenanceDurableRun(run, context),
         );
       },
@@ -587,17 +616,7 @@ export function buildDurableWorkflowExecutors(
           : { recoverable: false, reason: "Durable memory maintenance payload is invalid or incomplete." },
       markUnrecoverable: async (run, reason) => {
         hosts.memoryMaintenance.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-        hosts.memoryMaintenance.publishRealtime(
-          "system",
-          "durable",
-          {
-            type: "durable_workflow_unrecoverable",
-            runId: run.runId,
-            workflowKey: run.workflowKey,
-            reason,
-          },
-          buildDurableRealtimeOptions({ runId: run.runId }),
-        );
+        publishUnrecoverableProjectionSafely(hosts.memoryMaintenance, run, reason, { runId: run.runId });
       },
     },
     "chat.turn.execute": {
@@ -617,18 +636,20 @@ export function buildDurableWorkflowExecutors(
       markUnrecoverable: (run, reason) => markDurableProactiveTickUnrecoverable(hosts.proactiveTick, run, reason),
     },
     "curator.tick": {
-      execute: (run, context) => hosts.curatorTick.curatorService.executeDurableCuratorTickRun(run, context),
+      execute: async (run, context) => {
+        await hosts.curatorTick.curatorService.executeDurableCuratorTickRun(run, context);
+        completeDurableWorkflowRun(hosts.curatorTick, run, {
+          workflow: "curator.tick",
+          status: "completed",
+          completedAt: new Date().toISOString(),
+        });
+      },
       isRecoverable: (run) =>
         parseCuratorTickWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable curator tick payload is invalid or incomplete." },
       markUnrecoverable: async (run, reason) => {
-        hosts.curatorTick.publishRealtime("system", "durable", {
-          type: "durable_workflow_unrecoverable",
-          runId: run.runId,
-          workflowKey: run.workflowKey,
-          reason,
-        });
+        publishUnrecoverableProjectionSafely(hosts.curatorTick, run, reason, { runId: run.runId });
       },
     },
     "approval.wait": {
@@ -638,20 +659,10 @@ export function buildDurableWorkflowExecutors(
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable approval wait payload is invalid or incomplete." },
       markUnrecoverable: async (run, reason) => {
-        hosts.approvalWait.publishRealtime(
-          "system",
-          "durable",
-          {
-            type: "durable_workflow_unrecoverable",
-            runId: run.runId,
-            workflowKey: run.workflowKey,
-            reason,
-          },
-          buildDurableRealtimeOptions({
-            runId: run.runId,
-            approvalId: parseApprovalWaitWorkflowPayload(run)?.approvalId,
-          }),
-        );
+        publishUnrecoverableProjectionSafely(hosts.approvalWait, run, reason, {
+          runId: run.runId,
+          approvalId: parseApprovalWaitWorkflowPayload(run)?.approvalId,
+        });
       },
     },
     "connector.delivery": {
@@ -661,20 +672,10 @@ export function buildDurableWorkflowExecutors(
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." },
       markUnrecoverable: async (run, reason) => {
-        hosts.connectorDelivery.publishRealtime(
-          "system",
-          "durable",
-          {
-            type: "durable_workflow_unrecoverable",
-            runId: run.runId,
-            workflowKey: run.workflowKey,
-            reason,
-          },
-          buildDurableRealtimeOptions({
-            runId: run.runId,
-            connectorId: parseConnectorDeliveryWorkflowPayload(run)?.connectorId,
-          }),
-        );
+        publishUnrecoverableProjectionSafely(hosts.connectorDelivery, run, reason, {
+          runId: run.runId,
+          connectorId: parseConnectorDeliveryWorkflowPayload(run)?.connectorId,
+        });
       },
     },
     "hook.delivery": {
@@ -693,51 +694,27 @@ export function buildDurableWorkflowExecutors(
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable external side-effect replay payload is invalid or incomplete." },
       markUnrecoverable: async (run, reason) => {
-        hosts.externalSideEffectReplay.publishRealtime(
-          "system",
-          "durable",
-          {
-            type: "durable_workflow_unrecoverable",
-            runId: run.runId,
-            workflowKey: run.workflowKey,
-            reason,
-          },
-          buildDurableRealtimeOptions({
-            runId: run.runId,
-          }),
-        );
+        publishUnrecoverableProjectionSafely(hosts.externalSideEffectReplay, run, reason, { runId: run.runId });
       },
     },
     "orchestration.plan.execute": {
       execute: async (run, context) => {
         const result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
         if (result.outcome === "failed") {
-          failDurableWorkflowRun(hosts.orchestration, run.runId, result.checkpointState);
+          failDurableWorkflowRun(hosts.orchestration, run, result.checkpointState);
           return;
         }
         if (result.outcome === "paused" || result.outcome === "cancelled") {
           return;
         }
-        completeDurableWorkflowRun(hosts.orchestration, run.runId, result.checkpointState);
+        completeDurableWorkflowRun(hosts.orchestration, run, result.checkpointState);
       },
       isRecoverable: (run) =>
         parseOrchestrationWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable orchestration payload is invalid or incomplete." },
       markUnrecoverable: async (run, reason) => {
-        hosts.orchestration.publishRealtime(
-          "system",
-          "durable",
-          {
-            type: "durable_workflow_unrecoverable",
-            runId: run.runId,
-            workflowKey: run.workflowKey,
-            reason,
-          },
-          buildDurableRealtimeOptions({
-            runId: run.runId,
-          }),
-        );
+        publishUnrecoverableProjectionSafely(hosts.orchestration, run, reason, { runId: run.runId });
       },
     },
   };
@@ -756,6 +733,11 @@ function buildDurableWorkflowExecutorsFromExecutionHost(
     orchestration: host,
     externalSideEffectReplay: host,
     curatorTick: {
+      storage: host.storage,
+      recordDurableTimelineEvent: (runId, eventType, payload) =>
+        host.recordDurableTimelineEvent(runId, eventType, payload),
+      recordImprovementDurableRunCompletion: (run, checkpointState) =>
+        host.recordImprovementDurableRunCompletion?.(run, checkpointState),
       curatorService: {
         executeDurableCuratorTickRun: async () => {
           throw new Error("curator.tick not supported in this execution context");
@@ -770,90 +752,133 @@ function buildDurableWorkflowExecutorsFromExecutionHost(
 
 function completeDurableWorkflowRun(
   host: DurableWorkflowCompletionHost,
-  runId: string,
+  run: DurableRunRecord,
   checkpointState: Record<string, unknown>,
-): void {
+): DurableRunRecord | undefined {
   const now = new Date().toISOString();
-  const current = host.storage.durableRuns.getRun(runId);
-  if (!canCompleteCurrentDurableRunStatus(current.status)) {
-    return;
+  const safeCheckpointState = redactStructuredSecrets(checkpointState).value;
+  let completed: DurableRunRecord | undefined;
+  runDurableCompletionTransaction(host, () => {
+    const current = host.storage.durableRuns.getRun(run.runId);
+    if (!hasExpectedExecutionLease(current, run)) {
+      return;
+    }
+    completed = host.storage.durableRuns.updateRun({
+      runId: run.runId,
+      status: "completed",
+      updatedAt: now,
+      finishedAt: now,
+      clearLease: true,
+      clearLastError: true,
+      expectedVersion: current.version,
+    });
+    host.storage.durableRuns.createCheckpoint({
+      runId: run.runId,
+      checkpointKind: "run_completed",
+      state: safeCheckpointState,
+      createdAt: now,
+    });
+    host.recordDurableTimelineEvent(run.runId, "run_completed", safeCheckpointState);
+  });
+  if (!completed) {
+    return undefined;
   }
-  host.storage.durableRuns.updateRun({
-    runId,
-    status: "completed",
-    updatedAt: now,
-    finishedAt: now,
-    clearLease: true,
-    clearLastError: true,
-    expectedVersion: current.version,
+  publishDurableWorkflowProjectionSafely(host, run.runId, {
+    type: "durable_run_completed",
+    runId: run.runId,
+    checkpoint: safeCheckpointState,
   });
-  host.storage.durableRuns.createCheckpoint({
-    runId,
-    checkpointKind: "run_completed",
-    state: checkpointState,
-    createdAt: now,
-  });
-  host.recordDurableTimelineEvent(runId, "run_completed", checkpointState);
-  host.publishRealtime(
-    "system",
-    "durable",
-    {
-      type: "durable_run_completed",
-      runId,
-      checkpoint: checkpointState,
-    },
-    buildDurableRealtimeOptions({ runId }),
-  );
-  host.recordImprovementDurableRunCompletion?.(host.storage.durableRuns.getRun(runId), checkpointState);
+  try {
+    host.recordImprovementDurableRunCompletion?.(completed, safeCheckpointState);
+  } catch {
+    // Improvement analytics are downstream of the canonical terminal commit.
+    return completed;
+  }
+  return completed;
 }
 
 function failDurableWorkflowRun(
   host: DurableWorkflowCompletionHost,
-  runId: string,
+  run: DurableRunRecord,
   checkpointState: Record<string, unknown>,
 ): void {
   const now = new Date().toISOString();
-  const current = host.storage.durableRuns.getRun(runId);
-  if (!canCompleteCurrentDurableRunStatus(current.status)) {
+  const safeCheckpointState = redactStructuredSecrets(checkpointState).value;
+  const lastError =
+    typeof safeCheckpointState.error === "string"
+      ? safeCheckpointState.error
+      : typeof safeCheckpointState.lastError === "string"
+        ? safeCheckpointState.lastError
+        : "Durable workflow failed.";
+  let failed = false;
+  runDurableCompletionTransaction(host, () => {
+    const current = host.storage.durableRuns.getRun(run.runId);
+    if (!hasExpectedExecutionLease(current, run)) {
+      return;
+    }
+    host.storage.durableRuns.updateRun({
+      runId: run.runId,
+      status: "failed",
+      updatedAt: now,
+      finishedAt: now,
+      clearLease: true,
+      lastError,
+      expectedVersion: current.version,
+    });
+    host.storage.durableRuns.createCheckpoint({
+      runId: run.runId,
+      checkpointKind: "run_failed",
+      state: safeCheckpointState,
+      createdAt: now,
+    });
+    host.recordDurableTimelineEvent(run.runId, "run_failed", safeCheckpointState);
+    failed = true;
+  });
+  if (!failed) {
     return;
   }
-  const lastError =
-    typeof checkpointState.error === "string"
-      ? checkpointState.error
-      : typeof checkpointState.lastError === "string"
-        ? checkpointState.lastError
-        : "Durable workflow failed.";
-  host.storage.durableRuns.updateRun({
-    runId,
-    status: "failed",
-    updatedAt: now,
-    finishedAt: now,
-    clearLease: true,
-    lastError,
-    expectedVersion: current.version,
+  publishDurableWorkflowProjectionSafely(host, run.runId, {
+    type: "durable_run_failed",
+    runId: run.runId,
+    checkpoint: safeCheckpointState,
+    error: lastError,
   });
-  host.storage.durableRuns.createCheckpoint({
-    runId,
-    checkpointKind: "run_failed",
-    state: checkpointState,
-    createdAt: now,
-  });
-  host.recordDurableTimelineEvent(runId, "run_failed", checkpointState);
-  host.publishRealtime(
-    "system",
-    "durable",
-    {
-      type: "durable_run_failed",
-      runId,
-      checkpoint: checkpointState,
-      error: lastError,
-    },
-    buildDurableRealtimeOptions({ runId }),
+}
+
+function hasExpectedExecutionLease(current: DurableRunRecord, claimed: DurableRunRecord): boolean {
+  const leaseExpiresAt = current.leaseExpiresAt ? Date.parse(current.leaseExpiresAt) : Number.NaN;
+  return (
+    current.status === "running" &&
+    typeof claimed.leaseOwnerId === "string" &&
+    claimed.leaseOwnerId.length > 0 &&
+    current.leaseOwnerId === claimed.leaseOwnerId &&
+    Number.isFinite(leaseExpiresAt) &&
+    leaseExpiresAt > Date.now()
   );
 }
 
-function canCompleteCurrentDurableRunStatus(status: DurableRunRecord["status"]): boolean {
-  return status === "queued" || status === "running";
+function publishDurableWorkflowProjectionSafely(
+  host: Pick<DurableWorkflowCompletionHost, "publishRealtime">,
+  runId: string,
+  payload: Record<string, unknown>,
+): void {
+  try {
+    host.publishRealtime("system", "durable", payload, buildDurableRealtimeOptions({ runId }));
+  } catch {
+    // Retained realtime is downstream of the atomic terminal transition.
+    return;
+  }
+}
+
+function runDurableCompletionTransaction<T>(host: DurableWorkflowCompletionHost, callback: () => T): T {
+  const transactionOwner = host.storage as { runImmediateTransaction?: <R>(work: () => R) => R };
+  if (transactionOwner.runImmediateTransaction) {
+    return transactionOwner.runImmediateTransaction(callback);
+  }
+  if (process.env.NODE_ENV === "test") {
+    return callback();
+  }
+  throw new Error("Durable completion host is missing immediate transaction ownership");
 }
 
 export async function executeDurableExternalSideEffectReplayRun(
@@ -896,7 +921,7 @@ export async function executeDurableExternalSideEffectReplayRun(
     replayAuditResults,
     results: replayAuditResults,
   };
-  completeDurableWorkflowRun(host, run.runId, checkpointState);
+  completeDurableWorkflowRun(host, run, checkpointState);
 }
 
 type ExternalSideEffectReplayAuditResult = {
@@ -1070,7 +1095,7 @@ export async function executeDurableApprovalWaitRun(
     workflowKey: run.workflowKey,
     ...checkpointState,
   });
-  completeDurableWorkflowRun(host, run.runId, checkpointState);
+  completeDurableWorkflowRun(host, run, checkpointState);
 }
 
 export async function executeDurableConnectorDeliveryRun(
@@ -1117,21 +1142,25 @@ export async function executeDurableConnectorDeliveryRun(
       secretCleanupPending,
       error: "Approval remote-action delivery expired before dispatch.",
     };
-    publishRealtime(
-      "connector_delivery_expired",
-      "connectors",
-      { runId: run.runId, ...checkpointState },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: buildConnectorDeliveryRealtimeLinks({
-          runId: run.runId,
-          connectorId: payload.connectorId,
-          payload: payload as unknown as Record<string, unknown>,
-        }),
-      },
-    );
-    failDurableWorkflowRun(host, run.runId, checkpointState);
+    failDurableWorkflowRun(host, run, checkpointState);
+    try {
+      publishRealtime(
+        "connector_delivery_expired",
+        "connectors",
+        { runId: run.runId, ...checkpointState },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: buildConnectorDeliveryRealtimeLinks({
+            runId: run.runId,
+            connectorId: payload.connectorId,
+            payload: payload as unknown as Record<string, unknown>,
+          }),
+        },
+      );
+    } catch {
+      // The durable failure/checkpoint is canonical; retained realtime is best-effort.
+    }
     return;
   }
   const connector = host.requireConnectorRecord(payload.connectorId);
@@ -1140,59 +1169,125 @@ export async function executeDurableConnectorDeliveryRun(
   }
   const operatorId = payload.operatorId ?? payload.authActorId ?? "system-durable";
   const hydratesBrowserApprovalBearer = connector.connectorType === "browser" && Boolean(approvalActionTokenRef);
-  const dispatchPayload =
-    hydratesBrowserApprovalBearer && approvalActionTokenRef
-      ? hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
-          payload,
-          approvalRemoteTokenSecrets.resolve(approvalActionTokenRef),
-        )
-      : payload;
-  const dispatch = await dispatchConnectorDelivery(connector, dispatchPayload, {
-    commsSend: (input) => host.commsSend(input),
-    commsReply: (input) => host.commsReply(input),
-    commsReact: (input) => host.commsReact(input),
-    commsUnsend: (input) => host.commsUnsend(input),
-    commsTyping: (input) => host.commsTyping(input),
-    commsActivity: (input) => host.commsActivity(input),
-    invokeMcpTool: (input) => host.invokeMcpTool({ ...input, signal: context?.signal }),
-    mcpInvokeContext: {
-      workspaceId: payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run),
-      taskId: payload.taskId,
-      runId: payload.runId ?? run.runId,
-      permissionProfileId: payload.permissionProfileId,
-      localOperatorOverrideId: payload.localOperatorOverrideId,
-      surface: normalizeDurableConnectorSurface(payload.originSurface) ?? "mcp",
-      policyContext: {
-        operatorId,
-        authActorId: payload.authActorId,
-        authActorSource: payload.authActorSource,
-        workspaceId: payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run),
-        sessionId: payload.sessionId,
-        taskId: payload.taskId,
-        runId: payload.runId ?? run.runId,
-        surface: normalizeDurableConnectorSurface(payload.originSurface) ?? "mcp",
-        permissionProfileId: payload.permissionProfileId,
-        localOperatorOverrideId: payload.localOperatorOverrideId,
-      },
-      consentContext: {
-        operatorId,
-        source: "agent",
-        reason: `durable connector delivery:${run.runId}`,
-      },
+  const deliveryEffectId = `connector-delivery:${run.runId}`;
+  const workspaceId = payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run);
+  const sideEffect = await runIdempotentExternalSideEffect({
+    mutationStore: storage.mutationIdempotency,
+    sideEffectRunStore: storage.externalSideEffectRuns,
+    workspaceId,
+    boundary: "durable_connector_delivery",
+    catalogId: `connector.${connector.connectorType}`,
+    connectionId: connector.connectorId,
+    actionId: payload.action,
+    actorScope: workspaceId,
+    idempotencyKey: `durable-connector:${run.runId}`,
+    checkedAt: new Date().toISOString(),
+    payload,
+    label: `Durable connector delivery ${run.runId}`,
+    output: { durableRunId: run.runId, connectorId: connector.connectorId, action: payload.action },
+    requireDurableBoundaryRecord: true,
+    execute: (claim) => {
+      const dispatchPayload =
+        hydratesBrowserApprovalBearer && approvalActionTokenRef
+          ? hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
+              payload,
+              approvalRemoteTokenSecrets.resolve(approvalActionTokenRef),
+            )
+          : payload;
+      return dispatchConnectorDelivery(connector, dispatchPayload, {
+        commsSend: (input) => {
+          claim.markExternalCallStarted();
+          return host.commsSend(input);
+        },
+        commsReply: (input) => {
+          claim.markExternalCallStarted();
+          return host.commsReply(input);
+        },
+        commsReact: (input) => {
+          claim.markExternalCallStarted();
+          return host.commsReact(input);
+        },
+        commsUnsend: (input) => {
+          claim.markExternalCallStarted();
+          return host.commsUnsend(input);
+        },
+        commsTyping: (input) => {
+          claim.markExternalCallStarted();
+          return host.commsTyping(input);
+        },
+        commsActivity: (input) => {
+          claim.markExternalCallStarted();
+          return host.commsActivity(input);
+        },
+        invokeMcpTool: (input) => {
+          claim.markExternalCallStarted();
+          return host.invokeMcpTool({ ...input, signal: context?.signal });
+        },
+        mcpInvokeContext: {
+          workspaceId,
+          taskId: payload.taskId,
+          runId: payload.runId ?? run.runId,
+          permissionProfileId: payload.permissionProfileId,
+          localOperatorOverrideId: payload.localOperatorOverrideId,
+          surface: normalizeDurableConnectorSurface(payload.originSurface) ?? "mcp",
+          policyContext: {
+            operatorId,
+            authActorId: payload.authActorId,
+            authActorSource: payload.authActorSource,
+            workspaceId,
+            sessionId: payload.sessionId,
+            taskId: payload.taskId,
+            runId: payload.runId ?? run.runId,
+            surface: normalizeDurableConnectorSurface(payload.originSurface) ?? "mcp",
+            permissionProfileId: payload.permissionProfileId,
+            localOperatorOverrideId: payload.localOperatorOverrideId,
+          },
+          consentContext: {
+            operatorId,
+            source: "agent",
+            reason: `durable connector delivery:${run.runId}`,
+          },
+        },
+        publishRealtime: (eventType, source, eventPayload, options) => {
+          claim.markExternalCallStarted();
+          host.publishRealtime(eventType, source, eventPayload, options);
+        },
+        markExternalCallStarted: () => claim.markExternalCallStarted(),
+        deliveryEffectId,
+        signal: context?.signal,
+      });
     },
-    publishRealtime: (eventType, source, eventPayload, options) =>
-      host.publishRealtime(eventType, source, eventPayload, options),
-    signal: context?.signal,
   });
-  throwIfDurableWorkflowAborted(context);
-  if (hydratesBrowserApprovalBearer && approvalActionTokenRef) {
-    try {
-      approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
-    } catch {
-      // The protected-token delivery already completed; cleanup failure must
-      // not cause a duplicate browser event or external channel message.
-    }
+  if (sideEffect.status === "failed") {
+    throw sideEffect.error;
   }
+  if (sideEffect.status === "blocked") {
+    const recorded = sideEffect.claim.sideEffectRunId
+      ? storage.externalSideEffectRuns.get(sideEffect.claim.sideEffectRunId)
+      : undefined;
+    if (sideEffect.claim.replayOutcome !== "duplicate" && recorded?.status !== "completed") {
+      throw new Error(sideEffect.message);
+    }
+    const checkpointState = {
+      connectorId: connector.connectorId,
+      connectorType: connector.connectorType,
+      action: payload.action,
+      deliveryStatus: "already_committed",
+      sideEffectRunId: sideEffect.claim.sideEffectRunId,
+      externalReferenceId: recorded?.externalReferenceId,
+    };
+    const completed = completeDurableWorkflowRun(host, run, checkpointState);
+    if (completed && hydratesBrowserApprovalBearer && approvalActionTokenRef) {
+      try {
+        approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
+      } catch {
+        // Canonical delivery and terminal state are already committed.
+      }
+    }
+    publishConnectorDeliveryCompletedSafely(host, run, connector, payload, checkpointState);
+    return;
+  }
+  const dispatch = sideEffect.value;
   const checkpointState = {
     connectorId: connector.connectorId,
     connectorType: connector.connectorType,
@@ -1200,25 +1295,48 @@ export async function executeDurableConnectorDeliveryRun(
     capabilityId: dispatch.capabilityId,
     dispatchKind: dispatch.dispatchKind,
     result: dispatch.result ?? null,
+    sideEffectRunId: sideEffect.claim.sideEffectRunId,
   };
-  host.publishRealtime(
-    "connector_delivery_completed",
-    "connectors",
-    {
-      runId: run.runId,
-      ...checkpointState,
-    },
-    {
-      eventClass: "operational_signal",
-      eventAuthority: "retained_stream",
-      links: buildConnectorDeliveryRealtimeLinks({
+  const completed = completeDurableWorkflowRun(host, run, checkpointState);
+  if (completed && hydratesBrowserApprovalBearer && approvalActionTokenRef) {
+    try {
+      approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
+    } catch {
+      // The protected-token delivery and durable terminal state already committed.
+    }
+  }
+  publishConnectorDeliveryCompletedSafely(host, run, connector, payload, checkpointState);
+}
+
+function publishConnectorDeliveryCompletedSafely(
+  host: Pick<DurableConnectorDeliveryWorkflowHost, "publishRealtime">,
+  run: DurableRunRecord,
+  connector: ConnectorRecord,
+  payload: ConnectorDeliveryWorkflowPayload,
+  checkpointState: Record<string, unknown>,
+): void {
+  try {
+    host.publishRealtime(
+      "connector_delivery_completed",
+      "connectors",
+      {
         runId: run.runId,
-        connectorId: connector.connectorId,
-        payload: payload as unknown as Record<string, unknown>,
-      }),
-    },
-  );
-  completeDurableWorkflowRun(host, run.runId, checkpointState);
+        ...checkpointState,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: buildConnectorDeliveryRealtimeLinks({
+          runId: run.runId,
+          connectorId: connector.connectorId,
+          payload: payload as unknown as Record<string, unknown>,
+        }),
+      },
+    );
+  } catch {
+    // The side-effect ledger and durable terminal state are authoritative.
+    return;
+  }
 }
 
 export async function executeDurableHookDeliveryRun(
@@ -1235,8 +1353,7 @@ export async function executeDurableHookDeliveryRun(
     const delivered = await host.hooksService.executeHookDelivery(payload.hookRunId, run.attemptCount + 1, {
       signal: context?.signal,
     });
-    throwIfDurableWorkflowAborted(context);
-    completeDurableWorkflowRun(host, run.runId, {
+    completeDurableWorkflowRun(host, run, {
       hookRunId: delivered.runId,
       hookId: delivered.hookId,
       status: delivered.status,
@@ -1250,6 +1367,7 @@ export async function executeDurableHookDeliveryRun(
       run.runId,
       error instanceof Error ? error.message : "hook delivery failed",
       "hooks",
+      run.leaseOwnerId,
     );
     if (retry.status === "queued") {
       const nextDelayMs = host.computeDurableRetryDelayMs(retry, retry.attemptCount);
@@ -1280,6 +1398,15 @@ export async function executeDurableChatTurnRun(
   if (!userMessage) {
     throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
   }
+  const userMessageError = validateDurableChatLinkedUserMessage(userMessage, payload);
+  if (userMessageError) {
+    throw new Error(userMessageError);
+  }
+  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage);
+  if (recoveryTrace.outcome === "invalid") {
+    throw new Error(recoveryTrace.reason);
+  }
+  const committedRecoveryTrace = recoveryTrace.outcome === "valid" ? recoveryTrace.trace : undefined;
   const resumedContent = buildDurableChatTurnResumeContent(userMessage.content, payload.userInputResponses);
   const resumedUserMessage =
     resumedContent === userMessage.content ? userMessage : { ...userMessage, content: resumedContent };
@@ -1299,6 +1426,22 @@ export async function executeDurableChatTurnRun(
     assistantMessageId: payload.assistantMessageId,
   });
   throwIfDurableWorkflowAborted(context);
+  if (committedRecoveryTrace) {
+    host.finalizeDurableChatRun(run.runId, prepared, committedRecoveryTrace, run.leaseOwnerId);
+    const finalizedRun = host.storage.durableRuns.getRun(run.runId);
+    const finalizedAsExpected = isDurableChatWaitingStatus(committedRecoveryTrace.status)
+      ? finalizedRun.status === "waiting"
+      : isDurableRunTerminal(finalizedRun.status);
+    if (!finalizedAsExpected) {
+      const error = new Error(
+        `Durable Chat recovery for ${run.runId} could not commit ${committedRecoveryTrace.status} state under lease ${run.leaseOwnerId ?? "unknown"}.`,
+      );
+      error.name = "DurableWorkerInterruptionError";
+      throw error;
+    }
+    await reconcileDurableChatPostCommit(host, finalizedRun, payload);
+    return;
+  }
   const continuation = isDurableChatStreamContinuation(run, payload);
   const streamRegistration = host.registerActiveChatTurnStream(
     payload.sessionId,
@@ -1317,11 +1460,189 @@ export async function executeDurableChatTurnRun(
     {
       streamRegistration,
       skipMessageStart: true,
+      durableLeaseOwnerId: run.leaseOwnerId,
       ...(context?.signal ? { abortSignal: context.signal } : {}),
     },
   );
+  await reconcileDurableChatPostCommit(host, run, payload);
+}
+
+async function reconcileDurableChatPostCommit(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): Promise<void> {
+  if (typeof host.reconcileGeneralChatPostCommit === "function") {
+    await host.reconcileGeneralChatPostCommit(run.runId);
+  }
+  if (typeof host.reconcileAutonomousChatPostCommit === "function") {
+    await host.reconcileAutonomousChatPostCommit(run.runId);
+    return;
+  }
+  // Compatibility fallback for narrow hosts. Shipped Gateway hosts use the
+  // durable marker reconciler so a crash cannot lose or duplicate delivery.
   maybeEnqueueAutonomousDelivery(host, run, payload);
   maybeCleanupSilentHeartbeatTurn(host, run, payload);
+}
+
+export function executeGeneralChatPostCommit(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  progress?: GeneralChatPostCommitProgress,
+): Record<string, unknown> {
+  const payload = parseDurableChatTurnPayload(run);
+  if (!payload) {
+    throw new Error("Durable chat run payload is invalid or incomplete.");
+  }
+  const userMessage = host.storage.chatMessages.get(payload.userMessageId);
+  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage);
+  if (recoveryTrace.outcome !== "valid") {
+    throw new Error(
+      recoveryTrace.outcome === "invalid"
+        ? recoveryTrace.reason
+        : `Durable Chat post-commit requires a committed resting trace ${payload.turnId}.`,
+    );
+  }
+  const trace = recoveryTrace.trace;
+  if (progress && trace.status !== progress.targetTraceStatus) {
+    throw new Error(
+      `Durable Chat post-commit generation ${progress.generationId} targets ${progress.targetTraceStatus}, but the canonical trace is ${trace.status}.`,
+    );
+  }
+  const assistantMessageId = trace.assistantMessageId;
+  const assistantMessage = assistantMessageId ? host.storage.chatMessages.get(assistantMessageId) : undefined;
+  const toolRuns = host.storage.chatToolRuns.listByTurn(payload.turnId);
+  const hydratedTrace: ChatTurnTraceRecord = { ...trace, toolRuns };
+  const workspaceId = trace.guidance?.workspaceId?.trim() || "default";
+  const autonomous = isAutonomousTurnRequest(payload.request);
+  const hasTranscript = Boolean(
+    isChatTurnTerminalStatus(trace.status) &&
+    userMessage?.role === "user" &&
+    assistantMessage?.role === "assistant" &&
+    assistantMessage.content.trim().length > 0,
+  );
+  const delegatedChild = Boolean(userMessage?.parentDelegationStepId);
+  const completed = trace.status === "completed";
+  const transcriptCompleted = hasTranscript && completed;
+  const runEffect = (
+    effect: GeneralChatPostCommitEffect,
+    applicable: boolean,
+    callback: () => void,
+  ): "reconciled" | "already_reconciled" | "not_applicable" => {
+    if (!applicable) {
+      if (progress) {
+        progress.runEffect(effect, () => undefined);
+      }
+      return "not_applicable";
+    }
+    if (!progress) {
+      callback();
+      return "reconciled";
+    }
+    return progress.runEffect(effect, callback) ? "reconciled" : "already_reconciled";
+  };
+
+  const capabilityGap = runEffect("capability_gap", hasTranscript || trace.status === "waiting_for_approval", () => {
+    host.recordCapabilityGapFromTrace({
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      content: userMessage!.content,
+      trace: hydratedTrace,
+    });
+  });
+  const learnedMemoryUser = runEffect("learned_memory_user", hasTranscript, () => {
+    host.extractAndPersistLearnedMemory(payload.sessionId, userMessage!.content, {
+      role: "user",
+      sourceRef: userMessage!.messageId,
+      trace: hydratedTrace,
+    });
+  });
+  const learnedMemoryAssistant = runEffect("learned_memory_assistant", hasTranscript, () => {
+    host.extractAndPersistLearnedMemory(payload.sessionId, assistantMessage!.content, {
+      role: "assistant",
+      sourceRef: assistantMessage!.messageId,
+      trace: hydratedTrace,
+    });
+  });
+  const commitments = runEffect("commitments", transcriptCompleted, () => {
+    host.recordTurnCommitments({
+      sessionId: payload.sessionId,
+      workspaceId,
+      userText: userMessage!.content,
+      assistantText: assistantMessage!.content,
+      autonomous,
+    });
+  });
+  const backgroundReview = runEffect("background_review", transcriptCompleted, () => {
+    host.scheduleBackgroundReviewIfDue({
+      sessionId: payload.sessionId,
+      workspaceId,
+      turnId: payload.turnId,
+      userText: userMessage!.content,
+      assistantText: assistantMessage!.content,
+      delegatedChild,
+      autonomous,
+    });
+  });
+  const memoryMaintenance = runEffect("memory_maintenance", transcriptCompleted, () => {
+    host.scheduleMemoryMaintenancePostTurnEvaluation({
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      delegatedChild,
+    });
+  });
+  const memoryPrewarm = runEffect("memory_prewarm", hasTranscript, () => {
+    host.scheduleChatMemoryContextPrewarm({
+      sessionId: payload.sessionId,
+      prompt: assistantMessage!.content,
+      relationScope: "self",
+    });
+  });
+  const realtime = runEffect("realtime", hasTranscript || isDurableChatWaitingStatus(trace.status), () => {
+    host.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: payload.threadEventType,
+        sessionId: payload.sessionId,
+        turnId: payload.turnId,
+        activeLeafTurnId: payload.turnId,
+      },
+      buildChatTurnRealtimeOptions({ sessionId: payload.sessionId, turnId: payload.turnId }),
+    );
+  });
+  const agentEnd = runEffect("agent_end", true, () => {
+    enqueueAgentEndHook(host, {
+      workspaceId,
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      status: trace.status,
+      toolRunCount: toolRuns.length,
+      stream: true,
+      repaired: Boolean(trace.completion?.repaired),
+      runId: run.runId,
+      taskId: trace.orchestration ? `chat-orchestration:${payload.turnId}` : undefined,
+      approvalId: toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
+      providerId: trace.routing?.effectiveProviderId ?? trace.routing?.primaryProviderId,
+      model: trace.routing?.effectiveModel ?? trace.model,
+    });
+  });
+
+  return {
+    turnId: payload.turnId,
+    status: trace.status,
+    agentEnd,
+    learnedMemory: {
+      user: learnedMemoryUser,
+      assistant: learnedMemoryAssistant,
+    },
+    capabilityGap,
+    realtime,
+    commitments,
+    memoryMaintenance,
+    memoryPrewarm,
+    backgroundReview,
+  };
 }
 
 function isDurableChatStreamContinuation(run: DurableRunRecord, payload: DurableChatTurnExecutionPayload): boolean {
@@ -1343,24 +1664,155 @@ function readDurableChatTurnAssistantText(
   return readDurableChatTurnAssistantOutput(host, payload).assistantText;
 }
 
+function readAutonomousChatAssistantText(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): string | undefined {
+  const durableOutput = typeof run.metadata?.outputText === "string" ? run.metadata.outputText.trim() : "";
+  return durableOutput || readDurableChatTurnAssistantText(host, payload);
+}
+
 function readDurableChatTurnAssistantOutput(
   host: DurableChatTurnWorkflowHost,
   payload: DurableChatTurnExecutionPayload,
 ): { assistantText?: string; trace?: ChatTurnTraceRecord } {
-  let trace: ChatTurnTraceRecord | undefined;
-  try {
-    trace = host.storage.chatTurnTraces.get(payload.turnId);
-  } catch (error) {
-    if (!(error instanceof NotFoundError)) {
-      throw error;
-    }
-  }
+  const trace = readDurableChatTurnTrace(host, payload.turnId);
   const assistantMessageId = trace?.assistantMessageId ?? payload.assistantMessageId;
   if (!assistantMessageId) {
     return { trace };
   }
   const content = host.storage.chatMessages.get(assistantMessageId)?.content?.trim();
   return { assistantText: content ? content : undefined, trace };
+}
+
+function readDurableChatTurnTrace(host: DurableChatTurnWorkflowHost, turnId: string): ChatTurnTraceRecord | undefined {
+  try {
+    return host.storage.chatTurnTraces.get(turnId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
+type DurableChatRecoveryTraceValidation =
+  | { outcome: "not_resting"; trace?: ChatTurnTraceRecord }
+  | { outcome: "valid"; trace: ChatTurnTraceRecord }
+  | { outcome: "invalid"; reason: string };
+
+function validateCommittedDurableChatTurnRecoveryTrace(
+  host: DurableChatTurnWorkflowHost,
+  payload: DurableChatTurnExecutionPayload,
+  expectedRunId: string,
+  observedUserMessage?: { role?: unknown; sessionId?: unknown },
+): DurableChatRecoveryTraceValidation {
+  const trace = readDurableChatTurnTrace(host, payload.turnId);
+  const userMessage = observedUserMessage ?? host.storage.chatMessages.get(payload.userMessageId);
+  const userMessageError = validateDurableChatLinkedUserMessage(userMessage, payload);
+  if (userMessageError) {
+    return { outcome: "invalid", reason: userMessageError };
+  }
+  if (!trace) {
+    return { outcome: "not_resting" };
+  }
+  if (trace.durable?.runId && trace.durable.runId !== expectedRunId) {
+    return {
+      outcome: "invalid",
+      reason: "Persisted Chat trace does not match the current durable run linkage.",
+    };
+  }
+  if (trace.sessionId !== payload.sessionId || trace.userMessageId !== payload.userMessageId) {
+    return {
+      outcome: "invalid",
+      reason: "Persisted Chat resting trace does not match the durable run session/user linkage.",
+    };
+  }
+  if (!isChatTurnTerminalStatus(trace.status) && !isDurableChatWaitingStatus(trace.status)) {
+    return { outcome: "not_resting", trace };
+  }
+  if (trace.assistantMessageId && trace.assistantMessageId !== payload.assistantMessageId) {
+    return {
+      outcome: "invalid",
+      reason: "Persisted assistant output does not match the durable Chat run linkage.",
+    };
+  }
+  const assistantMessage = trace.assistantMessageId
+    ? host.storage.chatMessages.get(trace.assistantMessageId)
+    : undefined;
+  if (assistantMessage && (assistantMessage.role !== "assistant" || assistantMessage.sessionId !== payload.sessionId)) {
+    return {
+      outcome: "invalid",
+      reason: "Persisted assistant output does not match the durable Chat run linkage.",
+    };
+  }
+  if (
+    (trace.status === "completed" || trace.status === "partial") &&
+    (!assistantMessage || trace.assistantMessageId !== payload.assistantMessageId)
+  ) {
+    return {
+      outcome: "invalid",
+      reason: "Completed durable Chat trace is missing its linked assistant output.",
+    };
+  }
+  if (isDurableChatWaitingStatus(trace.status)) {
+    const toolRuns = host.storage.chatToolRuns.listByTurn(payload.turnId);
+    if (!hasDurableChatWaitingEvidence(trace, toolRuns)) {
+      return {
+        outcome: "invalid",
+        reason: `Durable Chat trace ${payload.turnId} lacks canonical evidence for ${trace.status}.`,
+      };
+    }
+  }
+  return { outcome: "valid", trace };
+}
+
+function validateDurableChatLinkedUserMessage(
+  userMessage: { role?: unknown; sessionId?: unknown } | undefined,
+  payload: DurableChatTurnExecutionPayload,
+): string | undefined {
+  if (!userMessage) {
+    return "Durable Chat recovery is missing its linked user message.";
+  }
+  if (userMessage.role !== "user" || userMessage.sessionId !== payload.sessionId) {
+    return "Durable Chat recovery linked user message is not a user message in the payload session.";
+  }
+  return undefined;
+}
+
+function isDurableChatWaitingStatus(
+  status: ChatTurnTraceRecord["status"],
+): status is "waiting_for_approval" | "waiting_for_user_input" | "waiting_for_tool" {
+  return status === "waiting_for_approval" || status === "waiting_for_user_input" || status === "waiting_for_tool";
+}
+
+function hasDurableChatWaitingEvidence(trace: ChatTurnTraceRecord, toolRuns: ChatTurnTraceRecord["toolRuns"]): boolean {
+  if (trace.status === "waiting_for_user_input") {
+    return Boolean(
+      trace.pendingUserInput?.promptId?.trim() &&
+      trace.pendingUserInput.turnId === trace.turnId &&
+      trace.pendingUserInput.question?.trim(),
+    );
+  }
+  if (trace.status === "waiting_for_approval") {
+    return toolRuns.some(
+      (toolRun) =>
+        isDurableChatWaitToolRunLinked(toolRun, trace) &&
+        toolRun.status === "approval_required" &&
+        Boolean(toolRun.approvalId?.trim()),
+    );
+  }
+  return toolRuns.some(
+    (toolRun) => isDurableChatWaitToolRunLinked(toolRun, trace) && toolRun.status === "started" && !toolRun.finishedAt,
+  );
+}
+
+function isDurableChatWaitToolRunLinked(
+  toolRun: ChatTurnTraceRecord["toolRuns"][number],
+  trace: ChatTurnTraceRecord,
+): boolean {
+  return toolRun.turnId === trace.turnId && toolRun.sessionId === trace.sessionId;
 }
 
 /**
@@ -1407,24 +1859,22 @@ export function maybeEnqueueAutonomousDelivery(
   run: DurableRunRecord,
   payload: DurableChatTurnExecutionPayload,
 ): string | undefined {
-  const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
-  if (!autonomous || typeof autonomous !== "object") {
+  if (!run.metadata?.autonomous) {
     return undefined;
   }
-  if (isAutonomyKillSwitchEnabled(host)) {
+  const currentRun = readCurrentDurableRun(host, run);
+  if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
+    return undefined;
+  }
+  const autonomous = (currentRun.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  if (!autonomous || typeof autonomous !== "object") {
     return undefined;
   }
   const deliveryChannel = autonomous.deliveryChannel;
   if (!deliveryChannel?.channelKey || typeof host.enqueueAutonomousChannelDelivery !== "function") {
     return undefined;
   }
-  const { assistantText, trace } = readDurableChatTurnAssistantOutput(host, payload);
-  if (trace?.status !== "completed") {
-    return undefined;
-  }
-  if (isFailedAutonomousDeliveryRunStatus(readCurrentDurableRunStatus(host, run))) {
-    return undefined;
-  }
+  const assistantText = readAutonomousChatAssistantText(host, currentRun, payload);
   if (!assistantText) {
     return undefined;
   }
@@ -1432,7 +1882,7 @@ export function maybeEnqueueAutonomousDelivery(
     return undefined;
   }
   return host.enqueueAutonomousChannelDelivery({
-    runId: run.runId,
+    runId: currentRun.runId,
     sessionId: payload.sessionId,
     turnId: payload.turnId,
     assistantText,
@@ -1443,22 +1893,15 @@ export function maybeEnqueueAutonomousDelivery(
   });
 }
 
-function readCurrentDurableRunStatus(
-  host: DurableChatTurnWorkflowHost,
-  run: DurableRunRecord,
-): DurableRunRecord["status"] {
+function readCurrentDurableRun(host: DurableChatTurnWorkflowHost, run: DurableRunRecord): DurableRunRecord {
   try {
-    return host.storage.durableRuns.getRun(run.runId).status;
+    return host.storage.durableRuns.getRun(run.runId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
     }
   }
-  return run.status;
-}
-
-function isFailedAutonomousDeliveryRunStatus(status: DurableRunRecord["status"]): boolean {
-  return status === "failed" || status === "cancelled" || status === "dead_lettered";
+  return run;
 }
 
 /**
@@ -1474,24 +1917,80 @@ export function maybeCleanupSilentHeartbeatTurn(
   host: DurableChatTurnWorkflowHost,
   run: DurableRunRecord,
   payload: DurableChatTurnExecutionPayload,
-): void {
-  const autonomous = (run.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
-  if (autonomous?.kind !== "heartbeat" || typeof host.cleanupSilentHeartbeatTurn !== "function") {
-    return;
+): SilentHeartbeatCleanupResult {
+  if (!run.metadata?.autonomous) {
+    return { status: "not_required" };
   }
-  const assistantText = readDurableChatTurnAssistantText(host, payload);
+  const currentRun = readCurrentDurableRun(host, run);
+  if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
+    return { status: "not_required" };
+  }
+  const autonomous = (currentRun.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  if (autonomous?.kind !== "heartbeat" || typeof host.cleanupSilentHeartbeatTurn !== "function") {
+    return { status: "not_required" };
+  }
+  const assistantText = readAutonomousChatAssistantText(host, currentRun, payload);
   // Notifying heartbeats stay visible (the user is meant to see them). Only a
   // silent (no-notify / empty) heartbeat is pruned.
   if (assistantText && parseAutonomousNotifySignal(assistantText)) {
-    return;
+    return { status: "not_required" };
   }
-  host.cleanupSilentHeartbeatTurn({
+  return host.cleanupSilentHeartbeatTurn({
     sessionId: payload.sessionId,
     turnId: payload.turnId,
     userMessageId: payload.userMessageId,
     assistantMessageId: payload.assistantMessageId,
     ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {}),
   });
+}
+
+export function executeAutonomousChatPostCommit(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+): Record<string, unknown> {
+  const payload = parseDurableChatTurnPayload(run);
+  if (!payload) {
+    throw new Error(`Autonomous Chat post-commit recovery payload is invalid for run ${run.runId}.`);
+  }
+  const currentRun = readCurrentDurableRun(host, run);
+  if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
+    return {
+      delivery: { status: "skipped", reason: "parent_not_pending" },
+      heartbeatCleanup: { status: "not_required" },
+    };
+  }
+  const autonomous = (currentRun.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
+  const assistantText = readAutonomousChatAssistantText(host, currentRun, payload);
+  const hasDeliveryChannel = Boolean(autonomous?.deliveryChannel?.channelKey?.trim());
+  const notifyRequested = Boolean(assistantText && parseAutonomousNotifySignal(assistantText));
+  const deliveryIntended = Boolean(
+    autonomous && hasDeliveryChannel && assistantText && (autonomous.deliverMode !== "on_notify" || notifyRequested),
+  );
+  const deliveryRunId = maybeEnqueueAutonomousDelivery(host, currentRun, payload);
+  if (deliveryIntended && !deliveryRunId) {
+    throw new Error(`Autonomous Chat delivery could not be durably enqueued for run ${run.runId}.`);
+  }
+  const cleanupRequired = autonomous?.kind === "heartbeat" && !notifyRequested;
+  if (cleanupRequired && typeof host.cleanupSilentHeartbeatTurn !== "function") {
+    throw new Error(`Silent heartbeat cleanup host is unavailable for run ${run.runId}.`);
+  }
+  const cleanup = maybeCleanupSilentHeartbeatTurn(host, run, payload);
+  if (cleanup.status === "retryable_failure") {
+    throw new Error(`Silent heartbeat cleanup did not commit for run ${run.runId}.`);
+  }
+  const skippedReason = !autonomous
+    ? "not_autonomous"
+    : !hasDeliveryChannel
+      ? "delivery_not_configured"
+      : !assistantText
+        ? "empty_output"
+        : "notify_not_requested";
+  return {
+    delivery: deliveryRunId
+      ? { status: "enqueued", runId: deliveryRunId }
+      : { status: "skipped", reason: skippedReason },
+    heartbeatCleanup: cleanupRequired ? cleanup : { status: "not_required" },
+  };
 }
 
 function isDurableChatTurnRecoverable(
@@ -1502,14 +2001,14 @@ function isDurableChatTurnRecoverable(
   if (!payload) {
     return { recoverable: false, reason: "Durable chat run payload is invalid or incomplete." };
   }
-  let trace: ChatTurnTraceRecord | undefined;
-  try {
-    trace = host.storage.chatTurnTraces.get(payload.turnId);
-  } catch (error) {
-    if (!(error instanceof NotFoundError)) {
-      throw error;
-    }
+  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId);
+  if (recoveryTrace.outcome === "valid") {
+    return { recoverable: true };
   }
+  if (recoveryTrace.outcome === "invalid") {
+    return { recoverable: false, reason: recoveryTrace.reason };
+  }
+  const trace = recoveryTrace.trace;
   if (!trace) {
     return { recoverable: true };
   }
@@ -1517,7 +2016,24 @@ function isDurableChatTurnRecoverable(
     ? host.storage.chatMessages.get(trace.assistantMessageId)
     : undefined;
   if (assistantMessage?.role === "assistant") {
-    return { recoverable: false, reason: "Assistant output was already persisted before interruption." };
+    if (
+      trace.sessionId !== payload.sessionId ||
+      trace.userMessageId !== payload.userMessageId ||
+      trace.assistantMessageId !== payload.assistantMessageId ||
+      assistantMessage.sessionId !== payload.sessionId
+    ) {
+      return {
+        recoverable: false,
+        reason: "Persisted assistant output does not match the durable Chat run linkage.",
+      };
+    }
+    if (isChatTurnTerminalStatus(trace.status)) {
+      return { recoverable: true };
+    }
+    return {
+      recoverable: false,
+      reason: "Assistant output was persisted while the Chat turn trace was still active.",
+    };
   }
   const toolRuns = host.storage.chatToolRuns.listByTurn(payload.turnId);
   if (toolRuns.length > 0) {
@@ -1559,22 +2075,12 @@ function markDurableProactiveTickUnrecoverable(
         });
     }
   }
-  host.publishRealtime(
-    "system",
-    "durable",
-    {
-      type: "durable_workflow_unrecoverable",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-      reason,
-    },
-    buildDurableRealtimeOptions({
-      runId: run.runId,
-      proactiveRunId: payload?.proactiveRunId,
-      sessionId: payload?.sessionId,
-      taskId: payload?.taskId,
-    }),
-  );
+  publishUnrecoverableProjectionSafely(host, run, reason, {
+    runId: run.runId,
+    proactiveRunId: payload?.proactiveRunId,
+    sessionId: payload?.sessionId,
+    taskId: payload?.taskId,
+  });
 }
 
 function markDurableHookDeliveryUnrecoverable(
@@ -1586,17 +2092,7 @@ function markDurableHookDeliveryUnrecoverable(
   if (payload) {
     host.hooksService.markHookRunDeadLettered(payload.hookRunId, reason);
   }
-  host.publishRealtime(
-    "system",
-    "durable",
-    {
-      type: "durable_workflow_unrecoverable",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-      reason,
-    },
-    buildDurableRealtimeOptions({ runId: run.runId }),
-  );
+  publishUnrecoverableProjectionSafely(host, run, reason, { runId: run.runId });
 }
 
 function markDurableChatTurnUnrecoverable(
@@ -1616,8 +2112,22 @@ function markDurableChatTurnUnrecoverable(
       throw error;
     }
   }
-  if (trace) {
-    host.storage.chatTurnTraces.patch(payload.turnId, {
+  if (!trace) {
+    return;
+  }
+  const durableFailure = {
+    runId: run.runId,
+    status: "failed" as const,
+    checkpointKind: "run_failed",
+  };
+  host.storage.runImmediateTransaction(() => {
+    if (!CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])) {
+      host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [trace.status], {
+        durable: durableFailure,
+      });
+      return;
+    }
+    const failedTrace = host.storage.chatTurnTraces.patchIfStatus(payload.turnId, CHAT_TURN_ACTIVE_STATUSES, {
       status: "failed",
       finishedAt: new Date().toISOString(),
       failure: {
@@ -1631,22 +2141,50 @@ function markDurableChatTurnUnrecoverable(
         status: "interrupted",
         repaired: Boolean(trace.completion?.repaired),
       },
-      durable: {
-        runId: run.runId,
-        status: "failed",
-        checkpointKind: "run_failed",
-      },
+      durable: durableFailure,
     });
+    if (!failedTrace) {
+      const latestTrace = host.storage.chatTurnTraces.get(payload.turnId);
+      if (!CHAT_TURN_ACTIVE_STATUSES.includes(latestTrace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])) {
+        host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [latestTrace.status], {
+          durable: durableFailure,
+        });
+      }
+      return;
+    }
+    host.persistChatStreamChunk(
+      {
+        type: "error",
+        sessionId: payload.sessionId,
+        turnId: payload.turnId,
+        error: reason,
+      },
+      run.runId,
+    );
+  });
+}
+
+function publishUnrecoverableProjectionSafely(
+  host: Pick<DurableExecutionHost, "publishRealtime">,
+  run: DurableRunRecord,
+  reason: string,
+  links: Parameters<typeof buildDurableRealtimeOptions>[0],
+): void {
+  try {
+    host.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_workflow_unrecoverable",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+        reason,
+      },
+      buildDurableRealtimeOptions(links),
+    );
+  } catch {
+    // Linked canonical state is authoritative; retained realtime is best-effort.
   }
-  host.persistChatStreamChunk(
-    {
-      type: "error",
-      sessionId: payload.sessionId,
-      turnId: payload.turnId,
-      error: reason,
-    },
-    run.runId,
-  );
 }
 
 function formatDurableChatTurnResumeEntry(response: DurableChatTurnUserInputResumeRecord, index: number): string {

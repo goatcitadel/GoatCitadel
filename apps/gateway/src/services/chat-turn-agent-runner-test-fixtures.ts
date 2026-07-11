@@ -547,7 +547,7 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
 }
 
 export function createExecuteToolCallForTest(input: {
-  invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+  invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
   toolNames: string[];
   storage?: ChatTurnAgentRunnerDeps["storage"];
   persistToolArtifact?: NonNullable<ChatTurnAgentRunnerDeps["persistToolArtifact"]>;

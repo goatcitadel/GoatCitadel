@@ -37,6 +37,21 @@ test("extracts migration record hashes after resolving frozen string constants",
   assert.equal(records[0]?.sha256, expectedHash);
 });
 
+test("extracts explicit integrity hashes for generated batched migrations", () => {
+  const digest = "a".repeat(64);
+  const records = extractMigrationRecords(`
+    const migrations = [{
+      version: 81,
+      name: "batched",
+      sql: "",
+      integritySha256: "${digest}",
+      batchedStatements: [{ name: "one", sql: buildSql() }],
+    }];
+  `);
+
+  assert.equal(records[0]?.sha256, digest);
+});
+
 test("requires parity-bearing migrations on both storage backends", () => {
   assert.deepEqual(findMigrationParityErrors(["first", "foo_parity"], ["first"]), [
     "SQLite parity migration missing from Postgres: foo_parity",

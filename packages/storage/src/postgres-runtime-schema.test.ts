@@ -638,13 +638,26 @@ describe("Postgres runtime schema generation", () => {
   it("ships a Postgres scrub for legacy remote approval bearer persistence", () => {
     const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "scrub_legacy_remote_approval_bearers");
     assert.ok(migration, "expected Postgres legacy remote approval bearer scrub migration");
-    assert.match(migration.sql, /UPDATE durable_runs/);
-    assert.match(migration.sql, /UPDATE comms_deliveries/);
-    assert.match(migration.sql, /UPDATE approval_inbox_items/);
-    assert.match(migration.sql, /UPDATE tool_invocations/);
-    assert.match(migration.sql, /UPDATE audit_events/);
-    assert.match(migration.sql, /regexp_replace/);
-    assert.match(migration.sql, /Legacy remote approval bearer was removed/);
+    assert.equal(migration.sql, "");
+    assert.equal(migration.batchedStatements?.length, 17);
+    const batchSql = migration.batchedStatements?.map((statement) => statement.sql).join("\n") ?? "";
+    assert.match(batchSql, /UPDATE durable_runs AS target/);
+    assert.match(batchSql, /UPDATE comms_deliveries AS target/);
+    assert.match(batchSql, /UPDATE approval_inbox_items AS target/);
+    assert.match(batchSql, /UPDATE tool_invocations AS target/);
+    assert.match(batchSql, /UPDATE audit_events AS target/);
+    assert.match(batchSql, /regexp_replace/);
+    assert.match(batchSql, /Legacy remote approval bearer was removed/);
+    for (const statement of migration.batchedStatements ?? []) {
+      assert.match(statement.sql, /LIMIT 250/);
+      assert.match(statement.sql, /FOR UPDATE/);
+      assert.match(statement.sql, /UPDATE \w+ AS target/);
+    }
+    assert.ok(batchSql.includes("token ~ 'grat_[A-Za-z0-9_-]{43}'"));
+    assert.ok(batchSql.includes("~ 'grat_[A-Za-z0-9_-]{43}'"));
+    assert.equal(batchSql.includes("\\M"), false);
+    assert.doesNotMatch(batchSql, /LIKE '%grat_%'/);
+    assert.doesNotMatch(batchSql, /SKIP LOCKED/);
   });
 
   it("auto-derives capability_scope_assignments into the runtime schema", () => {

@@ -109,12 +109,13 @@ describe("DurableRunService boot recovery integration", () => {
       backgroundTasks: new Set(),
       workflowRegistry: {
         executeWorkflow: vi.fn(async (run) => {
+          const current = storage.durableRuns.getRun(run.runId);
           storage.durableRuns.updateRun({
             runId: run.runId,
             status: "completed",
             finishedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            expectedVersion: run.version,
+            expectedVersion: current.version,
           });
         }),
         isWorkflowRecoverable: () => ({ recoverable: true }),

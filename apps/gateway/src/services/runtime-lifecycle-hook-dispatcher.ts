@@ -34,6 +34,7 @@ function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
     trigger: TTrigger;
     entityType: string;
     entityId: string;
+    idempotencyDiscriminator?: string;
     payload: RuntimeLifecycleHookPayloadByTrigger[TTrigger];
   },
 ): void {
@@ -42,6 +43,7 @@ function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
     trigger: input.trigger as HookTrigger,
     entityType: input.entityType,
     entityId: input.entityId,
+    ...(input.idempotencyDiscriminator ? { idempotencyDiscriminator: input.idempotencyDiscriminator } : {}),
     payload: input.payload as unknown as Record<string, unknown>,
   });
 }

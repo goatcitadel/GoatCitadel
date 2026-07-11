@@ -207,6 +207,16 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   createApproval?: (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort) => Promise<ApprovalRequest>;
 }
 
+/**
+ * Internal runtime boundary supplied by a durable caller. The callback is
+ * intentionally not part of ToolInvokeRequest: it is process-local execution
+ * authority and must never be serialized into an approval or accepted over a
+ * wire API.
+ */
+export interface ToolPolicyInvokeOptions {
+  beforeExecute?: () => void;
+}
+
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
 export class ToolPolicyEngine {
@@ -274,14 +284,13 @@ export class ToolPolicyEngine {
     };
   }
 
-  public async invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+  public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {
     const directApprovalBypassId = getVerifiedApprovalBypassId(request, this.storage);
     if (directApprovalBypassId) {
-      const result = await this.executeApprovedAction(
-        directApprovalBypassId,
-        request.signal,
-        request.externalRuntime === true ? { deferResolution: true } : undefined,
-      );
+      const result = await this.executeApprovedAction(directApprovalBypassId, request.signal, {
+        ...(request.externalRuntime === true ? { deferResolution: true } : {}),
+        beforeExecute: options.beforeExecute,
+      });
       if (result) {
         return result;
       }
@@ -579,6 +588,7 @@ export class ToolPolicyEngine {
         undefined,
         evaluation,
         internalCall,
+        options,
       );
     }
 
@@ -592,13 +602,14 @@ export class ToolPolicyEngine {
       undefined,
       evaluation,
       internalCall,
+      options,
     );
   }
 
   public async executeApprovedAction(
     approvalId: string,
     signal?: AbortSignal,
-    options?: { deferResolution?: boolean; externalRuntimeReplay?: boolean },
+    options?: { deferResolution?: boolean; externalRuntimeReplay?: boolean; beforeExecute?: () => void },
   ): Promise<ToolInvokeResult | undefined> {
     const pending = this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending") {
@@ -624,12 +635,14 @@ export class ToolPolicyEngine {
     };
     if (!hasVerifiedApprovalBypass(approvedRequest, this.storage)) {
       const reason = "pending approval action is expired, resolved, or no longer matches the stored request";
-      this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-      this.storage.approvalEvents.append({
-        approvalId,
-        eventType: "approved_action_executed",
-        actorId: "system",
-        payload: { outcome: "blocked", reason },
+      this.storage.runImmediateTransaction(() => {
+        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+        this.storage.approvalEvents.append({
+          approvalId,
+          eventType: "approved_action_executed",
+          actorId: "system",
+          payload: { outcome: "blocked", reason },
+        });
       });
       return undefined;
     }
@@ -676,12 +689,14 @@ export class ToolPolicyEngine {
         approvalMode: evaluation.approvalMode,
         approvalId,
       });
-      this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-      this.storage.approvalEvents.append({
-        approvalId,
-        eventType: "approved_action_executed",
-        actorId: "system",
-        payload: { outcome: "blocked", reason, auditEventId },
+      this.storage.runImmediateTransaction(() => {
+        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+        this.storage.approvalEvents.append({
+          approvalId,
+          eventType: "approved_action_executed",
+          actorId: "system",
+          payload: { outcome: "blocked", reason, auditEventId },
+        });
       });
       const completedAt = new Date().toISOString();
       return {
@@ -723,6 +738,7 @@ export class ToolPolicyEngine {
       approvalId,
       evaluation,
       internalCall,
+      { beforeExecute: options?.beforeExecute },
     );
 
     if (options?.deferResolution !== true) {
@@ -1507,6 +1523,7 @@ export class ToolPolicyEngine {
     approvalId?: string,
     evaluation?: AccessEvaluation,
     internalCall?: ReturnType<typeof buildInternalToolCall>,
+    options: ToolPolicyInvokeOptions = {},
   ): Promise<ToolInvokeResult> {
     const executionRequest = withExecutionGrantContext(request, evaluation);
     if (grantIdToConsume && !this.storage.toolGrants.consumeOne(grantIdToConsume)) {
@@ -1584,6 +1601,11 @@ export class ToolPolicyEngine {
         }),
       };
     }
+    // This is the last process-local authority check before the concrete tool
+    // executor starts. Keep it outside the execution catch so lease loss
+    // interrupts the stale worker instead of being normalized into an ordinary
+    // tool failure that could let the turn continue.
+    options.beforeExecute?.();
     try {
       const result = await executeTool(executionRequest, this.config, this.storage, this.runtimeHooks);
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);

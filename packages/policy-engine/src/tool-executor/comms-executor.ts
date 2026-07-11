@@ -219,7 +219,7 @@ function hydrateProtectedApprovalActionAtProviderBoundary(
     throw new Error("blocked: Approval interactive-action token expired before provider dispatch.");
   }
   const rawToken = runtime.resolveApprovalActionTokenSecret?.(tokenRef)?.trim();
-  if (!rawToken || !/^grat_[A-Za-z0-9_-]{16,}$/.test(rawToken)) {
+  if (!rawToken || !/^grat_[A-Za-z0-9_-]{43}$/.test(rawToken)) {
     throw new Error("Approval interactive-action token is unavailable or invalid.");
   }
   return {
@@ -263,7 +263,7 @@ function assertIntegrationConnectionAvailable(connection: { enabled?: boolean; s
 }
 
 function assertNoRawApprovalBearerInToolArgs(value: unknown): void {
-  if (/\bgrat_[A-Za-z0-9_-]{16,}\b/i.test(JSON.stringify(value ?? null))) {
+  if (/grat_[A-Za-z0-9_-]{43}/i.test(JSON.stringify(value ?? null))) {
     throw new Error("Raw remote approval bearers are not accepted in tool arguments; use a protected template.");
   }
 }

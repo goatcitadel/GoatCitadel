@@ -98,7 +98,7 @@ export class HooksService {
     state.consecutiveFailures += 1;
     if (state.consecutiveFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD && !state.trippedAt) {
       state.trippedAt = Date.now();
-      this.ctx.publishRealtime(
+      this.publishRealtimeSafely(
         "hook_circuit_breaker_tripped",
         "hooks",
         {
@@ -152,7 +152,7 @@ export class HooksService {
       trigger: created.trigger,
       mode: created.mode,
     });
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_created",
       hookId: created.hookId,
       workspaceId,
@@ -180,7 +180,7 @@ export class HooksService {
       mode: updated.mode,
       enabled: updated.enabled,
     });
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_updated",
       hookId: updated.hookId,
       workspaceId: normalizedWorkspaceId,
@@ -210,7 +210,7 @@ export class HooksService {
         hookId,
         workspaceId: normalizedWorkspaceId,
       });
-      this.ctx.publishRealtime("system", "hooks", {
+      this.publishRealtimeSafely("system", "hooks", {
         type: "hook_deleted",
         hookId,
         workspaceId: normalizedWorkspaceId,
@@ -284,6 +284,7 @@ export class HooksService {
     trigger: HookTrigger;
     entityType: string;
     entityId: string;
+    idempotencyDiscriminator?: string;
     payload: Record<string, unknown>;
   }): HookRunRecord[] {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
@@ -292,7 +293,12 @@ export class HooksService {
       return [];
     }
     return hooks.map((hook) => {
-      const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(input.trigger, input.entityType, input.entityId);
+      const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(
+        input.trigger,
+        input.entityType,
+        input.entityId,
+        input.idempotencyDiscriminator,
+      );
       const existing = this.ctx.storage.hookRuns.findByIdempotency(hook.hookId, idempotencyKey);
       if (existing) {
         if (existing.status === "queued" && existing.durableRunId) {
@@ -318,7 +324,7 @@ export class HooksService {
           errorText: "durable_kernel_disabled",
           completedAt: new Date().toISOString(),
         });
-        this.ctx.publishRealtime("system", "hooks", {
+        this.publishRealtimeSafely("system", "hooks", {
           type: "hook_delivery_skipped",
           hookId: hook.hookId,
           hookRunId: skipped.runId,
@@ -343,7 +349,7 @@ export class HooksService {
       });
       this.ctx.storage.hookRuns.attachDurableRun(run.runId, durableRun.runId);
       this.deps.requestDurableRunProcessing(durableRun.runId);
-      this.ctx.publishRealtime("system", "hooks", {
+      this.publishRealtimeSafely("system", "hooks", {
         type: "hook_delivery_queued",
         hookId: hook.hookId,
         hookRunId: run.runId,
@@ -361,6 +367,9 @@ export class HooksService {
     options?: { signal?: AbortSignal },
   ): Promise<HookRunRecord> {
     const run = this.ctx.storage.hookRuns.get(hookRunId);
+    if (run.status === "completed" || run.status === "blocked" || run.status === "skipped") {
+      return run;
+    }
     const hook = this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
     const delivered = await this.executeRecordedHookRun(
       hook,
@@ -381,7 +390,7 @@ export class HooksService {
       errorText,
       completedAt: new Date().toISOString(),
     });
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_delivery_dead_lettered",
       hookId: run.hookId,
       hookRunId: run.runId,
@@ -424,7 +433,15 @@ export class HooksService {
       attemptCount,
       requestPayload: payload,
     });
-    const executionKey = `${hook.hookId}:${current.trigger}:${current.entityType}:${current.entityId}`;
+    const entityExecutionKey = `${hook.hookId}:${current.trigger}:${current.entityType}:${current.entityId}`;
+    // agent_end is a lifecycle stream, not a single immutable event. Keep true
+    // retry/recursion suppression for one semantic status while allowing a
+    // waiting-for-approval delivery and a later completed delivery for the same
+    // turn to overlap without dropping the terminal status.
+    const executionKey =
+      current.trigger === "agent_end"
+        ? `${entityExecutionKey}:${current.idempotencyKey ?? current.runId}`
+        : entityExecutionKey;
     if (this.activeExecutions.has(executionKey)) {
       return this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status: "skipped",
@@ -437,7 +454,6 @@ export class HooksService {
     const startedAt = Date.now();
     try {
       const response = await this.postWebhook(hook, current, payload, options);
-      throwIfHookExecutionAborted(options?.signal);
       const decision = normalizeDecision(response.decision);
       const patchSummary = summarizePatch(response.patch);
       const status = decision?.type === "block" ? "blocked" : "completed";
@@ -553,7 +569,7 @@ export class HooksService {
   }
 
   private publishRunRealtime(hook: HookRecord, run: HookRunRecord): void {
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_run_updated",
       hookId: hook.hookId,
       hookRunId: run.runId,
@@ -563,6 +579,20 @@ export class HooksService {
       latencyMs: run.latencyMs,
       error: run.errorText,
     });
+  }
+
+  private publishRealtimeSafely(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void {
+    try {
+      this.ctx.publishRealtime(eventType, source, payload, options);
+    } catch {
+      // Retained realtime is a projection; it cannot roll back canonical hook state
+      // or turn a webhook that already returned success into a replayable failure.
+    }
   }
 
   private assertModeAllowed(workspaceId: string, mode: HookMode): void {
@@ -656,8 +686,15 @@ function buildDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, e
   return `${trigger}:${entityType}:${entityId}:${randomUUID()}`;
 }
 
-function buildAfterHookDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, entityId: string): string {
-  return `${trigger}:${entityType}:${entityId}`;
+function buildAfterHookDeliveryIdempotencyKey(
+  trigger: HookTrigger,
+  entityType: string,
+  entityId: string,
+  discriminator?: string,
+): string {
+  const base = `${trigger}:${entityType}:${entityId}`;
+  const normalizedDiscriminator = discriminator?.trim();
+  return normalizedDiscriminator ? `${base}:${normalizedDiscriminator}` : base;
 }
 
 function normalizeDecision(value: unknown): HookDecision | undefined {

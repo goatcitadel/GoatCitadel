@@ -3,7 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { PostgresDatabaseClient } from "./client.js";
-import { runPostgresMigrations } from "./migrator.js";
+import { applyPostgresMigrationsSync, runPostgresMigrations } from "./migrator.js";
 import { POSTGRES_MIGRATIONS } from "./migrations.js";
 import { PostgresSyncDatabaseClient } from "./sync.js";
 import { CommsDeliveryRepository } from "../comms-delivery-repo.js";
@@ -102,6 +102,10 @@ test(
       { pool: scopedPool },
     );
     const rawToken = `grat_${"p".repeat(43)}`;
+    const trailingHyphenToken = `grat_${"h".repeat(42)}-`;
+    const benignTokenlike = "grat_community_discount_code";
+    const benignLongTokenlike = `grat_${"c".repeat(42)}`;
+    const benignMessage = `grateful operator note ${benignTokenlike} ${benignLongTokenlike}`;
     const now = "2026-07-10T00:00:00.000Z";
 
     try {
@@ -120,6 +124,70 @@ test(
         ["legacy-remote-run", JSON.stringify({ payload: { token: rawToken } }), now],
       );
       await client.query(
+        `UPDATE durable_runs
+         SET lease_owner_id = $1, lease_expires_at = $2, lease_heartbeat_at = $3
+         WHERE run_id = $4`,
+        ["worker-legacy", "2099-07-10T00:05:00.000Z", now, "legacy-remote-run"],
+      );
+      await client.query(
+        `
+          INSERT INTO durable_runs (
+            run_id, workflow_key, status, attempt_count, max_attempts, payload_json, metadata_json,
+            version, created_at, updated_at
+          ) VALUES ($1, 'connector.delivery', 'queued', 0, 3, $2, '{}', 1, $3, $3)
+        `,
+        ["legacy-hyphen-run", JSON.stringify({ payload: { token: `x${trailingHyphenToken}y` } }), now],
+      );
+      await client.query(
+        `
+          INSERT INTO durable_runs (
+            run_id, workflow_key, status, attempt_count, max_attempts, payload_json, metadata_json,
+            version, created_at, updated_at
+          ) VALUES ($1, 'connector.delivery', 'queued', 0, 3, $2, '{}', 1, $3, $3)
+        `,
+        ["benign-grateful-run", JSON.stringify({ message: benignMessage }), now],
+      );
+      await client.query(
+        `
+          INSERT INTO approval_inbox_items (
+            inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
+            action_type, state, approval_kind, risk_level, approval_status, preview_json,
+            created_at, updated_at, expires_at, delivery_count, last_delivered_at
+          ) VALUES ($1, $2, $3, 'mcp', $4, $5, $6, 'approval.resolve', 'pending', 'tool.invoke', 'danger',
+            'pending', '{}', $7, $7, $8, 1, $7)
+        `,
+        [
+          "benign-inbox",
+          "benign-approval",
+          "mcp:server-1",
+          "server-1",
+          "benign-token-id",
+          benignTokenlike,
+          now,
+          "2026-07-10T00:15:00.000Z",
+        ],
+      );
+      await client.query(
+        `
+          INSERT INTO approval_inbox_items (
+            inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
+            action_type, state, approval_kind, risk_level, approval_status, preview_json,
+            created_at, updated_at, expires_at, delivery_count, last_delivered_at
+          ) VALUES ($1, $2, $3, 'mcp', $4, $5, $6, 'approval.resolve', 'pending', 'tool.invoke', 'danger',
+            'pending', '{}', $7, $7, $8, 1, $7)
+        `,
+        [
+          "legacy-decorated-inbox",
+          "legacy-decorated-approval",
+          "mcp:server-1",
+          "server-1",
+          "legacy-decorated-token-id",
+          `x${trailingHyphenToken}y`,
+          now,
+          "2026-07-10T00:15:00.000Z",
+        ],
+      );
+      await client.query(
         `
           INSERT INTO audit_events (
             stream_name, event_id, event_sequence, occurred_at, payload
@@ -132,18 +200,99 @@ test(
       assert.deepEqual(final.appliedVersions, [81]);
       assert.equal(final.latestVersion, 81);
 
-      const [durable] = await client.query<{ status: string; payload_json: string }>(
-        `SELECT status, payload_json FROM durable_runs WHERE run_id = $1`,
+      const [durable] = await client.query<{
+        status: string;
+        payload_json: string;
+        lease_owner_id: string | null;
+        lease_expires_at: string | null;
+        lease_heartbeat_at: string | null;
+      }>(
+        `SELECT status, payload_json, lease_owner_id, lease_expires_at, lease_heartbeat_at
+         FROM durable_runs WHERE run_id = $1`,
         ["legacy-remote-run"],
       );
       const [audit] = await client.query<{ payload: Record<string, unknown> }>(
         `SELECT payload FROM audit_events WHERE event_id = $1`,
         ["legacy-remote-audit"],
       );
+      const [hyphenDurable] = await client.query<{ status: string; payload_json: string }>(
+        `SELECT status, payload_json FROM durable_runs WHERE run_id = $1`,
+        ["legacy-hyphen-run"],
+      );
+      const [benignDurable] = await client.query<{ status: string; payload_json: string }>(
+        `SELECT status, payload_json FROM durable_runs WHERE run_id = $1`,
+        ["benign-grateful-run"],
+      );
+      const [benignInbox] = await client.query<{ token: string }>(
+        `SELECT token FROM approval_inbox_items WHERE inbox_item_id = $1`,
+        ["benign-inbox"],
+      );
+      const [legacyDecoratedInbox] = await client.query<{ token: string }>(
+        `SELECT token FROM approval_inbox_items WHERE inbox_item_id = $1`,
+        ["legacy-decorated-inbox"],
+      );
       assert.equal(durable?.status, "failed");
+      assert.equal(durable?.lease_owner_id, null);
+      assert.equal(durable?.lease_expires_at, null);
+      assert.equal(durable?.lease_heartbeat_at, null);
       assert.equal(JSON.stringify({ durable, audit }).includes(rawToken), false);
       assert.match(durable?.payload_json ?? "", /\[REDACTED\]/);
       assert.match(JSON.stringify(audit?.payload ?? {}), /\[REDACTED\]/);
+      assert.equal(hyphenDurable?.status, "failed");
+      assert.equal(hyphenDurable?.payload_json.includes(trailingHyphenToken), false);
+      assert.match(hyphenDurable?.payload_json ?? "", /\[REDACTED\]/);
+      assert.deepEqual(benignDurable, {
+        status: "queued",
+        payload_json: JSON.stringify({ message: benignMessage }),
+      });
+      assert.equal(benignInbox?.token, benignTokenlike);
+      assert.equal(legacyDecoratedInbox?.token, "redacted:legacy-decorated-token-id");
+
+      await client.query(
+        `
+          INSERT INTO audit_events (
+            stream_name, event_id, event_sequence, occurred_at, payload
+          )
+          SELECT
+            'sync-scrub',
+            'sync-scrub-' || item::text,
+            item,
+            $1::timestamptz,
+            jsonb_build_object('callbackData', 'gca:x' || $2::text || 'y:a')
+          FROM generate_series(1, 251) AS items(item)
+        `,
+        [now, trailingHyphenToken],
+      );
+      const scrubMigration = POSTGRES_MIGRATIONS.find(
+        (migration) => migration.name === "scrub_legacy_remote_approval_bearers",
+      );
+      assert.ok(scrubMigration);
+      const syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-batched-scrub-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      try {
+        applyPostgresMigrationsSync(syncClient, {
+          migrationsTable: `sync_scrub_migrations_${suffix}`,
+          migrations: [scrubMigration],
+        });
+      } finally {
+        syncClient.close();
+      }
+      const [syncScrubResult] = await client.query<{ total: number; redacted: number; leaked: number }>(
+        `
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE payload::text LIKE '%[REDACTED]%')::int AS redacted,
+            COUNT(*) FILTER (WHERE POSITION($1 IN payload::text) > 0)::int AS leaked
+          FROM audit_events
+          WHERE stream_name = 'sync-scrub'
+        `,
+        [trailingHyphenToken],
+      );
+      assert.deepEqual(syncScrubResult, { total: 251, redacted: 251, leaked: 0 });
     } finally {
       await client.close();
       await pool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);

@@ -32,4 +32,31 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
 
     expect(host.subagentFanout).toBe(subagentFanout);
   });
+
+  it("forwards the durable lease owner through the composed Chat runtime host", () => {
+    const finalizeDurableChatRun = vi.fn();
+    const stub = {
+      storage: { runtimeDecisionTraces: {}, chatSessionPrefs: { get: vi.fn() } },
+      turnRuntime: {},
+      backgroundTasks: new Set(),
+      hooksService: {},
+      llmService: {},
+      steerService: {},
+      config: {},
+      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      subagentFanout: {},
+      finalizeDurableChatRun,
+    };
+    const host = (
+      GatewayService.prototype as unknown as {
+        buildChatTurnRuntimeHost(this: unknown): {
+          finalizeDurableChatRun: (...args: unknown[]) => void;
+        };
+      }
+    ).buildChatTurnRuntimeHost.call(stub);
+
+    host.finalizeDurableChatRun("run-1", {}, {}, "lease-owner-1");
+
+    expect(finalizeDurableChatRun).toHaveBeenCalledWith("run-1", {}, {}, "lease-owner-1");
+  });
 });

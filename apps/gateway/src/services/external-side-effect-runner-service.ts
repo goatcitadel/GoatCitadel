@@ -207,6 +207,8 @@ export function deriveExternalSideEffectReversibility(input: {
 export interface ExternalSideEffectClaimInput {
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
+  /** Atomically owns the mutation claim and its operator-visible side-effect run. */
+  runClaimTransaction?<T>(work: () => T): T;
   workspaceId?: string;
   boundary: string;
   catalogId?: string;
@@ -233,13 +235,22 @@ export interface ExternalSideEffectClaimResult {
 
 export interface ExternalSideEffectExecutionContext extends ExternalSideEffectClaimResult {
   readonly externalCallStarted: boolean;
+  readonly externalCallNotRequired: boolean;
   /** Call immediately before the provider or bridge request crosses the external side-effect boundary. */
   markExternalCallStarted(): void;
+  /** Call only when preflight completed safely without crossing an external boundary. */
+  markExternalCallNotRequired(): void;
 }
 
 export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSideEffectClaimInput {
   label: string;
   output?: Record<string, unknown>;
+  /**
+   * Require the operator-visible side-effect ledger to record the boundary
+   * before provider code runs. Intended for durable workflows where a missing
+   * boundary marker must fail closed instead of creating a replay ambiguity.
+   */
+  requireDurableBoundaryRecord?: boolean;
   /**
    * The Citadel Ward effect resolved for this action (via evaluateWards()). When it is
    * `require_dry_run`, a direct execute is REFUSED before the boundary — the side-effect must
@@ -248,6 +259,8 @@ export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSi
    */
   wardEffect?: WardEffect;
   execute(claim: ExternalSideEffectExecutionContext): Promise<TValue>;
+  /** Optional canonical completion commit. When present it owns all terminal stores atomically. */
+  commitCompleted?(claim: ExternalSideEffectExecutionContext, value: TValue): void;
 }
 
 export type IdempotentExternalSideEffectRunResult<TValue> =
@@ -338,25 +351,30 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
     });
   }
 
-  const claim = input.mutationStore.claim({
-    method: "POST",
-    routePath,
-    idempotencyKey,
-    actorScope,
-    payloadHash,
-    now: input.checkedAt,
-  });
-  return recordExternalSideEffectRun(input, {
-    replayPolicy: "idempotent_external",
-    replayOutcome: claim.outcome,
-    replayAttempt: claim.outcome === "claimed" ? (claim.claimKind ?? "new") : "blocked",
-    resumable: false,
-    resumeState: mapExternalSideEffectResumeState(claim.outcome),
-    idempotencyKey,
-    payloadHash,
-    actorScope,
-    routePath,
-  });
+  const claimAndRecord = (): ExternalSideEffectClaimResult => {
+    const claim = input.mutationStore!.claim({
+      method: "POST",
+      routePath,
+      idempotencyKey,
+      actorScope,
+      payloadHash,
+      now: input.checkedAt,
+    });
+    return recordExternalSideEffectRun(input, {
+      replayPolicy: "idempotent_external",
+      replayOutcome: claim.outcome,
+      replayAttempt: claim.outcome === "claimed" ? (claim.claimKind ?? "new") : "blocked",
+      resumable: false,
+      resumeState: mapExternalSideEffectResumeState(claim.outcome),
+      idempotencyKey,
+      payloadHash,
+      actorScope,
+      routePath,
+    });
+  };
+  return input.sideEffectRunStore && input.runClaimTransaction
+    ? input.runClaimTransaction(claimAndRecord)
+    : claimAndRecord();
 }
 
 export async function runReplaySafeExternalSideEffectWorker<TValue>(
@@ -466,32 +484,67 @@ export async function runIdempotentExternalSideEffect<TValue>(
   }
 
   let externalCallStarted = false;
+  let externalCallNotRequired = false;
+  let boundaryClaimLost = false;
   const markExternalCallStarted = () => {
     if (!externalCallStarted) {
+      if (input.requireDurableBoundaryRecord) {
+        if (!input.sideEffectRunStore || !claim.sideEffectRunId) {
+          throw new Error(`${input.label} requires a durable external-boundary record before execution.`);
+        }
+        try {
+          markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
+        } catch (error) {
+          boundaryClaimLost = isExternalSideEffectBoundaryClaimLostError(error);
+          throw error;
+        }
+        externalCallStarted = true;
+        return;
+      }
       externalCallStarted = true;
       try {
         markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
-      } catch (error) {
-        // The in-memory boundary flag is authoritative for this request. A
-        // local run-store write failure must not turn a sent external request
-        // into a retryable pre-boundary failure.
-        void error;
+      } catch {
+        // Legacy callers retain best-effort mirror behavior. Strict durable
+        // callers opt into the fail-closed branch above.
       }
     }
+  };
+  const markExternalCallNotRequired = () => {
+    if (externalCallStarted) {
+      throw new Error(`${input.label} cannot skip an external boundary after the external call started.`);
+    }
+    externalCallNotRequired = true;
   };
   const executionClaim: ExternalSideEffectExecutionContext = {
     ...claim,
     get externalCallStarted() {
       return externalCallStarted;
     },
+    get externalCallNotRequired() {
+      return externalCallNotRequired;
+    },
     markExternalCallStarted,
+    markExternalCallNotRequired,
   };
 
   try {
     const value = await input.execute(executionClaim);
-    markExternalCallStarted();
-    safeMarkIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
-    safeMarkExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
+    if (input.requireDurableBoundaryRecord && !externalCallStarted && !externalCallNotRequired) {
+      // The callback violated the strict contract. Treat the outcome as unknown:
+      // provider code may have run, so never reopen the mutation for retry.
+      externalCallStarted = true;
+      throw new Error(`${input.label} crossed execution without recording its durable external boundary.`);
+    }
+    if (!externalCallStarted && !externalCallNotRequired) {
+      markExternalCallStarted();
+    }
+    if (input.commitCompleted) {
+      input.commitCompleted(executionClaim, value);
+    } else {
+      safeMarkIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
+      safeMarkExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
+    }
     return {
       status: "executed",
       claim: {
@@ -502,14 +555,21 @@ export async function runIdempotentExternalSideEffect<TValue>(
       value,
     };
   } catch (error) {
-    if (!externalCallStarted) {
+    const manualReconciliationRequired = externalCallStarted || boundaryClaimLost;
+    if (!manualReconciliationRequired) {
       markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
     }
-    safeMarkExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, externalCallStarted, input.checkedAt);
+    safeMarkExternalSideEffectRunFailed(
+      input.sideEffectRunStore,
+      claim,
+      error,
+      manualReconciliationRequired,
+      input.checkedAt,
+    );
     const failedClaim = {
       ...claim,
       resumable: false,
-      resumeState: externalCallStarted
+      resumeState: manualReconciliationRequired
         ? ("manual_review_unknown_external_outcome" as const)
         : ("manual_retry_after_recorded_failure" as const),
     };
@@ -520,6 +580,15 @@ export async function runIdempotentExternalSideEffect<TValue>(
       output: buildExternalSideEffectReplayOutput(failedClaim, input.output),
     };
   }
+}
+
+function isExternalSideEffectBoundaryClaimLostError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST"
+  );
 }
 
 function readExternalSideEffectReplayEligibility(

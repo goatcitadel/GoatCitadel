@@ -220,7 +220,8 @@ describe("sqlite schema migrations", () => {
   it("scrubs legacy remote approval bearers from durable and observability stores", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-remote-bearer-${randomUUID()}.db`);
     createdFiles.push(dbPath);
-    const rawToken = `grat_${"m".repeat(43)}`;
+    const rawToken = `grat_${"m".repeat(42)}-`;
+    const decoratedToken = `x${rawToken}y`;
     const now = "2026-07-10T00:00:00.000Z";
     const db = createDatabase({ dbPath });
     db.prepare(
@@ -230,7 +231,25 @@ describe("sqlite schema migrations", () => {
         version, created_at, updated_at
       ) VALUES (?, 'connector.delivery', 'queued', 0, 3, ?, '{}', 1, ?, ?)
     `,
-    ).run("legacy-remote-run", JSON.stringify({ payload: { token: rawToken } }), now, now);
+    ).run("legacy-remote-run", JSON.stringify({ payload: { token: decoratedToken } }), now, now);
+    db.prepare(
+      `UPDATE durable_runs
+       SET lease_owner_id = ?, lease_expires_at = ?, lease_heartbeat_at = ?
+       WHERE run_id = ?`,
+    ).run("worker-legacy", "2099-07-10T00:05:00.000Z", now, "legacy-remote-run");
+    db.prepare(
+      `
+      INSERT INTO durable_runs (
+        run_id, workflow_key, status, attempt_count, max_attempts, payload_json, metadata_json,
+        version, created_at, updated_at
+      ) VALUES (?, 'connector.delivery', 'queued', 0, 3, ?, '{}', 1, ?, ?)
+    `,
+    ).run(
+      "benign-grateful-run",
+      JSON.stringify({ message: "grateful operator note using grat_community_discount_code" }),
+      now,
+      now,
+    );
     db.prepare(
       `
       INSERT INTO comms_deliveries (
@@ -250,6 +269,23 @@ describe("sqlite schema migrations", () => {
     );
     db.prepare(
       `
+      INSERT INTO comms_deliveries (
+        delivery_id, connection_id, channel_key, target, payload_hash, payload_json, status,
+        attempts, max_attempts, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, 3, ?, ?)
+    `,
+    ).run(
+      "benign-gratis-delivery",
+      "connection-1",
+      "discord",
+      "channel-1",
+      "benign-payload-hash",
+      JSON.stringify({ message: "gratis support is enabled" }),
+      now,
+      now,
+    );
+    db.prepare(
+      `
       INSERT INTO approval_inbox_items (
         inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
         action_type, state, approval_kind, risk_level, approval_status, preview_json,
@@ -263,7 +299,7 @@ describe("sqlite schema migrations", () => {
       "mcp:server-1",
       "server-1",
       "legacy-token-id",
-      rawToken,
+      `${rawToken}y`,
       now,
       now,
       "2026-07-10T00:15:00.000Z",
@@ -271,35 +307,135 @@ describe("sqlite schema migrations", () => {
     );
     db.prepare(
       `
-      INSERT INTO tool_invocations (
-        audit_event_id, timestamp, agent_id, session_id, tool_name, outcome, policy_reason, args_json
-      ) VALUES (?, ?, 'operator', 'session-1', 'channel.send', 'executed', 'allowed', ?)
+      INSERT INTO approval_inbox_items (
+        rowid, inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
+        action_type, state, approval_kind, risk_level, approval_status, preview_json,
+        created_at, updated_at, expires_at, delivery_count, last_delivered_at
+      ) VALUES (-2, ?, ?, ?, 'mcp', ?, ?, ?, 'approval.resolve', 'pending', 'tool.invoke', 'danger',
+        'pending', '{}', ?, ?, ?, 1, ?)
     `,
-    ).run("legacy-tool-invocation", now, JSON.stringify({ callbackData: `gca:${rawToken}:a` }));
+    ).run(
+      "legacy-negative-rowid-inbox",
+      "legacy-negative-rowid-approval",
+      "mcp:server-1",
+      "server-1",
+      "legacy-negative-rowid-token-id",
+      `x${rawToken}`,
+      now,
+      now,
+      "2026-07-10T00:15:00.000Z",
+      now,
+    );
+    db.prepare(
+      `
+      INSERT INTO approval_inbox_items (
+        inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
+        action_type, state, approval_kind, risk_level, approval_status, preview_json,
+        created_at, updated_at, expires_at, delivery_count, last_delivered_at
+      ) VALUES (?, ?, ?, 'mcp', ?, ?, ?, 'approval.resolve', 'pending', 'tool.invoke', 'danger',
+        'pending', '{}', ?, ?, ?, 1, ?)
+    `,
+    ).run(
+      "benign-inbox",
+      "benign-approval",
+      "mcp:server-1",
+      "server-1",
+      "benign-token-id",
+      "grateful-note",
+      now,
+      now,
+      "2026-07-10T00:15:00.000Z",
+      now,
+    );
+    const insertToolInvocation = db.prepare(
+      `INSERT INTO tool_invocations (
+         audit_event_id, timestamp, agent_id, session_id, tool_name, outcome, policy_reason, args_json
+       ) VALUES (?, ?, 'operator', 'session-1', 'channel.send', 'executed', 'allowed', ?)`,
+    );
+    db.transaction("immediate", () => {
+      for (let index = 0; index < 250; index += 1) {
+        insertToolInvocation.run(
+          `benign-batch-${index}`,
+          now,
+          JSON.stringify({ message: `grat_community_discount_code-${index}` }),
+        );
+      }
+    });
+    insertToolInvocation.run("legacy-tool-invocation", now, JSON.stringify({ callbackData: `gca:x${rawToken}:a` }));
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(139);
     db.close();
 
     const migrated = createDatabase({ dbPath });
     const durable = migrated
-      .prepare("SELECT status, payload_json FROM durable_runs WHERE run_id = ?")
-      .get("legacy-remote-run") as { status: string; payload_json: string };
+      .prepare(
+        `SELECT status, payload_json, lease_owner_id, lease_expires_at, lease_heartbeat_at
+         FROM durable_runs WHERE run_id = ?`,
+      )
+      .get("legacy-remote-run") as {
+      status: string;
+      payload_json: string;
+      lease_owner_id: string | null;
+      lease_expires_at: string | null;
+      lease_heartbeat_at: string | null;
+    };
     const delivery = migrated
       .prepare("SELECT status, delivery_status, payload_json FROM comms_deliveries WHERE delivery_id = ?")
       .get("legacy-remote-delivery") as { status: string; delivery_status: string; payload_json: string };
     const inbox = migrated
       .prepare("SELECT token FROM approval_inbox_items WHERE inbox_item_id = ?")
       .get("legacy-inbox") as { token: string };
+    const negativeRowidInbox = migrated
+      .prepare("SELECT token FROM approval_inbox_items WHERE inbox_item_id = ?")
+      .get("legacy-negative-rowid-inbox") as { token: string };
     const invocation = migrated
       .prepare("SELECT args_json FROM tool_invocations WHERE audit_event_id = ?")
       .get("legacy-tool-invocation") as { args_json: string };
+    const benignDurable = migrated
+      .prepare("SELECT status, payload_json FROM durable_runs WHERE run_id = ?")
+      .get("benign-grateful-run") as { status: string; payload_json: string };
+    const benignDelivery = migrated
+      .prepare("SELECT status, delivery_status, payload_json FROM comms_deliveries WHERE delivery_id = ?")
+      .get("benign-gratis-delivery") as { status: string; delivery_status: string | null; payload_json: string };
+    const benignInbox = migrated
+      .prepare("SELECT token FROM approval_inbox_items WHERE inbox_item_id = ?")
+      .get("benign-inbox") as { token: string };
+    const benignBatch = migrated
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM tool_invocations
+         WHERE audit_event_id LIKE 'benign-batch-%'
+           AND args_json LIKE '%grat_community_discount_code%'`,
+      )
+      .get() as { count: number };
 
     assert.equal(durable.status, "failed");
+    assert.equal(durable.lease_owner_id, null);
+    assert.equal(durable.lease_expires_at, null);
+    assert.equal(durable.lease_heartbeat_at, null);
     assert.equal(delivery.status, "failed");
     assert.equal(delivery.delivery_status, "manual_reconciliation_required");
     assert.equal(inbox.token, "redacted:legacy-token-id");
+    assert.equal(negativeRowidInbox.token, "redacted:legacy-negative-rowid-token-id");
     assert.equal(JSON.stringify({ durable, delivery, inbox, invocation }).includes(rawToken), false);
     assert.match(durable.payload_json, /\[REDACTED\]/);
     assert.match(invocation.args_json, /\[REDACTED\]/);
+    assert.deepEqual(
+      { ...benignDurable },
+      {
+        status: "queued",
+        payload_json: JSON.stringify({ message: "grateful operator note using grat_community_discount_code" }),
+      },
+    );
+    assert.deepEqual(
+      { ...benignDelivery },
+      {
+        status: "queued",
+        delivery_status: null,
+        payload_json: JSON.stringify({ message: "gratis support is enabled" }),
+      },
+    );
+    assert.equal(benignInbox.token, "grateful-note");
+    assert.equal(benignBatch.count, 250);
     migrated.close();
   });
 

@@ -4,6 +4,7 @@ import {
   buildApprovalRemoteTokenConnectorDeliveryPayload,
   enqueueApprovalRemoteTokenConnectorDelivery,
 } from "./approval-connector-delivery.js";
+import { DurableOperatorPostCommitError } from "./durable-operator-service.js";
 
 describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
   it("never serializes the raw bearer into any connector delivery payload", () => {
@@ -67,6 +68,117 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         }),
       }),
     );
+  });
+
+  it("returns committed durable truth and preserves its secret when post-commit publication fails", () => {
+    const rawToken = `grat_${"c".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_committed";
+    const committedRun = { runId: "delivery-run-committed", status: "queued" } as never;
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(),
+    };
+    const createDurableRun = vi.fn((input) => {
+      expect(input).toMatchObject({
+        workflowKey: "connector.delivery",
+        payload: expect.objectContaining({ secretRefs: { approvalActionToken: tokenRef } }),
+      });
+      throw new DurableOperatorPostCommitError(
+        "Durable run creation",
+        committedRun,
+        new Error("processing request unavailable"),
+      );
+    });
+
+    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets,
+        requestAttribution: {},
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
+        tokenRecord: {
+          token: rawToken,
+          tokenId: "rat_committed",
+          expiresAt: "2099-03-20T12:00:00.000Z",
+        },
+      },
+    );
+
+    expect(run).toBe(committedRun);
+    expect(tokenSecrets.delete).not.toHaveBeenCalled();
+  });
+
+  it("deletes an uncommitted secret when durable creation fails before commit", () => {
+    const rawToken = `grat_${"f".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_uncommitted";
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(),
+    };
+    const createDurableRun = vi.fn(() => {
+      throw new Error("checkpoint write unavailable");
+    });
+
+    expect(() =>
+      enqueueApprovalRemoteTokenConnectorDelivery(
+        {
+          tokenSecrets,
+          requestAttribution: {},
+          createDurableRun: createDurableRun as never,
+        },
+        {
+          approval: createApproval(),
+          connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
+          tokenRecord: {
+            token: rawToken,
+            tokenId: "rat_uncommitted",
+            expiresAt: "2099-03-20T12:00:00.000Z",
+          },
+        },
+      ),
+    ).toThrow("checkpoint write unavailable");
+    expect(tokenSecrets.delete).toHaveBeenCalledWith(tokenRef);
+  });
+
+  it("does not fail token issuance when cleanup of an undeliverable connector secret is deferred", () => {
+    const rawToken = `grat_${"z".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_deferred_cleanup";
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(() => {
+        throw new Error("keychain cleanup unavailable");
+      }),
+    };
+    const createDurableRun = vi.fn();
+    let run: ReturnType<typeof enqueueApprovalRemoteTokenConnectorDelivery>;
+
+    expect(() => {
+      run = enqueueApprovalRemoteTokenConnectorDelivery(
+        {
+          tokenSecrets,
+          requestAttribution: {},
+          createDurableRun: createDurableRun as never,
+        },
+        {
+          approval: createApproval(),
+          connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
+          tokenRecord: {
+            token: rawToken,
+            tokenId: "rat_deferred_cleanup",
+            expiresAt: "2099-03-20T12:00:00.000Z",
+          },
+        },
+      );
+    }).not.toThrow();
+
+    expect(run!).toBeUndefined();
+    expect(tokenSecrets.store).toHaveBeenCalledWith("rat_deferred_cleanup", rawToken);
+    expect(tokenSecrets.delete).toHaveBeenCalledTimes(1);
+    expect(tokenSecrets.delete).toHaveBeenCalledWith(tokenRef);
+    expect(createDurableRun).not.toHaveBeenCalled();
   });
 
   it("builds browser delivery payloads for active approval-capable mission control connectors", () => {

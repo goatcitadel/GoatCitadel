@@ -625,6 +625,7 @@ async function runAgentSendChatMessageLlmPath(
     // turns are excluded (no self-feeding classifier/review loop on their output).
     if (finalTraceStatus === "completed") {
       const autonomousTurn = isAutonomousTurnRequest(input);
+      const delegatedChild = Boolean(prepared.parentDelegationStepId);
       host.recordTurnCommitments({
         sessionId,
         workspaceId: prepared.workspaceId,
@@ -637,10 +638,16 @@ async function runAgentSendChatMessageLlmPath(
       host.scheduleBackgroundReviewIfDue({
         sessionId,
         workspaceId: prepared.workspaceId,
+        turnId,
         userText: prepared.content,
         assistantText,
-        parentTurnId: prepared.parentTurnId,
+        delegatedChild,
         autonomous: autonomousTurn,
+      });
+      host.scheduleMemoryMaintenancePostTurnEvaluation({
+        sessionId,
+        turnId,
+        delegatedChild,
       });
     }
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);

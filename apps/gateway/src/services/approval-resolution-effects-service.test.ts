@@ -2107,7 +2107,7 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("does not overwrite a durable run cancelled between materialization read and completion CAS", () => {
+  it("does not seize a running durable run during approval materialization", () => {
     const runningRun = {
       runId: "durable-cancel-race",
       status: "running",
@@ -2157,11 +2157,74 @@ describe("approval-resolution-effects-service", () => {
         checkpointState: { status: "completed" },
       }),
     ).not.toThrow();
-    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: 4 }));
+    expect(updateRun).not.toHaveBeenCalled();
     expect(createCheckpoint).not.toHaveBeenCalled();
   });
 
-  it("preserves cancelled Chat and delegation truth when cancellation wins the materialization CAS", () => {
+  it("records the run_completed timeline inside approval materialization completion", () => {
+    let durableRun = {
+      runId: "durable-waiting",
+      status: "waiting" as const,
+      version: 4,
+      metadata: {},
+    };
+    const updateRun = vi.fn((input: Record<string, unknown>) => {
+      durableRun = { ...durableRun, ...input, status: "completed", version: 5 } as typeof durableRun;
+      return durableRun;
+    });
+    const createCheckpoint = vi.fn();
+    const recordDurableTimelineEvent = vi.fn();
+    const runImmediateTransaction = vi.fn(<T>(work: () => T): T => work());
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          durableRuns: {
+            getRun: vi.fn(() => durableRun),
+            updateRun,
+            createCheckpoint,
+          },
+          runImmediateTransaction,
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+        recordDurableTimelineEvent,
+      },
+    );
+
+    const result = (
+      service as unknown as {
+        completeDurableRunIfPresent(
+          runId: string,
+          input: { now: string; outputText: string; checkpointState: Record<string, unknown> },
+        ): string | undefined;
+      }
+    ).completeDurableRunIfPresent("durable-waiting", {
+      now: "2026-04-11T00:00:00.000Z",
+      outputText: "approved output",
+      checkpointState: { status: "completed", approvalId: "approval-1" },
+    });
+
+    expect(result).toBe("completed");
+    expect(runImmediateTransaction).toHaveBeenCalledTimes(1);
+    expect(createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "durable-waiting", checkpointKind: "run_completed" }),
+    );
+    expect(recordDurableTimelineEvent).toHaveBeenCalledWith("durable-waiting", "run_completed", {
+      status: "completed",
+      approvalId: "approval-1",
+    });
+  });
+
+  it("leaves running Chat and delegation truth untouched until the durable run parks", () => {
     const effect = createEffect({
       effectKind: "pending_action_execute",
       targetKind: "pending_action",
@@ -2292,9 +2355,9 @@ describe("approval-resolution-effects-service", () => {
       ),
     ).not.toThrow();
 
-    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: 4 }));
-    expect(trace.status).toBe("cancelled");
-    expect(trace.durable?.status).toBe("cancelled");
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(trace.status).toBe("waiting_for_approval");
+    expect(trace.durable?.status).toBe("running");
     expect(chatMessagesUpsert).not.toHaveBeenCalled();
     expect(chatTurnTracesPatch).not.toHaveBeenCalled();
     expect(delegationParents).not.toHaveBeenCalled();

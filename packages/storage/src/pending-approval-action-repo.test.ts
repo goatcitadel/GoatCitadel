@@ -58,6 +58,36 @@ describe("PendingApprovalActionRepository", () => {
     assert.equal(secondResolve.result?.ok, true);
   });
 
+  it("does not reopen or overwrite a terminal action during a stale pending refresh", () => {
+    const repo = createRepo();
+    repo.upsertPending({
+      approvalId: "ap-terminal-refresh",
+      actionType: "tool.invoke",
+      request: { toolName: "plugin.send", args: { before: true } },
+      createdAt: "2026-07-10T00:00:00.000Z",
+      expiresAt: "2026-07-10T00:10:00.000Z",
+    });
+    const resolved = repo.markResolved("ap-terminal-refresh", "executed", {
+      outcome: "executed",
+      auditEventId: "audit-terminal",
+    });
+
+    const refreshed = repo.upsertPending({
+      approvalId: "ap-terminal-refresh",
+      actionType: "tool.invoke",
+      request: { toolName: "plugin.send", args: { after: true } },
+      createdAt: "2026-07-10T00:01:00.000Z",
+      expiresAt: "2026-07-10T00:20:00.000Z",
+    });
+
+    assert.equal(refreshed.resolutionStatus, "executed");
+    assert.equal(refreshed.resolvedAt, resolved.resolvedAt);
+    assert.deepEqual(refreshed.result, { outcome: "executed", auditEventId: "audit-terminal" });
+    assert.deepEqual(refreshed.request, { toolName: "plugin.send", args: { before: true } });
+    assert.equal(refreshed.createdAt, "2026-07-10T00:00:00.000Z");
+    assert.equal(refreshed.expiresAt, "2026-07-10T00:10:00.000Z");
+  });
+
   it("creates the SQLite expiry column", () => {
     const { db } = createRepoWithDb();
     const columns = db.prepare("PRAGMA table_info(pending_approval_actions)").all() as Array<{ name: string }>;

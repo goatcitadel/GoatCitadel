@@ -17,6 +17,7 @@ import {
   type DurableCheckpointRecord,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
+  type ExternalSideEffectRunRecord,
   type PendingApprovalAction,
   type ProactiveActionRecord,
   type ProactiveRunRecord,
@@ -305,7 +306,8 @@ describe("ChatProactiveService", () => {
     // immediate transaction so a concurrent resolution cannot read the same row,
     // merge, and clobber the other writer's field updates.
     const txSpy = vi.spyOn(
-      (service as unknown as { ctx: { gatewaySql: { runImmediateTransaction: <T>(cb: () => T) => T } } }).ctx.gatewaySql,
+      (service as unknown as { ctx: { gatewaySql: { runImmediateTransaction: <T>(cb: () => T) => T } } }).ctx
+        .gatewaySql,
       "runImmediateTransaction",
     );
 
@@ -507,6 +509,15 @@ describe("ChatProactiveService", () => {
         correlationId: approvalId,
         payload: { approvalId },
       });
+      const queuedParent = state.durableRuns.get(parentRunId)!;
+      state.durableRuns.set(parentRunId, {
+        ...queuedParent,
+        status: "running",
+        version: queuedParent.version + 1,
+        leaseOwnerId: `test-resume-claim:${parentRunId}`,
+        leaseHeartbeatAt: new Date().toISOString(),
+        leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+      });
       await service.executeDurableProactiveTickRun(state.durableRuns.get(parentRunId)!);
 
       const completedRun = readRun(state, started.runId);
@@ -546,6 +557,166 @@ describe("ChatProactiveService", () => {
     }
   });
 
+  it("recovers an already-resolved approval when the durable wait linkage was never committed", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool } = harness;
+    const planSpy = vi.spyOn(
+      service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+      "planProactiveActions",
+    );
+    planSpy.mockResolvedValue({
+      confidence: 0.9,
+      reasoningSummary: "One approval-gated action is required.",
+      actions: [{ kind: "tool", toolName: "http.get", args: { url: "https://example.com/private" } }],
+    });
+
+    let approvalId = "";
+    invokeTool.mockImplementationOnce(async () => {
+      const approval = harness.storage.approvals.create({
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: { toolName: "http.get" },
+        preview: { title: "Approve private fetch" },
+        linkage: { sessionId: state.session.sessionId, originSurface: "chat" },
+      });
+      approvalId = approval.approvalId;
+      harness.storage.pendingApprovalActions.upsertPending({
+        approvalId,
+        actionType: "tool.invoke",
+        request: { toolName: "http.get", args: { url: "https://example.com/private" } },
+      });
+      return {
+        outcome: "approval_required",
+        approvalId,
+        policyReason: "Approval required by policy.",
+        auditEventId: "audit-approval",
+      } satisfies ToolInvokeResult;
+    });
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    const waitSpy = vi
+      .spyOn(service as unknown as { markDurableRunWaiting: (...args: unknown[]) => unknown }, "markDurableRunWaiting")
+      .mockImplementationOnce(() => {
+        throw new Error("simulated crash before wait commit");
+      });
+
+    await expect(service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!)).rejects.toThrow(
+      "simulated crash before wait commit",
+    );
+    expect(actionsForRun(state, started.runId)).toEqual([expect.objectContaining({ status: "blocked", approvalId })]);
+    expect(state.durableRuns.get(durableRunId)?.status).toBe("running");
+
+    harness.storage.pendingApprovalActions.markResolved(approvalId, "executed", {
+      outcome: "executed",
+      result: { ok: true, recovered: true },
+    });
+    harness.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+    waitSpy.mockRestore();
+
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(readRun(state, started.runId)).toMatchObject({ status: "executed", stopReason: "completed" });
+    expect(actionsForRun(state, started.runId)).toEqual([
+      expect.objectContaining({
+        status: "executed",
+        approvalId,
+        result: expect.objectContaining({ approvedResult: { ok: true, recovered: true } }),
+      }),
+    ]);
+    expect(state.durableRuns.get(durableRunId)?.status).toBe("completed");
+  });
+
+  it("fails before invoking a proactive tool when the durable boundary marker cannot be recorded", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool } = harness;
+    const markerSpy = vi
+      .spyOn(harness.storage.externalSideEffectRuns, "markExternalCallStarted")
+      .mockImplementationOnce(() => {
+        throw new Error("side-effect ledger unavailable");
+      });
+    invokeTool.mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowlisted",
+      auditEventId: "audit-1",
+      result: { ok: true },
+    } satisfies ToolInvokeResult);
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    await expect(service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!)).rejects.toThrow(
+      "side-effect ledger unavailable",
+    );
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(actionsForRun(state, started.runId)).toEqual([expect.objectContaining({ status: "suggested" })]);
+
+    markerSpy.mockRestore();
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(readRun(state, started.runId).status).toBe("executed");
+  });
+
+  it("does not invoke the same proactive action twice when executions overlap", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool } = harness;
+    let releaseTool: ((result: ToolInvokeResult) => void) | undefined;
+    let toolStartedResolve: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      toolStartedResolve = resolve;
+    });
+    invokeTool.mockImplementation(
+      async () =>
+        await new Promise<ToolInvokeResult>((resolve) => {
+          releaseTool = resolve;
+          toolStartedResolve?.();
+        }),
+    );
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    const first = service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+    await toolStarted;
+    const second = service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+
+    await expect(second).rejects.toThrow("manual reconciliation is required");
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    releaseTool?.({
+      outcome: "executed",
+      policyReason: "allowlisted",
+      auditEventId: "audit-1",
+      result: { ok: true },
+    });
+    await first;
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(readRun(state, started.runId).status).toBe("executed");
+  });
+
+  it("preserves proactive completion and cooldown truth when realtime projection fails", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool, publishRealtime } = harness;
+    invokeTool.mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowlisted",
+      auditEventId: "audit-1",
+      result: { ok: true },
+    } satisfies ToolInvokeResult);
+    publishRealtime.mockImplementation(() => {
+      throw new Error("realtime unavailable");
+    });
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(readRun(state, started.runId).status).toBe("executed");
+    expect(state.durableRuns.get(durableRunId)?.status).toBe("completed");
+    expect(state.prefs.get(state.session.sessionId)).toMatchObject({ lastProactiveRunId: started.runId });
+  });
+
   it("aborts proactive durable execution without marking the pending action failed", async () => {
     const harness = createHarness();
     const { service, state, invokeTool } = harness;
@@ -577,6 +748,11 @@ describe("ChatProactiveService", () => {
     const actions = actionsForRun(state, started.runId);
     expect(actions).toHaveLength(1);
     expect(actions[0]?.status).toBe("suggested");
+
+    await expect(service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!)).rejects.toThrow(
+      "manual reconciliation is required",
+    );
+    expect(invokeTool).toHaveBeenCalledTimes(1);
   });
 
   it("propagates string abort reasons before starting durable proactive work", async () => {
@@ -1057,7 +1233,19 @@ function createHarness(options?: {
     listChatMessages: async (sessionId) => state.messages.get(sessionId) ?? [],
     invokeTool,
     detectDelegationRoles: () => [],
-    createDurableRun: (input) => durableRunService.createDurableRun(input),
+    createDurableRun: (input) => {
+      const created = durableRunService.createDurableRun(input);
+      const claimed = {
+        ...created,
+        status: "running" as const,
+        version: created.version + 1,
+        leaseOwnerId: `test-claim:${created.runId}`,
+        leaseHeartbeatAt: new Date().toISOString(),
+        leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+      };
+      state.durableRuns.set(created.runId, claimed);
+      return claimed;
+    },
     requestDurableRunProcessing: () => undefined,
     backgroundTasks,
     closing: false,
@@ -1076,7 +1264,165 @@ function createHarness(options?: {
 }
 
 function createStorage(state: HarnessState) {
+  const mutationRecords = new Map<
+    string,
+    {
+      method: string;
+      routePath: string;
+      idempotencyKey: string;
+      actorScope: string;
+      payloadHash: string;
+      status: "pending" | "completed" | "failed";
+      createdAt: string;
+      updatedAt: string;
+    }
+  >();
+  const sideEffectRecords = new Map<string, ExternalSideEffectRunRecord>();
+  const mutationKey = (input: { routePath: string; idempotencyKey: string; actorScope?: string }) =>
+    `${input.routePath}:${input.idempotencyKey}:${input.actorScope ?? ""}`;
   return {
+    runImmediateTransaction: <T>(callback: () => T): T => callback(),
+    mutationIdempotency: {
+      claim: (input: {
+        method: string;
+        routePath: string;
+        idempotencyKey: string;
+        actorScope?: string;
+        payloadHash: string;
+        now?: string;
+      }) => {
+        const key = mutationKey(input);
+        const existing = mutationRecords.get(key);
+        const now = input.now ?? new Date().toISOString();
+        if (!existing) {
+          const record = {
+            method: input.method,
+            routePath: input.routePath,
+            idempotencyKey: input.idempotencyKey,
+            actorScope: input.actorScope ?? "",
+            payloadHash: input.payloadHash,
+            status: "pending" as const,
+            createdAt: now,
+            updatedAt: now,
+          };
+          mutationRecords.set(key, record);
+          return { outcome: "claimed" as const, claimKind: "new" as const, record };
+        }
+        if (existing.payloadHash !== input.payloadHash) {
+          return { outcome: "payload_mismatch" as const, record: existing };
+        }
+        if (existing.status === "failed") {
+          const record = { ...existing, status: "pending" as const, updatedAt: now };
+          mutationRecords.set(key, record);
+          return { outcome: "claimed" as const, claimKind: "retry_after_failure" as const, record };
+        }
+        return {
+          outcome: existing.status === "completed" ? ("duplicate" as const) : ("in_progress" as const),
+          record: existing,
+        };
+      },
+      markCompleted: (input: {
+        routePath: string;
+        idempotencyKey: string;
+        actorScope?: string;
+        updatedAt?: string;
+      }) => {
+        const key = mutationKey(input);
+        const current = mutationRecords.get(key)!;
+        mutationRecords.set(key, {
+          ...current,
+          status: "completed",
+          updatedAt: input.updatedAt ?? new Date().toISOString(),
+        });
+      },
+      markFailed: (input: { routePath: string; idempotencyKey: string; actorScope?: string; updatedAt?: string }) => {
+        const key = mutationKey(input);
+        const current = mutationRecords.get(key)!;
+        mutationRecords.set(key, {
+          ...current,
+          status: "failed",
+          updatedAt: input.updatedAt ?? new Date().toISOString(),
+        });
+      },
+    },
+    externalSideEffectRuns: {
+      createOrGet: (
+        input: {
+          workspaceId?: string;
+          boundary: string;
+          routePath: string;
+          catalogId?: string;
+          connectionId?: string;
+          actionId?: string;
+          actorScope?: string;
+          idempotencyKey: string;
+          payloadHash: string;
+          status?: ExternalSideEffectRunRecord["status"];
+          replayOutcome?: ExternalSideEffectRunRecord["replayOutcome"];
+          replayAttempt?: ExternalSideEffectRunRecord["replayAttempt"];
+          requestPayload?: Record<string, unknown>;
+        },
+        now = new Date().toISOString(),
+      ) => {
+        const existing = [...sideEffectRecords.values()].find(
+          (candidate) => candidate.boundary === input.boundary && candidate.idempotencyKey === input.idempotencyKey,
+        );
+        if (existing) return existing;
+        const record: ExternalSideEffectRunRecord = {
+          runId: randomUUID(),
+          workspaceId: input.workspaceId ?? "default",
+          boundary: input.boundary,
+          routePath: input.routePath,
+          catalogId: input.catalogId,
+          connectionId: input.connectionId,
+          actionId: input.actionId,
+          actorScope: input.actorScope ?? "",
+          idempotencyKey: input.idempotencyKey,
+          payloadHash: input.payloadHash,
+          status: input.status ?? "claimed_not_sent",
+          replayPolicy: "idempotent_external",
+          replayOutcome: input.replayOutcome,
+          replayAttempt: input.replayAttempt,
+          resumeState: "not_resumable",
+          requestPayload: input.requestPayload,
+          attemptCount: 0,
+          createdAt: now,
+          updatedAt: now,
+        };
+        sideEffectRecords.set(record.runId, record);
+        return record;
+      },
+      markExternalCallStarted: (runId: string, _input?: unknown, now = new Date().toISOString()) => {
+        const record = { ...sideEffectRecords.get(runId)!, status: "external_call_started" as const, updatedAt: now };
+        sideEffectRecords.set(runId, record);
+        return record;
+      },
+      markCompleted: (runId: string, _input?: unknown, now = new Date().toISOString()) => {
+        const record = {
+          ...sideEffectRecords.get(runId)!,
+          status: "completed" as const,
+          resumeState: "completed" as const,
+          updatedAt: now,
+        };
+        sideEffectRecords.set(runId, record);
+        return record;
+      },
+      markFailure: (
+        runId: string,
+        input: { status: "failed_before_boundary" | "unknown_external_outcome"; errorText: string },
+        now = new Date().toISOString(),
+      ) => {
+        const record = {
+          ...sideEffectRecords.get(runId)!,
+          status: input.status,
+          errorText: input.errorText,
+          updatedAt: now,
+        };
+        sideEffectRecords.set(runId, record);
+        return record;
+      },
+      get: (runId: string) => sideEffectRecords.get(runId)!,
+    },
     durableRuns: {
       statusCounts: () =>
         [...state.durableRuns.values()].reduce(

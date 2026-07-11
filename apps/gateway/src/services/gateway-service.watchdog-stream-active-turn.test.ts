@@ -292,7 +292,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     expect(drainDueChannelDeliveries).toHaveBeenCalledTimes(1);
   });
 
-  it("schedules root-turn memory maintenance and chat memory prewarm only when useful", async () => {
+  it("schedules normal append-turn memory maintenance and skips delegated children", async () => {
     const noteSuccessfulRootTurn = vi.fn(async () => undefined);
     const prewarmContext = vi.fn(async () => ({ contextId: "ctx-1" }));
     const resolveMemoryWorkspaceRelativeDir = vi.fn(() => "memory/workspace/session-1");
@@ -305,10 +305,18 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       resolveMemoryWorkspaceRelativeDir,
     });
 
-    GatewayService.prototype.scheduleMemoryMaintenancePostTurnEvaluation.call(gateway, "session-1", "parent-turn");
+    GatewayService.prototype.scheduleMemoryMaintenancePostTurnEvaluation.call(gateway, {
+      sessionId: "session-1",
+      turnId: "turn-child",
+      delegatedChild: true,
+    });
     expect(noteSuccessfulRootTurn).not.toHaveBeenCalled();
 
-    GatewayService.prototype.scheduleMemoryMaintenancePostTurnEvaluation.call(gateway, "session-1");
+    GatewayService.prototype.scheduleMemoryMaintenancePostTurnEvaluation.call(gateway, {
+      sessionId: "session-1",
+      turnId: "turn-current",
+      delegatedChild: false,
+    });
     expect(noteSuccessfulRootTurn).toHaveBeenCalledWith("session-1");
 
     GatewayService.prototype.scheduleChatMemoryContextPrewarm.call(gateway, {
@@ -335,13 +343,56 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     });
 
     gateway.closing = true;
-    GatewayService.prototype.scheduleMemoryMaintenancePostTurnEvaluation.call(gateway, "session-2");
+    GatewayService.prototype.scheduleMemoryMaintenancePostTurnEvaluation.call(gateway, {
+      sessionId: "session-2",
+      turnId: "turn-closing",
+      delegatedChild: false,
+    });
     GatewayService.prototype.scheduleChatMemoryContextPrewarm.call(gateway, {
       sessionId: "session-2",
       prompt: "Ignored while closing",
     });
     expect(noteSuccessfulRootTurn).toHaveBeenCalledTimes(1);
     expect(prewarmContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the completed turn as background-review provenance and skips delegated children", () => {
+    const runBackgroundReview = vi.fn(async () => ({ ran: false }));
+    const gateway = createGatewayHarness({
+      backgroundReviewService: { runBackgroundReview },
+      isFeatureEnabled: vi.fn(() => false),
+      isReplayScratchSession: vi.fn(() => false),
+      advanceBackgroundReviewCounter: vi.fn(() => true),
+      storage: {
+        chatSessionMeta: { get: vi.fn(() => ({ origin: "human" })) },
+      },
+    });
+    const baseInput = {
+      sessionId: "session-1",
+      workspaceId: "default",
+      userText: "Question",
+      assistantText: "Answer",
+      autonomous: false,
+    };
+
+    GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
+      ...baseInput,
+      turnId: "turn-child",
+      delegatedChild: true,
+    });
+    expect(runBackgroundReview).not.toHaveBeenCalled();
+
+    GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
+      ...baseInput,
+      turnId: "turn-current",
+      delegatedChild: false,
+    });
+    expect(runBackgroundReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        sourceTurnId: "turn-current",
+      }),
+    );
   });
 });
 

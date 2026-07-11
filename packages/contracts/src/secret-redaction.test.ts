@@ -525,10 +525,10 @@ describe("redactSecretText", () => {
 
   it("redacts remote approval capability tokens inside callback data and free text", () => {
     const token = `grat_${"a".repeat(43)}`;
-    const result = redactSecretText(`callback=gca:${token}:a raw=${token}`);
+    const result = redactSecretText(`callback=gca:${token}:a raw=${token} prefixed=x${token} suffixed=${token}x`);
 
-    expect(result.value).toBe("callback=gca:[REDACTED]:a raw=[REDACTED]");
-    expect(result.redactionCount).toBe(2);
+    expect(result.value).toBe("callback=gca:[REDACTED]:a raw=[REDACTED] prefixed=x[REDACTED] suffixed=[REDACTED]x");
+    expect(result.redactionCount).toBe(4);
     expect(
       redactStructuredSecrets({
         callbackData: `gca:${token}:r`,
@@ -540,6 +540,12 @@ describe("redactSecretText", () => {
       note: "Use [REDACTED] once",
       tokenId: "remote-action-token-id",
     });
+  });
+
+  it("does not redact benign token-like identifiers that are not canonical remote approval tokens", () => {
+    const value = "Keep grat_community_discount_code and grat_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF visible.";
+
+    expect(redactSecretText(value)).toEqual({ value, redactionCount: 0 });
   });
 
   it("does not reinterpret repeated authorization labels as credential values", () => {

@@ -153,6 +153,34 @@ function setRawField(db: DatabaseClient, turnId: string, field: string, value: u
 }
 
 describe("ChatTurnTraceRepository", () => {
+  it("rolls back a newly inserted trace when its post-insert read fails", () => {
+    const { db } = createStore();
+    const originalPrepare = db.prepare.bind(db);
+    let failNextTraceRead = false;
+    db.prepare = ((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (sql !== "SELECT * FROM chat_turn_traces WHERE turn_id = ?") {
+        return statement;
+      }
+      return {
+        run: (...params: unknown[]) => statement.run(...params),
+        get: <T = unknown>(...params: unknown[]) => {
+          if (failNextTraceRead) {
+            failNextTraceRead = false;
+            throw new Error("trace read unavailable");
+          }
+          return statement.get<T>(...params);
+        },
+        all: <T = unknown>(...params: unknown[]) => statement.all<T>(...params),
+      };
+    }) as DatabaseClient["prepare"];
+    const repo = new ChatTurnTraceRepository(db);
+    failNextTraceRead = true;
+
+    assert.throws(() => repo.create(baseTrace()), /trace read unavailable/);
+    assert.throws(() => repo.get("turn-a"), /not found/i);
+  });
+
   it("conditionally completes only while the observed lifecycle status still owns the turn", () => {
     const { repo } = createStore();
     repo.create(baseTrace({ status: "running" }));

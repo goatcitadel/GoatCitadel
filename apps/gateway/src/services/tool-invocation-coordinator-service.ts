@@ -175,22 +175,7 @@ export interface ToolInvocationCoordinatorHost {
    *  available in the active workspace/citadel scope. Missing wiring fails closed. */
   assertMcpServerInScope?: (request: McpInvokeRequest) => void;
   readonly policyEngine: {
-    invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
-    invoke(request: {
-      toolName: "mcp.invoke";
-      args: {
-        serverId: string;
-        toolName: string;
-        arguments: Record<string, unknown>;
-      };
-      agentId: string;
-      sessionId: string;
-      taskId?: string;
-      consentContext?: {
-        source: "agent";
-        reason: string;
-      };
-    }): Promise<ToolInvokeResult>;
+    invoke(request: ToolInvokeRequest, options?: { beforeExecute?: () => void }): Promise<ToolInvokeResult>;
     evaluateAccess(request: {
       toolName: "mcp.invoke";
       args: {
@@ -211,11 +196,6 @@ export interface ToolInvocationCoordinatorHost {
   resolveToolHookWorkspaceId(request: ToolInvokeRequest): string;
   primeToolApprovalLifecycle(approvalId: string, request: ToolInvokeRequest): ApprovalRequest;
   scheduleApprovalExplanationById(approvalId: string): void;
-  recordApprovedExternalRuntimeToolResult?(input: {
-    approvalId: string;
-    request: ToolInvokeRequest;
-    result: ToolInvokeResult;
-  }): void;
   evaluateAutonomousActivationGrant?(
     input: AutonomousActivationGrantEvaluationInput,
   ): AutonomousActivationGrantEvaluationResult;
@@ -269,13 +249,47 @@ export interface ToolInvocationCoordinatorHost {
   readonly pluginToolOverrideService?: Pick<PluginToolOverrideService, "resolveActiveHandler">;
 }
 
+export interface ToolInvocationRuntimeOptions {
+  /** Process-local durable authority check; never serialize this callback. */
+  executionFence?: () => void;
+}
+
 export interface ToolInvocationCoordinator {
-  invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
-  invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse>;
+  invokeTool(request: ToolInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<ToolInvokeResult>;
+  invokeMcpTool(input: McpInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<McpInvokeResponse>;
 }
 
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
   public constructor(private readonly host: ToolInvocationCoordinatorHost) {}
+
+  private runPostCommitConsumer(consumer: string, request: ToolInvokeRequest, callback: () => void): void {
+    try {
+      callback();
+    } catch (error) {
+      try {
+        this.host.recordDevDiagnostic?.({
+          level: "warn",
+          category: "tools",
+          event: "tool.invocation.post_commit_consumer_failed",
+          message: `Tool invocation completed, but ${consumer} failed.`,
+          sessionId: request.sessionId,
+          taskId: request.taskId,
+          toolName: request.toolName,
+          runtimeKind: "tool.invocation.post_commit",
+          runtimeStatus: "degraded",
+          runtimeError: {
+            name: error instanceof Error ? error.name : undefined,
+            message: error instanceof Error ? error.message : String(error),
+            retryable: true,
+          },
+          context: { consumer, runId: request.runId ?? request.policyContext?.runId },
+        });
+      } catch {
+        // A completed external mutation must never be replayed because reporting failed.
+        return;
+      }
+    }
+  }
 
   private buildMcpPolicyRequest(input: McpInvokeRequest): McpPolicyRequestShape {
     return {
@@ -353,7 +367,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     return null;
   }
 
-  public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+  public async invokeTool(
+    request: ToolInvokeRequest,
+    options: ToolInvocationRuntimeOptions = {},
+  ): Promise<ToolInvokeResult> {
     if (!this.host.isValidToolName(request.toolName)) {
       return {
         outcome: "blocked",
@@ -503,6 +520,19 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         return overridePolicyFailure;
       }
       approvedExternalRuntimeReplayId = extractVerifiedApprovalReplayId(finalPolicyCheck, hookableRequest);
+      if (approvedExternalRuntimeReplayId) {
+        return {
+          outcome: "blocked",
+          policyReason:
+            "blocked: approved external-runtime actions execute only through the canonical approval-effect worker",
+          auditEventId: finalPolicyCheck.auditEventId,
+          result: {
+            approvalId: approvedExternalRuntimeReplayId,
+            executionOwner: "approval_effect",
+          },
+          audit: finalPolicyCheck.audit,
+        };
+      }
     }
     let result: ToolInvokeResult;
     const toolStartedAt = Date.now();
@@ -522,12 +552,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       },
     });
     try {
-      result = overrideHandler
-        ? await overrideHandler(
-            hookableRequest.args ?? {},
-            buildPluginToolExecutionContext(hookableRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
-          )
-        : await this.host.policyEngine.invoke(hookableRequest);
+      if (overrideHandler) {
+        options.executionFence?.();
+        result = await overrideHandler(
+          hookableRequest.args ?? {},
+          buildPluginToolExecutionContext(hookableRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
+        );
+      } else {
+        result = options.executionFence
+          ? await this.host.policyEngine.invoke(hookableRequest, { beforeExecute: options.executionFence })
+          : await this.host.policyEngine.invoke(hookableRequest);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.host.recordDevDiagnostic?.({
@@ -571,14 +606,6 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     // Non-redact invocations are untouched, so behavior is byte-identical to before.
     result = applyRedactWardEffect(result);
 
-    if (overrideHandler && approvedExternalRuntimeReplayId && result.outcome !== "approval_required") {
-      this.host.recordApprovedExternalRuntimeToolResult?.({
-        approvalId: approvedExternalRuntimeReplayId,
-        request: hookableRequest,
-        result,
-      });
-    }
-
     const approvalForResult =
       result.outcome === "approval_required" && result.approvalId
         ? this.host.primeToolApprovalLifecycle(result.approvalId, hookableRequest)
@@ -590,111 +617,126 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const linkedRunId =
       hookableRequest.runId ?? hookableRequest.policyContext?.runId ?? approvalForResult?.linkage?.durableRunId;
 
-    this.host.publishRealtime(
-      "tool_invoked",
-      "policy",
-      {
-        toolName: hookableRequest.toolName,
-        sessionId: hookableRequest.sessionId,
-        agentId: hookableRequest.agentId,
-        taskId: hookableRequest.taskId,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        approvalId: result.approvalId,
-        auditEventId: result.auditEventId,
-        permissionProfileId,
-        localOperatorOverrideId,
-        runId: linkedRunId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
+    this.runPostCommitConsumer("realtime projection", hookableRequest, () => {
+      this.host.publishRealtime(
+        "tool_invoked",
+        "policy",
+        {
+          toolName: hookableRequest.toolName,
           sessionId: hookableRequest.sessionId,
+          agentId: hookableRequest.agentId,
           taskId: hookableRequest.taskId,
+          outcome: result.outcome,
+          policyReason: result.policyReason,
           approvalId: result.approvalId,
+          auditEventId: result.auditEventId,
+          permissionProfileId,
+          localOperatorOverrideId,
           runId: linkedRunId,
         },
-      },
-    );
-
-    this.host.recordDevDiagnostic?.({
-      level: result.outcome === "blocked" ? "warn" : "info",
-      category: "tools",
-      event: "tool.invocation.complete",
-      message: "Tool invocation completed",
-      sessionId: hookableRequest.sessionId,
-      taskId: hookableRequest.taskId,
-      toolRunId: toolHookEntityId,
-      toolName: hookableRequest.toolName,
-      durationMs: Date.now() - toolStartedAt,
-      runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
-      runtimeStatus: result.outcome === "blocked" || result.outcome === "approval_required" ? "blocked" : "completed",
-      context: {
-        outcome: result.outcome,
-        approvalId: result.approvalId,
-        policyReason: result.policyReason,
-        permissionProfileId,
-        localOperatorOverrideId,
-        runId: linkedRunId,
-      },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId: hookableRequest.sessionId,
+            taskId: hookableRequest.taskId,
+            approvalId: result.approvalId,
+            runId: linkedRunId,
+          },
+        },
+      );
     });
-    this.host.recordEvidenceEnvelope?.({
-      eventKind: "tool_invocation",
-      sessionId: hookableRequest.sessionId,
-      runId: linkedRunId,
-      approvalId: result.approvalId,
-      toolCallHashes: [result.auditEventId ?? toolHookEntityId],
-      metadata: {
-        runtime: overrideHandler ? "plugin_override" : "policy",
-        toolName: hookableRequest.toolName,
+
+    this.runPostCommitConsumer("completion diagnostic", hookableRequest, () => {
+      this.host.recordDevDiagnostic?.({
+        level: result.outcome === "blocked" ? "warn" : "info",
+        category: "tools",
+        event: "tool.invocation.complete",
+        message: "Tool invocation completed",
+        sessionId: hookableRequest.sessionId,
         taskId: hookableRequest.taskId,
-        agentId: hookableRequest.agentId,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        permissionProfileId,
-        localOperatorOverrideId,
-      },
+        toolRunId: toolHookEntityId,
+        toolName: hookableRequest.toolName,
+        durationMs: Date.now() - toolStartedAt,
+        runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
+        runtimeStatus: result.outcome === "blocked" || result.outcome === "approval_required" ? "blocked" : "completed",
+        context: {
+          outcome: result.outcome,
+          approvalId: result.approvalId,
+          policyReason: result.policyReason,
+          permissionProfileId,
+          localOperatorOverrideId,
+          runId: linkedRunId,
+        },
+      });
+    });
+    this.runPostCommitConsumer("evidence recording", hookableRequest, () => {
+      this.host.recordEvidenceEnvelope?.({
+        eventKind: "tool_invocation",
+        sessionId: hookableRequest.sessionId,
+        runId: linkedRunId,
+        approvalId: result.approvalId,
+        toolCallHashes: [result.auditEventId ?? toolHookEntityId],
+        metadata: {
+          runtime: overrideHandler ? "plugin_override" : "policy",
+          toolName: hookableRequest.toolName,
+          taskId: hookableRequest.taskId,
+          agentId: hookableRequest.agentId,
+          outcome: result.outcome,
+          policyReason: result.policyReason,
+          permissionProfileId,
+          localOperatorOverrideId,
+        },
+      });
     });
 
     if (result.outcome === "approval_required" && result.approvalId) {
-      this.host.scheduleApprovalExplanationById(result.approvalId);
+      this.runPostCommitConsumer("approval explanation scheduling", hookableRequest, () => {
+        this.host.scheduleApprovalExplanationById(result.approvalId!);
+      });
     }
 
-    this.host.hooksService.enqueueAfterHooks({
-      workspaceId: toolHookWorkspaceId,
-      trigger: "tool.call.after",
-      entityType: "tool_call",
-      entityId: toolHookEntityId,
-      payload: {
-        toolName: hookableRequest.toolName,
-        args: hookableRequest.args,
-        sessionId: hookableRequest.sessionId,
-        taskId: hookableRequest.taskId,
-        result,
-      },
-    });
-    runtimeLifecycleHookDispatcher.enqueueObserveHook(this.host.hooksService, {
-      workspaceId: toolHookWorkspaceId,
-      trigger: "after_tool_call",
-      entityType: "tool_call",
-      entityId: toolHookEntityId,
-      payload: {
+    this.runPostCommitConsumer("tool.call.after hook enqueue", hookableRequest, () => {
+      this.host.hooksService.enqueueAfterHooks({
         workspaceId: toolHookWorkspaceId,
-        sessionId: hookableRequest.sessionId,
-        taskId: hookableRequest.taskId,
-        approvalId: result.approvalId,
-        toolName: hookableRequest.toolName,
-        outcome: result.outcome,
-        auditEventId: result.auditEventId,
-        policyReason: result.policyReason,
-      },
+        trigger: "tool.call.after",
+        entityType: "tool_call",
+        entityId: toolHookEntityId,
+        payload: {
+          toolName: hookableRequest.toolName,
+          args: hookableRequest.args,
+          sessionId: hookableRequest.sessionId,
+          taskId: hookableRequest.taskId,
+          result,
+        },
+      });
+    });
+    this.runPostCommitConsumer("lifecycle observe hook enqueue", hookableRequest, () => {
+      runtimeLifecycleHookDispatcher.enqueueObserveHook(this.host.hooksService, {
+        workspaceId: toolHookWorkspaceId,
+        trigger: "after_tool_call",
+        entityType: "tool_call",
+        entityId: toolHookEntityId,
+        payload: {
+          workspaceId: toolHookWorkspaceId,
+          sessionId: hookableRequest.sessionId,
+          taskId: hookableRequest.taskId,
+          approvalId: result.approvalId,
+          toolName: hookableRequest.toolName,
+          outcome: result.outcome,
+          auditEventId: result.auditEventId,
+          policyReason: result.policyReason,
+        },
+      });
     });
 
     return result;
   }
 
-  public async invokeApprovedExternalRuntimeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+  public async invokeApprovedExternalRuntimeTool(
+    request: ToolInvokeRequest,
+    markExternalCallStarted?: () => void,
+  ): Promise<ToolInvokeResult> {
     if (!this.host.isValidToolName(request.toolName)) {
       return {
         outcome: "blocked",
@@ -758,6 +800,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         approvalReplay: true,
       },
     });
+    markExternalCallStarted?.();
     const result = await overrideHandler(
       normalizedRequest.args ?? {},
       buildPluginToolExecutionContext(normalizedRequest, finalPolicyCheck, undefined),
@@ -767,64 +810,74 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const localOperatorOverrideId =
       normalizedRequest.policyContext?.localOperatorOverrideId ?? normalizedRequest.localOperatorOverrideId;
     const linkedRunId = normalizedRequest.runId ?? normalizedRequest.policyContext?.runId;
-    this.host.publishRealtime(
-      "tool_invoked",
-      "policy",
-      {
-        toolName: normalizedRequest.toolName,
-        sessionId: normalizedRequest.sessionId,
-        agentId: normalizedRequest.agentId,
-        taskId: normalizedRequest.taskId,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        approvalId: result.approvalId,
-        auditEventId: result.auditEventId,
-        permissionProfileId,
-        localOperatorOverrideId,
-        runId: linkedRunId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
+    this.runPostCommitConsumer("approved external-runtime realtime projection", normalizedRequest, () => {
+      this.host.publishRealtime(
+        "tool_invoked",
+        "policy",
+        {
+          toolName: normalizedRequest.toolName,
           sessionId: normalizedRequest.sessionId,
+          agentId: normalizedRequest.agentId,
           taskId: normalizedRequest.taskId,
+          outcome: result.outcome,
+          policyReason: result.policyReason,
           approvalId: result.approvalId,
+          auditEventId: result.auditEventId,
+          permissionProfileId,
+          localOperatorOverrideId,
           runId: linkedRunId,
         },
-      },
-    );
-    this.host.recordEvidenceEnvelope?.({
-      eventKind: "tool_invocation",
-      sessionId: normalizedRequest.sessionId,
-      runId: linkedRunId,
-      approvalId: result.approvalId,
-      toolCallHashes: [result.auditEventId],
-      metadata: {
-        runtime: "plugin_override",
-        toolName: normalizedRequest.toolName,
-        taskId: normalizedRequest.taskId,
-        agentId: normalizedRequest.agentId,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        permissionProfileId,
-        localOperatorOverrideId,
-        approvalReplay: true,
-      },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId: normalizedRequest.sessionId,
+            taskId: normalizedRequest.taskId,
+            approvalId: result.approvalId,
+            runId: linkedRunId,
+          },
+        },
+      );
+    });
+    this.runPostCommitConsumer("approved external-runtime evidence recording", normalizedRequest, () => {
+      this.host.recordEvidenceEnvelope?.({
+        eventKind: "tool_invocation",
+        sessionId: normalizedRequest.sessionId,
+        runId: linkedRunId,
+        approvalId: result.approvalId,
+        toolCallHashes: [result.auditEventId],
+        metadata: {
+          runtime: "plugin_override",
+          toolName: normalizedRequest.toolName,
+          taskId: normalizedRequest.taskId,
+          agentId: normalizedRequest.agentId,
+          outcome: result.outcome,
+          policyReason: result.policyReason,
+          permissionProfileId,
+          localOperatorOverrideId,
+          approvalReplay: true,
+        },
+      });
     });
     return result;
   }
 
-  public async invokeApprovedMcpRuntime(input: McpInvokeRequest): Promise<McpInvokeResponse> {
+  public async invokeApprovedMcpRuntime(
+    input: McpInvokeRequest,
+    markExternalCallStarted?: () => void,
+  ): Promise<McpInvokeResponse> {
     const runtimeStartedAt = Date.now();
     const server = this.resolveMcpRuntimeTarget(input);
     if (!("serverId" in server)) {
       return server;
     }
-    return this.executeMcpRuntime(input, server, runtimeStartedAt);
+    return this.executeMcpRuntime(input, server, runtimeStartedAt, undefined, undefined, markExternalCallStarted);
   }
 
-  public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
+  public async invokeMcpTool(
+    input: McpInvokeRequest,
+    options: ToolInvocationRuntimeOptions = {},
+  ): Promise<McpInvokeResponse> {
     const runtimeStartedAt = Date.now();
     const server = this.resolveMcpRuntimeTarget(input);
     if (!("serverId" in server)) {
@@ -864,6 +917,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       runtimeStartedAt,
       autonomyGate.evidence,
       runtimeEvaluation.decision.wardEffect,
+      undefined,
+      options.executionFence,
     );
   }
 
@@ -992,6 +1047,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     runtimeStartedAt: number,
     autonomousActivation?: AutonomousActivationRuntimeEvidence,
     wardEffect?: WardEffect,
+    markExternalCallStarted?: () => void,
+    executionFence?: () => void,
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
@@ -1001,6 +1058,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (scopeFailure) {
       return scopeFailure;
     }
+    executionFence?.();
+    markExternalCallStarted?.();
     const runtime = isInternalMcpApprovalInboxServer(server)
       ? await handleInternalMcpApprovalInboxInvoke(server, input, {
           approvalInbox: this.host.approvalInbox,
@@ -1185,7 +1244,7 @@ function hasApprovalActionTemplate(request: ToolInvokeRequest): boolean {
 }
 
 function containsRawApprovalActionBearer(value: unknown): boolean {
-  return /\bgrat_[A-Za-z0-9_-]{16,}\b/i.test(JSON.stringify(value ?? null));
+  return /grat_[A-Za-z0-9_-]{43}/i.test(JSON.stringify(value ?? null));
 }
 
 function isProtectedApprovalActionBindingUnchanged(before: ToolInvokeRequest, after: ToolInvokeRequest): boolean {

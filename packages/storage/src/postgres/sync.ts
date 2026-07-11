@@ -194,6 +194,14 @@ class PostgresStatementAdapter implements DbStatement {
 }
 
 function translateSql(sql: string, params: unknown[]): { sql: string; params: unknown[] } {
+  // Prepared statements without bound values are also used for generated
+  // migration SQL. Preserve their text verbatim: PostgreSQL regular
+  // expressions can legitimately contain `?` (for example, a negative
+  // lookahead), and treating that character as a SQLite-style placeholder
+  // silently changes the regex inside the quoted SQL literal.
+  if (params.length === 0) {
+    return { sql, params };
+  }
   const namedMatch = /@([a-zA-Z_][a-zA-Z0-9_]*)/.test(sql);
   if (namedMatch) {
     const first = params[0];

@@ -131,9 +131,7 @@ describe("PermissionProfileRepository", () => {
     `,
     ).run({ profileId: "scheduled-restricted", label: "Stored Shadow" });
 
-    const scheduledProfiles = repo
-      .listProfiles(true)
-      .filter((profile) => profile.profileId === "scheduled-restricted");
+    const scheduledProfiles = repo.listProfiles(true).filter((profile) => profile.profileId === "scheduled-restricted");
 
     assert.equal(scheduledProfiles.length, 1);
     const scheduledProfile = scheduledProfiles[0];
@@ -222,6 +220,50 @@ describe("PermissionProfileRepository", () => {
       repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a", surface: "code" }).permissionProfile
         .profileId,
       allProfile.profileId,
+    );
+  });
+
+  it("rolls back activation replacement when its owning transaction fails", () => {
+    const { db, repo } = createStore();
+    const original = repo.createProfile({
+      label: "Original Chat",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      createdBy: "operator-a",
+    });
+    const replacement = repo.createProfile({
+      label: "Replacement Chat",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_all",
+      createdBy: "operator-a",
+    });
+    repo.activateProfile({
+      profileId: original.profileId,
+      workspaceId: "workspace-a",
+      surface: "chat",
+      createdBy: "operator-a",
+    });
+
+    assert.throws(
+      () =>
+        db.transaction("immediate", () => {
+          repo.activateProfile({
+            profileId: replacement.profileId,
+            workspaceId: "workspace-a",
+            surface: "chat",
+            createdBy: "operator-a",
+          });
+          throw new Error("activation projection failed");
+        }),
+      /activation projection failed/,
+    );
+
+    assert.equal(
+      repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a", surface: "chat" }).permissionProfile
+        .profileId,
+      original.profileId,
     );
   });
 

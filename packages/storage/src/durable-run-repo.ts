@@ -7,62 +7,27 @@ import type {
   DurableRunRecord,
   DurableRunStatus,
 } from "@goatcitadel/contracts";
-import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
+import {
+  toCountRow,
+  toDurableCheckpointRows,
+  toDurableDeadLetterRow,
+  toDurableDeadLetterRows,
+  toDurableRetryRows,
+  toDurableRunRow,
+  toDurableRunRows,
+  type DurableDeadLetterRow,
+  type DurableRunRow,
+} from "./durable-run-row-codec.js";
 
 export interface PruneCheckpointsResult {
   prunedOrphans: number;
   prunedAged: number;
   finalBytes: number;
   diskBudgetBytes: number;
-}
-
-interface DurableRunRow {
-  run_id: string;
-  workflow_key: string;
-  status: DurableRunStatus;
-  attempt_count: number;
-  max_attempts: number;
-  payload_json: string;
-  metadata_json: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  last_error: string | null;
-  lease_owner_id: string | null;
-  lease_expires_at: string | null;
-  lease_heartbeat_at: string | null;
-  version: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DurableCheckpointRow {
-  checkpoint_id: string;
-  run_id: string;
-  checkpoint_kind: DurableCheckpointRecord["checkpointKind"];
-  state_json: string;
-  created_at: string;
-}
-
-interface DurableRetryRow {
-  retry_id: string;
-  run_id: string;
-  attempt_no: number;
-  reason: string;
-  next_retry_at: string | null;
-  created_at: string;
-}
-
-interface DurableDeadLetterRow {
-  dead_letter_id: string;
-  run_id: string;
-  reason: string;
-  payload_json: string;
-  created_at: string;
-  resolved_at: string | null;
-  resolution_note: string | null;
 }
 
 export interface DurableRunRepositoryOptions {
@@ -73,10 +38,14 @@ export interface DurableRunRepositoryOptions {
 export class DurableRunRepository {
   private readonly insertRunStmt;
   private readonly getRunStmt;
+  private readonly lockActiveLeaseForUpdateStmt;
   private readonly getRunsByIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly updateRunStmt;
   private readonly listRunsStmt;
   private readonly listRunIdsByStatusStmt;
+  private readonly listPendingLinkedFinalizationRunIdsStmt;
+  private readonly listPendingAutonomousChatPostCommitRunIdsStmt;
+  private readonly listPendingGeneralChatPostCommitRunIdsStmt;
   private readonly listExpiredRunningRunIdsStmt;
   private readonly countRunsStmt;
   private readonly statusCountsStmt;
@@ -106,6 +75,16 @@ export class DurableRunRepository {
       )
     `);
     this.getRunStmt = db.prepare("SELECT * FROM durable_runs WHERE run_id = ?");
+    this.lockActiveLeaseForUpdateStmt = db.prepare(`
+      SELECT *
+      FROM durable_runs
+      WHERE run_id = @runId
+        AND status = 'running'
+        AND lease_owner_id = @expectedLeaseOwnerId
+        AND lease_expires_at IS NOT NULL
+        AND lease_expires_at > @now
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.updateRunStmt = db.prepare(`
       UPDATE durable_runs
       SET
@@ -136,6 +115,35 @@ export class DurableRunRepository {
       WHERE status = ?
       ORDER BY created_at ASC
       LIMIT ?
+    `);
+    this.listPendingLinkedFinalizationRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status = 'failed'
+        AND metadata_json LIKE '%"linkedFinalizationPending":%'
+        AND (@afterRunId IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
+    this.listPendingAutonomousChatPostCommitRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status = 'completed'
+        AND workflow_key = 'chat.turn.execute'
+        AND metadata_json LIKE '%"autonomousChatPostCommitPending":%'
+        AND (@afterRunId IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
+    this.listPendingGeneralChatPostCommitRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status IN ('completed', 'failed', 'cancelled', 'waiting')
+        AND workflow_key = 'chat.turn.execute'
+        AND metadata_json LIKE '%"generalChatPostCommitPending":%'
+        AND (@afterRunId IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
     `);
     this.listExpiredRunningRunIdsStmt = db.prepare(`
       SELECT run_id
@@ -213,6 +221,7 @@ export class DurableRunRepository {
       SET resolved_at = @resolvedAt,
           resolution_note = @resolutionNote
       WHERE dead_letter_id = @deadLetterId
+        AND resolved_at IS NULL
     `);
   }
 
@@ -284,8 +293,31 @@ export class DurableRunRepository {
     return this.mapRunRow(row);
   }
 
+  /**
+   * Locks and returns a run only while the caller still owns its active lease.
+   * Callers must invoke this method inside a storage transaction. PostgreSQL
+   * takes an explicit row lock; SQLite's BEGIN IMMEDIATE transaction provides
+   * the corresponding write serialization before this predicate is evaluated.
+   */
+  public lockActiveLeaseForUpdate(
+    runId: string,
+    expectedLeaseOwnerId: string,
+    now: string,
+  ): DurableRunRecord | undefined {
+    const row = toDurableRunRow(
+      this.lockActiveLeaseForUpdateStmt.get({
+        runId,
+        expectedLeaseOwnerId,
+        now,
+      }),
+    );
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
   public getRunsByIds(runIds: Array<string | undefined>): Map<string, DurableRunRecord> {
-    const uniqueRunIds = [...new Set(runIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+    const uniqueRunIds = [
+      ...new Set(runIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item))),
+    ];
     const byRunId = new Map<string, DurableRunRecord>();
     if (uniqueRunIds.length === 0) {
       return byRunId;
@@ -446,6 +478,33 @@ export class DurableRunRepository {
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
     const rows = this.listRunIdsByStatusStmt.all(status, safeLimit) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listPendingLinkedFinalizationRunIds(limit = 500, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listPendingLinkedFinalizationRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listPendingAutonomousChatPostCommitRunIds(limit = 500, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listPendingAutonomousChatPostCommitRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listPendingGeneralChatPostCommitRunIds(limit = 500, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listPendingGeneralChatPostCommitRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
     return rows.map((row) => row.run_id);
   }
 
@@ -631,11 +690,17 @@ export class DurableRunRepository {
     } = {},
   ): DurableDeadLetterRecord {
     const existing = this.getDeadLetterById(deadLetterId);
-    this.resolveDeadLetterStmt.run({
+    const result = this.resolveDeadLetterStmt.run({
       deadLetterId,
       resolvedAt: input.resolvedAt ?? new Date().toISOString(),
       resolutionNote: input.resolutionNote?.trim() || null,
     });
+    if (Number(result.changes ?? 0) !== 1) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Durable dead letter ${deadLetterId} is already resolved`,
+      });
+    }
     return this.getDeadLetterById(existing.deadLetterId);
   }
 
@@ -852,109 +917,6 @@ function mapDeadLetterRow(row: DurableDeadLetterRow): DurableDeadLetterRecord {
     resolvedAt: row.resolved_at ?? undefined,
     resolutionNote: row.resolution_note ?? undefined,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isDurableRunRow(value: unknown): value is DurableRunRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.run_id === "string" &&
-    typeof value.workflow_key === "string" &&
-    typeof value.status === "string" &&
-    typeof value.attempt_count === "number" &&
-    typeof value.max_attempts === "number" &&
-    typeof value.payload_json === "string" &&
-    (typeof value.metadata_json === "string" || value.metadata_json === null) &&
-    (typeof value.started_at === "string" || value.started_at === null) &&
-    (typeof value.finished_at === "string" || value.finished_at === null) &&
-    (typeof value.last_error === "string" || value.last_error === null) &&
-    (typeof value.lease_owner_id === "string" || value.lease_owner_id === null) &&
-    (typeof value.lease_expires_at === "string" || value.lease_expires_at === null) &&
-    (typeof value.lease_heartbeat_at === "string" || value.lease_heartbeat_at === null) &&
-    typeof value.version === "number" &&
-    typeof value.created_at === "string" &&
-    typeof value.updated_at === "string"
-  );
-}
-
-function isDurableCheckpointRow(value: unknown): value is DurableCheckpointRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.checkpoint_id === "string" &&
-    typeof value.run_id === "string" &&
-    typeof value.checkpoint_kind === "string" &&
-    typeof value.state_json === "string" &&
-    typeof value.created_at === "string"
-  );
-}
-
-function isDurableRetryRow(value: unknown): value is DurableRetryRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.retry_id === "string" &&
-    typeof value.run_id === "string" &&
-    typeof value.attempt_no === "number" &&
-    typeof value.reason === "string" &&
-    (typeof value.next_retry_at === "string" || value.next_retry_at === null) &&
-    typeof value.created_at === "string"
-  );
-}
-
-function isDurableDeadLetterRow(value: unknown): value is DurableDeadLetterRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.dead_letter_id === "string" &&
-    typeof value.run_id === "string" &&
-    typeof value.reason === "string" &&
-    typeof value.payload_json === "string" &&
-    typeof value.created_at === "string" &&
-    (typeof value.resolved_at === "string" || value.resolved_at === null) &&
-    (typeof value.resolution_note === "string" || value.resolution_note === null)
-  );
-}
-
-function toDurableRunRow(value: unknown): DurableRunRow | undefined {
-  return isDurableRunRow(value) ? value : undefined;
-}
-
-function toDurableRunRows(value: unknown): DurableRunRow[] {
-  return Array.isArray(value) ? value.filter(isDurableRunRow) : [];
-}
-
-function toDurableCheckpointRows(value: unknown): DurableCheckpointRow[] {
-  return Array.isArray(value) ? value.filter(isDurableCheckpointRow) : [];
-}
-
-function toDurableRetryRows(value: unknown): DurableRetryRow[] {
-  return Array.isArray(value) ? value.filter(isDurableRetryRow) : [];
-}
-
-function toDurableDeadLetterRow(value: unknown): DurableDeadLetterRow | undefined {
-  return isDurableDeadLetterRow(value) ? value : undefined;
-}
-
-function toDurableDeadLetterRows(value: unknown): DurableDeadLetterRow[] {
-  return Array.isArray(value) ? value.filter(isDurableDeadLetterRow) : [];
-}
-
-function toCountRow(value: unknown): { count?: number } | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return typeof value.count === "number" || value.count === undefined
-    ? { count: value.count as number | undefined }
-    : undefined;
 }
 
 function byteLength(value: string): number {

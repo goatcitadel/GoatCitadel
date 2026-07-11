@@ -106,7 +106,7 @@ describe("ExternalSideEffectRunRepository", () => {
       "2026-05-31T10:00:03.000Z",
     );
     assert.equal(failed.status, "unknown_external_outcome");
-    assert.equal(failed.resumeState, "not_resumable");
+    assert.equal(failed.resumeState, "manual_review_unknown_external_outcome");
     assert.equal(failed.reversibility?.status, "manual_reconciliation");
     assert.equal(failed.errorText, "connection reset after request started");
     assert.deepEqual(failed.responsePayload, { provider: "trello" });
@@ -126,6 +126,18 @@ describe("ExternalSideEffectRunRepository", () => {
     assert.equal(completed.reversibility?.status, "irreversible");
     assert.equal(completed.envelopeId, "env-1");
     assert.equal(completed.externalReferenceId, "id:card-1");
+
+    const staleReconciliation = repo.markFailureIfStatus(
+      run.runId,
+      "external_call_started",
+      {
+        status: "unknown_external_outcome",
+        errorText: "stale reconciler must not overwrite completion",
+      },
+      "2026-05-31T10:00:04.500Z",
+    );
+    assert.equal(staleReconciliation.status, "completed");
+    assert.equal(staleReconciliation.resumeState, "completed");
 
     const attached = repo.attachEnvelope(run.runId, "env-2", "2026-05-31T10:00:05.000Z");
     assert.equal(attached.envelopeId, "env-2");

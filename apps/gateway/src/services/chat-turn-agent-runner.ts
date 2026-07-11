@@ -492,6 +492,7 @@ export interface ChatTurnAgentRunnerInput {
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
+  canonicalWriteFence?: <T>(work: () => T) => T;
 }
 
 export interface ChatTurnAgentRunnerResult {
@@ -513,8 +514,8 @@ export interface ChatTurnAgentRunnerDeps {
   createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
   createChatCompletionStream?: (request: ChatCompletionRequest) => AsyncGenerator<Record<string, unknown>>;
   generateImage?: (request: ImageGenerationRequest) => Promise<ImageGenerationResponse>;
-  invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
-  invokeMcpTool?: (request: McpInvokeRequest) => Promise<McpInvokeResponse>;
+  invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
+  invokeMcpTool?: (request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => McpBrowserFallbackTarget[];
   persistToolArtifact?: (input: {
     sessionId: string;
@@ -525,6 +526,7 @@ export interface ChatTurnAgentRunnerDeps {
     contentType?: string;
     snippet?: string;
     createdAt?: string;
+    canonicalWriteFence?: <T>(work: () => T) => T;
   }) => Promise<{
     artifactId: string;
     storageRelPath: string;
@@ -610,6 +612,51 @@ export class ChatTurnAgentRunner {
     };
   }
 
+  private runCanonicalWrite<T>(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">, work: () => T): T {
+    return input.canonicalWriteFence ? input.canonicalWriteFence(work) : work();
+  }
+
+  private invokeTurnTool(turnInput: ChatTurnAgentRunnerInput, request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+    if (!turnInput.canonicalWriteFence) {
+      return this.deps.invokeTool(request);
+    }
+    return this.deps.invokeTool(request, {
+      executionFence: () => this.runCanonicalWrite(turnInput, () => undefined),
+    });
+  }
+
+  private patchTurnTrace(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    turnId: string,
+    patch: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
+  ): ChatTurnTraceRecord {
+    return this.runCanonicalWrite(input, () => this.deps.storage.chatTurnTraces.patch(turnId, patch));
+  }
+
+  private createToolRun(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    record: Parameters<Storage["chatToolRuns"]["create"]>[0],
+  ): ChatToolRunRecord {
+    return this.runCanonicalWrite(input, () => this.deps.storage.chatToolRuns.create(record));
+  }
+
+  private patchToolRun(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    toolRunId: string,
+    patch: Parameters<Storage["chatToolRuns"]["patch"]>[1],
+  ): ChatToolRunRecord {
+    return this.runCanonicalWrite(input, () => this.deps.storage.chatToolRuns.patch(toolRunId, patch));
+  }
+
+  private upsertInlineApproval(
+    input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">,
+    record: Parameters<Storage["chatInlineApprovals"]["upsert"]>[0],
+  ): void {
+    this.runCanonicalWrite(input, () => {
+      this.deps.storage.chatInlineApprovals.upsert(record);
+    });
+  }
+
   /**
    * P2-W3: blocker-template strictness for this turn, read from the
    * self-improvement tuner's setting. Passed to `buildToolFailureGuidance` at
@@ -638,7 +685,7 @@ export class ChatTurnAgentRunner {
       return;
     }
     const now = new Date().toISOString();
-    const record = this.deps.storage.chatToolRuns.create({
+    const record = this.createToolRun(input.turnInput, {
       toolRunId: randomUUID(),
       turnId: input.turnInput.turnId,
       sessionId: input.turnInput.sessionId,
@@ -734,30 +781,32 @@ export class ChatTurnAgentRunner {
       missingLogPayload: detectMissingLogPayloadIntent(input.content),
     };
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
-    const trace = createOrRefreshAgentStreamTrace(this.deps.storage, {
-      turnId: input.turnId,
-      sessionId: input.sessionId,
-      userMessageId: input.userMessageId,
-      parentTurnId: input.parentTurnId,
-      branchKind: input.branchKind ?? "append",
-      sourceTurnId: input.sourceTurnId,
-      status: "running",
-      mode: input.mode,
-      model: input.model,
-      webMode: input.webMode,
-      memoryMode: input.memoryMode,
-      thinkingLevel: input.thinkingLevel,
-      speedMode: input.speedMode ?? "standard",
-      subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
-      effectiveToolAutonomy: input.toolAutonomy,
-      routing: {
-        executionProfile,
-        liveDataIntent: intents.liveData,
-        ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
-      },
-      loopGuard: createLoopGuardTrace(loopGuardState),
-      startedAt: now,
-    });
+    const trace = this.runCanonicalWrite(input, () =>
+      createOrRefreshAgentStreamTrace(this.deps.storage, {
+        turnId: input.turnId,
+        sessionId: input.sessionId,
+        userMessageId: input.userMessageId,
+        parentTurnId: input.parentTurnId,
+        branchKind: input.branchKind ?? "append",
+        sourceTurnId: input.sourceTurnId,
+        status: "running",
+        mode: input.mode,
+        model: input.model,
+        webMode: input.webMode,
+        memoryMode: input.memoryMode,
+        thinkingLevel: input.thinkingLevel,
+        speedMode: input.speedMode ?? "standard",
+        subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
+        effectiveToolAutonomy: input.toolAutonomy,
+        routing: {
+          executionProfile,
+          liveDataIntent: intents.liveData,
+          ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
+        },
+        loopGuard: createLoopGuardTrace(loopGuardState),
+        startedAt: now,
+      }),
+    );
 
     yield {
       type: "trace_update",
@@ -1003,7 +1052,7 @@ export class ChatTurnAgentRunner {
       });
       if (accessCheckPath) {
         throwIfChatTurnCancelled(input);
-        this.deps.storage.chatTurnTraces.patch(input.turnId, {
+        this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
         });
         ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1050,7 +1099,7 @@ export class ChatTurnAgentRunner {
             reason: "Approval required by policy.",
             expiresAt: syntheticRun.approvalExpiresAt,
           };
-          this.deps.storage.chatInlineApprovals.upsert({
+          this.upsertInlineApproval(input, {
             approvalId: syntheticRun.record.approvalId,
             sessionId: input.sessionId,
             turnId: input.turnId,
@@ -1115,7 +1164,7 @@ export class ChatTurnAgentRunner {
     ) {
       const memoryQuery = inferMemoryQueryFromPrompt(input.content) ?? "planning preferences travel scheduling";
       throwIfChatTurnCancelled(input);
-      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+      this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1181,7 +1230,7 @@ export class ChatTurnAgentRunner {
       toolRunCount === 0
     ) {
       throwIfChatTurnCancelled(input);
-      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+      this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1246,7 +1295,7 @@ export class ChatTurnAgentRunner {
             break;
           }
           throwIfChatTurnCancelled(input);
-          this.deps.storage.chatTurnTraces.patch(input.turnId, {
+          this.patchTurnTrace(input, input.turnId, {
             status: "waiting_for_tool",
           });
           ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1330,7 +1379,7 @@ export class ChatTurnAgentRunner {
               reason: "Approval required by policy.",
               expiresAt: syntheticRun.approvalExpiresAt,
             };
-            this.deps.storage.chatInlineApprovals.upsert({
+            this.upsertInlineApproval(input, {
               approvalId: syntheticRun.record.approvalId,
               sessionId: input.sessionId,
               turnId: input.turnId,
@@ -1357,7 +1406,7 @@ export class ChatTurnAgentRunner {
                 break;
               }
               throwIfChatTurnCancelled(input);
-              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              this.patchTurnTrace(input, input.turnId, {
                 status: "waiting_for_tool",
               });
               ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1440,7 +1489,7 @@ export class ChatTurnAgentRunner {
                   reason: "Approval required by policy.",
                   expiresAt: fileReadRun.approvalExpiresAt,
                 };
-                this.deps.storage.chatInlineApprovals.upsert({
+                this.upsertInlineApproval(input, {
                   approvalId: fileReadRun.record.approvalId,
                   sessionId: input.sessionId,
                   turnId: input.turnId,
@@ -1497,7 +1546,7 @@ export class ChatTurnAgentRunner {
               break promptLabSearchLoop;
             }
             throwIfChatTurnCancelled(input);
-            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+            this.patchTurnTrace(input, input.turnId, {
               status: "waiting_for_tool",
             });
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1554,7 +1603,7 @@ export class ChatTurnAgentRunner {
             ) {
               promptLabSearchPathMissing = true;
               const fallbackSearchArgs = buildPromptLabSearchArgs(searchToolName, ".", query);
-              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              this.patchTurnTrace(input, input.turnId, {
                 status: "waiting_for_tool",
               });
               ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1616,7 +1665,7 @@ export class ChatTurnAgentRunner {
                 reason: "Approval required by policy.",
                 expiresAt: effectiveSearchRun.approvalExpiresAt,
               };
-              this.deps.storage.chatInlineApprovals.upsert({
+              this.upsertInlineApproval(input, {
                 approvalId: effectiveSearchRun.record.approvalId,
                 sessionId: input.sessionId,
                 turnId: input.turnId,
@@ -1644,7 +1693,7 @@ export class ChatTurnAgentRunner {
                   break;
                 }
                 throwIfChatTurnCancelled(input);
-                this.deps.storage.chatTurnTraces.patch(input.turnId, {
+                this.patchTurnTrace(input, input.turnId, {
                   status: "waiting_for_tool",
                 });
                 ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1727,7 +1776,7 @@ export class ChatTurnAgentRunner {
                     reason: "Approval required by policy.",
                     expiresAt: fileReadRun.approvalExpiresAt,
                   };
-                  this.deps.storage.chatInlineApprovals.upsert({
+                  this.upsertInlineApproval(input, {
                     approvalId: fileReadRun.record.approvalId,
                     sessionId: input.sessionId,
                     turnId: input.turnId,
@@ -1765,7 +1814,7 @@ export class ChatTurnAgentRunner {
           inferQueryFromPrompt(promptLabTaskForInspection) ?? deriveLiveDataQuery(promptLabTaskForInspection);
         if (promptLabSearchQuery.trim().length > 0) {
           throwIfChatTurnCancelled(input);
-          this.deps.storage.chatTurnTraces.patch(input.turnId, {
+          this.patchTurnTrace(input, input.turnId, {
             status: "waiting_for_tool",
           });
           ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1849,7 +1898,7 @@ export class ChatTurnAgentRunner {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
       if (quickWebQuery.trim().length > 0) {
         throwIfChatTurnCancelled(input);
-        this.deps.storage.chatTurnTraces.patch(input.turnId, {
+        this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
         });
         ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1913,7 +1962,7 @@ export class ChatTurnAgentRunner {
     // Deterministic live-time helper for simple queries.
     if (!assistantContent && intents.time && canUseTimeTool && !promptLabContract.toolUseSuppressed) {
       throwIfChatTurnCancelled(input);
-      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+      this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -1990,7 +2039,7 @@ export class ChatTurnAgentRunner {
           reason: "Approval required by policy.",
           expiresAt: syntheticRun.approvalExpiresAt,
         };
-        this.deps.storage.chatInlineApprovals.upsert({
+        this.upsertInlineApproval(input, {
           approvalId: syntheticRun.record.approvalId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -2020,7 +2069,7 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+      this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
@@ -2178,7 +2227,7 @@ export class ChatTurnAgentRunner {
                 reason: "Approval required by policy.",
                 expiresAt: navigateRun.approvalExpiresAt,
               };
-              this.deps.storage.chatInlineApprovals.upsert({
+              this.upsertInlineApproval(input, {
                 approvalId: navigateRun.record.approvalId,
                 sessionId: input.sessionId,
                 turnId: input.turnId,
@@ -2218,7 +2267,7 @@ export class ChatTurnAgentRunner {
           reason: "Approval required by policy.",
           expiresAt: syntheticRun.approvalExpiresAt,
         };
-        this.deps.storage.chatInlineApprovals.upsert({
+        this.upsertInlineApproval(input, {
           approvalId: syntheticRun.record.approvalId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -2241,7 +2290,7 @@ export class ChatTurnAgentRunner {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
           throwIfChatTurnCancelled(input);
-          this.deps.storage.chatTurnTraces.patch(input.turnId, {
+          this.patchTurnTrace(input, input.turnId, {
             status: "running",
           });
           const loopTrace: ChatTurnTraceRecord = {
@@ -2832,7 +2881,7 @@ export class ChatTurnAgentRunner {
             batchAccessApprovalFree()
           ) {
             throwIfChatTurnCancelled(input);
-            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+            this.patchTurnTrace(input, input.turnId, {
               status: "waiting_for_tool",
             });
             // Residual divergence (review I3, narrowed by the access preflight
@@ -2923,7 +2972,7 @@ export class ChatTurnAgentRunner {
             const loopGuardEvent = detectToolLoopRisk(loopGuardState, toolCall.toolName, toolCall.args);
             if (loopGuardEvent) {
               loopGuardState.events.push(loopGuardEvent);
-              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              this.patchTurnTrace(input, input.turnId, {
                 loopGuard: createLoopGuardTrace(loopGuardState),
               });
               yield {
@@ -2977,7 +3026,7 @@ export class ChatTurnAgentRunner {
                 shortCircuitedOnBudget = true;
                 break;
               }
-              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              this.patchTurnTrace(input, input.turnId, {
                 status: "waiting_for_tool",
               });
             }
@@ -3065,7 +3114,7 @@ export class ChatTurnAgentRunner {
                 reason: "Approval required by policy.",
                 expiresAt: executed.approvalExpiresAt,
               };
-              this.deps.storage.chatInlineApprovals.upsert({
+              this.upsertInlineApproval(input, {
                 approvalId: executed.record.approvalId,
                 sessionId: input.sessionId,
                 turnId: input.turnId,
@@ -3223,7 +3272,7 @@ export class ChatTurnAgentRunner {
               ...routingState,
               fallbackReason: checkpointReason,
             };
-            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+            this.patchTurnTrace(input, input.turnId, {
               status: "running",
               routing: routingState,
               loopGuard: createLoopGuardTrace(loopGuardState),
@@ -3372,7 +3421,7 @@ export class ChatTurnAgentRunner {
       );
       providerCallCount += presentationVisual.providerCalls;
       const rawArgs = presentationVisual.args;
-      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+      this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       const syntheticRun = await this.executeToolCall({
@@ -3425,7 +3474,7 @@ export class ChatTurnAgentRunner {
     ) {
       throwIfChatTurnCancelled(input);
       const rawArgs = buildSyntheticDocumentCreateArgs(input, this.deps.safeWriteFallbackDir);
-      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+      this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       const syntheticRun = await this.executeToolCall({
@@ -3681,7 +3730,7 @@ export class ChatTurnAgentRunner {
       ...(degradedOutcome ? { degraded: degradedOutcome } : {}),
       ...(failedFileMutations.length > 0 ? { failedFileMutations } : {}),
     };
-    const updatedTrace = this.deps.storage.chatTurnTraces.patch(input.turnId, {
+    const updatedTrace = this.patchTurnTrace(input, input.turnId, {
       status: finalStatus,
       model: assistantModel,
       citations,
@@ -4094,7 +4143,7 @@ export class ChatTurnAgentRunner {
       try {
         assertNoToolOutputInjection(res.record.result);
       } catch (error) {
-        const updated = this.deps.storage.chatToolRuns.patch(res.record.toolRunId, {
+        const updated = this.patchToolRun(input.input, res.record.toolRunId, {
           status: "failed",
           error: (error as Error).message,
           failureGuidance: buildToolFailureGuidance({
@@ -4143,7 +4192,7 @@ export class ChatTurnAgentRunner {
     });
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
-    const created = this.deps.storage.chatToolRuns.create({
+    const created = this.createToolRun(input.input, {
       toolRunId,
       turnId: input.turnId,
       sessionId: input.input.sessionId,
@@ -4154,7 +4203,7 @@ export class ChatTurnAgentRunner {
     });
 
     if (preflight.blockedReason) {
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "blocked",
         error: preflight.blockedReason,
         failureGuidance: buildToolFailureGuidance({
@@ -4178,7 +4227,7 @@ export class ChatTurnAgentRunner {
     }
 
     if (preflight.failureReason) {
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "failed",
         error: preflight.failureReason,
         failureGuidance: buildToolFailureGuidance({
@@ -4207,7 +4256,7 @@ export class ChatTurnAgentRunner {
       input.priorToolRuns,
     );
     if (reusableResult) {
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
         reused: true,
         reusedFromToolRunId: reusableResult.toolRunId,
@@ -4255,7 +4304,7 @@ export class ChatTurnAgentRunner {
         ...annotationResult,
         localBusinessResearch: annotationResult,
       };
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
         result: result as Record<string, unknown>,
         finishedAt: new Date().toISOString(),
@@ -4274,7 +4323,7 @@ export class ChatTurnAgentRunner {
     const sourceAttribution = collectSourceAttributionFromToolRuns(input.priorToolRuns);
 
     try {
-      const result = await this.deps.invokeTool({
+      const result = await this.invokeTurnTool(input.input, {
         toolName: preflight.toolName,
         args: preflight.args,
         agentId: "assistant",
@@ -4294,6 +4343,7 @@ export class ChatTurnAgentRunner {
         policyContext: buildTurnToolPolicyContext(input.input),
       });
       const persistedToolResult = await this.persistToolArtifactsIfNeeded({
+        turnInput: input.input,
         sessionId: input.input.sessionId,
         turnId: input.turnId,
         toolRunId: created.toolRunId,
@@ -4307,7 +4357,7 @@ export class ChatTurnAgentRunner {
         const approvalExpiresAt = result.approvalId
           ? this.resolveApprovalExpiresAt(result.approvalId, result.expiresAt)
           : undefined;
-        const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+        const updated = this.patchToolRun(input.input, created.toolRunId, {
           status: "approval_required",
           approvalId: result.approvalId,
           result: persistedToolResult,
@@ -4342,7 +4392,7 @@ export class ChatTurnAgentRunner {
               originalPath: typeof preflight.args.path === "string" ? preflight.args.path : undefined,
               note: `Write path blocked by policy; wrote to fallback path ${writeFallback.fallbackPath}`,
             };
-            const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+            const updated = this.patchToolRun(input.input, created.toolRunId, {
               status: "executed",
               result: fallbackPayload,
               finishedAt: new Date().toISOString(),
@@ -4362,7 +4412,7 @@ export class ChatTurnAgentRunner {
             const approvalExpiresAt = writeFallback.result.approvalId
               ? this.resolveApprovalExpiresAt(writeFallback.result.approvalId, writeFallback.result.expiresAt)
               : undefined;
-            const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+            const updated = this.patchToolRun(input.input, created.toolRunId, {
               status: "approval_required",
               approvalId: writeFallback.result.approvalId,
               result: {
@@ -4391,7 +4441,7 @@ export class ChatTurnAgentRunner {
           ]
             .filter(Boolean)
             .join("; ");
-          const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+          const updated = this.patchToolRun(input.input, created.toolRunId, {
             status: "blocked",
             error: fallbackError,
             result: writeFallback.result.result,
@@ -4425,7 +4475,7 @@ export class ChatTurnAgentRunner {
           };
         }
 
-        const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+        const updated = this.patchToolRun(input.input, created.toolRunId, {
           status: "blocked",
           error: result.policyReason,
           result: persistedToolResult,
@@ -4473,7 +4523,7 @@ export class ChatTurnAgentRunner {
         }
       }
 
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
         result: persistedToolResult,
         finishedAt: new Date().toISOString(),
@@ -4488,6 +4538,12 @@ export class ChatTurnAgentRunner {
         },
       };
     } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.name === "DurableWorkerInterruptionError" || error.name === "DurableRunPausedError")
+      ) {
+        throw error;
+      }
       if (MCP_BROWSER_FALLBACK_TOOL_NAMES.has(preflight.toolName)) {
         const recovered = await this.finalizeBrowserToolCall({
           created,
@@ -4502,7 +4558,7 @@ export class ChatTurnAgentRunner {
           return recovered;
         }
       }
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "failed",
         error: (error as Error).message,
         failureGuidance: buildToolFailureGuidance({
@@ -4545,6 +4601,7 @@ export class ChatTurnAgentRunner {
   }
 
   private async persistToolArtifactsIfNeeded(input: {
+    turnInput: ChatTurnAgentRunnerInput;
     sessionId: string;
     turnId: string;
     toolRunId: string;
@@ -4567,6 +4624,7 @@ export class ChatTurnAgentRunner {
     if (!content) {
       return compactToolResultForExecutionProfile(input.toolName, input.result, input.normalizationProfile);
     }
+    this.runCanonicalWrite(input.turnInput, () => undefined);
     const persisted = await this.deps.persistToolArtifact({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -4576,7 +4634,9 @@ export class ChatTurnAgentRunner {
       contentType: content.contentType,
       snippet: content.snippet,
       createdAt: new Date().toISOString(),
+      ...(input.turnInput.canonicalWriteFence ? { canonicalWriteFence: input.turnInput.canonicalWriteFence } : {}),
     });
+    this.runCanonicalWrite(input.turnInput, () => undefined);
     return compactToolResultForTurn(input.result, {
       artifactId: persisted.artifactId,
       storageRelPath: persisted.storageRelPath,
@@ -4671,6 +4731,7 @@ export class ChatTurnAgentRunner {
         result: alternateBuiltinResult,
       });
       const persistedAlternateBuiltinResult = await this.persistToolArtifactsIfNeeded({
+        turnInput: input.turnInput,
         sessionId: input.turnInput.sessionId,
         turnId: input.turnId,
         toolRunId: input.created.toolRunId,
@@ -4679,7 +4740,7 @@ export class ChatTurnAgentRunner {
         normalizationProfile: input.turnInput.normalizationProfile,
         priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
-      const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
+      const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
         result: persistedAlternateBuiltinResult,
         finishedAt: new Date().toISOString(),
@@ -4718,6 +4779,7 @@ export class ChatTurnAgentRunner {
           result: fallback.result,
         });
         const persistedFallbackResult = await this.persistToolArtifactsIfNeeded({
+          turnInput: input.turnInput,
           sessionId: input.turnInput.sessionId,
           turnId: input.turnId,
           toolRunId: input.created.toolRunId,
@@ -4726,7 +4788,7 @@ export class ChatTurnAgentRunner {
           normalizationProfile: input.turnInput.normalizationProfile,
           priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
         });
-        const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
+        const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
           status: "executed",
           result: persistedFallbackResult,
           finishedAt: new Date().toISOString(),
@@ -4752,6 +4814,7 @@ export class ChatTurnAgentRunner {
         result: normalizedWithChain,
       });
       const persistedNormalizedResult = await this.persistToolArtifactsIfNeeded({
+        turnInput: input.turnInput,
         sessionId: input.turnInput.sessionId,
         turnId: input.turnId,
         toolRunId: input.created.toolRunId,
@@ -4760,7 +4823,7 @@ export class ChatTurnAgentRunner {
         normalizationProfile: input.turnInput.normalizationProfile,
         priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
-      const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
+      const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
         result: persistedNormalizedResult,
         finishedAt: new Date().toISOString(),
@@ -4791,6 +4854,7 @@ export class ChatTurnAgentRunner {
         result: noResultsPayload,
       });
       const persistedNoResultsPayload = await this.persistToolArtifactsIfNeeded({
+        turnInput: input.turnInput,
         sessionId: input.turnInput.sessionId,
         turnId: input.turnId,
         toolRunId: input.created.toolRunId,
@@ -4799,7 +4863,7 @@ export class ChatTurnAgentRunner {
         normalizationProfile: input.turnInput.normalizationProfile,
         priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
       });
-      const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
+      const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
         result: persistedNoResultsPayload,
         failureGuidance: buildToolFailureGuidance({
@@ -4841,6 +4905,7 @@ export class ChatTurnAgentRunner {
       result: failureResult,
     });
     const persistedFailureResult = await this.persistToolArtifactsIfNeeded({
+      turnInput: input.turnInput,
       sessionId: input.turnInput.sessionId,
       turnId: input.turnId,
       toolRunId: input.created.toolRunId,
@@ -4849,7 +4914,7 @@ export class ChatTurnAgentRunner {
       normalizationProfile: input.turnInput.normalizationProfile,
       priorToolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
     });
-    const updated = this.deps.storage.chatToolRuns.patch(input.created.toolRunId, {
+    const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
       status: "failed",
       error: classification.error ?? input.error ?? "browser execution failed",
       result: persistedFailureResult,
@@ -5151,7 +5216,7 @@ export class ChatTurnAgentRunner {
       path: fallbackPath,
     };
 
-    const result = await this.deps.invokeTool({
+    const result = await this.invokeTurnTool(input.input, {
       toolName: input.toolName,
       args: fallbackArgs,
       agentId: "assistant",

@@ -294,9 +294,13 @@ export class RemoteActionTokenRepository {
    * not need a separate read/expire sequence that could misclassify a claim.
    */
   public expirePendingAtOrBefore(tokenId: string, boundaryAt: string): RemoteActionTokenRecord {
+    const boundaryMs = Date.parse(boundaryAt);
+    if (!Number.isFinite(boundaryMs)) {
+      throw new ValidationError({ message: "Remote action token expiry boundary must be a valid timestamp." });
+    }
     const current = this.get(tokenId);
     const expiresAt = Date.parse(current.expiresAt);
-    if (current.state !== "pending" || !Number.isFinite(expiresAt) || expiresAt > Date.parse(boundaryAt)) {
+    if (current.state !== "pending" || !Number.isFinite(expiresAt) || expiresAt > boundaryMs) {
       return current;
     }
     return this.expirePending(tokenId) ?? this.get(tokenId);

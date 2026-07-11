@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyReply } from "fastify";
 import { z } from "zod";
-import { isGoatError } from "@goatcitadel/contracts";
+import { isGoatError, redactStructuredSecrets } from "@goatcitadel/contracts";
 import { env } from "../env.js";
 import { sendRouteError } from "./_error-handler.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
@@ -36,6 +36,24 @@ export function getPublicChatSseErrorMessage(error: unknown): string {
 }
 
 export function sendChatWriteError(reply: FastifyReply, error: unknown) {
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    "mutationCommitted" in error &&
+    (error as { mutationCommitted?: unknown }).mutationCommitted === true &&
+    error instanceof Error
+  ) {
+    reply.log.error({ err: error }, "chat write failed after mutation commit");
+    const turnId = readNonEmptyString((error as { turnId?: unknown }).turnId, 256);
+    const deliveryEvidence = readPublicDeliveryEvidence((error as { deliveryEvidence?: unknown }).deliveryEvidence);
+    return reply.code(500).send({
+      error: error.message,
+      code: "mutation_committed",
+      retryable: false,
+      ...(turnId ? { turnId } : {}),
+      ...(deliveryEvidence ? { deliveryEvidence } : {}),
+    });
+  }
   if (isChatTurnWriteConflictError(error) && error instanceof Error) {
     return reply.code(409).send({ error: error.message });
   }
@@ -44,6 +62,28 @@ export function sendChatWriteError(reply: FastifyReply, error: unknown) {
   }
   reply.log.error({ err: error }, "chat write failed");
   return reply.code(400).send({ error: "Chat write failed. Check gateway diagnostics and retry." });
+}
+
+function readPublicDeliveryEvidence(value: unknown): Record<string, string> | undefined {
+  if (value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const evidence: Record<string, string> = {};
+  for (const key of ["status", "deliveryStatus", "deliveryId", "providerMessageId"] as const) {
+    const entry = readNonEmptyString((value as Record<string, unknown>)[key]);
+    if (entry) {
+      evidence[key] = entry;
+    }
+  }
+  return Object.keys(evidence).length > 0 ? redactStructuredSecrets(evidence).value : undefined;
+}
+
+function readNonEmptyString(value: unknown, maxLength = 512): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
 export async function streamSseReply(

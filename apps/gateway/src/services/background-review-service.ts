@@ -5,9 +5,7 @@ import type {
   OperatorProfileFact,
   OperatorProfileFactKind,
 } from "@goatcitadel/contracts";
-import type {
-  RecordOperatorProfileFactsResult,
-} from "./operator-profile-service.js";
+import type { RecordOperatorProfileFactsResult } from "./operator-profile-service.js";
 import type { SkillMutationResult } from "./skill-mutation-service.js";
 
 /**
@@ -91,11 +89,11 @@ export interface BackgroundReviewSkillSuggestion {
 
 export interface BackgroundReviewTurnInput {
   sessionId: string;
+  /** The completed turn that produced this review input. */
+  sourceTurnId: string;
   workspaceId: string;
   userText: string;
   assistantText: string;
-  /** The triggering root turn id (provenance for an authored skill). */
-  parentTurnId?: string;
   /** Honor the master autonomy kill switch (`autonomyV1Disabled`). */
   autonomyEnabled: boolean;
   /** Eval-integrity turns must never produce side effects. */
@@ -143,10 +141,7 @@ export interface BackgroundReviewServiceDeps {
    * Persist durable operator facts via the governed operator-profile service
    * (secrets blocked, snapshotted, autonomy-gated). Returns the write outcome.
    */
-  recordOperatorProfileFacts(
-    workspaceId: string,
-    facts: OperatorProfileFact[],
-  ): RecordOperatorProfileFactsResult;
+  recordOperatorProfileFacts(workspaceId: string, facts: OperatorProfileFact[]): RecordOperatorProfileFactsResult;
   /**
    * Author or patch a single skill via the governed skill-mutation service
    * (validated, jailed, candidate-only, snapshotted). Returns the mutation
@@ -200,7 +195,7 @@ export class BackgroundReviewService {
     const suggestion = await this.suggestSkill(transcript, input.signal);
     let skillMutation: SkillMutationResult | undefined;
     if (suggestion.shouldAuthor && suggestion.skillMarkdown) {
-      skillMutation = await this.safeDraftSkill(suggestion, input.parentTurnId);
+      skillMutation = await this.safeDraftSkill(suggestion, input.sourceTurnId);
     }
 
     const summaryMarker = buildSummaryMarker(memoryWrite, skillMutation);
@@ -218,10 +213,7 @@ export class BackgroundReviewService {
    * Memory-extraction model call. Read-only, strict JSON, no tool calls. Applies
    * the anti-self-poisoning filter + confidence gate. Returns `[]` on any error.
    */
-  public async extractMemoryFacts(
-    transcript: string,
-    signal?: AbortSignal,
-  ): Promise<OperatorProfileFact[]> {
+  public async extractMemoryFacts(transcript: string, signal?: AbortSignal): Promise<OperatorProfileFact[]> {
     const content = await this.callStrictJson(buildMemorySystemPrompt(), buildMemoryUserPrompt(transcript), signal);
     if (!content) {
       return [];
@@ -233,10 +225,7 @@ export class BackgroundReviewService {
    * Skill-suggestion model call. Read-only, strict JSON, no tool calls. Returns a
    * `shouldAuthor:false` suggestion on any error (nothing authored).
    */
-  public async suggestSkill(
-    transcript: string,
-    signal?: AbortSignal,
-  ): Promise<BackgroundReviewSkillSuggestion> {
+  public async suggestSkill(transcript: string, signal?: AbortSignal): Promise<BackgroundReviewSkillSuggestion> {
     const content = await this.callStrictJson(buildSkillSystemPrompt(), buildSkillUserPrompt(transcript), signal);
     if (!content) {
       return { shouldAuthor: false };
@@ -246,11 +235,7 @@ export class BackgroundReviewService {
 
   // ── internals ────────────────────────────────────────────────────────
 
-  private async callStrictJson(
-    system: string,
-    user: string,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  private async callStrictJson(system: string, user: string, signal?: AbortSignal): Promise<string> {
     const defaults = this.deps.resolveModelDefaults();
     const apiStyle = this.deps.resolveApiStyle(defaults.providerId, defaults.model);
     const request: ChatCompletionRequest = {
@@ -511,11 +496,7 @@ function normalizeConfidence(value: unknown): number {
   return value;
 }
 
-function normalizeText(
-  value: unknown,
-  maxLength: number,
-  options: { trim?: boolean } = {},
-): string | undefined {
+function normalizeText(value: unknown, maxLength: number, options: { trim?: boolean } = {}): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

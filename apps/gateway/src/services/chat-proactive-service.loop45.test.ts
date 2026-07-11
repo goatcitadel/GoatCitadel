@@ -15,6 +15,7 @@ vi.mock("@goatcitadel/storage", () => ({
 import type {
   DurableCheckpointRecord,
   DurableRunRecord,
+  ExternalSideEffectRunRecord,
   ProactiveActionRecord,
   ProactiveRunRecord,
   SessionMeta,
@@ -168,9 +169,8 @@ describe("ChatProactiveService loop45 coverage", () => {
       const started = await entry.harness.service.triggerChatSessionProactive(entry.harness.state.session.sessionId, {
         source: "manual",
       });
-      await entry.harness.service.executeDurableProactiveTickRun(
-        entry.harness.state.durableRuns.get(started.linkedDurableRunId!)!,
-      );
+      const claimed = claimDurableRun(entry.harness.state, started.linkedDurableRunId!);
+      await entry.harness.service.executeDurableProactiveTickRun(claimed);
 
       const completed = readRun(entry.harness.state, started.runId);
       expect(completed, entry.name).toMatchObject({
@@ -287,6 +287,20 @@ function callPlan(service: ChatProactiveService, sessionId: string) {
   ).planProactiveActions(sessionId);
 }
 
+function claimDurableRun(state: HarnessState, runId: string): DurableRunRecord {
+  const current = state.durableRuns.get(runId)!;
+  const claimed = {
+    ...current,
+    status: "running" as const,
+    version: current.version + 1,
+    leaseOwnerId: "worker-loop45",
+    leaseHeartbeatAt: new Date().toISOString(),
+    leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+  };
+  state.durableRuns.set(runId, claimed);
+  return claimed;
+}
+
 function callExecuteTool(service: ChatProactiveService, action: ProactiveActionRecord, durableRunId: string) {
   return (
     service as unknown as {
@@ -391,7 +405,70 @@ function createHarness(
 }
 
 function createStorage(state: HarnessState) {
+  const mutations = new Map<string, { payloadHash: string; status: "pending" | "completed" | "failed" }>();
+  const sideEffects = new Map<string, ExternalSideEffectRunRecord>();
   return {
+    runImmediateTransaction: <T>(callback: () => T): T => callback(),
+    mutationIdempotency: {
+      claim: (input: { routePath: string; idempotencyKey: string; actorScope?: string; payloadHash: string }) => {
+        const key = `${input.routePath}:${input.idempotencyKey}:${input.actorScope ?? ""}`;
+        const existing = mutations.get(key);
+        if (!existing) {
+          const record = { payloadHash: input.payloadHash, status: "pending" as const };
+          mutations.set(key, record);
+          return { outcome: "claimed" as const, claimKind: "new" as const, record };
+        }
+        if (existing.payloadHash !== input.payloadHash) {
+          return { outcome: "payload_mismatch" as const, record: existing };
+        }
+        return {
+          outcome: existing.status === "completed" ? ("duplicate" as const) : ("in_progress" as const),
+          record: existing,
+        };
+      },
+      markCompleted: (input: { routePath: string; idempotencyKey: string; actorScope?: string }) => {
+        const key = `${input.routePath}:${input.idempotencyKey}:${input.actorScope ?? ""}`;
+        const current = mutations.get(key)!;
+        mutations.set(key, { ...current, status: "completed" });
+      },
+      markFailed: (input: { routePath: string; idempotencyKey: string; actorScope?: string }) => {
+        const key = `${input.routePath}:${input.idempotencyKey}:${input.actorScope ?? ""}`;
+        const current = mutations.get(key)!;
+        mutations.set(key, { ...current, status: "failed" });
+      },
+    },
+    externalSideEffectRuns: {
+      createOrGet: (input: Record<string, unknown>, createdAt = new Date().toISOString()) => {
+        const key = `${String(input.boundary)}:${String(input.idempotencyKey)}`;
+        const existing = sideEffects.get(key);
+        if (existing) return existing;
+        const record = {
+          runId: key,
+          workspaceId: String(input.workspaceId ?? "default"),
+          boundary: String(input.boundary),
+          routePath: String(input.routePath),
+          catalogId: typeof input.catalogId === "string" ? input.catalogId : undefined,
+          actionId: typeof input.actionId === "string" ? input.actionId : undefined,
+          actorScope: String(input.actorScope ?? ""),
+          idempotencyKey: String(input.idempotencyKey),
+          payloadHash: String(input.payloadHash),
+          status: (input.status ?? "claimed_not_sent") as ExternalSideEffectRunRecord["status"],
+          replayPolicy: "idempotent_external" as const,
+          replayOutcome: input.replayOutcome as ExternalSideEffectRunRecord["replayOutcome"],
+          replayAttempt: input.replayAttempt as ExternalSideEffectRunRecord["replayAttempt"],
+          resumeState: "not_resumable" as const,
+          attemptCount: 0,
+          createdAt,
+          updatedAt: createdAt,
+        } satisfies ExternalSideEffectRunRecord;
+        sideEffects.set(key, record);
+        return record;
+      },
+      markExternalCallStarted: (runId: string) => updateSideEffect(sideEffects, runId, "external_call_started"),
+      markCompleted: (runId: string) => updateSideEffect(sideEffects, runId, "completed"),
+      markFailure: (runId: string, input: { status: "failed_before_boundary" | "unknown_external_outcome" }) =>
+        updateSideEffect(sideEffects, runId, input.status),
+    },
     sessionAutonomyPrefs: {
       ensure: (sessionId: string) => state.prefs.get(sessionId)!,
       patch: (sessionId: string, patch: Partial<Prefs>) => {
@@ -441,6 +518,7 @@ function createStorage(state: HarnessState) {
       },
     },
     durableRuns: {
+      getRun: (runId: string) => state.durableRuns.get(runId)!,
       updateRun: (input: {
         runId: string;
         status: DurableRunRecord["status"];
@@ -488,6 +566,17 @@ function createStorage(state: HarnessState) {
       find: vi.fn(),
     },
   };
+}
+
+function updateSideEffect(
+  records: Map<string, ExternalSideEffectRunRecord>,
+  runId: string,
+  status: ExternalSideEffectRunRecord["status"],
+): ExternalSideEffectRunRecord {
+  const current = records.get(runId)!;
+  const next = { ...current, status, updatedAt: new Date().toISOString() };
+  records.set(runId, next);
+  return next;
 }
 
 function createStatement(sql: string, state: HarnessState) {

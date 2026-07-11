@@ -197,6 +197,39 @@ describe("durable routes", () => {
     expect(conflict.json()).toEqual({ error: "duplicate idempotency key" });
   });
 
+  it("reports post-commit create failures as server errors with committed request truth", async () => {
+    const createRun = vi.fn(() => {
+      throw Object.assign(new Error("retained stream unavailable"), {
+        mutationCommitted: true,
+        canonicalResult: {
+          runId: "run-committed",
+          status: "queued",
+          payload: { remoteApprovalBearer: `grat_${"a".repeat(43)}` },
+        },
+      });
+    });
+    app = buildDurableApp({ createRun });
+    await app.register(durableRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/durable/runs",
+      payload: { workflowKey: "connector.delivery" },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: "retained stream unavailable",
+      code: "mutation_committed",
+      retryable: false,
+      canonicalResult: {
+        runId: "run-committed",
+        status: "queued",
+        payload: { remoteApprovalBearer: "[REDACTED]" },
+      },
+    });
+  });
+
   it("maps get/timeline not-found errors to 404 and other durable control errors to 409", async () => {
     const pauseRun = vi.fn(() => {
       throw new Error("run cannot be paused from completed");

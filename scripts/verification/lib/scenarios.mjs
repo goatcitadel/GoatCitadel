@@ -4082,7 +4082,7 @@ async function waitForDurableRunStatus(gatewayUrl, runId, acceptedStatuses, atte
     await delay(250);
   }
   throw new Error(
-    `durable run ${runId} did not reach one of [${acceptedStatuses.join(", ")}] in time; last status=${latest?.body?.status ?? "unknown"}`,
+    `durable run ${runId} did not reach one of [${acceptedStatuses.join(", ")}] in time; last status=${latest?.body?.status ?? "unknown"}; last error=${latest?.body?.lastError ?? "none"}`,
   );
 }
 

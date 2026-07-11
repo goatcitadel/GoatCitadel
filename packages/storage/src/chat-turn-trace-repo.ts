@@ -226,52 +226,54 @@ export class ChatTurnTraceRepository {
   }
 
   public create(input: ChatTurnTraceCreateInput): ChatTurnTraceRecord {
-    this.insertStmt.run({
-      turnId: input.turnId,
-      sessionId: input.sessionId,
-      userMessageId: input.userMessageId,
-      parentTurnId: input.parentTurnId ?? null,
-      branchKind: input.branchKind ?? "append",
-      sourceTurnId: input.sourceTurnId ?? null,
-      assistantMessageId: input.assistantMessageId ?? null,
-      executionPlanId: input.executionPlanId ?? null,
-      status: input.status ?? "running",
-      mode: input.mode,
-      model: input.model ?? null,
-      webMode: input.webMode,
-      memoryMode: input.memoryMode,
-      thinkingLevel: input.thinkingLevel,
-      routingJson: serializeRoutingJson(input.routing ?? {}, input.effectiveToolAutonomy, {
-        speedMode: input.speedMode,
-        subagentPolicy: input.subagentPolicy,
-      }),
-      retrievalJson: input.retrieval ? JSON.stringify(input.retrieval) : null,
-      reflectionJson: input.reflection ? JSON.stringify(input.reflection) : null,
-      proactiveJson: input.proactive ? JSON.stringify(input.proactive) : null,
-      completionJson: input.completion ? JSON.stringify(input.completion) : null,
-      durableJson: input.durable ? JSON.stringify(input.durable) : null,
-      orchestrationJson: input.orchestration ? JSON.stringify(input.orchestration) : null,
-      guidanceJson: input.guidance ? JSON.stringify(input.guidance) : null,
-      loopGuardJson: input.loopGuard ? JSON.stringify(input.loopGuard) : null,
-      pendingUserInputJson: input.pendingUserInput ? JSON.stringify(input.pendingUserInput) : null,
-      citationsJson: input.citations ? JSON.stringify(input.citations) : null,
-      failureJson: input.failure ? JSON.stringify(input.failure) : null,
-      capabilityUpgradeSuggestionsJson: input.capabilityUpgradeSuggestions
-        ? JSON.stringify(input.capabilityUpgradeSuggestions)
-        : null,
-      specialistCandidateSuggestionsJson: input.specialistCandidateSuggestions
-        ? JSON.stringify(input.specialistCandidateSuggestions)
-        : null,
-      startedAt: input.startedAt ?? new Date().toISOString(),
-      finishedAt: input.finishedAt ?? null,
+    return this.db.transaction("immediate", () => {
+      this.insertStmt.run({
+        turnId: input.turnId,
+        sessionId: input.sessionId,
+        userMessageId: input.userMessageId,
+        parentTurnId: input.parentTurnId ?? null,
+        branchKind: input.branchKind ?? "append",
+        sourceTurnId: input.sourceTurnId ?? null,
+        assistantMessageId: input.assistantMessageId ?? null,
+        executionPlanId: input.executionPlanId ?? null,
+        status: input.status ?? "running",
+        mode: input.mode,
+        model: input.model ?? null,
+        webMode: input.webMode,
+        memoryMode: input.memoryMode,
+        thinkingLevel: input.thinkingLevel,
+        routingJson: serializeRoutingJson(input.routing ?? {}, input.effectiveToolAutonomy, {
+          speedMode: input.speedMode,
+          subagentPolicy: input.subagentPolicy,
+        }),
+        retrievalJson: input.retrieval ? JSON.stringify(input.retrieval) : null,
+        reflectionJson: input.reflection ? JSON.stringify(input.reflection) : null,
+        proactiveJson: input.proactive ? JSON.stringify(input.proactive) : null,
+        completionJson: input.completion ? JSON.stringify(input.completion) : null,
+        durableJson: input.durable ? JSON.stringify(input.durable) : null,
+        orchestrationJson: input.orchestration ? JSON.stringify(input.orchestration) : null,
+        guidanceJson: input.guidance ? JSON.stringify(input.guidance) : null,
+        loopGuardJson: input.loopGuard ? JSON.stringify(input.loopGuard) : null,
+        pendingUserInputJson: input.pendingUserInput ? JSON.stringify(input.pendingUserInput) : null,
+        citationsJson: input.citations ? JSON.stringify(input.citations) : null,
+        failureJson: input.failure ? JSON.stringify(input.failure) : null,
+        capabilityUpgradeSuggestionsJson: input.capabilityUpgradeSuggestions
+          ? JSON.stringify(input.capabilityUpgradeSuggestions)
+          : null,
+        specialistCandidateSuggestionsJson: input.specialistCandidateSuggestions
+          ? JSON.stringify(input.specialistCandidateSuggestions)
+          : null,
+        startedAt: input.startedAt ?? new Date().toISOString(),
+        finishedAt: input.finishedAt ?? null,
+      });
+      const trace = this.get(input.turnId);
+      if (trace.sessionId !== input.sessionId || trace.userMessageId !== input.userMessageId) {
+        throw new Error(
+          `Chat turn trace ${input.turnId} already belongs to session ${trace.sessionId} and message ${trace.userMessageId}.`,
+        );
+      }
+      return trace;
     });
-    const trace = this.get(input.turnId);
-    if (trace.sessionId !== input.sessionId || trace.userMessageId !== input.userMessageId) {
-      throw new Error(
-        `Chat turn trace ${input.turnId} already belongs to session ${trace.sessionId} and message ${trace.userMessageId}.`,
-      );
-    }
-    return trace;
   }
 
   public patch(turnId: string, input: ChatTurnTracePatchInput): ChatTurnTraceRecord {

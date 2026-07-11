@@ -36,6 +36,15 @@ interface ExternalSideEffectRunRow {
   updated_at: string;
 }
 
+export class ExternalSideEffectBoundaryClaimLostError extends Error {
+  public readonly code = "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST";
+
+  public constructor(runId: string, status: ExternalSideEffectRunStatus) {
+    super(`External side-effect run ${runId} cannot cross the external boundary from status ${status}.`);
+    this.name = "ExternalSideEffectBoundaryClaimLostError";
+  }
+}
+
 export class ExternalSideEffectRunRepository {
   private readonly insertStmt;
   private readonly getStmt;
@@ -45,6 +54,7 @@ export class ExternalSideEffectRunRepository {
   private readonly markExternalCallStartedStmt;
   private readonly markCompletedStmt;
   private readonly markFailureStmt;
+  private readonly markFailureIfStatusStmt;
   private readonly attachEnvelopeStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -92,6 +102,7 @@ export class ExternalSideEffectRunRepository {
           external_call_started_at = @externalCallStartedAt,
           updated_at = @updatedAt
       WHERE run_id = @runId
+        AND status IN ('claimed_not_sent', 'failed_before_boundary')
     `);
     this.markCompletedStmt = db.prepare(`
       UPDATE external_side_effect_runs
@@ -115,6 +126,17 @@ export class ExternalSideEffectRunRepository {
           completed_at = @completedAt,
           updated_at = @updatedAt
       WHERE run_id = @runId
+    `);
+    this.markFailureIfStatusStmt = db.prepare(`
+      UPDATE external_side_effect_runs
+      SET status = @status,
+          resume_state = @resumeState,
+          response_payload_json = @responsePayloadJson,
+          error_text = @errorText,
+          completed_at = @completedAt,
+          updated_at = @updatedAt
+      WHERE run_id = @runId
+        AND status = @expectedStatus
     `);
     this.attachEnvelopeStmt = db.prepare(`
       UPDATE external_side_effect_runs
@@ -231,12 +253,15 @@ export class ExternalSideEffectRunRepository {
     now = new Date().toISOString(),
   ): ExternalSideEffectRunRecord {
     const current = this.get(runId);
-    this.markExternalCallStartedStmt.run({
+    const updated = this.markExternalCallStartedStmt.run({
       runId,
       attemptCount: input.attemptCount ?? current.attemptCount + 1,
       externalCallStartedAt: now,
       updatedAt: now,
     });
+    if (updated.changes !== 1) {
+      throw new ExternalSideEffectBoundaryClaimLostError(runId, current.status);
+    }
     return this.get(runId);
   }
 
@@ -273,6 +298,33 @@ export class ExternalSideEffectRunRepository {
   ): ExternalSideEffectRunRecord {
     this.markFailureStmt.run({
       runId,
+      status: input.status,
+      resumeState: resumeStateForStatus(input.status),
+      responsePayloadJson: serializeJson(input.responsePayload),
+      errorText: input.errorText,
+      completedAt: now,
+      updatedAt: now,
+    });
+    return this.get(runId);
+  }
+
+  /**
+   * Reconciliation-only compare-and-set. A stale observer must not overwrite a
+   * concurrently completed provider result with unknown-outcome truth.
+   */
+  public markFailureIfStatus(
+    runId: string,
+    expectedStatus: ExternalSideEffectRunStatus,
+    input: {
+      status: "failed_before_boundary" | "unknown_external_outcome";
+      errorText: string;
+      responsePayload?: Record<string, unknown>;
+    },
+    now = new Date().toISOString(),
+  ): ExternalSideEffectRunRecord {
+    this.markFailureIfStatusStmt.run({
+      runId,
+      expectedStatus,
       status: input.status,
       resumeState: resumeStateForStatus(input.status),
       responsePayloadJson: serializeJson(input.responsePayload),
@@ -387,6 +439,9 @@ function resumeStateForStatus(status: ExternalSideEffectRunStatus): ExternalSide
   if (status === "failed_before_boundary") {
     return "manual_retry_after_recorded_failure";
   }
+  if (status === "unknown_external_outcome") {
+    return "manual_review_unknown_external_outcome";
+  }
   return "not_resumable";
 }
 
@@ -433,6 +488,7 @@ function isExternalSideEffectRunRow(value: unknown): value is ExternalSideEffect
     (value.resume_state === "not_resumable" ||
       value.resume_state === "completed" ||
       value.resume_state === "manual_retry_after_recorded_failure" ||
+      value.resume_state === "manual_review_unknown_external_outcome" ||
       value.resume_state === "in_progress" ||
       value.resume_state === "payload_mismatch" ||
       value.resume_state === "idempotency_unavailable") &&

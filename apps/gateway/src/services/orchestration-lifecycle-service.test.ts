@@ -70,7 +70,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
   let durableRun: DurableRunRecord = {
     runId: "durable-run-1",
     workflowKey: "orchestration.plan.execute",
-    status: "queued",
+    status: "running",
     attemptCount: 0,
     maxAttempts: 3,
     version: 1,
@@ -82,6 +82,9 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       requestedAt: "2026-04-12T00:00:00.000Z",
     },
     metadata: {},
+    leaseOwnerId: "worker-a",
+    leaseHeartbeatAt: "2026-04-12T00:00:00.000Z",
+    leaseExpiresAt: "2099-12-31T23:59:59.999Z",
     createdAt: "2026-04-12T00:00:00.000Z",
     updatedAt: "2026-04-12T00:00:00.000Z",
   };
@@ -110,7 +113,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     },
   };
 
-  return {
+  const host: OrchestrationLifecycleHost = {
     config: {
       assistant: {
         memory: {
@@ -202,19 +205,53 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       return durableRun;
     }),
     updateDurableRunState: vi.fn((input) => {
+      if (
+        input.expectedLeaseOwnerId &&
+        (durableRun.status !== "running" ||
+          durableRun.leaseOwnerId !== input.expectedLeaseOwnerId ||
+          !durableRun.leaseExpiresAt ||
+          Date.parse(durableRun.leaseExpiresAt) <= Date.now())
+      ) {
+        const error = new Error("durable lease lost");
+        error.name = "DurableWorkerInterruptionError";
+        throw error;
+      }
       durableRun = {
         ...durableRun,
         ...(input.status ? { status: input.status } : {}),
         ...(input.metadata ? { metadata: input.metadata } : {}),
         ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
         ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+        ...(input.clearFinishedAt ? { finishedAt: undefined } : {}),
+        ...(input.clearLastError ? { lastError: undefined } : {}),
+        ...(input.clearLease
+          ? { leaseOwnerId: undefined, leaseHeartbeatAt: undefined, leaseExpiresAt: undefined }
+          : {}),
+        ...(input.status === "running" && !input.expectedLeaseOwnerId
+          ? {
+              leaseOwnerId: "worker-resumed",
+              leaseHeartbeatAt: "2026-04-12T00:01:00.000Z",
+              leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+            }
+          : {}),
         updatedAt: "2026-04-12T00:00:00.000Z",
         version: durableRun.version + 1,
       };
       return durableRun;
     }),
     recordDurableTimelineEvent: vi.fn(),
+  };
+  return {
+    ...host,
     ...overrides,
+    storage: {
+      ...storage,
+      ...(overrides.storage ?? {}),
+      orchestration: {
+        ...storage.orchestration,
+        ...(overrides.storage?.orchestration ?? {}),
+      },
+    },
   };
 }
 
@@ -1099,7 +1136,15 @@ describe("orchestration-lifecycle-service", () => {
       "phase-1",
       expect.objectContaining({ costIncrementUsd: 0.5 }),
     );
-    expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(host.pauseDurableRun).not.toHaveBeenCalled();
+    expect(host.updateDurableRunState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        status: "paused",
+        clearLease: true,
+        expectedLeaseOwnerId: "worker-a",
+      }),
+    );
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));
   });
 
@@ -1137,6 +1182,7 @@ describe("orchestration-lifecycle-service", () => {
     ]);
     expect(vi.mocked(host.recordDurableTimelineEvent).mock.calls.map(([, eventType]) => eventType)).toEqual([
       "run_started",
+      "run_paused",
     ]);
   });
 
@@ -1628,7 +1674,7 @@ describe("orchestration-lifecycle-service", () => {
 
     host.updateDurableRunState({
       runId: "durable-run-1",
-      status: "queued",
+      status: "running",
       metadata: host.getDurableRun("durable-run-1").metadata,
       clearFinishedAt: true,
       clearLastError: true,
@@ -1730,7 +1776,7 @@ describe("orchestration-lifecycle-service", () => {
 
     host.updateDurableRunState({
       runId: "durable-run-1",
-      status: "queued",
+      status: "running",
       metadata: host.getDurableRun("durable-run-1").metadata,
       clearFinishedAt: true,
       clearLastError: true,
@@ -1802,7 +1848,7 @@ describe("orchestration-lifecycle-service", () => {
 
     host.updateDurableRunState({
       runId: "durable-run-1",
-      status: "queued",
+      status: "running",
       metadata: host.getDurableRun("durable-run-1").metadata,
       clearFinishedAt: true,
       clearLastError: true,
@@ -1901,7 +1947,7 @@ describe("orchestration-lifecycle-service", () => {
 
     host.updateDurableRunState({
       runId: "durable-run-1",
-      status: "queued",
+      status: "running",
       metadata: host.getDurableRun("durable-run-1").metadata,
       clearFinishedAt: true,
       clearLastError: true,
@@ -1966,7 +2012,10 @@ describe("orchestration-lifecycle-service", () => {
     const parentDurableRun: DurableRunRecord = {
       runId: "durable-run-1",
       workflowKey: "orchestration.plan.execute",
-      status: "queued",
+      status: "running",
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-04-12T00:00:00.000Z",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
       attemptCount: 1,
       maxAttempts: 3,
       version: 5,
@@ -2079,7 +2128,10 @@ describe("orchestration-lifecycle-service", () => {
     const parentDurableRun: DurableRunRecord = {
       runId: "durable-run-1",
       workflowKey: "orchestration.plan.execute",
-      status: "queued",
+      status: "running",
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-04-12T00:00:00.000Z",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
       attemptCount: 1,
       maxAttempts: 3,
       version: 5,
@@ -2156,7 +2208,10 @@ describe("orchestration-lifecycle-service", () => {
     const parentDurableRun: DurableRunRecord = {
       runId: "durable-run-1",
       workflowKey: "orchestration.plan.execute",
-      status: "queued",
+      status: "running",
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-04-12T00:00:00.000Z",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
       attemptCount: 1,
       maxAttempts: 3,
       version: 5,

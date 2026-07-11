@@ -59,6 +59,23 @@ describe("chat tool artifact service", () => {
     await expect(fs.readFile(path.join(rootDir, "data", first.storageRelPath), "utf8")).resolves.toBe("preexisting");
   });
 
+  it("does not expose an artifact record when the canonical write fence rejects after file persistence", async () => {
+    const host = fakeHost(rootDir);
+    const canonicalWriteFence = vi.fn(() => {
+      throw new Error("durable lease lost");
+    });
+
+    await expect(
+      persistChatToolArtifact(host, {
+        ...input("text/plain"),
+        canonicalWriteFence,
+      }),
+    ).rejects.toThrow("durable lease lost");
+
+    expect(canonicalWriteFence).toHaveBeenCalledTimes(1);
+    expect(host.storage.chatToolArtifacts.create).not.toHaveBeenCalled();
+  });
+
   it("loads artifact content only for the owning workspace inside the data root", async () => {
     const host = fakeHost(rootDir);
     const persisted = await persistChatToolArtifact(host, input("text/plain"));

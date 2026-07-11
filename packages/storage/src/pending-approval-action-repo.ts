@@ -39,10 +39,8 @@ export class PendingApprovalActionRepository {
         action_type = excluded.action_type,
         request_json = excluded.request_json,
         created_at = excluded.created_at,
-        expires_at = excluded.expires_at,
-        resolved_at = NULL,
-        resolution_status = 'pending',
-        result_json = NULL
+        expires_at = excluded.expires_at
+      WHERE pending_approval_actions.resolution_status = 'pending'
     `);
 
     this.getStmt = db.prepare("SELECT * FROM pending_approval_actions WHERE approval_id = ?");

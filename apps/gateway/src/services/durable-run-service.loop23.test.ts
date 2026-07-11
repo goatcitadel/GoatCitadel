@@ -161,7 +161,7 @@ describe("DurableRunService loop23 lifecycle coverage", () => {
     expect(() => service.pauseDurableRun(terminal.runId)).toThrow(/already terminal/);
 
     expect(timeline.map((event) => event.eventType)).toEqual(["run_paused", "run_resumed", "run_cancelled"]);
-    expect(checkpoints.map((checkpoint) => checkpoint.checkpointKind)).toEqual(["run_resumed"]);
+    expect(checkpoints.map((checkpoint) => checkpoint.checkpointKind)).toEqual(["run_resumed", "run_cancelled"]);
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",
       "durable",
@@ -382,6 +382,8 @@ function createContext(
         listRuns: (limit = 50) => [...runs.values()].slice(0, limit),
         listRunIdsByStatus: (status: DurableRunRecord["status"]) =>
           [...runs.values()].filter((run) => run.status === status).map((run) => run.runId),
+        listPendingLinkedFinalizationRunIds: () => [],
+        listPendingAutonomousChatPostCommitRunIds: () => [],
         listCheckpoints: (runId: string, limit = 200) =>
           checkpoints.filter((checkpoint) => checkpoint.runId === runId).slice(0, limit),
         listRetries: (runId: string) => retryRecords.get(runId) ?? [],

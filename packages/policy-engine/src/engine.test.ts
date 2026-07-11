@@ -22,6 +22,7 @@ afterEach(async () => {
 
 function createStorageStub(): Storage {
   return {
+    runImmediateTransaction: vi.fn(<T>(work: () => T): T => work()),
     approvals: {
       create: vi.fn((input) => ({
         approvalId: "approval-1",
@@ -3697,6 +3698,14 @@ describe("ToolPolicyEngine outside-root read access", () => {
       expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith("apr-expired-direct", "failed", {
         reason: "pending approval action is expired, resolved, or no longer matches the stored request",
       });
+      expect(storage.runImmediateTransaction).toHaveBeenCalledTimes(1);
+      expect(storage.approvalEvents.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalId: "apr-expired-direct",
+          eventType: "approved_action_executed",
+          payload: expect.objectContaining({ outcome: "blocked" }),
+        }),
+      );
       expect(storage.audit.append).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -3829,6 +3838,92 @@ describe("ToolPolicyEngine outside-root read access", () => {
         expect.objectContaining({
           approvalId: "apr-external-runtime",
           eventType: "approved_action_executed",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("atomically records an approved external-runtime policy denial before any runtime call", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      const pendingAction = createPendingApprovalAction({
+        approvalId: "apr-external-runtime-denied",
+        expiresAt: "2026-03-21T00:10:00.000Z",
+        request: {
+          toolName: "mcp.invoke",
+          args: { serverId: "srv-1", toolName: "tool.mutate", arguments: { value: "hello" } },
+          agentId: "agent",
+          sessionId: "session",
+          externalRuntime: true,
+        },
+      });
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(pendingAction);
+      let transactionDepth = 0;
+      vi.mocked(storage.runImmediateTransaction).mockImplementation(<T>(work: () => T): T => {
+        transactionDepth += 1;
+        try {
+          return work();
+        } finally {
+          transactionDepth -= 1;
+        }
+      });
+      vi.mocked(storage.pendingApprovalActions.markResolved).mockImplementation((approvalId, status, nextResult) => {
+        if (transactionDepth !== 1) {
+          throw new Error("pending action terminal truth escaped its transaction");
+        }
+        return {
+          ...pendingAction,
+          approvalId,
+          resolutionStatus: status,
+          result: nextResult,
+          resolvedAt: "2026-03-21T00:05:00.000Z",
+        };
+      });
+      vi.mocked(storage.approvalEvents.append).mockImplementation((event) => {
+        if (transactionDepth !== 1) {
+          throw new Error("approved action event escaped its transaction");
+        }
+        return {
+          ...event,
+          eventId: "event-external-runtime-denied",
+          timestamp: "2026-03-21T00:05:00.000Z",
+        };
+      });
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          tools: {
+            ...policyConfig.tools,
+            deny: ["mcp.invoke"],
+          },
+        },
+        storage,
+      );
+
+      const result = await engine.executeApprovedAction("apr-external-runtime-denied", undefined, {
+        deferResolution: true,
+        externalRuntimeReplay: true,
+      });
+
+      expect(result).toMatchObject({
+        outcome: "blocked",
+        policyReason: expect.stringContaining("blocked"),
+      });
+      expect(storage.runImmediateTransaction).toHaveBeenCalledTimes(1);
+      expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+        "apr-external-runtime-denied",
+        "failed",
+        expect.objectContaining({ reason: expect.stringContaining("blocked") }),
+      );
+      expect(storage.approvalEvents.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalId: "apr-external-runtime-denied",
+          eventType: "approved_action_executed",
+          payload: expect.objectContaining({ outcome: "blocked" }),
         }),
       );
     } finally {

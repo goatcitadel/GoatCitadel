@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatTurnTraceRecord, DurableRunRecord } from "@goatcitadel/contracts";
+import { NotFoundError, type ChatTurnTraceRecord, type DurableRunRecord } from "@goatcitadel/contracts";
 import type { ChatTurnDispatchHost } from "./chat-turn-dispatch-service.js";
 import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
@@ -117,6 +117,118 @@ describe("chat turn dispatch durable ownership", () => {
     expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
   });
 
+  it("still completes a durable-unavailable stream when no trace was persisted", () => {
+    const host = createHost({
+      beginDurableChatRun: vi.fn(() => undefined),
+    });
+    vi.mocked(host.storage.chatTurnTraces.get).mockImplementation(() => {
+      throw new NotFoundError({ entity: "chat turn trace", id: "turn-1" });
+    });
+
+    expect(() =>
+      launchPreparedAgentChatTurnStream(
+        host,
+        "session-1",
+        { content: "hello", mode: "chat" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+      ),
+    ).not.toThrow();
+
+    expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
+    expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "chat.dispatch.durable_unavailable", turnId: "turn-1" }),
+    );
+  });
+
+  it("releases a durable-unavailable stream when trace storage is unavailable", () => {
+    const host = createHost({
+      beginDurableChatRun: vi.fn(() => undefined),
+    });
+    vi.mocked(host.storage.chatTurnTraces.get).mockImplementation(() => {
+      throw new Error("trace read unavailable");
+    });
+
+    expect(() =>
+      launchPreparedAgentChatTurnStream(
+        host,
+        "session-1",
+        { content: "hello", mode: "chat" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+      ),
+    ).toThrow("trace read unavailable");
+
+    expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
+  });
+
+  it("releases a durable-unavailable stream when its failure diagnostic sink is unavailable", () => {
+    const host = createHost({
+      beginDurableChatRun: vi.fn(() => undefined),
+    });
+    host.recordDevDiagnostic
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error("diagnostic sink unavailable");
+      });
+
+    expect(() =>
+      launchPreparedAgentChatTurnStream(
+        host,
+        "session-1",
+        { content: "hello", mode: "chat" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+      ),
+    ).not.toThrow();
+
+    expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
+    expect(host.storage.chatTurnTraces.get).toHaveBeenCalled();
+  });
+
+  it("does not leak a registered stream when the initial dispatch diagnostic sink is unavailable", () => {
+    const host = createHost({
+      beginDurableChatRun: vi.fn(() => undefined),
+    });
+    host.recordDevDiagnostic.mockImplementationOnce(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
+
+    expect(() =>
+      launchPreparedAgentChatTurnStream(
+        host,
+        "session-1",
+        { content: "hello", mode: "chat" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+      ),
+    ).not.toThrow();
+
+    expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
+  });
+
+  it("releases a durable-unavailable stream when the failure trace cannot be patched", () => {
+    const host = createHost({
+      beginDurableChatRun: vi.fn(() => undefined),
+    });
+    vi.mocked(host.storage.chatTurnTraces.patchIfStatus).mockImplementation(() => {
+      throw new Error("trace patch unavailable");
+    });
+
+    expect(() =>
+      launchPreparedAgentChatTurnStream(
+        host,
+        "session-1",
+        { content: "hello", mode: "chat" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+      ),
+    ).toThrow("trace patch unavailable");
+
+    expect(host.getActiveChatTurnStream("turn-1")?.completed).toBe(true);
+  });
+
   it("records completed integration writeback traces without allocating a durable run", async () => {
     const host = createHost();
     const response = await sendPreparedIntegrationChatTurn(
@@ -174,11 +286,44 @@ describe("chat turn dispatch durable ownership", () => {
     expect(response.trace?.status).toBe("completed");
   });
 
-  it("marks the integration trace failed if bookkeeping breaks after external delivery", async () => {
+  it("releases integration execution ownership when trace creation fails", async () => {
+    const host = createHost();
+    vi.mocked(host.storage.chatTurnTraces.create).mockImplementationOnce(() => {
+      throw new Error("trace store unavailable");
+    });
+    const externalController = new AbortController();
+    const removeListener = vi.spyOn(externalController.signal, "removeEventListener");
+
+    await expect(
+      sendPreparedIntegrationChatTurn(
+        host,
+        "session-1",
+        {},
+        createPrepared("chat"),
+        createBinding(),
+        "chat_thread_turn_appended",
+        { abortSignal: externalController.signal },
+      ),
+    ).rejects.toThrow("trace store unavailable");
+
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", expect.any(AbortController));
+    expect(host.storage.chatTurnTraces.get).not.toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.patchIfStatus).not.toHaveBeenCalled();
+    expect(host.commsSend).not.toHaveBeenCalled();
+  });
+
+  it("marks committed delivery as non-retryable when bookkeeping breaks after the external side effect", async () => {
     const host = createHost({
       ingestEvent: vi.fn(async () => {
         throw new Error("local ingest failed");
       }),
+    });
+    host.requireExecutedToolResult.mockReturnValue({
+      status: "sent",
+      deliveryStatus: "sent",
+      deliveryId: "delivery-1",
+      providerMessageId: "provider-message-1",
     });
 
     await expect(
@@ -190,7 +335,17 @@ describe("chat turn dispatch durable ownership", () => {
         createBinding(),
         "chat_thread_turn_appended",
       ),
-    ).rejects.toThrow("local ingest failed");
+    ).rejects.toMatchObject({
+      name: "IntegrationDeliveryPostCommitError",
+      mutationCommitted: true,
+      turnId: "turn-1",
+      deliveryEvidence: {
+        status: "sent",
+        deliveryStatus: "sent",
+        deliveryId: "delivery-1",
+        providerMessageId: "provider-message-1",
+      },
+    });
 
     expect(host.commsSend).toHaveBeenCalled();
     expect(host.storage.chatTurnTraces.patchIfStatus).toHaveBeenLastCalledWith(
@@ -198,6 +353,26 @@ describe("chat turn dispatch durable ownership", () => {
       expect.arrayContaining(["running"]),
       expect.objectContaining({
         status: "failed",
+        failure: expect.objectContaining({
+          retryable: false,
+          message: expect.stringContaining("delivery committed"),
+          provider: expect.objectContaining({
+            status: "sent",
+            responseId: "provider-message-1",
+            type: "integration_delivery_committed",
+          }),
+        }),
+      }),
+    );
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.integration_delivery.bookkeeping_failed",
+        context: expect.objectContaining({
+          deliveryCommitted: true,
+          reconciliationRequired: true,
+          deliveryId: "delivery-1",
+          providerMessageId: "provider-message-1",
+        }),
       }),
     );
   });

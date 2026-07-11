@@ -618,6 +618,82 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("commits autonomous post-commit recovery truth with the winning Chat completion", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    state.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      metadata: {
+        surface: "chat",
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram", target: "42" },
+        },
+      },
+    });
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")).toMatchObject({
+      status: "completed",
+      metadata: {
+        surface: "chat",
+        autonomous: expect.objectContaining({ kind: "scheduled" }),
+        autonomousChatPostCommitPending: {
+          version: 1,
+          requestedAt: expect.any(String),
+        },
+      },
+    });
+  });
+
+  it("rolls back every finalization projection when a late transaction write fails", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    const before = state.runs.get("run-complete");
+    const patchTrace = state.deps.chatTurnTraces.patch;
+    state.deps.chatTurnTraces.patch = (turnId, patch) => {
+      patchTrace(turnId, patch);
+      throw new Error("injected trace commit failure");
+    };
+
+    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+      "injected trace commit failure",
+    );
+
+    expect(state.runs.get("run-complete")).toEqual(before);
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([]);
+
+    state.deps.chatTurnTraces.patch = patchTrace;
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")?.status).toBe("completed");
+    expect(state.checkpoints).toHaveLength(1);
+    expect(state.timelineEvents).toHaveLength(1);
+    expect(state.tracePatches).toHaveLength(1);
+  });
+
+  it("does not create autonomous post-commit work for failed or human Chat finalization", () => {
+    const prepared = createPreparedTurn();
+    const failed = createFinalizeState();
+    failed.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      metadata: { autonomous: { kind: "scheduled" } },
+    });
+    finalizeDurableChatRun(failed.deps, "run-complete", prepared, createTrace({ status: "failed" }));
+
+    const human = createFinalizeState();
+    finalizeDurableChatRun(human.deps, "run-complete", prepared, createTrace({ status: "completed" }));
+
+    expect(failed.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
+    expect(human.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
+  });
+
   it("records completed checkpoints when older traces do not include completion metadata", () => {
     const prepared = createPreparedTurn({ content: "Run the agentic smoke" });
     const trace = createTrace({
@@ -825,6 +901,24 @@ function createFinalizeState(options?: {
   }> = [];
   const tracePatches: Array<{ turnId: string; patch: Record<string, unknown> }> = [];
   const deps: ChatDurableRunFinalizeDeps = {
+    runImmediateTransaction: (callback) => {
+      const runSnapshot = new Map(runs);
+      const checkpointSnapshot = [...checkpoints];
+      const timelineSnapshot = [...timelineEvents];
+      const tracePatchSnapshot = [...tracePatches];
+      try {
+        return callback();
+      } catch (error) {
+        runs.clear();
+        for (const [runId, run] of runSnapshot) {
+          runs.set(runId, run);
+        }
+        checkpoints.splice(0, checkpoints.length, ...checkpointSnapshot);
+        timelineEvents.splice(0, timelineEvents.length, ...timelineSnapshot);
+        tracePatches.splice(0, tracePatches.length, ...tracePatchSnapshot);
+        throw error;
+      }
+    },
     durableRuns: {
       getRun: (runId) => {
         const current = runs.get(runId);

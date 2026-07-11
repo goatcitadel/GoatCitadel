@@ -209,6 +209,8 @@ export interface PreparedAgentChatTurn {
   turnId: string;
   assistantMessageId: string;
   parentTurnId?: string;
+  /** Canonical delegation lineage. Unlike parentTurnId, this is absent on normal branch appends. */
+  parentDelegationStepId?: string;
   branchKind: ChatTurnBranchKind;
   sourceTurnId?: string;
   effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"];
@@ -540,6 +542,7 @@ export async function prepareAgentChatTurn(
     turnId: options?.turnId ?? randomUUID(),
     assistantMessageId: options?.assistantMessageId ?? `assistant-${randomUUID()}`,
     parentTurnId,
+    parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
     branchKind,
     sourceTurnId: options?.sourceTurnId,
     effectiveToolAutonomy,

@@ -117,12 +117,113 @@ describe("tool grant route commit truth", () => {
     expect(retry.statusCode).toBe(409);
     expect(revokeToolGrant).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves idempotency claims for every committed permission and local-override mutation", async () => {
+    const ownedProfile = {
+      profileId: "profile-owned",
+      builtin: false,
+      scope: "operator",
+      scopeRef: "operator-test",
+      createdBy: "operator-test",
+    };
+    const activeOverride = {
+      overrideId: "override-owned",
+      operatorId: "operator-test",
+      status: "active",
+    };
+    const scenarios = [
+      {
+        label: "permission profile create",
+        route: "/api/v1/tools/permission-profiles",
+        method: "POST" as const,
+        payload: { label: "Review", approvalMode: "approve_all" },
+        mutation: vi.fn(() => ({ ...ownedProfile, profileId: "profile-created" })),
+        tools: {} as Record<string, unknown>,
+        mutationName: "createPermissionProfile",
+      },
+      {
+        label: "permission profile update",
+        route: "/api/v1/tools/permission-profiles/profile-owned",
+        method: "PATCH" as const,
+        payload: { description: "updated" },
+        mutation: vi.fn(() => ({ ...ownedProfile, description: "updated" })),
+        tools: { listPermissionProfiles: vi.fn(() => [ownedProfile]) } as Record<string, unknown>,
+        mutationName: "updatePermissionProfile",
+      },
+      {
+        label: "permission profile archive",
+        route: "/api/v1/tools/permission-profiles/profile-owned/archive",
+        method: "POST" as const,
+        mutation: vi.fn(() => true),
+        tools: { listPermissionProfiles: vi.fn(() => [ownedProfile]) } as Record<string, unknown>,
+        mutationName: "archivePermissionProfile",
+      },
+      {
+        label: "permission profile activation",
+        route: "/api/v1/tools/permission-profiles/activate",
+        method: "POST" as const,
+        payload: { profileId: "profile-owned", surface: "chat" },
+        mutation: vi.fn(() => ({ activationId: "activation-1" })),
+        tools: { listPermissionProfiles: vi.fn(() => [ownedProfile]) } as Record<string, unknown>,
+        mutationName: "activatePermissionProfile",
+      },
+      {
+        label: "local operator override create",
+        route: "/api/v1/tools/local-operator-overrides",
+        method: "POST" as const,
+        payload: { scope: "operator", reason: "local review", ttlSeconds: 300 },
+        mutation: vi.fn(() => ({ ...activeOverride, overrideId: "override-created" })),
+        tools: {} as Record<string, unknown>,
+        mutationName: "createLocalOperatorOverride",
+      },
+      {
+        label: "local operator override revoke",
+        route: "/api/v1/tools/local-operator-overrides/override-owned/revoke",
+        method: "POST" as const,
+        mutation: vi.fn(() => ({ ...activeOverride, status: "revoked", revokedAt: "2026-07-10T00:00:00.000Z" })),
+        tools: { listActiveLocalOperatorOverrides: vi.fn(() => [activeOverride]) } as Record<string, unknown>,
+        mutationName: "revokeLocalOperatorOverride",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const app = await buildApp({ ...scenario.tools, [scenario.mutationName]: scenario.mutation }, scenario.route);
+      const request = {
+        method: scenario.method,
+        url: scenario.route,
+        headers: { "idempotency-key": `commit-truth-${scenario.mutationName}` },
+        ...(scenario.payload ? { payload: scenario.payload } : {}),
+      };
+
+      const first = await app.inject(request);
+      const retry = await app.inject(request);
+
+      expect(first.statusCode, scenario.label).toBe(500);
+      expect(retry.statusCode, scenario.label).toBe(409);
+      expect(scenario.mutation, scenario.label).toHaveBeenCalledTimes(1);
+
+      const postCommitMutation = vi.fn(() => {
+        throw Object.assign(new Error(`${scenario.label} projection unavailable`), { mutationCommitted: true });
+      });
+      const postCommitApp = await buildApp(
+        { ...scenario.tools, [scenario.mutationName]: postCommitMutation },
+        scenario.route,
+      );
+      const postCommitRequest = {
+        ...request,
+        headers: { "idempotency-key": `post-commit-truth-${scenario.mutationName}` },
+      };
+      const postCommitFailure = await postCommitApp.inject(postCommitRequest);
+      const postCommitRetry = await postCommitApp.inject(postCommitRequest);
+
+      expect(postCommitFailure.statusCode, scenario.label).toBe(500);
+      expect(postCommitRetry.statusCode, scenario.label).toBe(409);
+      expect(postCommitMutation, scenario.label).toHaveBeenCalledTimes(1);
+    }
+  });
 });
 
-async function buildApp(
-  tools: { createToolGrant: ReturnType<typeof vi.fn>; revokeToolGrant: ReturnType<typeof vi.fn> },
-  responseFailureRoute: string,
-): Promise<FastifyInstance> {
+async function buildApp(tools: Record<string, unknown>, responseFailureRoute: string): Promise<FastifyInstance> {
   const app = Fastify();
   apps.push(app);
   app.decorateRequest("authActorId", "");
@@ -139,7 +240,12 @@ async function buildApp(
 
   let responseProjectionFailed = false;
   app.addHook("onSend", async (request, reply, payload) => {
-    if (!responseProjectionFailed && request.routeOptions.url === responseFailureRoute && reply.statusCode < 400) {
+    const requestPath = request.url.split("?", 1)[0];
+    if (
+      !responseProjectionFailed &&
+      (request.routeOptions.url === responseFailureRoute || requestPath === responseFailureRoute) &&
+      reply.statusCode < 400
+    ) {
       responseProjectionFailed = true;
       reply.code(500);
       return JSON.stringify({ error: "response projection unavailable" });

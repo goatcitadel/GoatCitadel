@@ -75,6 +75,7 @@ export interface SubagentFanoutDelegatedStepInput {
   localOperatorOverrideId?: string;
   policyContext?: ToolPolicyActorContext;
   fullWebAccess?: boolean;
+  canonicalWriteFence?: <T>(work: () => T) => T;
 }
 
 export type SubagentFanoutRunDelegatedStep = (
@@ -100,6 +101,7 @@ export interface SubagentFanoutExecutorOptions {
   localOperatorOverrideId?: string;
   policyContext?: ToolPolicyActorContext;
   fullWebAccess?: boolean;
+  canonicalWriteFence?: <T>(work: () => T) => T;
 }
 
 function truncateWithLimit(value: string, limit: number): string {
@@ -344,8 +346,17 @@ export function createSubagentFanoutExecutor(
             localOperatorOverrideId: options.localOperatorOverrideId,
             policyContext: options.policyContext,
             fullWebAccess: options.fullWebAccess,
+            canonicalWriteFence: options.canonicalWriteFence,
           });
         } catch (error) {
+          if (
+            error instanceof Error &&
+            (error.name === "DurableWorkerInterruptionError" ||
+              error.name === "DurableRunPausedError" ||
+              error.name === "DurableRunCancelledError")
+          ) {
+            throw error;
+          }
           // executeDelegatedPlanStep shapes its own failures; this catch only
           // guards the fan-out from an unexpected throw so one subtask can never
           // sink its siblings.

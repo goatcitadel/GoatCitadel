@@ -30,7 +30,140 @@ function createRepo(): DurableRunRepository {
   return new DurableRunRepository(db);
 }
 
+function createRepoWithDb(): { db: DatabaseClient; repo: DurableRunRepository } {
+  const dbPath = path.join(os.tmpdir(), `goatcitadel-durable-${randomUUID()}.db`);
+  createdFiles.push(dbPath);
+  const db = createDatabase({ dbPath });
+  return { db, repo: new DurableRunRepository(db) };
+}
+
 describe("DurableRunRepository", () => {
+  it("locks only the exact active, unexpired SQLite lease inside an immediate transaction", () => {
+    const { db, repo } = createRepoWithDb();
+    const active = repo.createRun({
+      runId: "run-active-lease",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-07-11T12:00:00.000Z",
+      leaseExpiresAt: "2026-07-11T12:05:00.000Z",
+      now: "2026-07-11T12:00:00.000Z",
+    });
+    repo.createRun({
+      runId: "run-queued-lease",
+      workflowKey: "chat.turn.execute",
+      status: "queued",
+      leaseOwnerId: "worker-a",
+      leaseExpiresAt: "2026-07-11T12:05:00.000Z",
+      now: "2026-07-11T12:00:00.000Z",
+    });
+
+    const locked = db.transaction("immediate", () =>
+      repo.lockActiveLeaseForUpdate(active.runId, "worker-a", "2026-07-11T12:04:59.999Z"),
+    );
+    assert.equal(locked?.runId, active.runId);
+    assert.equal(locked?.leaseOwnerId, "worker-a");
+
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(active.runId, "worker-b", "2026-07-11T12:04:59.999Z"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(active.runId, "worker-a", "2026-07-11T12:05:00.000Z"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate("run-queued-lease", "worker-a", "2026-07-11T12:04:00.000Z"),
+      ),
+      undefined,
+    );
+  });
+
+  it("uses a PostgreSQL row lock with exact owner and unexpired-lease predicates", () => {
+    const preparedSql: string[] = [];
+    const activeRow = {
+      run_id: "run-postgres-lease",
+      workflow_key: "chat.turn.execute",
+      status: "running",
+      attempt_count: 1,
+      max_attempts: 3,
+      payload_json: "{}",
+      metadata_json: null,
+      started_at: "2026-07-11T12:00:00.000Z",
+      finished_at: null,
+      last_error: null,
+      lease_owner_id: "worker-a",
+      lease_expires_at: "2026-07-11T12:05:00.000Z",
+      lease_heartbeat_at: "2026-07-11T12:00:00.000Z",
+      version: 2,
+      created_at: "2026-07-11T12:00:00.000Z",
+      updated_at: "2026-07-11T12:00:00.000Z",
+    };
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const lockStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: <T = unknown>(...args: unknown[]) => {
+        const input = args[0] as { expectedLeaseOwnerId?: string; now?: string };
+        return (
+          input.expectedLeaseOwnerId === activeRow.lease_owner_id &&
+          typeof input.now === "string" &&
+          input.now < activeRow.lease_expires_at
+            ? activeRow
+            : undefined
+        ) as T | undefined;
+      },
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return sql.includes("lease_owner_id = @expectedLeaseOwnerId") ? lockStatement : emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new DurableRunRepository(db);
+
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(activeRow.run_id, "worker-a", "2026-07-11T12:04:59.999Z"),
+      )?.runId,
+      activeRow.run_id,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(activeRow.run_id, "worker-b", "2026-07-11T12:04:59.999Z"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(activeRow.run_id, "worker-a", activeRow.lease_expires_at),
+      ),
+      undefined,
+    );
+
+    const lockSql = preparedSql.find((sql) => sql.includes("lease_owner_id = @expectedLeaseOwnerId"));
+    assert.ok(lockSql);
+    assert.match(lockSql, /status = 'running'/);
+    assert.match(lockSql, /lease_expires_at IS NOT NULL/);
+    assert.match(lockSql, /lease_expires_at > @now/);
+    assert.match(lockSql, /FOR UPDATE/);
+  });
+
   it("persists payload updates when runs are patched", () => {
     const repo = createRepo();
     const run = repo.createRun({
@@ -206,6 +339,118 @@ describe("DurableRunRepository", () => {
 
     assert.equal(resolved.resolvedAt, "2026-04-10T00:00:00.000Z");
     assert.equal(resolved.resolutionNote, "recovered by operator");
+    assert.throws(
+      () =>
+        repo.resolveDeadLetter(deadLetter.deadLetterId, {
+          resolvedAt: "2026-04-10T01:00:00.000Z",
+          resolutionNote: "second recovery",
+        }),
+      /already resolved/,
+    );
+    assert.deepEqual(repo.getDeadLetterById(deadLetter.deadLetterId), resolved);
+  });
+
+  it("lists only failed runs with pending linked-state finalization", () => {
+    const repo = createRepo();
+    const pending = repo.createRun({
+      runId: "run-pending-finalization",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      metadata: {
+        "0": "integer-like keys serialize first",
+        linkedFinalizationPending: {
+          reason: "trace reconciliation required",
+          requestedAt: "2026-04-10T00:00:00.000Z",
+        },
+      },
+    });
+    repo.createRun({ runId: "run-ordinary-failed", workflowKey: "connector.delivery", status: "failed" });
+    repo.createRun({
+      runId: "run-pending-but-running",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      metadata: pending.metadata,
+    });
+
+    assert.deepEqual(repo.listPendingLinkedFinalizationRunIds(), [pending.runId]);
+    assert.deepEqual(repo.listPendingLinkedFinalizationRunIds(1, " run-before"), [pending.runId]);
+  });
+
+  it("lists only completed Chat runs with pending autonomous post-commit work", () => {
+    const repo = createRepo();
+    const pending = repo.createRun({
+      runId: "run-autonomous-pending",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      metadata: {
+        autonomous: { kind: "scheduled" },
+        autonomousChatPostCommitPending: { version: 1, requestedAt: "2026-04-10T00:00:00.000Z" },
+      },
+    });
+    repo.createRun({
+      runId: "run-autonomous-running",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      metadata: pending.metadata,
+    });
+    repo.createRun({
+      runId: "run-wrong-workflow",
+      workflowKey: "connector.delivery",
+      status: "completed",
+      metadata: pending.metadata,
+    });
+    repo.createRun({ runId: "run-completed-ordinary", workflowKey: "chat.turn.execute", status: "completed" });
+
+    assert.deepEqual(repo.listPendingAutonomousChatPostCommitRunIds(), [pending.runId]);
+    assert.deepEqual(repo.listPendingAutonomousChatPostCommitRunIds(1, " run-before"), [pending.runId]);
+  });
+
+  it("lists terminal Chat runs with pending general post-commit work", () => {
+    const repo = createRepo();
+    const completed = repo.createRun({
+      runId: "run-general-completed",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      metadata: { generalChatPostCommitPending: { version: 1 } },
+    });
+    const failed = repo.createRun({
+      runId: "run-general-failed",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      metadata: completed.metadata,
+    });
+    const cancelled = repo.createRun({
+      runId: "run-general-cancelled",
+      workflowKey: "chat.turn.execute",
+      status: "cancelled",
+      metadata: completed.metadata,
+    });
+    const waiting = repo.createRun({
+      runId: "run-general-waiting",
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      metadata: completed.metadata,
+    });
+    repo.createRun({
+      runId: "run-general-running",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      metadata: completed.metadata,
+    });
+    repo.createRun({
+      runId: "run-general-wrong-workflow",
+      workflowKey: "connector.delivery",
+      status: "completed",
+      metadata: completed.metadata,
+    });
+
+    assert.deepEqual(repo.listPendingGeneralChatPostCommitRunIds(), [
+      cancelled.runId,
+      completed.runId,
+      failed.runId,
+      waiting.runId,
+    ]);
+    assert.deepEqual(repo.listPendingGeneralChatPostCommitRunIds(1, cancelled.runId), [completed.runId]);
   });
 
   it("covers run validation, lease lifecycle, indexes, and dead-letter edge cases", () => {

@@ -236,6 +236,15 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     assert.deepEqual(calls[0]?.params, ["review", "default"]);
   });
 
+  it("preserves question marks in parameterless SQL literals", () => {
+    const sql = "SELECT 'grat_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])' AS bearer_pattern";
+
+    assert.deepEqual(__postgresSyncInternals.translateSql(sql, []), {
+      sql,
+      params: [],
+    });
+  });
+
   it("translates named parameters and falls back to undefined for missing or non-record params", () => {
     const named = __postgresSyncInternals.translateSql(
       "UPDATE tasks SET status = @status WHERE task_id = @taskId AND workspace_id = @workspaceId",

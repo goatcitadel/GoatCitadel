@@ -108,7 +108,12 @@ export interface ChatTurnDurableRunOwner {
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   ): DurableRunRecord | undefined;
-  finalizeDurableChatRun(runId: string, prepared: PreparedAgentChatTurn, trace: ChatTurnTraceRecord): void;
+  finalizeDurableChatRun(
+    runId: string,
+    prepared: PreparedAgentChatTurn,
+    trace: ChatTurnTraceRecord,
+    expectedLeaseOwnerId?: string,
+  ): void;
   /**
    * Soft-cancel a durable chat run when an external `AbortSignal` fires while
    * `consumePreparedAgentChatTurn` is waiting on its persisted stream. The
@@ -150,10 +155,16 @@ export interface ChatTurnMemorySideEffects {
     prompt: string;
     relationScope?: MemoryRelationScope;
   }): void;
-  scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void;
+  scheduleMemoryMaintenancePostTurnEvaluation(input: {
+    sessionId: string;
+    /** The turn that just completed, retained for truthful post-turn provenance. */
+    turnId: string;
+    /** True only for a delegated child, not for an ordinary turn with branch ancestry. */
+    delegatedChild: boolean;
+  }): void;
   /**
    * Fire-and-forget self-improvement background review (P2-S1). After a
-   * successful root turn, distills durable operator facts and (when a reusable
+   * successful eligible turn, distills durable operator facts and (when a reusable
    * procedure emerged) drafts a candidate skill — counter-gated to run every few
    * turns. The host resolves the master-autonomy / eval-integrity / non-human
    * guards and the counter; the entry/stream services only supply the transcript.
@@ -162,9 +173,12 @@ export interface ChatTurnMemorySideEffects {
   scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
     workspaceId: string;
+    /** The turn that produced this review input and owns any resulting provenance. */
+    turnId: string;
     userText: string;
     assistantText: string;
-    parentTurnId?: string;
+    /** True only for a delegated child, not for an ordinary turn with branch ancestry. */
+    delegatedChild: boolean;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
   }): void;

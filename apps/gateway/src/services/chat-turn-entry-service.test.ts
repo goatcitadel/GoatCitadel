@@ -552,6 +552,17 @@ describe("agentSendChatMessage", () => {
         turnId: "turn-1",
       }),
     );
+    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: "turn-1",
+        delegatedChild: false,
+      }),
+    );
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      delegatedChild: false,
+    });
     expect(host.publishRealtime).toHaveBeenCalledWith(
       "chat_thread_updated",
       "chat",
@@ -562,6 +573,32 @@ describe("agentSendChatMessage", () => {
       expect.anything(),
     );
     expect(host.endActiveChatTurnExecution).toHaveBeenCalled();
+  });
+
+  it("marks delegated-child post-turn schedules explicitly on the non-stream path", async () => {
+    const host = createHost({
+      assistantContent: "Child answer.",
+      assistantModel: "primary-model",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    (host.prepareAgentChatTurn as ReturnType<typeof vi.fn>).mockResolvedValue(
+      createPreparedTurn({ parentDelegationStepId: "run-1:step-1" }),
+    );
+
+    await agentSendChatMessage(host, "session-1", {
+      content: "delegated work",
+      mode: "chat",
+      parentDelegationStepId: "run-1:step-1",
+    });
+
+    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: "turn-1", delegatedChild: true }),
+    );
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      delegatedChild: true,
+    });
   });
 
   it("inherits actor, permission profile, and override context for automatic proactive suggestions", async () => {

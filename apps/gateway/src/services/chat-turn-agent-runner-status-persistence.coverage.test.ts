@@ -155,6 +155,43 @@ describe("ChatTurnAgentRunner status and approval persistence coverage", () => {
       failure: expect.objectContaining({ failureClass: "approval_required" }),
     });
   });
+
+  it("fences intermediate trace and tool-run writes after durable lease ownership is lost", async () => {
+    const storage = createObservableStorage();
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: storage.value as never,
+      listToolCatalog: () => createToolCatalog(["fs.list"]),
+      createChatCompletion: vi.fn(),
+      invokeTool,
+    });
+    let writeCount = 0;
+    const input = turnInput({
+      turnId: "turn-stale-durable-worker",
+      content: "Can you verify access to local files at `apps/gateway/src/services`?",
+      mode: "code",
+      historyMessages: [
+        { role: "user", content: "Can you verify access to local files at `apps/gateway/src/services`?" },
+      ],
+      canonicalWriteFence: <T>(work: () => T): T => {
+        writeCount += 1;
+        if (writeCount > 1) {
+          const error = new Error("durable lease moved to worker B");
+          error.name = "DurableWorkerInterruptionError";
+          throw error;
+        }
+        return work();
+      },
+    });
+
+    await expect(collectStream(orchestrator, input)).rejects.toMatchObject({
+      name: "DurableWorkerInterruptionError",
+    });
+    expect(writeCount).toBeGreaterThanOrEqual(2);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(storage.value.chatToolRuns.listByTurn(input.turnId)).toEqual([]);
+    expect(storage.upsert).not.toHaveBeenCalled();
+  });
 });
 
 function createObservableStorage() {
