@@ -38,6 +38,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
+import { hydrateApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
@@ -1133,10 +1134,13 @@ export async function executeDurableConnectorDeliveryRun(
     throw new Error(payload.simulateFailureReason.trim());
   }
   const operatorId = payload.operatorId ?? payload.authActorId ?? "system-durable";
-  const dispatchPayload =
-    connector.connectorType === "browser" && approvalActionTokenRef
-      ? hydrateBrowserApprovalActionToken(payload, approvalRemoteTokenSecrets.resolve(approvalActionTokenRef))
-      : payload;
+  const dispatchPayload = approvalActionTokenRef
+    ? hydrateApprovalRemoteTokenConnectorDeliveryPayload(
+        payload,
+        connector.connectorType,
+        approvalRemoteTokenSecrets.resolve(approvalActionTokenRef),
+      )
+    : payload;
   const dispatch = await dispatchConnectorDelivery(connector, dispatchPayload, {
     commsSend: (input) => host.commsSend(input),
     commsReply: (input) => host.commsReply(input),
@@ -1175,12 +1179,12 @@ export async function executeDurableConnectorDeliveryRun(
     signal: context?.signal,
   });
   throwIfDurableWorkflowAborted(context);
-  if (connector.connectorType === "browser" && approvalActionTokenRef) {
+  if (approvalActionTokenRef) {
     try {
       approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
     } catch {
-      // The live-only browser delivery already completed; cleanup failure must
-      // not cause a duplicate durable replay.
+      // The protected-token delivery already completed; cleanup failure must
+      // not cause a duplicate browser event or external channel message.
     }
   }
   const checkpointState = {
@@ -1209,27 +1213,6 @@ export async function executeDurableConnectorDeliveryRun(
     },
   );
   completeDurableWorkflowRun(host, run.runId, checkpointState);
-}
-
-function hydrateBrowserApprovalActionToken(
-  payload: ConnectorDeliveryWorkflowPayload,
-  token: string,
-): ConnectorDeliveryWorkflowPayload {
-  const actionPayload = payload.payload ?? {};
-  const eventPayload =
-    actionPayload.payload && typeof actionPayload.payload === "object" && !Array.isArray(actionPayload.payload)
-      ? (actionPayload.payload as Record<string, unknown>)
-      : {};
-  return {
-    ...payload,
-    payload: {
-      ...actionPayload,
-      payload: {
-        ...eventPayload,
-        token,
-      },
-    },
-  };
 }
 
 export async function executeDurableHookDeliveryRun(

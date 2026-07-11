@@ -182,6 +182,87 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
   }
 }
 
+/**
+ * Hydrate a protected approval bearer only in the transient payload handed to
+ * the final connector transport. Durable runs and checkpoints retain the
+ * template plus keychain reference, never the callback bearer.
+ */
+export function hydrateApprovalRemoteTokenConnectorDeliveryPayload(
+  payload: ConnectorDeliveryWorkflowPayload,
+  connectorType: ConnectorRecord["connectorType"],
+  rawToken: string,
+): ConnectorDeliveryWorkflowPayload {
+  const token = rawToken.trim();
+  if (!/^grat_[A-Za-z0-9_-]{16,}$/.test(token)) {
+    throw new Error("Approval remote-action token is unavailable or invalid.");
+  }
+  const actionPayload = payload.payload ?? {};
+  if (connectorType === "browser") {
+    const eventPayload =
+      actionPayload.payload && typeof actionPayload.payload === "object" && !Array.isArray(actionPayload.payload)
+        ? (actionPayload.payload as Record<string, unknown>)
+        : {};
+    return {
+      ...payload,
+      payload: {
+        ...actionPayload,
+        payload: {
+          ...eventPayload,
+          token,
+        },
+      },
+    };
+  }
+  if (connectorType !== "integration_connection") {
+    throw new Error(`Connector type ${connectorType} cannot hydrate an approval remote-action bearer.`);
+  }
+
+  const templateValue = actionPayload.interactiveActionTemplate;
+  if (!templateValue || typeof templateValue !== "object" || Array.isArray(templateValue)) {
+    throw new Error("Approval connector delivery is missing its interactive-action template.");
+  }
+  const template = templateValue as Record<string, unknown>;
+  const tokenId = readApprovalScopedString(template.tokenId);
+  const tokenRef = readApprovalScopedString(template.tokenRef);
+  const expiresAt = readApprovalScopedString(template.expiresAt);
+  const expectedTokenRef = payload.secretRefs?.approvalActionToken;
+  if (
+    !tokenId ||
+    !tokenRef ||
+    tokenRef !== expectedTokenRef ||
+    !expiresAt ||
+    !Number.isFinite(Date.parse(expiresAt)) ||
+    tokenId !== payload.approvalAction?.tokenId ||
+    expiresAt !== payload.approvalAction.expiresAt ||
+    !Array.isArray(template.buttons)
+  ) {
+    throw new Error("Approval connector delivery interactive-action template is invalid or mismatched.");
+  }
+  const buttons = template.buttons
+    .filter((value) => value && typeof value === "object" && !Array.isArray(value))
+    .map((value) => {
+      const button = value as Record<string, unknown>;
+      const label = readApprovalScopedString(button.label);
+      const decision = button.decision === "a" || button.decision === "r" ? button.decision : undefined;
+      return label && decision ? { label, callbackData: `gca:${token}:${decision}` } : undefined;
+    })
+    .filter((value): value is { label: string; callbackData: string } => Boolean(value));
+  if (buttons.length === 0 || buttons.length !== template.buttons.length) {
+    throw new Error("Approval connector delivery interactive-action buttons are invalid.");
+  }
+  return {
+    ...payload,
+    payload: {
+      ...actionPayload,
+      interactiveActions: {
+        platform: readApprovalScopedString(template.platform),
+        tokenId,
+        buttons,
+      },
+    },
+  };
+}
+
 function hasEnabledCapability(connector: ConnectorRecord, capabilityId: ConnectorCapabilityId): boolean {
   return connector.capabilities.some((item) => item.id === capabilityId && item.enabled);
 }

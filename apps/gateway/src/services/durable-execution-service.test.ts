@@ -990,6 +990,10 @@ describe("durable-execution-service orchestration workflow", () => {
     const publishRealtime = vi.fn();
     const host = {
       requireConnectorRecord: vi.fn(() => connector),
+      approvalRemoteTokenSecrets: {
+        resolve: vi.fn(() => `grat_${"l".repeat(43)}`),
+        delete: vi.fn(),
+      },
       commsSend: vi.fn(),
       commsReply: vi.fn(),
       commsReact: vi.fn(),
@@ -1025,6 +1029,90 @@ describe("durable-execution-service orchestration workflow", () => {
         }),
       }),
     );
+  });
+
+  it("hydrates integration approval buttons only for live dispatch and cleans the protected bearer", async () => {
+    const rawToken = `grat_${"i".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:token-integration";
+    const connector = {
+      connectorId: "connector-approval-buttons",
+      connectorType: "integration_connection",
+      sourceId: "channel-approval-buttons",
+      status: "active",
+      capabilities: [
+        { id: "approvals", enabled: true },
+        { id: "outbound_messages", enabled: true },
+        { id: "interactive_actions", enabled: true },
+      ],
+      metadata: {
+        approvalDeliveryTarget: "#approvals",
+        approvalDeliveryPlatform: "slack",
+      },
+    } as unknown as ConnectorRecord;
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: {
+        approvalId: "approval-integration-buttons",
+        kind: "tool.invoke",
+        riskLevel: "danger",
+        status: "pending",
+        payload: {},
+        preview: {},
+        createdAt: "2026-07-10T00:00:00.000Z",
+      } as ApprovalRequest,
+      connector,
+      tokenRef,
+      tokenId: "token-integration",
+      expiresAt: "2099-07-10T00:15:00.000Z",
+    });
+    const run = buildRunWithPayload("connector.delivery", payload!);
+    const updateRun = vi.fn();
+    const createCheckpoint = vi.fn();
+    const deleteApprovalRemoteActionTokenSecret = vi.fn();
+    vi.mocked(dispatchConnectorDelivery).mockResolvedValue({
+      capabilityId: "outbound_messages",
+      dispatchKind: "integration_channel_send",
+      result: { delivered: true },
+    } as never);
+    const host = {
+      requireConnectorRecord: vi.fn(() => connector),
+      approvalRemoteTokenSecrets: {
+        resolve: vi.fn(() => rawToken),
+        delete: deleteApprovalRemoteActionTokenSecret,
+      },
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => run),
+          updateRun,
+          createCheckpoint,
+        },
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime: vi.fn(),
+      resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
+    };
+
+    expect(JSON.stringify(run)).not.toContain(rawToken);
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(dispatchConnectorDelivery).toHaveBeenCalledWith(
+      connector,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          interactiveActions: {
+            platform: "slack",
+            tokenId: "token-integration",
+            buttons: [
+              { label: "Approve", callbackData: `gca:${rawToken}:a` },
+              { label: "Deny", callbackData: `gca:${rawToken}:r` },
+            ],
+          },
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(deleteApprovalRemoteActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    expect(JSON.stringify(updateRun.mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(createCheckpoint.mock.calls)).not.toContain(rawToken);
   });
 
   it("hydrates browser approval bearer only for live dispatch and keeps durable proof redacted", async () => {
