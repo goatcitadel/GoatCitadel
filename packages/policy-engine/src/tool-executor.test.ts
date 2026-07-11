@@ -1219,9 +1219,125 @@ describe("executeTool", () => {
     });
   });
 
+  it("hydrates protected Telegram approval actions only inside the provider adapter", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const rawToken = `grat_${"p".repeat(43)}`;
+    const tokenId = "rat_provider_boundary";
+    const tokenRef = `keychain:goatcitadel:approval-remote-action:${tokenId}`;
+    const expiresAt = "2099-07-10T00:15:00.000Z";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 2468 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
+      deliveryId: "delivery-provider-boundary",
+      status: "queued",
+      channelKey: input.channelKey,
+      target: input.target,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    }));
+    const resolveApprovalActionTokenSecret = vi.fn(() => rawToken);
+    const deleteApprovalActionTokenSecret = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram",
+          key: "telegram",
+          config: {
+            botToken: "telegram-provider-token",
+            defaultChatId: "-1001234567890",
+          },
+        })),
+      },
+      remoteActionTokens: {
+        get: vi.fn(() => ({
+          tokenId,
+          actionType: "approval.resolve",
+          approvalId: "approval-provider-boundary",
+          connectorId: "integration:conn-telegram",
+          mutation: { approvalId: "approval-provider-boundary" },
+          createdAt: "2026-07-10T00:00:00.000Z",
+          expiresAt,
+          state: "pending",
+        })),
+      },
+      commsDeliveries: {
+        createQueued: queuedSpy,
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const request: ToolInvokeRequest = {
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-telegram",
+        target: "-1001234567890",
+        message: "Approval requested.",
+        interactiveActionTemplate: {
+          platform: "telegram",
+          tokenId,
+          tokenRef,
+          expiresAt,
+          buttons: [
+            { label: "Approve", decision: "a" },
+            { label: "Deny", decision: "r" },
+          ],
+        },
+      },
+      agentId: "operator",
+      sessionId: "sess-telegram-approval",
+      authContext: {
+        boundary: "tool_host_boundary",
+        secretRefs: [tokenRef],
+      },
+    };
+    const result = await executeTool(
+      request,
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.telegram.org"],
+        },
+      },
+      commsStorage,
+      {
+        resolveApprovalActionTokenSecret,
+        deleteApprovalActionTokenSecret,
+        isApprovalActionConnectorReady: vi.fn(() => true),
+      },
+    );
+
+    expect(JSON.stringify(request)).not.toContain(rawToken);
+    expect(JSON.stringify(queuedSpy.mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(queuedSpy.mock.calls)).toContain(tokenRef);
+    expect(resolveApprovalActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    expect(deleteApprovalActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    const telegramCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { body?: BodyInit | null }];
+    const telegramBody = JSON.parse(String(telegramCall[1]?.body ?? "{}")) as Record<string, unknown>;
+    expect(telegramBody).toMatchObject({
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Approve", callback_data: `gca:${rawToken}:a` },
+            { text: "Deny", callback_data: `gca:${rawToken}:r` },
+          ],
+        ],
+      },
+    });
+    expect(result).toMatchObject({ status: "sent", providerMessageId: "2468" });
+  });
+
   it("sends channel messages through Slack bot API with rendered attachments", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const auditOnlySecret = "slack-callback-secret-value-1234567890";
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -1277,7 +1393,7 @@ describe("executeTool", () => {
             buttons: [
               {
                 label: "Approve",
-                callbackData: `gca:grat_${"s".repeat(43)}:a`,
+                callbackData: `Authorization: Bearer ${auditOnlySecret}`,
               },
             ],
           },
@@ -1286,7 +1402,7 @@ describe("executeTool", () => {
         sessionId: "sess-slack",
         authContext: {
           boundary: "tool_host_boundary",
-          secretRefs: ["keychain:goatcitadel:approval-remote-action:rat-secret-proof"],
+          secretRefs: ["keychain:goatcitadel:test:slack-callback"],
         },
       },
       {
@@ -1304,7 +1420,7 @@ describe("executeTool", () => {
         target: "#build-alerts",
       }),
     );
-    expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).not.toContain(`grat_${"s".repeat(43)}`);
+    expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).not.toContain(auditOnlySecret);
     expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).toContain("[REDACTED]");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://slack.com/api/chat.postMessage",

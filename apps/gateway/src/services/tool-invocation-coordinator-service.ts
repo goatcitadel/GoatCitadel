@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Tool invocation coordination keeps policy, MCP, audit, and grant evidence in one reviewable runtime seam. */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   redactSecretText,
   type ApprovalRequest,
@@ -362,6 +363,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
 
     const normalizedRequest = this.host.normalizeToolInvokeRequest(request);
+    if (containsRawApprovalActionBearer(normalizedRequest.args)) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: raw approval action bearers cannot enter tool hooks or policy",
+        auditEventId: randomUUID(),
+      };
+    }
     const isCodeModeWrapperInvocation = Boolean(normalizedRequest.policyContext?.approvedCodeModeRunId);
     const toolHookWorkspaceId = this.host.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
@@ -409,6 +417,25 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           ...(beforeHook.patch.args ? { args: beforeHook.patch.args } : {}),
         }
       : normalizedRequest;
+
+    if (
+      beforeHook.patch &&
+      hasApprovalActionTemplate(normalizedRequest) &&
+      !isProtectedApprovalActionBindingUnchanged(normalizedRequest, hookableRequest)
+    ) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: protected approval action binding cannot be rewritten by tool hooks",
+        auditEventId: randomUUID(),
+      };
+    }
+    if (containsRawApprovalActionBearer(hookableRequest.args)) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: raw approval action bearers cannot enter tool policy",
+        auditEventId: randomUUID(),
+      };
+    }
 
     if (
       isCodeModeWrapperInvocation &&
@@ -459,9 +486,11 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       }
     }
 
-    const overrideHandler = isCodeModeWrapperInvocation
-      ? undefined
-      : this.host.pluginToolOverrideService?.resolveActiveHandler(hookableRequest.toolName);
+    const protectedApprovalActionDelivery = hasApprovalActionTemplate(hookableRequest);
+    const overrideHandler =
+      isCodeModeWrapperInvocation || protectedApprovalActionDelivery
+        ? undefined
+        : this.host.pluginToolOverrideService?.resolveActiveHandler(hookableRequest.toolName);
     let approvedExternalRuntimeReplayId: string | undefined;
     let finalPolicyCheck: ToolInvokeResult | undefined;
     if (overrideHandler) {
@@ -674,6 +703,20 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
     const normalizedRequest = this.host.normalizeToolInvokeRequest(request);
+    if (containsRawApprovalActionBearer(normalizedRequest.args)) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: raw approval action bearers cannot enter an external runtime",
+        auditEventId: randomUUID(),
+      };
+    }
+    if (hasApprovalActionTemplate(normalizedRequest)) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: protected approval action delivery cannot execute through an external runtime",
+        auditEventId: randomUUID(),
+      };
+    }
     const deploymentGuard = this.host.evaluateToolDeploymentGuard(normalizedRequest);
     if (deploymentGuard) {
       return {
@@ -1135,6 +1178,27 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
   }
+}
+
+function hasApprovalActionTemplate(request: ToolInvokeRequest): boolean {
+  return request.args.interactiveActionTemplate !== undefined;
+}
+
+function containsRawApprovalActionBearer(value: unknown): boolean {
+  return /\bgrat_[A-Za-z0-9_-]{16,}\b/i.test(JSON.stringify(value ?? null));
+}
+
+function isProtectedApprovalActionBindingUnchanged(before: ToolInvokeRequest, after: ToolInvokeRequest): boolean {
+  return isDeepStrictEqual(
+    {
+      toolName: before.toolName,
+      args: before.args,
+    },
+    {
+      toolName: after.toolName,
+      args: after.args,
+    },
+  );
 }
 
 function buildMcpAutonomousActivationGrantInput(

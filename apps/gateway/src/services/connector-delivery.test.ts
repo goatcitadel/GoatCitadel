@@ -75,6 +75,46 @@ describe("dispatchConnectorDelivery", () => {
     });
   });
 
+  it("fails closed when a durable channel delivery contains a malformed approval action template", async () => {
+    const commsSend = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-should-not-run",
+        policyReason: "allowed",
+      }),
+    );
+
+    await expect(
+      dispatchConnectorDelivery(
+        createConnector("integration_connection", "integration:telegram-1", "telegram-1", ["outbound_messages"]),
+        createPayload("channel.send", {
+          target: "-1001234567890",
+          message: "Use the inline approval buttons.",
+          interactiveActionTemplate: {
+            platform: "telegram",
+            tokenId: "rat_malformed",
+            tokenRef: "keychain:goatcitadel:approval-remote-action:rat_malformed",
+            expiresAt: "not-a-date",
+            buttons: [
+              { label: "Approve", decision: "a" },
+              { label: "Deny", decision: "r" },
+            ],
+          },
+        }),
+        {
+          commsSend,
+          commsReply: vi.fn(async () => ({})),
+          commsReact: vi.fn(),
+          commsUnsend: vi.fn(),
+          commsTyping: vi.fn(async () => createTypingResult()),
+          invokeMcpTool: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow(/approval action template/i);
+    expect(commsSend).not.toHaveBeenCalled();
+  });
+
   it("passes abort signals through integration channel sends and rejects on lease-loss abort", async () => {
     const signal = AbortSignal.abort(new Error("lease lost"));
     const commsSend = vi.fn(async (input: ChannelSendInput): Promise<ToolInvokeResult> => {

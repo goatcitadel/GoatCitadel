@@ -38,7 +38,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
-import { hydrateApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import { hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
@@ -1088,19 +1088,23 @@ export async function executeDurableConnectorDeliveryRun(
   const approvalActionTokenRef = payload.secretRefs?.approvalActionToken;
   const approvalAction = payload.approvalAction;
   if (approvalAction && Date.parse(approvalAction.expiresAt) <= Date.now()) {
+    let secretCleanupPending = false;
     if (approvalActionTokenRef) {
       try {
         approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
       } catch {
-        // The terminal token state is authoritative. The approval expiry
-        // worker will retry keychain cleanup by token id.
+        // Keep the canonical token pending-but-expired so the approval expiry
+        // worker can select it again and retry keychain cleanup by token id.
+        secretCleanupPending = true;
       }
     }
-    try {
-      storage.remoteActionTokens.expirePendingAtOrBefore(approvalAction.tokenId, new Date().toISOString());
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) {
-        throw error;
+    if (!secretCleanupPending) {
+      try {
+        storage.remoteActionTokens.expirePendingAtOrBefore(approvalAction.tokenId, new Date().toISOString());
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
       }
     }
     const checkpointState = {
@@ -1110,6 +1114,7 @@ export async function executeDurableConnectorDeliveryRun(
       tokenId: approvalAction.tokenId,
       expiresAt: approvalAction.expiresAt,
       deliveryStatus: "expired",
+      secretCleanupPending,
       error: "Approval remote-action delivery expired before dispatch.",
     };
     publishRealtime(
@@ -1134,13 +1139,14 @@ export async function executeDurableConnectorDeliveryRun(
     throw new Error(payload.simulateFailureReason.trim());
   }
   const operatorId = payload.operatorId ?? payload.authActorId ?? "system-durable";
-  const dispatchPayload = approvalActionTokenRef
-    ? hydrateApprovalRemoteTokenConnectorDeliveryPayload(
-        payload,
-        connector.connectorType,
-        approvalRemoteTokenSecrets.resolve(approvalActionTokenRef),
-      )
-    : payload;
+  const hydratesBrowserApprovalBearer = connector.connectorType === "browser" && Boolean(approvalActionTokenRef);
+  const dispatchPayload =
+    hydratesBrowserApprovalBearer && approvalActionTokenRef
+      ? hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
+          payload,
+          approvalRemoteTokenSecrets.resolve(approvalActionTokenRef),
+        )
+      : payload;
   const dispatch = await dispatchConnectorDelivery(connector, dispatchPayload, {
     commsSend: (input) => host.commsSend(input),
     commsReply: (input) => host.commsReply(input),
@@ -1179,7 +1185,7 @@ export async function executeDurableConnectorDeliveryRun(
     signal: context?.signal,
   });
   throwIfDurableWorkflowAborted(context);
-  if (approvalActionTokenRef) {
+  if (hydratesBrowserApprovalBearer && approvalActionTokenRef) {
     try {
       approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
     } catch {

@@ -967,6 +967,7 @@ describe("integration provider webhook routes", () => {
       token: "grat_secret",
       decision: "approve",
       resolvedBy: "telegram:777",
+      connectorId: "integration:11111111-1111-1111-1111-111111111111",
     });
     expect(response.json()).toEqual(
       expect.objectContaining({

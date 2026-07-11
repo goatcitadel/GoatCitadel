@@ -652,8 +652,11 @@ function normalizeInteractiveActions(value: unknown): ChannelSendInput["interact
 }
 
 function normalizeInteractiveActionTemplate(value: unknown): ChannelSendInput["interactiveActionTemplate"] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (value === undefined) {
     return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError({ message: "Approval action template is invalid." });
   }
   const recordValue = value as Record<string, unknown>;
   const tokenId = optionalString(recordValue.tokenId);
@@ -666,7 +669,7 @@ function normalizeInteractiveActionTemplate(value: unknown): ChannelSendInput["i
     !Number.isFinite(Date.parse(expiresAt)) ||
     !Array.isArray(recordValue.buttons)
   ) {
-    return undefined;
+    throw new ValidationError({ message: "Approval action template is invalid." });
   }
   const buttons = recordValue.buttons
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
@@ -678,10 +681,9 @@ function normalizeInteractiveActionTemplate(value: unknown): ChannelSendInput["i
         decision,
       };
     })
-    .filter((item): item is { label: string; decision: "a" | "r" } => Boolean(item.label && item.decision))
-    .slice(0, 8);
-  if (buttons.length === 0) {
-    return undefined;
+    .filter((item): item is { label: string; decision: "a" | "r" } => Boolean(item.label && item.decision));
+  if (buttons.length === 0 || buttons.length !== recordValue.buttons.length) {
+    throw new ValidationError({ message: "Approval action template is invalid." });
   }
   return {
     platform: optionalString(recordValue.platform),

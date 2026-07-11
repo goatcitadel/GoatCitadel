@@ -10,6 +10,7 @@ import type {
 import { MCP_APPROVAL_DELIVERY_TOOL_NAME } from "./mcp-approval-inbox.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { describeChannelCapabilities, describeChannelFeatureMetadata } from "./channel-diagnostics.js";
+import { isTelegramApprovalActionConnectionReady } from "./channel-secret-resolution.js";
 
 const CONNECTOR_CAPABILITY_VERSION = "v1";
 
@@ -72,6 +73,10 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
         : "degraded";
   const approvalDeliveryTarget = resolveIntegrationApprovalDeliveryTarget(connection);
   const approvalDeliveryReady = status === "active" && Boolean(approvalDeliveryTarget);
+  const approvalInlineActionsReady =
+    approvalDeliveryReady &&
+    channelFeatures?.runtimePosture.inboundReadiness === "ready" &&
+    isTelegramApprovalActionConnectionReady(connection);
   return {
     connectorId: `integration:${connection.connectionId}`,
     connectorType: "integration_connection",
@@ -96,6 +101,7 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       connectionStatus: connection.status,
       approvalDeliveryMode: isChannel ? "integration_channel_send" : undefined,
       approvalDeliveryReady,
+      approvalInlineActionsReady,
       approvalDeliveryReason: describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
       channelCapabilities:

@@ -103,7 +103,8 @@ export async function commsSend(
         target: input.target,
         message: sanitized.message,
         attachments,
-        interactiveActions: input.interactiveActions,
+        interactiveActions: input.interactiveActionTemplate ? undefined : input.interactiveActions,
+        interactiveActionTemplate: input.interactiveActionTemplate,
         outboundSanitizer: hasOutboundSanitizerEffect(sanitized)
           ? {
               removedBlockCount: sanitized.removedBlockCount,

@@ -58,7 +58,10 @@ const bulkResolveSchema = z.object({
 });
 
 const remoteTokenSchema = z.object({
-  connectorId: z.string().min(1),
+  connectorId: z
+    .string()
+    .min(1)
+    .transform((connectorId) => (connectorId === "mission-control" ? "browser:mission-control" : connectorId)),
   expiresInMs: z
     .number()
     .int()
@@ -259,7 +262,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await approvals.resolveApprovalWithRemoteToken(parsed.data);
+      const result = await approvals.resolveApprovalWithRemoteToken({
+        ...parsed.data,
+        connectorId: "browser:mission-control",
+      });
       markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {

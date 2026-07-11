@@ -600,6 +600,7 @@ import {
   policyContextHasOperatorApproval,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
+import { isTelegramApprovalActionConnectorReady } from "./channel-secret-resolution.js";
 import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
 import {
   commsActivity as commsActivityImpl,
@@ -725,7 +726,7 @@ export class GatewayService {
   private readonly eventIngestService: EventIngestService;
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
-  private readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
+  public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
   public readonly orchestrationEngine: OrchestrationEngine;
@@ -925,6 +926,10 @@ export class GatewayService {
       // retryable approval observability envelope.
       createApproval: (input, onCreated) => this.createApproval(input, onCreated),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
+      deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
+      isApprovalActionConnectorReady: (connectionId) =>
+        isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -5840,6 +5845,7 @@ export class GatewayService {
 
   public async resolveApprovalWithRemoteToken(input: {
     token: string;
+    connectorId?: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -6881,9 +6887,7 @@ export class GatewayService {
   private async sendQueuedChannelDelivery(
     input: ChannelDeliveryRuntimeSendInput,
   ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
-    return sendQueuedChannelDeliveryImpl((sendInput) => commsSendImpl(this.buildCommsHost(), sendInput), input, {
-      tokenSecrets: this.approvalRemoteTokenSecrets,
-    });
+    return sendQueuedChannelDeliveryImpl((sendInput) => commsSendImpl(this.buildCommsHost(), sendInput), input);
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {

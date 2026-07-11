@@ -43,6 +43,7 @@ import {
   type DurableWorkflowExecutorHosts,
 } from "./durable-execution-service.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-replay-job-service.js";
 
 afterEach(() => {
@@ -974,7 +975,8 @@ describe("durable-execution-service orchestration workflow", () => {
       ],
       metadata: {
         approvalDeliveryTarget: "#approvals",
-        approvalDeliveryPlatform: "slack",
+        approvalDeliveryPlatform: "telegram",
+        approvalInlineActionsReady: true,
       },
     } as unknown as ConnectorRecord;
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
@@ -1031,7 +1033,7 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
-  it("hydrates integration approval buttons only for live dispatch and cleans the protected bearer", async () => {
+  it("keeps integration approval templates sealed for the downstream channel queue", async () => {
     const rawToken = `grat_${"i".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:token-integration";
     const connector = {
@@ -1046,7 +1048,8 @@ describe("durable-execution-service orchestration workflow", () => {
       ],
       metadata: {
         approvalDeliveryTarget: "#approvals",
-        approvalDeliveryPlatform: "slack",
+        approvalDeliveryPlatform: "telegram",
+        approvalInlineActionsReady: true,
       },
     } as unknown as ConnectorRecord;
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
@@ -1098,19 +1101,24 @@ describe("durable-execution-service orchestration workflow", () => {
       connector,
       expect.objectContaining({
         payload: expect.objectContaining({
-          interactiveActions: {
-            platform: "slack",
+          interactiveActionTemplate: {
+            platform: "telegram",
             tokenId: "token-integration",
+            tokenRef,
+            expiresAt: "2099-07-10T00:15:00.000Z",
             buttons: [
-              { label: "Approve", callbackData: `gca:${rawToken}:a` },
-              { label: "Deny", callbackData: `gca:${rawToken}:r` },
+              { label: "Approve", decision: "a" },
+              { label: "Deny", decision: "r" },
             ],
           },
         }),
       }),
       expect.any(Object),
     );
-    expect(deleteApprovalRemoteActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    const dispatchedPayload = vi.mocked(dispatchConnectorDelivery).mock.calls[0]?.[1];
+    expect(dispatchedPayload?.payload?.interactiveActions).toBeUndefined();
+    expect(host.approvalRemoteTokenSecrets.resolve).not.toHaveBeenCalled();
+    expect(deleteApprovalRemoteActionTokenSecret).not.toHaveBeenCalled();
     expect(JSON.stringify(updateRun.mock.calls)).not.toContain(rawToken);
     expect(JSON.stringify(createCheckpoint.mock.calls)).not.toContain(rawToken);
   });
@@ -1252,6 +1260,70 @@ describe("durable-execution-service orchestration workflow", () => {
       expect.objectContaining({ tokenId: "token-expired" }),
       expect.any(Object),
     );
+  });
+
+  it("leaves an expired token pending until failed keychain cleanup can be reconciled", async () => {
+    const tokenId = "token-expired-retry";
+    const tokenRef = `keychain:goatcitadel:approval-remote-action:${tokenId}`;
+    const payload = {
+      version: "connector.delivery.v1" as const,
+      connectorId: "browser:mission-control",
+      connectorType: "browser",
+      action: "realtime.emit",
+      approvalAction: { tokenId, expiresAt: "2020-07-10T00:15:00.000Z" },
+      secretRefs: { approvalActionToken: tokenRef },
+      payload: { eventType: "approval_remote_action_ready", payload: { approvalId: "approval-expired-retry" } },
+    };
+    const run = buildRunWithPayload("connector.delivery", payload);
+    let tokenState = "pending";
+    let secretPresent = true;
+    const deleteSecret = vi.fn(() => {
+      if (deleteSecret.mock.calls.length === 1) {
+        throw new Error("keychain temporarily unavailable");
+      }
+      secretPresent = false;
+    });
+    const tokens = {
+      listPendingExpiredAtOrBefore: vi.fn(() => (tokenState === "pending" ? [{ tokenId }] : [])),
+      expirePendingAtOrBefore: vi.fn(() => {
+        tokenState = "expired";
+        return { state: tokenState };
+      }),
+    };
+    const tokenSecrets = new ApprovalRemoteTokenSecretService(
+      { setSecret: vi.fn(), getSecret: vi.fn(), deleteSecret } as never,
+      tokens as never,
+      () => new Date("2026-07-10T12:00:00.000Z"),
+    );
+    const updateRun = vi.fn();
+    const createCheckpoint = vi.fn();
+    const host = {
+      requireConnectorRecord: vi.fn(),
+      approvalRemoteTokenSecrets: {
+        resolve: vi.fn(),
+        delete: (secretRef: string) => tokenSecrets.delete(secretRef),
+      },
+      storage: {
+        durableRuns: { getRun: vi.fn(() => run), updateRun, createCheckpoint },
+        remoteActionTokens: tokens,
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime: vi.fn(),
+    };
+
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(tokenState).toBe("pending");
+    expect(secretPresent).toBe(true);
+    expect(tokens.expirePendingAtOrBefore).not.toHaveBeenCalled();
+    expect(createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ state: expect.objectContaining({ secretCleanupPending: true }) }),
+    );
+
+    expect(tokenSecrets.reconcileExpired()).toBe(1);
+    expect(secretPresent).toBe(false);
+    expect(tokenState).toBe("expired");
+    expect(deleteSecret).toHaveBeenCalledTimes(2);
   });
 
   it("retries hook delivery runs and dead-letters exhausted hook attempts", async () => {

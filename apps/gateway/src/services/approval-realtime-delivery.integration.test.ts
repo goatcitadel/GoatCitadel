@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalRequest, ConnectorRecord, RealtimeEvent } from "@goatcitadel/contracts";
+import type {
+  ApprovalRequest,
+  ChannelSendInput,
+  ConnectorRecord,
+  DurableRunRecord,
+  RealtimeEvent,
+} from "@goatcitadel/contracts";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
+import { executeDurableConnectorDeliveryRun } from "./durable-execution-service.js";
+import { buildChannelDeliveryPayload, sendQueuedChannelDelivery } from "./gateway/channel-delivery-helpers.js";
 import { RealtimeEventService } from "./realtime-event-service.js";
 
 describe("browser approval realtime delivery", () => {
@@ -106,6 +114,93 @@ describe("browser approval realtime delivery", () => {
     );
     expect(JSON.stringify(rows)).not.toContain("must_not_cross_live_boundary");
   });
+
+  it("keeps integration approval bearers sealed across durable and channel queues through the policy handoff", async () => {
+    const rawToken = `grat_${"i".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_integration";
+    const connector = createIntegrationConnector();
+    const workflow = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: createApproval(),
+      connector,
+      tokenRef,
+      tokenId: "rat_integration",
+      expiresAt: "2099-07-10T00:15:00.000Z",
+    });
+    expect(workflow).toBeDefined();
+    const run: DurableRunRecord = {
+      runId: "durable-integration-approval",
+      workflowKey: "connector.delivery",
+      status: "running",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 1,
+      payload: workflow as unknown as Record<string, unknown>,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:01.000Z",
+    };
+    let queuedPayload: Record<string, unknown> | undefined;
+    const resolveToken = vi.fn(() => rawToken);
+    const deleteToken = vi.fn();
+    const commsSend = vi.fn(async (input: ChannelSendInput) => {
+      expect(input.interactiveActions).toBeUndefined();
+      expect(input.interactiveActionTemplate).toMatchObject({ tokenRef, tokenId: "rat_integration" });
+      queuedPayload = buildChannelDeliveryPayload(input, "telegram");
+      return {
+        deliveryId: "delivery-integration-approval",
+        status: "queued",
+        deliveryStatus: "retrying",
+        createdAt: "2026-07-10T00:00:01.000Z",
+        updatedAt: "2026-07-10T00:00:01.000Z",
+      };
+    });
+    const updateRun = vi.fn();
+    const createCheckpoint = vi.fn();
+
+    await executeDurableConnectorDeliveryRun(
+      {
+        requireConnectorRecord: vi.fn(() => connector),
+        approvalRemoteTokenSecrets: { resolve: resolveToken, delete: deleteToken },
+        commsSend,
+        commsReply: vi.fn(),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(),
+        commsActivity: vi.fn(),
+        invokeMcpTool: vi.fn(),
+        resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
+        storage: {
+          durableRuns: {
+            getRun: vi.fn(() => run),
+            updateRun,
+            createCheckpoint,
+          },
+        },
+        recordDurableTimelineEvent: vi.fn(),
+        publishRealtime: vi.fn(),
+      } as never,
+      run,
+    );
+
+    expect(commsSend).toHaveBeenCalledTimes(1);
+    expect(resolveToken).not.toHaveBeenCalled();
+    expect(deleteToken).not.toHaveBeenCalled();
+    expect(queuedPayload).toBeDefined();
+    expect(JSON.stringify(queuedPayload)).not.toContain(rawToken);
+    expect(JSON.stringify(queuedPayload)).toContain(tokenRef);
+    expect(JSON.stringify(updateRun.mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(createCheckpoint.mock.calls)).not.toContain(rawToken);
+
+    const providerSend = vi.fn(async (input: ChannelSendInput) => {
+      expect(input.interactiveActions).toBeUndefined();
+      expect(input.interactiveActionTemplate).toMatchObject({ tokenId: "rat_integration", tokenRef });
+      expect(JSON.stringify(input)).not.toContain(rawToken);
+      return { status: "sent", providerMessageId: "provider-integration-approval" };
+    });
+    await sendQueuedChannelDelivery(providerSend, createChannelRuntimeInput(queuedPayload!));
+
+    expect(resolveToken).not.toHaveBeenCalled();
+    expect(deleteToken).not.toHaveBeenCalled();
+  });
 });
 
 function createRealtimeStorage(rows: RealtimeEvent[]) {
@@ -174,4 +269,39 @@ function createBrowserConnector(): ConnectorRecord {
     ],
     metadata: {},
   };
+}
+
+function createIntegrationConnector(): ConnectorRecord {
+  return {
+    connectorId: "integration:approval-actions",
+    connectorType: "integration_connection",
+    label: "Approval actions",
+    sourceId: "connection-approval-actions",
+    status: "active",
+    capabilities: [
+      { id: "approvals", enabled: true, version: "v1" },
+      { id: "outbound_messages", enabled: true, version: "v1" },
+      { id: "interactive_actions", enabled: true, version: "v1" },
+    ],
+    metadata: {
+      approvalDeliveryTarget: "#approvals",
+      approvalDeliveryPlatform: "telegram",
+      approvalInlineActionsReady: true,
+    },
+  };
+}
+
+function createChannelRuntimeInput(payload: Record<string, unknown>) {
+  return {
+    deliveryId: "delivery-integration-approval",
+    connectionId: "connection-approval-actions",
+    channelKey: "telegram",
+    target: "#approvals",
+    status: "running",
+    attempts: 1,
+    maxAttempts: 3,
+    createdAt: "2026-07-10T00:00:01.000Z",
+    updatedAt: "2026-07-10T00:00:02.000Z",
+    payload,
+  } as const;
 }

@@ -93,6 +93,43 @@ describe("comms service governance", () => {
     });
   });
 
+  it("keeps approval action bearers sealed while carrying the protected template through policy", async () => {
+    const host = createHost();
+    const rawToken = `grat_${"t".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_template";
+
+    await commsSend(host, {
+      connectionId: "conn-1",
+      target: "-1001234567890",
+      message: "Approval requested.",
+      interactiveActionTemplate: {
+        platform: "telegram",
+        tokenId: "rat_template",
+        tokenRef,
+        expiresAt: "2099-07-10T00:15:00.000Z",
+        buttons: [
+          { label: "Approve", decision: "a" },
+          { label: "Deny", decision: "r" },
+        ],
+      },
+    });
+
+    const request = host.invokeAndUnwrap.mock.calls[0]![0] as ToolInvokeRequest;
+    expect(request.args).toMatchObject({
+      interactiveActionTemplate: {
+        platform: "telegram",
+        tokenId: "rat_template",
+        tokenRef,
+      },
+    });
+    expect(request.args.interactiveActions).toBeUndefined();
+    expect(request.authContext).toEqual({
+      boundary: "tool_host_boundary",
+      secretRefs: [tokenRef],
+    });
+    expect(JSON.stringify(request)).not.toContain(rawToken);
+  });
+
   it("strips hidden reasoning blocks before final channel delivery, including fenced-code delivery text", async () => {
     const host = createHost();
     host.getIntegrationConnection = vi.fn(

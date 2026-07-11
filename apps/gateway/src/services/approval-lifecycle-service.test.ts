@@ -20,6 +20,7 @@ import {
 import {
   createApprovalRemoteActionToken,
   resolveApprovalWithConsumedRemoteToken,
+  resolveApprovalWithRemoteToken,
   type ApprovalRemoteActionContext,
 } from "./approval-remote-action-service.js";
 import {
@@ -222,6 +223,26 @@ describe("approval lifecycle service", () => {
       deliveryStatus: "failed",
       deliveryError: "connector delivery unavailable",
     });
+  });
+
+  it("binds raw remote-token consumption to the ingress connector when supplied", async () => {
+    const host = createApprovalHarness();
+    const tokenRecord = createRemoteActionTokenRecord("token-bound-ingress");
+    host.consumeRemoteActionToken = vi.fn(() => tokenRecord);
+    host.resolveApproval = vi.fn(async () => ({ approval: host.storage.approvals.get("approval-1"), effects: [] }));
+
+    await resolveApprovalWithRemoteToken(host, {
+      token: "grat_connector_bound",
+      connectorId: "integration:conn-telegram",
+      decision: "approve",
+      resolvedBy: "telegram:777",
+    });
+
+    expect(host.consumeRemoteActionToken).toHaveBeenCalledWith(
+      "grat_connector_bound",
+      "approval.resolve",
+      expect.objectContaining({ expectedConnectorId: "integration:conn-telegram" }),
+    );
   });
 
   it("keeps pending-list reads side-effect free while omitting not-yet-swept expirations", () => {

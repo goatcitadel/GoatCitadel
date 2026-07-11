@@ -15,6 +15,7 @@ const NOW = "2026-07-10T12:00:00.000Z";
 interface Harness {
   storage: Storage;
   host: ApprovalRemoteTokenHost;
+  deleteRemoteActionTokenSecretById: ReturnType<typeof vi.fn>;
   cleanup(): void;
 }
 
@@ -25,9 +26,11 @@ function createHarness(): Harness {
     transcriptsDir: path.join(root, "transcripts"),
     auditDir: path.join(root, "audit"),
   });
+  const deleteRemoteActionTokenSecretById = vi.fn();
   return {
     storage,
-    host: { storage },
+    host: { storage, approvalRemoteTokenSecrets: { deleteById: deleteRemoteActionTokenSecretById } },
+    deleteRemoteActionTokenSecretById,
     cleanup: () => {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });
@@ -35,12 +38,17 @@ function createHarness(): Harness {
   };
 }
 
-function issueApprovalToken(harness: Harness, rawToken: string, expiresAt = "2099-07-10T13:00:00.000Z") {
+function issueApprovalToken(
+  harness: Harness,
+  rawToken: string,
+  expiresAt = "2099-07-10T13:00:00.000Z",
+  connectorId = "mission-control",
+) {
   return harness.storage.remoteActionTokens.create({
     tokenHash: hashSensitiveToken(rawToken),
     actionType: "approval.resolve",
     approvalId: "approval-1",
-    connectorId: "mission-control",
+    connectorId,
     mutation: { approvalId: "approval-1" },
     expiresAt,
   });
@@ -123,6 +131,36 @@ describe("approval remote token request claims", () => {
     expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("pending");
   });
 
+  it("rejects integration-bound raw tokens at the browser ingress while accepting browser tokens", () => {
+    const harness = createHarness();
+    harnesses.push(harness);
+    const integrationToken = issueApprovalToken(
+      harness,
+      "grat_integration_bound",
+      "2099-07-10T13:00:00.000Z",
+      "integration:conn-telegram",
+    );
+    const browserToken = issueApprovalToken(
+      harness,
+      "grat_browser_bound",
+      "2099-07-10T13:00:00.000Z",
+      "browser:mission-control",
+    );
+
+    expect(() =>
+      consumeRemoteActionToken(harness.host, "grat_integration_bound", "approval.resolve", {
+        expectedConnectorId: "browser:mission-control",
+      }),
+    ).toThrow(/connector/i);
+    expect(harness.storage.remoteActionTokens.get(integrationToken.tokenId).state).toBe("pending");
+
+    expect(
+      consumeRemoteActionToken(harness.host, "grat_browser_bound", "approval.resolve", {
+        expectedConnectorId: "browser:mission-control",
+      }),
+    ).toMatchObject({ tokenId: browserToken.tokenId, state: "consumed" });
+  });
+
   it("preserves strict single-use behavior when no claim fingerprint is supplied", () => {
     const harness = createHarness();
     harnesses.push(harness);
@@ -144,6 +182,7 @@ describe("approval remote token request claims", () => {
         claimFingerprint: "sha256:too-late",
       }),
     ).toThrow(/has expired/);
+    expect(harness.deleteRemoteActionTokenSecretById).toHaveBeenCalledWith(token.tokenId);
     expect(harness.storage.remoteActionTokens.get(token.tokenId)).toMatchObject({
       state: "expired",
       mutation: { approvalId: "approval-1" },
@@ -153,5 +192,29 @@ describe("approval remote token request claims", () => {
         claimFingerprint: "sha256:too-late",
       }),
     ).toThrow(/has expired/);
+  });
+
+  it("keeps an expired token pending until keychain cleanup succeeds", () => {
+    const harness = createHarness();
+    harnesses.push(harness);
+    const token = issueApprovalToken(harness, "grat_expired_cleanup_retry", "2026-07-10T11:59:59.000Z");
+    harness.deleteRemoteActionTokenSecretById.mockImplementationOnce(() => {
+      throw new Error("keychain temporarily unavailable");
+    });
+
+    expect(() =>
+      consumeRemoteActionToken(harness.host, "grat_expired_cleanup_retry", "approval.resolve", {
+        expectedConnectorId: "mission-control",
+      }),
+    ).toThrow(/keychain temporarily unavailable/i);
+    expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("pending");
+
+    expect(() =>
+      consumeRemoteActionToken(harness.host, "grat_expired_cleanup_retry", "approval.resolve", {
+        expectedConnectorId: "mission-control",
+      }),
+    ).toThrow(/has expired/i);
+    expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("expired");
+    expect(harness.deleteRemoteActionTokenSecretById).toHaveBeenCalledTimes(2);
   });
 });

@@ -424,7 +424,7 @@ describe("approvals routes", () => {
     expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
       "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
       expect.objectContaining({
-        connectorId: "mission-control",
+        connectorId: "browser:mission-control",
       }),
     );
   });
@@ -460,6 +460,7 @@ describe("approvals routes", () => {
     expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
       token: "grat_token",
       decision: "approve",
+      connectorId: "browser:mission-control",
     });
     expect(built.requireOperatorAuth).not.toHaveBeenCalled();
   });
@@ -678,7 +679,7 @@ describe("approvals routes", () => {
     expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
       "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
       expect.objectContaining({
-        connectorId: "mission-control",
+        connectorId: "browser:mission-control",
         issuedBy: "ip:127.0.0.1",
       }),
     );

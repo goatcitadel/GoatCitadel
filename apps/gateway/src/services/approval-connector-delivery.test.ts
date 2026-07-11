@@ -14,6 +14,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       createConnector("integration_connection", "active", ["approvals", "outbound_messages", "interactive_actions"], {
         approvalDeliveryTarget: "#ops-approvals",
         key: "telegram",
+        approvalInlineActionsReady: true,
       }),
       createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
     ];
@@ -190,7 +191,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     expect(JSON.stringify(approval)).toContain("rollback-secret");
   });
 
-  it("adds integration approval buttons only when interactive actions are enabled", () => {
+  it("adds integration approval buttons only when the provider has authenticated inline-action support", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),
       connector: createConnector(
@@ -199,7 +200,8 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         ["approvals", "outbound_messages", "interactive_actions"],
         {
           approvalDeliveryTarget: "#ops-approvals",
-          key: "discord",
+          key: "telegram",
+          approvalInlineActionsReady: true,
         },
       ),
       tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
@@ -208,7 +210,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     });
 
     expect(payload?.payload?.interactiveActionTemplate).toMatchObject({
-      platform: "discord",
+      platform: "telegram",
       tokenId: "rat_123",
       tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       buttons: [
@@ -216,6 +218,47 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         { label: "Deny", decision: "r" },
       ],
     });
+  });
+
+  it("keeps unsupported integration providers on Mission Control resolution without storing a bearer", () => {
+    const rawToken = `grat_${"u".repeat(43)}`;
+    const createDurableRun = vi.fn(() => ({ runId: "delivery-run-unsupported" }));
+    const tokenSecrets = {
+      store: vi.fn(() => "keychain:goatcitadel:approval-remote-action:rat_unsupported"),
+      delete: vi.fn(),
+    };
+    const connector = createConnector(
+      "integration_connection",
+      "active",
+      ["approvals", "outbound_messages", "interactive_actions"],
+      {
+        approvalDeliveryTarget: "#ops-approvals",
+        key: "discord",
+        approvalInlineActionsReady: false,
+      },
+    );
+
+    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets,
+        requestAttribution: {},
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector,
+        tokenRecord: { token: rawToken, tokenId: "rat_unsupported", expiresAt: "2099-07-10T00:15:00.000Z" },
+      },
+    );
+
+    expect(run).toEqual({ runId: "delivery-run-unsupported" });
+    expect(tokenSecrets.store).not.toHaveBeenCalled();
+    const durableInput = createDurableRun.mock.calls[0]?.[0] as { payload?: Record<string, unknown> };
+    expect(durableInput.payload?.secretRefs).toBeUndefined();
+    expect((durableInput.payload?.payload as Record<string, unknown>)?.interactiveActionTemplate).toBeUndefined();
+    expect(String((durableInput.payload?.payload as Record<string, unknown>)?.message)).toContain(
+      "Resolve this approval from Mission Control.",
+    );
   });
 
   it("builds MCP invoke payloads for approval-capable MCP connectors", () => {

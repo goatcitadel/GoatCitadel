@@ -62,6 +62,12 @@ const MAX_SHELL_OUTPUT_BYTES = 4096;
 
 export interface ToolExecutorRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
+  resolveApprovalActionTokenSecret?: (secretRef: string) => string;
+  /** Remove a protected approval action bearer after a terminal provider outcome. */
+  deleteApprovalActionTokenSecret?: (secretRef: string) => void;
+  /** Revalidate authenticated callback ingress immediately before a protected provider send. */
+  isApprovalActionConnectorReady?: (connectionId: string) => boolean;
   /**
    * Impure `schedule.manage` fulfillment. The cron mutation (create/list/cancel
    * an `agent_turn` job) lives in the gateway, not this pure package, so the
@@ -237,7 +243,13 @@ export async function executeTool(
     case "zalo.send":
     case "zalouser.send":
       return finalizeToolResult(
-        await executeCommsTool(request, config, storage, resolveExecutionGrantAllowedHosts(request, storage)),
+        await executeCommsTool(
+          request,
+          config,
+          storage,
+          resolveExecutionGrantAllowedHosts(request, storage),
+          runtimeHooks,
+        ),
       );
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);

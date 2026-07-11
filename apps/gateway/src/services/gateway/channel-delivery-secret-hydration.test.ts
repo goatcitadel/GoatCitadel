@@ -21,37 +21,28 @@ describe("channel approval action secret hydration", () => {
     ).toThrow(/cannot be queued/i);
   });
 
-  it("persists only a keychain reference and hydrates the bearer at final transport", async () => {
+  it("persists only a keychain reference and carries the template to the protected tool-host boundary", async () => {
     const rawToken = `grat_${"h".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_123";
-    const persistedPayload = buildChannelDeliveryPayload(createInput(tokenRef), "discord");
+    const persistedPayload = buildChannelDeliveryPayload(createInput(tokenRef), "telegram");
     const send = vi.fn(async (input: ChannelSendInput) => {
-      expect(input.interactiveActions?.buttons).toEqual([
-        { label: "Approve", callbackData: `gca:${rawToken}:a` },
-        { label: "Deny", callbackData: `gca:${rawToken}:r` },
-      ]);
+      expect(input.interactiveActions).toBeUndefined();
+      expect(input.interactiveActionTemplate).toMatchObject({ tokenRef, tokenId: "rat_123" });
+      expect(JSON.stringify(input)).not.toContain(rawToken);
       return { status: "sent", providerMessageId: "provider-1" };
     });
-    const deleteInteractiveActionToken = vi.fn();
 
     expect(JSON.stringify(persistedPayload)).not.toContain(rawToken);
     expect(JSON.stringify(persistedPayload)).toContain(tokenRef);
 
-    await sendQueuedChannelDelivery(send, createRuntimeInput(persistedPayload), {
-      tokenSecrets: {
-        resolve: vi.fn(() => rawToken),
-        delete: deleteInteractiveActionToken,
-      },
-    });
+    await sendQueuedChannelDelivery(send, createRuntimeInput(persistedPayload));
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(deleteInteractiveActionToken).toHaveBeenCalledWith(tokenRef);
   });
 
   it("keeps the keychain secret available when provider delivery fails before completion", async () => {
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_retry";
     const persistedPayload = buildChannelDeliveryPayload(createInput(tokenRef), "discord");
-    const deleteInteractiveActionToken = vi.fn();
 
     await expect(
       sendQueuedChannelDelivery(
@@ -59,42 +50,24 @@ describe("channel approval action secret hydration", () => {
           throw new Error("provider unavailable");
         }),
         createRuntimeInput(persistedPayload),
-        {
-          tokenSecrets: {
-            resolve: vi.fn(() => `grat_${"r".repeat(43)}`),
-            delete: deleteInteractiveActionToken,
-          },
-        },
       ),
     ).rejects.toThrow("provider unavailable");
-
-    expect(deleteInteractiveActionToken).not.toHaveBeenCalled();
   });
 
-  it("deletes and blocks an expired action before resolving or calling the provider", async () => {
+  it("leaves expiry enforcement to the protected provider boundary without hydrating in the queue worker", async () => {
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_expired";
     const input = createInput(tokenRef);
     input.interactiveActionTemplate!.expiresAt = "2020-07-10T00:00:00.000Z";
     const persistedPayload = buildChannelDeliveryPayload(input, "discord");
-    const resolveInteractiveActionToken = vi.fn();
-    const deleteInteractiveActionToken = vi.fn();
-    const send = vi.fn();
-
-    await expect(
-      sendQueuedChannelDelivery(send, createRuntimeInput(persistedPayload), {
-        tokenSecrets: {
-          resolve: resolveInteractiveActionToken,
-          delete: deleteInteractiveActionToken,
-        },
-      }),
-    ).rejects.toMatchObject({
-      message: "Approval interactive-action token expired before provider dispatch.",
-      deliveryStatus: "blocked",
+    const send = vi.fn(async (sendInput: ChannelSendInput) => {
+      expect(sendInput.interactiveActionTemplate?.expiresAt).toBe("2020-07-10T00:00:00.000Z");
+      expect(sendInput.interactiveActions).toBeUndefined();
+      return { status: "sent", providerMessageId: "provider-expired-fixture" };
     });
 
-    expect(deleteInteractiveActionToken).toHaveBeenCalledWith(tokenRef);
-    expect(resolveInteractiveActionToken).not.toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
+    await sendQueuedChannelDelivery(send, createRuntimeInput(persistedPayload));
+
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -104,7 +77,7 @@ function createInput(tokenRef: string): ChannelSendInput {
     target: "channel-1",
     message: "Approval requested.",
     interactiveActionTemplate: {
-      platform: "discord",
+      platform: "telegram",
       tokenId: "rat_123",
       tokenRef,
       expiresAt: "2099-07-10T00:15:00.000Z",

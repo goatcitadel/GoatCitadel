@@ -11,9 +11,6 @@ import type {
   ChannelDeliveryRuntimeRecord,
   ChannelDeliveryRuntimeSendInput,
 } from "../channel-delivery-runtime-service.js";
-import type { ApprovalRemoteTokenSecretService } from "../approval-remote-token-secret.js";
-
-type InteractiveActionTokenSecrets = Pick<ApprovalRemoteTokenSecretService, "resolve" | "delete">;
 
 const CHANNEL_DELIVERY_DEFAULT_CHUNK_LIMIT = 3_900;
 const CHANNEL_DELIVERY_FAILURE_STATUSES = new Set<ChannelDeliveryStatus>([
@@ -193,10 +190,8 @@ export function readDeliveryDiagnostics(value: unknown): ChannelDeliveryDiagnost
 export async function sendQueuedChannelDelivery(
   send: ChannelDeliverySender,
   input: ChannelDeliveryRuntimeSendInput,
-  options?: { tokenSecrets?: InteractiveActionTokenSecrets },
 ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
-  const baseInput = hydrateInteractiveActionTemplate(channelDeliveryPayloadToSendInput(input), options);
-  const hydratedTokenRef = baseInput.interactiveActionTemplate?.tokenRef;
+  const baseInput = channelDeliveryPayloadToSendInput(input);
   const messageParts = readChannelDeliveryMessageParts(input.payload);
   if (messageParts.length <= 1) {
     let result: Awaited<ReturnType<ChannelDeliverySender>>;
@@ -215,9 +210,6 @@ export async function sendQueuedChannelDelivery(
         readOptionalString(unwrapped.providerMessageId),
       );
     }
-    if (hydratedTokenRef) {
-      deleteInteractiveActionTokenBestEffort(options, hydratedTokenRef);
-    }
     return { providerMessageId: readOptionalString(unwrapped.providerMessageId) };
   }
 
@@ -231,6 +223,7 @@ export async function sendQueuedChannelDelivery(
         attachments: index === 0 ? baseInput.attachments : undefined,
         attachmentIds: index === 0 ? baseInput.attachmentIds : undefined,
         interactiveActions: index === messageParts.length - 1 ? baseInput.interactiveActions : undefined,
+        interactiveActionTemplate: index === messageParts.length - 1 ? baseInput.interactiveActionTemplate : undefined,
         replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
         replyToPartIndex: index,
       });
@@ -264,62 +257,10 @@ export async function sendQueuedChannelDelivery(
     providerMessageId = readOptionalString(unwrapped.providerMessageId) ?? providerMessageId;
   }
 
-  if (hydratedTokenRef) {
-    deleteInteractiveActionTokenBestEffort(options, hydratedTokenRef);
-  }
-
   return {
     providerMessageId,
     deliveryDiagnostics: readDeliveryDiagnostics(input.payload.deliveryDiagnostics),
   };
-}
-
-function hydrateInteractiveActionTemplate(
-  input: ChannelSendInput,
-  options: { tokenSecrets?: InteractiveActionTokenSecrets } | undefined,
-): ChannelSendInput {
-  const template = input.interactiveActionTemplate;
-  if (!template) {
-    return input;
-  }
-  const expiresAtMs = Date.parse(template.expiresAt);
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
-    deleteInteractiveActionTokenBestEffort(options, template.tokenRef);
-    throw createChannelDeliveryFailureError(
-      "Approval interactive-action token expired before provider dispatch.",
-      "blocked",
-    );
-  }
-  const token = options?.tokenSecrets?.resolve(template.tokenRef)?.trim();
-  if (!token?.startsWith("grat_")) {
-    throw createChannelDeliveryFailureError(
-      "Approval interactive-action token is unavailable or invalid.",
-      "not_available",
-    );
-  }
-  return {
-    ...input,
-    interactiveActions: {
-      platform: template.platform,
-      tokenId: template.tokenId,
-      buttons: template.buttons.map((button) => ({
-        label: button.label,
-        callbackData: `gca:${token}:${button.decision}`,
-      })),
-    },
-  };
-}
-
-function deleteInteractiveActionTokenBestEffort(
-  options: { tokenSecrets?: InteractiveActionTokenSecrets } | undefined,
-  secretRef: string,
-): void {
-  try {
-    options?.tokenSecrets?.delete(secretRef);
-  } catch {
-    // Provider delivery already succeeded. Cleanup failure must not trigger a
-    // retry that could duplicate the external message.
-  }
 }
 
 function readPermissionSurface(value: unknown): ChannelSendInput["surface"] | undefined {

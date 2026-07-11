@@ -124,6 +124,7 @@ export interface DiscordRuntimeBridgeHost {
   requireChatSession(sessionId: string): ChatSessionRecord;
   resolveApprovalWithRemoteToken(input: {
     token: string;
+    connectorId?: string;
     decision: ApprovalResolveInput["decision"];
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
@@ -338,6 +339,7 @@ export async function handleDiscordRuntimeSlashCommand(
     }
     const result = await host.resolveApprovalWithRemoteToken({
       token: normalizedCommand.approvalToken,
+      connectorId: `integration:${input.connectionId}`,
       decision: normalizedCommand.approvalDecision,
       resolvedBy: `discord:${input.actorId}`,
     });

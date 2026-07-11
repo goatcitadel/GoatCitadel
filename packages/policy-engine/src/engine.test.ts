@@ -2177,6 +2177,41 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     );
   });
 
+  it("persists only protected approval templates while channel.send waits for policy approval", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const rawToken = `grat_${"z".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_policy_wait";
+
+    const result = await engine.invoke({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-telegram",
+        target: "-1001234567890",
+        message: "Approval requested.",
+        interactiveActionTemplate: {
+          platform: "telegram",
+          tokenId: "rat_policy_wait",
+          tokenRef,
+          expiresAt: "2099-07-10T00:15:00.000Z",
+          buttons: [
+            { label: "Approve", decision: "a" },
+            { label: "Deny", decision: "r" },
+          ],
+        },
+      },
+      agentId: "operator",
+      sessionId: "session-policy-wait",
+      authContext: { boundary: "tool_host_boundary", secretRefs: [tokenRef] },
+    });
+
+    expect(result.outcome).toBe("approval_required");
+    expect(JSON.stringify(vi.mocked(storage.approvals.create).mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(vi.mocked(storage.pendingApprovalActions.upsertPending).mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(vi.mocked(storage.approvals.create).mock.calls)).toContain(tokenRef);
+    expect(JSON.stringify(vi.mocked(storage.pendingApprovalActions.upsertPending).mock.calls)).toContain(tokenRef);
+  });
+
   it("records runtime governance linkage on approval-gated tool requests", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage);

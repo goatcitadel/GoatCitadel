@@ -14,6 +14,7 @@
 
 import { type RemoteActionTokenRecord, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 
 /**
@@ -23,6 +24,7 @@ import { hashSensitiveToken } from "./device-access-helpers.js";
  */
 export interface ApprovalRemoteTokenHost {
   readonly storage: Pick<Storage, "remoteActionTokens">;
+  readonly approvalRemoteTokenSecrets?: Pick<ApprovalRemoteTokenSecretService, "deleteById">;
 }
 
 export interface RemoteActionTokenClaimOptions {
@@ -100,6 +102,7 @@ function consumeResolvedRemoteActionToken(
 
   const claimFingerprint = normalizeClaimFingerprint(options?.claimFingerprint);
   if (current.state === "expired") {
+    host.approvalRemoteTokenSecrets?.deleteById(current.tokenId);
     throwExpiredTokenConflict();
   }
   if (current.state === "consumed") {
@@ -115,7 +118,7 @@ function consumeResolvedRemoteActionToken(
 
   const expiresAt = Date.parse(current.expiresAt);
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    const latest = host.storage.remoteActionTokens.expirePendingAtOrBefore(current.tokenId, new Date().toISOString());
+    const latest = expirePendingTokenAfterSecretCleanup(host, current.tokenId, new Date().toISOString());
     if (latest.state === "expired") {
       throwExpiredTokenConflict();
     }
@@ -180,10 +183,19 @@ function resolveClaimResult(
 }
 
 function expireTokenAfterLostBoundaryRace(host: ApprovalRemoteTokenHost, tokenId: string, claimedAt: string): void {
-  const latest = host.storage.remoteActionTokens.expirePendingAtOrBefore(tokenId, claimedAt);
+  const latest = expirePendingTokenAfterSecretCleanup(host, tokenId, claimedAt);
   if (latest.state === "expired") {
     throwExpiredTokenConflict();
   }
+}
+
+function expirePendingTokenAfterSecretCleanup(
+  host: ApprovalRemoteTokenHost,
+  tokenId: string,
+  boundaryAt: string,
+): RemoteActionTokenRecord {
+  host.approvalRemoteTokenSecrets?.deleteById(tokenId);
+  return host.storage.remoteActionTokens.expirePendingAtOrBefore(tokenId, boundaryAt);
 }
 
 function normalizeClaimFingerprint(value: string | undefined): string | undefined {

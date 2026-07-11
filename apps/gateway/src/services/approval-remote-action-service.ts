@@ -233,6 +233,7 @@ export async function resolveApprovalWithRemoteToken(
   context: ApprovalRemoteActionContext,
   input: {
     token: string;
+    connectorId?: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -241,6 +242,7 @@ export async function resolveApprovalWithRemoteToken(
 ): Promise<ApprovalResolveResult> {
   const tokenRecord = context.consumeRemoteActionToken(input.token, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
+    expectedConnectorId: input.connectorId,
   });
   return resolveApprovalWithConsumedRemoteToken(context, tokenRecord, input);
 }
