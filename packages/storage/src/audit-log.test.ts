@@ -68,6 +68,38 @@ describe("AuditLog", () => {
     );
   });
 
+  it("dedupes a durable delivery id across logger instances and preserves captured attribution", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const delivery = {
+      deliveryId: "approval-observability:approval-1:create-audit",
+      occurredAt: "2026-07-10T10:00:00.000Z",
+      attribution: {
+        correlationId: "corr-original",
+        traceId: "trace-original",
+        actorId: "operator-original",
+      },
+    };
+
+    await new AuditLog(root).append("approvals", { event: "approval.create", approvalId: "approval-1" }, delivery);
+    await runWithRequestAttribution({ actorId: "wrong-retry-actor" }, () =>
+      new AuditLog(root).append("approvals", { event: "approval.create", approvalId: "approval-1" }, delivery),
+    );
+
+    const records = await new AuditLog(root).list("approvals");
+    assert.equal(records.length, 1);
+    assert.deepEqual(records[0], {
+      timestamp: "2026-07-10T10:00:00.000Z",
+      event: "approval.create",
+      approvalId: "approval-1",
+      correlationId: "corr-original",
+      traceId: "trace-original",
+      actorId: "operator-original",
+      eventId: delivery.deliveryId,
+      deliveryId: delivery.deliveryId,
+    });
+  });
+
   it("waits for a cross-process audit lock before appending", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);

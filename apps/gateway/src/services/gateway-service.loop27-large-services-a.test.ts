@@ -212,6 +212,9 @@ describe("GatewayService loop 27 large service coverage", () => {
             state: "consumed",
             ...patch,
           })),
+          expirePendingAtOrBefore: vi.fn((tokenId: string) =>
+            tokenId === "expired-token" ? { ...pending, tokenId, state: "expired" } : { ...pending, tokenId },
+          ),
           updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
             ...pending,
             tokenId,
@@ -259,7 +262,10 @@ describe("GatewayService loop 27 large service coverage", () => {
     expect(() =>
       GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "expired-token", "approval.resolve"),
     ).toThrow("expired");
-    expect(gateway.storage.remoteActionTokens.updateState).toHaveBeenCalledWith("expired-token", "expired");
+    expect(gateway.storage.remoteActionTokens.expirePendingAtOrBefore).toHaveBeenCalledWith(
+      "expired-token",
+      expect.any(String),
+    );
   });
 
   it("rejects remote action tokens that are empty, unknown, mismatched, or already consumed (security invariants)", () => {

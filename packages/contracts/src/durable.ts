@@ -71,6 +71,15 @@ export interface ConnectorDeliveryWorkflowPayload {
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   payload?: Record<string, unknown>;
+  /** Opaque keychain references; raw secret values must never enter a durable payload. */
+  secretRefs?: {
+    approvalActionToken?: string;
+  };
+  /** Expiry truth for a connector-delivered approval action. */
+  approvalAction?: {
+    tokenId: string;
+    expiresAt: string;
+  };
   correlationId?: string;
   traceId?: string;
   originSurface?: string;
@@ -105,6 +114,8 @@ export interface ExternalSideEffectReplayWorkflowPayload {
 }
 
 export interface DurableRunCreateRequest {
+  /** Optional internally reserved identity for cross-transaction handoff. */
+  runId?: string;
   workflowKey: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;

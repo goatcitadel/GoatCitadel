@@ -1,8 +1,12 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import type {
+  ApprovalCreateInput,
+  ApprovalObservabilityEffectInput,
   FilesystemReadAccessMode,
   ApprovalLinkage,
+  ApprovalRequest,
   EffectiveToolPolicy,
   ToolGrantConstraints,
   ToolAccessEvaluateRequest,
@@ -21,7 +25,7 @@ import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { ApprovalGate } from "./approval-gate.js";
+import { ApprovalGate, type ApprovalCreateCommitPort } from "./approval-gate.js";
 import { getVerifiedApprovalBypassId, hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import {
   parseIngestionBackend,
@@ -193,7 +197,15 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
   listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
 };
 
-export type ToolPolicyEngineRuntimeHooks = ToolExecutorRuntimeHooks;
+export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
+  /**
+   * Canonical approval creation boundary owned by the Gateway runtime. When
+   * present, policy-gated tool requests must use it instead of writing approval
+   * storage directly, so wait-run, event, and observability truth commit as one
+   * lifecycle operation.
+   */
+  createApproval?: (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort) => Promise<ApprovalRequest>;
+}
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
@@ -208,7 +220,7 @@ export class ToolPolicyEngine {
     private readonly runtimeHooks: ToolPolicyEngineRuntimeHooks = {},
   ) {
     this.registry = registry ?? createDefaultToolRegistry();
-    this.approvals = new ApprovalGate(storage);
+    this.approvals = new ApprovalGate(storage, runtimeHooks.createApproval);
   }
 
   public listCatalog() {
@@ -354,46 +366,119 @@ export class ToolPolicyEngine {
 
     if (evaluation.requiresApproval) {
       const expiresAt = new Date(Date.now() + DEFAULT_APPROVAL_TTL_MS).toISOString();
-      const approval = await this.approvals.create({
-        kind: request.toolName,
-        riskLevel: evaluation.riskLevel,
-        payload: request.args,
-        preview: this.buildApprovalPreview(request),
-        linkage: buildToolApprovalLinkage(request, evaluation),
-        expiresAt,
-      });
-
-      this.storage.pendingApprovalActions.upsertPending({
-        approvalId: approval.approvalId,
-        actionType: "tool.invoke",
-        request: toPlainRecord(request),
-        expiresAt,
-      });
-
-      this.storage.approvalEvents.append({
-        approvalId: approval.approvalId,
-        eventType: "pending_action_registered",
-        actorId: request.agentId,
-        payload: {
-          actionType: "tool.invoke",
-          toolName: request.toolName,
-          sessionId: request.sessionId,
-          taskId: request.taskId,
-          matchedGrantId: evaluation.matchedGrantId,
-          reasonCodes: evaluation.reasonCodes,
+      let invocationAuditPayload: Record<string, unknown> | undefined;
+      let invocationOutcome: "approval_required" | "blocked" = "approval_required";
+      let invocationPolicyReason = evaluation.policyReason;
+      const approval = await this.approvals.create(
+        {
+          kind: request.toolName,
+          riskLevel: evaluation.riskLevel,
+          payload: request.args,
+          preview: this.buildApprovalPreview(request),
+          linkage: buildToolApprovalLinkage(request, evaluation),
+          expiresAt,
         },
-      });
+        (createdApproval) => {
+          if (!isDeepStrictEqual(createdApproval.payload, request.args)) {
+            throw new Error(
+              "approval.create.before cannot mutate executable tool arguments; reject and submit a new tool request instead.",
+            );
+          }
+          this.storage.pendingApprovalActions.upsertPending({
+            approvalId: createdApproval.approvalId,
+            actionType: "tool.invoke",
+            request: toPlainRecord(request),
+            expiresAt: createdApproval.expiresAt ?? expiresAt,
+          });
 
-      await this.recordInvocation(
-        auditEventId,
-        request,
-        "approval_required",
-        evaluation.policyReason,
-        undefined,
-        approval.approvalId,
-        evaluation,
+          this.storage.approvalEvents.append({
+            approvalId: createdApproval.approvalId,
+            eventType: "pending_action_registered",
+            actorId: request.agentId,
+            payload: {
+              actionType: "tool.invoke",
+              toolName: request.toolName,
+              sessionId: request.sessionId,
+              taskId: request.taskId,
+              matchedGrantId: evaluation.matchedGrantId,
+              reasonCodes: evaluation.reasonCodes,
+            },
+          });
+
+          return {
+            finalize: (finalApproval): readonly ApprovalObservabilityEffectInput[] => {
+              invocationOutcome = finalApproval.status === "rejected" ? "blocked" : "approval_required";
+              invocationPolicyReason =
+                finalApproval.status === "rejected"
+                  ? `approval auto-rejected: ${finalApproval.resolutionNote ?? "approval policy rejected the request"}`
+                  : evaluation.policyReason;
+              invocationAuditPayload = this.recordInvocationRow(
+                auditEventId,
+                request,
+                invocationOutcome,
+                invocationPolicyReason,
+                undefined,
+                finalApproval.approvalId,
+                evaluation,
+              );
+              return [
+                {
+                  operationId: `tool.invoke.${invocationOutcome}.audit:${auditEventId}`,
+                  delivery: {
+                    kind: "audit",
+                    stream: "tool_invocations",
+                    payload: invocationAuditPayload,
+                  },
+                },
+              ];
+            },
+          };
+        },
       );
+
+      if (!this.runtimeHooks.createApproval && invocationAuditPayload) {
+        try {
+          await this.storage.audit.append("tool_invocations", invocationAuditPayload);
+        } catch (error) {
+          void error;
+          // Compatibility consumers have no Gateway observability worker. The
+          // relational invocation row and approval registration already
+          // committed, so audit delivery failure cannot revive the mutation.
+        }
+      }
       const completedAt = new Date().toISOString();
+
+      if (approval.status === "rejected") {
+        return {
+          outcome: "blocked",
+          approvalId: approval.approvalId,
+          expiresAt: approval.expiresAt ?? expiresAt,
+          policyReason: invocationPolicyReason,
+          auditEventId,
+          internalCall,
+          internalResult: buildInternalToolResult({
+            toolName: request.toolName,
+            outcome: "blocked",
+            errorKind: "policy_block",
+            completedAt,
+          }),
+          audit: buildToolAuditRecord({
+            auditEventId,
+            request,
+            outcome: "blocked",
+            policyReason: invocationPolicyReason,
+            startedAt,
+            completedAt,
+            approvalId: approval.approvalId,
+            matchedGrantId: evaluation.matchedGrantId,
+            reasonCodes: evaluation.reasonCodes,
+            permissionProfileId: evaluation.permissionProfileId,
+            localOperatorOverrideId: evaluation.localOperatorOverrideId,
+            approvalMode: evaluation.approvalMode,
+            errorKind: "policy_block",
+          }),
+        };
+      }
 
       return {
         outcome: "approval_required",
@@ -1677,6 +1762,27 @@ export class ToolPolicyEngine {
     approvalId?: string,
     evaluation?: AccessEvaluation,
   ): Promise<void> {
+    const auditPayload = this.recordInvocationRow(
+      auditEventId,
+      request,
+      outcome,
+      policyReason,
+      result,
+      approvalId,
+      evaluation,
+    );
+    await this.storage.audit.append("tool_invocations", auditPayload);
+  }
+
+  private recordInvocationRow(
+    auditEventId: string,
+    request: ToolInvokeRequest,
+    outcome: "executed" | "approval_required" | "blocked",
+    policyReason: string,
+    result?: Record<string, unknown>,
+    approvalId?: string,
+    evaluation?: AccessEvaluation,
+  ): Record<string, unknown> {
     const now = new Date().toISOString();
     const sanitizedArgs = sanitizeForModel(request.args);
     const sanitizedResult = result ? sanitizeForModel(result) : undefined;
@@ -1710,7 +1816,7 @@ export class ToolPolicyEngine {
         evaluation?.reasonCodes ? JSON.stringify(evaluation.reasonCodes) : null,
       );
 
-    await this.storage.audit.append("tool_invocations", {
+    return {
       auditEventId,
       agentId: request.agentId,
       sessionId: request.sessionId,
@@ -1727,7 +1833,7 @@ export class ToolPolicyEngine {
       reasonCodes: evaluation?.reasonCodes,
       args: sanitizedArgs,
       result: sanitizedResult,
-    });
+    };
   }
 
   private async recordDangerProfileNetworkBypassIfNeeded(

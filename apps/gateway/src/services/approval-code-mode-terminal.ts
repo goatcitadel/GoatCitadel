@@ -75,33 +75,17 @@ export function markCodeModeRunTerminalForPendingApproval(
       pendingExpiresAt: pendingAction.expiresAt,
       ...(pendingRunIdDetail ?? {}),
     });
-    host.publishRealtime(
-      "code_mode_run_failed",
-      "approvals",
-      {
-        runId,
-        approvalId: approval.approvalId,
-        status,
-        error: typeof details.reason === "string" ? details.reason : "Code Mode approval expired before execution.",
-        errorDetails: {
-          phase: "approval_resolution",
-          ...details,
-          ...(pendingRunIdDetail ?? {}),
-        },
+    enqueueCodeModeExpirationRealtime(host, approval, {
+      runId,
+      approvalId: approval.approvalId,
+      status,
+      error: typeof details.reason === "string" ? details.reason : "Code Mode approval expired before execution.",
+      errorDetails: {
+        phase: "approval_resolution",
+        ...details,
+        ...(pendingRunIdDetail ?? {}),
       },
-      {
-        eventClass: "domain_fact",
-        eventAuthority: "durable_history",
-        links: {
-          approvalId: approval.approvalId,
-          runId,
-          ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
-          ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
-          ...(approval.linkage?.taskId ? { taskId: approval.linkage.taskId } : {}),
-          ...(approval.linkage?.durableRunId ? { durableRunId: approval.linkage.durableRunId } : {}),
-        },
-      },
-    );
+    });
   }
   return {
     runId,
@@ -136,30 +120,14 @@ function markExpiredCodeModePendingActionWithoutRunUpdate(
     approvalExpiresAt: approval.expiresAt,
     pendingExpiresAt: pendingAction.expiresAt,
   });
-  host.publishRealtime(
-    "code_mode_run_failed",
-    "approvals",
-    {
-      approvalId: approval.approvalId,
-      status: "expired",
-      error: typeof details.reason === "string" ? details.reason : "Code Mode approval expired before execution.",
-      errorCode: skipDetails.errorCode,
-      ...(skipDetails.runId ? { runId: skipDetails.runId } : {}),
-      ...(skipDetails.pendingRunId !== undefined ? { pendingRunId: skipDetails.pendingRunId } : {}),
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "durable_history",
-      links: {
-        approvalId: approval.approvalId,
-        ...(skipDetails.runId ? { runId: skipDetails.runId } : {}),
-        ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
-        ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
-        ...(approval.linkage?.taskId ? { taskId: approval.linkage.taskId } : {}),
-        ...(approval.linkage?.durableRunId ? { durableRunId: approval.linkage.durableRunId } : {}),
-      },
-    },
-  );
+  enqueueCodeModeExpirationRealtime(host, approval, {
+    approvalId: approval.approvalId,
+    status: "expired",
+    error: typeof details.reason === "string" ? details.reason : "Code Mode approval expired before execution.",
+    errorCode: skipDetails.errorCode,
+    ...(skipDetails.runId ? { runId: skipDetails.runId } : {}),
+    ...(skipDetails.pendingRunId !== undefined ? { pendingRunId: skipDetails.pendingRunId } : {}),
+  });
   return {
     ...(skipDetails.runId ? { runId: skipDetails.runId } : {}),
     ...(skipDetails.pendingRunId !== undefined ? { pendingRunId: skipDetails.pendingRunId } : {}),
@@ -177,6 +145,39 @@ function appendCodeModePendingActionRefused(
     actorId: "system",
     payload,
   });
+}
+
+function enqueueCodeModeExpirationRealtime(
+  host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
+  payload: Record<string, unknown>,
+): void {
+  const runId = readStringValue(payload.runId);
+  const errorCode = readStringValue(payload.errorCode);
+  host.enqueueApprovalObservabilityEffects(approval.approvalId, [
+    {
+      operationId: `code_mode.expired.realtime:${runId ?? errorCode ?? "approval"}`,
+      delivery: {
+        kind: "realtime",
+        eventType: "code_mode_run_failed",
+        source: "approvals",
+        payload,
+        options: {
+          eventClass: "domain_fact",
+          eventAuthority: "durable_history",
+          links: {
+            approvalId: approval.approvalId,
+            ...(runId ? { runId } : {}),
+            ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
+            ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
+            ...(approval.linkage?.taskId ? { taskId: approval.linkage.taskId } : {}),
+            ...(approval.linkage?.durableRunId ? { durableRunId: approval.linkage.durableRunId } : {}),
+          },
+          correlationId: approval.approvalId,
+        },
+      },
+    },
+  ]);
 }
 
 function resolveCodeModeApprovalRunId(approval: ApprovalRequest): string | undefined {

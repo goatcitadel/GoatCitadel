@@ -26,6 +26,7 @@ const GATEWAY_EVENTS_PATH = "/api/v1/gateway/events";
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
   fastify.decorateRequest("mutationIdempotencyState", null);
+  fastify.decorateRequest("mutationCommitted", false);
 
   fastify.addHook("preHandler", async (request, reply) => {
     if (!MUTATING_HTTP_METHODS.has(request.method)) {
@@ -91,13 +92,34 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     // legitimate corrected retry with a 409. Treat every error status (>= 400)
     // as a failed claim so it is revivable; only a 2xx/3xx outcome finalises the
     // key as completed.
-    if (reply.statusCode >= 400) {
+    if (reply.statusCode >= 400 && !request.mutationCommitted) {
       await options.mutationStore.markFailed(state);
       return;
     }
     await options.mutationStore.markCompleted(state);
   });
 });
+
+/**
+ * Marks that the canonical mutation transaction committed. A later transport,
+ * projection, or response-delivery failure must not revive the same
+ * idempotency key and execute the mutation again.
+ */
+export function markMutationCommitted(request: FastifyRequest): void {
+  request.mutationCommitted = true;
+}
+
+/** Preserve committed idempotency truth for mutation-aware domain errors. */
+export function markMutationCommittedFromError(request: FastifyRequest, error: unknown): void {
+  if (
+    error &&
+    typeof error === "object" &&
+    "mutationCommitted" in error &&
+    (error as { mutationCommitted?: unknown }).mutationCommitted === true
+  ) {
+    markMutationCommitted(request);
+  }
+}
 
 function shouldEnforceMutationIdempotency(request: FastifyRequest): boolean {
   const path = getNormalizedRoutePath(request);

@@ -6,22 +6,225 @@ import type {
   ToolGrantCreateInput,
 } from "@goatcitadel/contracts";
 import {
-  ApprovalCreateLateFailureError,
   createApproval,
+  createToolGrant,
+  expirePendingApprovals,
   listApprovals,
+  listApprovalsPage,
+  revokeToolGrant,
   resolveApproval,
   resolveApprovalsBulk,
-  resolveApprovalWithConsumedRemoteToken,
   resolveChatToolApproval,
   type ApprovalLifecycleHost,
 } from "./approval-lifecycle-service.js";
+import {
+  createApprovalRemoteActionToken,
+  resolveApprovalWithConsumedRemoteToken,
+  type ApprovalRemoteActionContext,
+} from "./approval-remote-action-service.js";
 import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
 
 describe("approval lifecycle service", () => {
-  it("omits expired approvals from pending lists", () => {
+  it("keeps a created tool grant committed when realtime projection fails", () => {
+    const host = createApprovalHarness();
+    const input: ToolGrantCreateInput = {
+      toolPattern: "browser.*",
+      decision: "allow",
+      scope: "global",
+      createdBy: "operator-test",
+    };
+    const grant = {
+      grantId: "grant-1",
+      ...input,
+      grantType: "persistent" as const,
+      constraints: {},
+      status: "active" as const,
+      usesRemaining: undefined,
+      createdAt: "2026-07-10T00:00:00.000Z",
+    };
+    host.policyEngine.createGrant.mockReturnValue(grant);
+    host.publishRealtime.mockImplementationOnce(() => {
+      throw new Error("realtime projection unavailable");
+    });
+
+    expect(createToolGrant(host, input)).toEqual(grant);
+    expect(host.policyEngine.createGrant).toHaveBeenCalledTimes(1);
+    expect(host.publishRealtime).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a revoked tool grant committed when realtime projection fails", () => {
+    const host = createApprovalHarness();
+    host.policyEngine.revokeGrant.mockReturnValue(true);
+    host.publishRealtime.mockImplementationOnce(() => {
+      throw new Error("realtime projection unavailable");
+    });
+
+    expect(revokeToolGrant(host, "grant-1", "operator-test")).toBe(true);
+    expect(host.policyEngine.revokeGrant).toHaveBeenCalledTimes(1);
+    expect(host.publishRealtime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hide tool-grant policy mutation failures", () => {
+    const createHost = createApprovalHarness();
+    createHost.policyEngine.createGrant.mockImplementationOnce(() => {
+      throw new Error("grant create conflict");
+    });
+
+    expect(() =>
+      createToolGrant(createHost, {
+        toolPattern: "browser.*",
+        decision: "allow",
+        scope: "global",
+        createdBy: "operator-test",
+      }),
+    ).toThrow("grant create conflict");
+    expect(createHost.publishRealtime).not.toHaveBeenCalled();
+
+    const revokeHost = createApprovalHarness();
+    revokeHost.policyEngine.revokeGrant.mockImplementationOnce(() => {
+      throw new Error("grant revoke conflict");
+    });
+
+    expect(() => revokeToolGrant(revokeHost, "grant-1", "operator-test")).toThrow("grant revoke conflict");
+    expect(revokeHost.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("rolls back remote-token issuance when resolution wins the observability lock", () => {
+    const host = createApprovalHarness();
+    const pending = host.storage.approvals.get("approval-1");
+    host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+    host.storage.remoteActionTokens.create = vi.fn(() => ({
+      tokenId: "token-1",
+      actionType: "approval.resolve",
+      approvalId: "approval-1",
+      connectorId: "connector-1",
+      mutation: { approvalId: "approval-1" },
+      createdAt: "2026-04-11T00:00:00.000Z",
+      expiresAt: "2099-04-11T00:15:00.000Z",
+      state: "pending",
+    }));
+    host.enqueueApprovalObservabilityEffects = vi.fn(() => {
+      host.storage.approvals.get = vi.fn(() => ({
+        ...pending,
+        status: "approved",
+        resolvedAt: "2026-04-11T00:00:01.000Z",
+        resolvedBy: "operator",
+      }));
+      return [];
+    });
+
+    expect(() => createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).toThrow(
+      /already resolved/i,
+    );
+    expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+  });
+
+  it("does not issue or deliver a remote token after the approval deadline", () => {
+    const host = createApprovalHarness({
+      expiresAt: "2020-04-11T00:00:00.000Z",
+    });
+    host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+
+    expect(() => createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).toThrow(
+      /has expired/i,
+    );
+    expect(host.storage.remoteActionTokens.create).not.toHaveBeenCalled();
+    expect(host.enqueueApprovalObservabilityEffects).not.toHaveBeenCalled();
+    expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+  });
+
+  it("rolls back remote-token issuance when the approval expires during locked observability work", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-11T00:00:00.000Z"));
+      const host = createApprovalHarness({
+        expiresAt: "2026-04-11T00:00:01.000Z",
+      });
+      host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+      host.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-boundary"));
+      host.enqueueApprovalObservabilityEffects = vi.fn(() => {
+        vi.setSystemTime(new Date("2026-04-11T00:00:02.000Z"));
+        return [];
+      });
+
+      expect(() => createApprovalRemoteActionToken(host, "approval-1", { connectorId: "connector-1" })).toThrow(
+        /has expired/i,
+      );
+      expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rolls back a remote token whose own TTL elapses before the locked transaction commits", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-11T00:00:00.000Z"));
+      const host = createApprovalHarness({
+        expiresAt: "2026-04-11T01:00:00.000Z",
+      });
+      host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+      host.storage.remoteActionTokens.create = vi.fn((input: { expiresAt: string }) => ({
+        ...createRemoteActionTokenRecord("token-ttl-boundary"),
+        expiresAt: input.expiresAt,
+      }));
+      host.enqueueApprovalObservabilityEffects = vi.fn(() => {
+        vi.setSystemTime(new Date("2026-04-11T00:01:01.000Z"));
+        return [];
+      });
+
+      expect(() =>
+        createApprovalRemoteActionToken(host, "approval-1", {
+          connectorId: "connector-1",
+          expiresInMs: 60_000,
+        }),
+      ).toThrow(/expired before issuance committed/i);
+      expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports queued, absent, and failed remote-token delivery without reviving issuance", () => {
+    const queuedHost = createApprovalHarness();
+    queuedHost.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+    queuedHost.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-queued"));
+    queuedHost.enqueueApprovalRemoteTokenDelivery = vi.fn(() => ({ runId: "delivery-run-1" }));
+
+    expect(createApprovalRemoteActionToken(queuedHost, "approval-1", { connectorId: "connector-1" })).toMatchObject({
+      tokenId: "token-queued",
+      deliveryStatus: "queued",
+      deliveryRunId: "delivery-run-1",
+    });
+
+    const absentHost = createApprovalHarness();
+    absentHost.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+    absentHost.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-absent"));
+    absentHost.enqueueApprovalRemoteTokenDelivery = vi.fn(() => undefined);
+
+    expect(createApprovalRemoteActionToken(absentHost, "approval-1", { connectorId: "connector-1" })).toMatchObject({
+      tokenId: "token-absent",
+      deliveryStatus: "not_configured",
+    });
+
+    const failedHost = createApprovalHarness();
+    failedHost.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+    failedHost.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-failed"));
+    failedHost.enqueueApprovalRemoteTokenDelivery = vi.fn(() => {
+      throw new Error("connector delivery unavailable");
+    });
+
+    expect(createApprovalRemoteActionToken(failedHost, "approval-1", { connectorId: "connector-1" })).toMatchObject({
+      tokenId: "token-failed",
+      deliveryStatus: "failed",
+      deliveryError: "connector delivery unavailable",
+    });
+  });
+
+  it("keeps pending-list reads side-effect free while omitting not-yet-swept expirations", () => {
     const host = createApprovalHarness();
     const activeApproval: ApprovalRequest = {
       approvalId: "approval-active",
@@ -43,6 +246,27 @@ describe("approval lifecycle service", () => {
 
     expect(listApprovals(host, "pending").map((approval) => approval.approvalId)).toEqual(["approval-active"]);
     expect(host.storage.approvals.list).toHaveBeenCalledWith("pending", 100, undefined);
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("preserves page cursor truth while filtering an expiry awaiting the background sweep", () => {
+    const host = createApprovalHarness();
+    const activeApproval = host.storage.approvals.get("approval-1");
+    const expiredApproval = {
+      ...activeApproval,
+      approvalId: "approval-expired",
+      expiresAt: "2020-04-11T00:00:00.000Z",
+    };
+    host.storage.approvals.listPage = vi.fn(() => ({
+      items: [expiredApproval, activeApproval],
+      nextCursor: "opaque-next-cursor",
+    }));
+
+    expect(listApprovalsPage(host, { status: "pending", limit: 2 })).toEqual({
+      items: [expect.objectContaining({ approvalId: "approval-1" })],
+      nextCursor: "opaque-next-cursor",
+    });
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
   it("creates approvals with explicit wait-run linkage and retained-stream metadata", async () => {
@@ -70,26 +294,43 @@ describe("approval lifecycle service", () => {
         workspaceId: "workspace-1",
       }),
     );
-    expect(host.publishRealtime).toHaveBeenCalledWith(
-      "approval_created",
-      "approvals",
-      {
-        approvalId: "approval-1",
-        kind: "shell.exec",
-        riskLevel: "danger",
-        status: "pending",
-      },
+    expect(host.approvalWaitRunService.reserveApprovalWaitRun).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1", status: "pending" }),
+    );
+    expect(host.enqueueApprovalWaitMaterialization).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventClass: "domain_fact",
-        eventAuthority: "retained_stream",
-        links: {
-          approvalId: "approval-1",
-          sessionId: "session-1",
-          runId: "approval-wait-1",
-          workspaceId: "workspace-1",
-        },
-        correlationId: "approval-1",
+        approvalId: "approval-1",
+        linkage: expect.objectContaining({ durableRunId: "approval-wait-1" }),
       }),
+    );
+    expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledWith(
+      "approval-1",
+      expect.arrayContaining([
+        expect.objectContaining({
+          operationId: "approval.create.realtime",
+          delivery: expect.objectContaining({
+            kind: "realtime",
+            eventType: "approval_created",
+            source: "approvals",
+            payload: {
+              approvalId: "approval-1",
+              kind: "shell.exec",
+              riskLevel: "danger",
+              status: "pending",
+            },
+            options: expect.objectContaining({
+              eventClass: "domain_fact",
+              eventAuthority: "retained_stream",
+              links: expect.objectContaining({
+                approvalId: "approval-1",
+                sessionId: "session-1",
+                workspaceId: "workspace-1",
+              }),
+              correlationId: "approval-1",
+            }),
+          }),
+        }),
+      ]),
     );
     expect(host.scheduleApprovalExplanation).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -100,6 +341,62 @@ describe("approval lifecycle service", () => {
       }),
     );
     expect(approval.linkage?.durableRunId).toBe("approval-wait-1");
+  });
+
+  it("commits policy registration and its audit outbox extension inside approval creation", async () => {
+    const host = createApprovalHarness();
+    host.storage.pendingApprovalActions.upsertPending = vi.fn();
+    let transactionActive = false;
+    host.storage.runImmediateTransaction = vi.fn(<T>(callback: () => T): T => {
+      transactionActive = true;
+      try {
+        return callback();
+      } finally {
+        transactionActive = false;
+      }
+    });
+    const onCreated = vi.fn((approval: ApprovalRequest) => {
+      expect(transactionActive).toBe(true);
+      host.storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: "tool.invoke",
+        request: { toolName: "shell.exec" },
+      });
+      return [
+        {
+          operationId: "tool.invoke.approval_required.audit:audit-1",
+          delivery: {
+            kind: "audit" as const,
+            stream: "tool_invocations" as const,
+            payload: { auditEventId: "audit-1", approvalId: approval.approvalId },
+          },
+        },
+      ];
+    });
+
+    await createApproval(
+      host,
+      {
+        kind: "shell.exec",
+        riskLevel: "danger",
+        payload: { sessionId: "session-1" },
+        preview: { label: "Run shell command" },
+        linkage: { sessionId: "session-1", workspaceId: "workspace-1" },
+      },
+      onCreated,
+    );
+
+    expect(onCreated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        linkage: expect.objectContaining({ durableRunId: "approval-wait-1" }),
+      }),
+    );
+    expect(host.storage.pendingApprovalActions.upsertPending).toHaveBeenCalledTimes(1);
+    expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledWith(
+      "approval-1",
+      expect.arrayContaining([expect.objectContaining({ operationId: "tool.invoke.approval_required.audit:audit-1" })]),
+    );
   });
 
   it("blocks createApproval when approval.request.before vetoes before approval.create.before fires", async () => {
@@ -165,7 +462,7 @@ describe("approval lifecycle service", () => {
     expect(approval.approvalId).toBe("approval-1");
   });
 
-  it("wraps late create side-effect failures with the created approval id", async () => {
+  it("returns committed creation truth when observability delivery is unavailable", async () => {
     const host = createApprovalHarness();
     const transactionSpy = vi.spyOn(host.storage, "runImmediateTransaction");
     host.storage.audit.append = vi.fn(async () => {
@@ -187,11 +484,10 @@ describe("approval lifecycle service", () => {
           workspaceId: "workspace-1",
         },
       }),
-    ).rejects.toMatchObject({
-      name: "ApprovalCreateLateFailureError",
+    ).resolves.toMatchObject({
       approvalId: "approval-1",
-      message: "audit store unavailable",
-    } satisfies Partial<ApprovalCreateLateFailureError>);
+      status: "pending",
+    });
 
     expect(transactionSpy).toHaveBeenCalledTimes(1);
     expect(host.storage.approvalEvents.append).toHaveBeenCalledWith(
@@ -266,7 +562,7 @@ describe("approval lifecycle service", () => {
       "rejected",
       expect.objectContaining({ decision: "reject" }),
     );
-    expect(host.recordApprovalResolution).toHaveBeenCalledWith(
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "approval-1", status: "rejected" }),
       expect.objectContaining({ decision: "reject", resolvedBy: "system" }),
     );
@@ -306,23 +602,18 @@ describe("approval lifecycle service", () => {
       resolvedBy: "operator",
     });
 
-    expect(host.storage.approvals.resolve).toHaveBeenCalledWith("approval-1", {
-      decision: "approve",
-      resolvedBy: "operator",
-    });
-    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "approval-1",
-        status: "approved",
-      }),
+    expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
       {
         decision: "approve",
         resolvedBy: "operator",
       },
+      { resolvedAt: expect.any(String) },
     );
-    expect(host.recordApprovalResolution).toHaveBeenCalledWith(
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalId: "approval-1",
+        status: "approved",
       }),
       {
         decision: "approve",
@@ -339,10 +630,332 @@ describe("approval lifecycle service", () => {
     });
   });
 
-  it("rejects expired approvals before mutating state or enqueueing effects", async () => {
+  it("returns committed resolution truth without awaiting observability delivery", async () => {
+    const host = createApprovalHarness();
+    host.storage.audit.append = vi.fn(async () => {
+      throw new Error("audit store unavailable");
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator",
+      }),
+    ).resolves.toMatchObject({
+      approval: {
+        approvalId: "approval-1",
+        status: "approved",
+      },
+    });
+
+    expect(host.storage.approvals.resolve).toHaveBeenCalledTimes(1);
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledTimes(1);
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires every remaining remote token before enqueueing effects for a terminal resolution", async () => {
+    const host = createApprovalHarness();
+    host.storage.remoteActionTokens.expirePendingByApprovalId = vi.fn(() => 2);
+
+    await resolveApproval(host, "approval-1", {
+      decision: "reject",
+      resolvedBy: "operator",
+    });
+
+    expect(host.storage.remoteActionTokens.expirePendingByApprovalId).toHaveBeenCalledOnce();
+    expect(host.storage.remoteActionTokens.expirePendingByApprovalId).toHaveBeenCalledWith("approval-1");
+    expect(host.storage.remoteActionTokens.expirePendingByApprovalId.mock.invocationCallOrder[0]).toBeLessThan(
+      host.enqueueApprovalResolutionEffects.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("terminalizes an already-expired generic approval and reports committed expiry truth", async () => {
     const host = createApprovalHarness({
       expiresAt: "2020-04-11T00:00:00.000Z",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "tool.invoke",
+        request: { toolName: "shell.exec", args: { command: "pwd" } },
+        createdAt: "2020-04-10T23:59:00.000Z",
+        resolutionStatus: "pending",
+      },
     });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator",
+      }),
+    ).rejects.toMatchObject({
+      mutationCommitted: true,
+      message: expect.stringMatching(/has expired and can no longer be resolved/i),
+    });
+
+    expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "reject",
+        resolvedBy: "system:approval-expiry",
+        resolutionNote: expect.stringMatching(/expired/i),
+      }),
+      expect.objectContaining({ allowExpired: true }),
+    );
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "rejected",
+      expect.objectContaining({
+        decision: "reject",
+        expired: true,
+        requestedDecision: "approve",
+      }),
+    );
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "resolved",
+        actorId: "system:approval-expiry",
+        payload: expect.objectContaining({
+          decision: "reject",
+          status: "rejected",
+          expired: true,
+          requestedDecision: "approve",
+        }),
+      }),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1", status: "rejected" }),
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      { allowExpired: true },
+    );
+    expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledWith(
+      "approval-1",
+      expect.arrayContaining([expect.objectContaining({ operationId: "approval.resolve.audit" })]),
+    );
+    expect(host.storage.remoteActionTokens.expirePendingByApprovalId).toHaveBeenCalledWith("approval-1");
+  });
+
+  it("allows only one expiry winner and leaves duplicate resolvers on terminal truth", async () => {
+    const host = createApprovalHarness({
+      expiresAt: "2020-04-11T00:00:00.000Z",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "tool.invoke",
+        request: { toolName: "shell.exec" },
+        createdAt: "2020-04-10T23:59:00.000Z",
+        resolutionStatus: "pending",
+      },
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator-a",
+      }),
+    ).rejects.toMatchObject({ mutationCommitted: true });
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "reject",
+        resolvedBy: "operator-b",
+      }),
+    ).rejects.toThrow(/already resolved/i);
+
+    expect(host.storage.approvals.resolve).toHaveBeenCalledTimes(1);
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledTimes(1);
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledTimes(1);
+    expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledTimes(1);
+  });
+
+  it("sweeps expired approvals from the always-running effect worker without a list or resolve request", async () => {
+    const host = createApprovalHarness({
+      expiresAt: "2020-04-11T00:00:00.000Z",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "tool.invoke",
+        request: { toolName: "shell.exec" },
+        createdAt: "2020-04-10T23:59:00.000Z",
+        resolutionStatus: "pending",
+      },
+    });
+    host.storage.approvals.listExpiredPending = vi.fn(() => {
+      const current = host.storage.approvals.get("approval-1");
+      return current.status === "pending" ? [current] : [];
+    });
+    const effectRows: ApprovalEffectRecord[] = [];
+    const getEffect = (effectId: string) => {
+      const effect = effectRows.find((candidate) => candidate.effectId === effectId);
+      if (!effect) {
+        throw new Error(`Missing effect ${effectId}`);
+      }
+      return effect;
+    };
+    host.storage.approvalEffects = {
+      upsert: vi.fn((input: Record<string, unknown>) => {
+        const idempotencyKey = `${String(input.approvalId)}:${String(input.effectKind)}:${String(input.targetKind)}:${String(input.targetId)}`;
+        const existing = effectRows.find((effect) => effect.idempotencyKey === idempotencyKey);
+        if (existing) {
+          return existing;
+        }
+        const created: ApprovalEffectRecord = {
+          effectId: `effect-${effectRows.length + 1}`,
+          approvalId: String(input.approvalId),
+          effectKind: input.effectKind as ApprovalEffectRecord["effectKind"],
+          targetKind: input.targetKind as ApprovalEffectRecord["targetKind"],
+          targetId: String(input.targetId),
+          idempotencyKey,
+          status: "pending",
+          attemptCount: 0,
+          payload: (input.payload as Record<string, unknown>) ?? {},
+          result: {},
+          version: 1,
+          createdAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+        };
+        effectRows.push(created);
+        return created;
+      }),
+      listByApproval: vi.fn((approvalId: string) => effectRows.filter((effect) => effect.approvalId === approvalId)),
+      claimNextPendingEffect: vi.fn((workerId: string, claimedAt: string, leaseExpiresAt: string) => {
+        const effect = effectRows.find((candidate) => candidate.status === "pending");
+        if (!effect) {
+          return undefined;
+        }
+        Object.assign(effect, {
+          status: "running",
+          attemptCount: effect.attemptCount + 1,
+          claimedBy: workerId,
+          claimedAt,
+          leaseExpiresAt,
+          version: effect.version + 1,
+          updatedAt: claimedAt,
+        });
+        return { ...effect };
+      }),
+      get: vi.fn((effectId: string) => getEffect(effectId)),
+      completeEffect: vi.fn(
+        (effectId: string, _workerId: string, _version: number, patch: { result?: Record<string, unknown> }) => {
+          const effect = getEffect(effectId);
+          Object.assign(effect, {
+            status: "completed",
+            result: patch.result ?? effect.result,
+            version: effect.version + 1,
+            completedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          return effect;
+        },
+      ),
+      skipEffect: vi.fn(
+        (effectId: string, _workerId: string, _version: number, patch: { result?: Record<string, unknown> }) => {
+          const effect = getEffect(effectId);
+          Object.assign(effect, { status: "skipped", result: patch.result ?? effect.result });
+          return effect;
+        },
+      ),
+      failEffect: vi.fn(
+        (effectId: string, _workerId: string, _version: number, patch: { result?: Record<string, unknown> }) => {
+          const effect = getEffect(effectId);
+          Object.assign(effect, { status: "failed", result: patch.result ?? effect.result });
+          return effect;
+        },
+      ),
+    } as never;
+    const markWaitResolved = vi.fn();
+    host.storage.approvalWaitRuns = {
+      getRunId: vi.fn(() => "approval-wait-1"),
+      markResolved: markWaitResolved,
+    } as never;
+    host.wakeDurableRun = vi.fn(() => ({
+      runId: "approval-wait-1",
+      eventKey: "approval.resolved",
+      correlationId: "approval-1",
+      outcome: "woke",
+    }));
+    const requestRunProcessing = vi.fn();
+    const backgroundTasks = new Set<Promise<void>>();
+    const effectsService = new ApprovalEffectsService(
+      {
+        storage: host.storage as never,
+        publishRealtime: host.publishRealtime,
+      },
+      {
+        backgroundTasks,
+        wakeDurableRun: host.wakeDurableRun,
+        requestRunProcessing,
+        findProactiveDurableRunIdsForApproval: host.findProactiveDurableRunIdsForApproval,
+        executeCodeModePendingApproval: host.executeCodeModePendingApproval,
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: host.hooksService.enqueueAfterHooks,
+        resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
+        recordApprovalResolutionSignals: vi.fn(),
+        reconcileExpiredApprovals: (limit) => expirePendingApprovals(host, limit),
+      },
+    );
+    host.enqueueApprovalResolutionEffects = vi.fn((approval, input, options) =>
+      effectsService.enqueueResolutionEffects(approval, input, options),
+    );
+
+    effectsService.startWorker();
+    try {
+      await vi.waitFor(() => {
+        expect(host.wakeDurableRun).toHaveBeenCalledWith(
+          "approval-wait-1",
+          expect.objectContaining({ eventKey: "approval.resolved" }),
+        );
+      });
+    } finally {
+      effectsService.stopWorker();
+      await Promise.allSettled([...backgroundTasks]);
+    }
+
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "rejected",
+      expect.objectContaining({ expired: true }),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ decision: "reject" }),
+      { allowExpired: true },
+    );
+    expect(markWaitResolved).toHaveBeenCalledWith("approval-1", expect.any(String));
+    expect(requestRunProcessing).toHaveBeenCalledWith("approval-wait-1");
+    expect(effectRows).toEqual(
+      expect.arrayContaining([expect.objectContaining({ effectKind: "approval_wait_wake", status: "completed" })]),
+    );
+  });
+
+  it("continues the expiry sweep after one candidate fails and reports the first failure", () => {
+    const host = createApprovalHarness({ expiresAt: "2020-04-11T00:00:00.000Z" });
+    const candidate = host.storage.approvals.get("approval-1");
+    host.storage.approvals.listExpiredPending = vi.fn(() => [
+      { ...candidate, approvalId: "approval-poison" },
+      candidate,
+    ]);
+    const transactionImplementation = host.storage.runImmediateTransaction.getMockImplementation()!;
+    host.storage.runImmediateTransaction
+      .mockImplementationOnce(() => {
+        throw new Error("poison approval transaction");
+      })
+      .mockImplementation(transactionImplementation);
+
+    expect(() => expirePendingApprovals(host, 10)).toThrow("poison approval transaction");
+
+    expect(host.storage.runImmediateTransaction).toHaveBeenCalledTimes(2);
+    expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      expect.objectContaining({ allowExpired: true }),
+    );
+  });
+
+  it("rechecks approval expiry inside the winning transaction", async () => {
+    const host = createApprovalHarness({
+      expiresAt: "2099-04-11T00:00:00.000Z",
+    });
+    const current = host.storage.approvals.get("approval-1");
+    vi.mocked(host.storage.approvals.get)
+      .mockReturnValueOnce(current)
+      .mockReturnValue({ ...current, expiresAt: "2020-04-11T00:00:00.000Z" });
 
     await expect(
       resolveApproval(host, "approval-1", {
@@ -351,9 +964,50 @@ describe("approval lifecycle service", () => {
       }),
     ).rejects.toThrow(/has expired and can no longer be resolved/i);
 
-    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
-    expect(host.enqueueApprovalResolutionEffects).not.toHaveBeenCalled();
-    expect(host.recordApprovalResolution).not.toHaveBeenCalled();
+    expect(host.storage.runImmediateTransaction).toHaveBeenCalledTimes(1);
+    expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      expect.objectContaining({ allowExpired: true }),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ decision: "reject" }),
+      { allowExpired: true },
+    );
+  });
+
+  it("rolls back a late approval decision and commits system expiry instead", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-11T00:00:00.000Z"));
+      const host = createApprovalHarness({
+        expiresAt: "2026-04-11T00:00:01.000Z",
+      });
+      const resolveImplementation = host.storage.approvals.resolve.getMockImplementation();
+      host.storage.approvals.resolve.mockImplementationOnce((...args) => {
+        const resolved = resolveImplementation!(...args);
+        vi.setSystemTime(new Date("2026-04-11T00:00:02.000Z"));
+        return resolved;
+      });
+
+      await expect(
+        resolveApproval(host, "approval-1", {
+          decision: "approve",
+          resolvedBy: "operator",
+        }),
+      ).rejects.toMatchObject({
+        mutationCommitted: true,
+        message: expect.stringMatching(/has expired and can no longer be resolved/i),
+      });
+      expect(host.storage.approvals.resolve).toHaveBeenLastCalledWith(
+        "approval-1",
+        expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+        expect.objectContaining({ allowExpired: true }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks linked Code Mode runs rejected when approval is rejected", async () => {
@@ -428,7 +1082,10 @@ describe("approval lifecycle service", () => {
         decision: "approve",
         resolvedBy: "operator",
       }),
-    ).rejects.toThrow(/has expired and can no longer be resolved/i);
+    ).rejects.toMatchObject({
+      mutationCommitted: true,
+      message: expect.stringMatching(/has expired and can no longer be resolved/i),
+    });
 
     expect(host.storage.codeModeRuns.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -530,23 +1187,31 @@ describe("approval lifecycle service", () => {
         }),
       }),
     );
-    expect(host.publishRealtime).toHaveBeenCalledWith(
-      "code_mode_run_failed",
-      "approvals",
-      expect.objectContaining({
-        approvalId: "approval-1",
-        status: "expired",
-        errorCode: "code_mode_run_missing",
-        runId: "code-run-missing",
-      }),
-      expect.objectContaining({
-        eventClass: "domain_fact",
-        eventAuthority: "durable_history",
-        links: expect.objectContaining({
-          approvalId: "approval-1",
-          runId: "code-run-missing",
+    expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledWith(
+      "approval-1",
+      expect.arrayContaining([
+        expect.objectContaining({
+          operationId: "code_mode.expired.realtime:code-run-missing",
+          delivery: expect.objectContaining({
+            kind: "realtime",
+            eventType: "code_mode_run_failed",
+            payload: expect.objectContaining({
+              approvalId: "approval-1",
+              status: "expired",
+              errorCode: "code_mode_run_missing",
+              runId: "code-run-missing",
+            }),
+            options: expect.objectContaining({
+              eventClass: "domain_fact",
+              eventAuthority: "durable_history",
+              links: expect.objectContaining({
+                approvalId: "approval-1",
+                runId: "code-run-missing",
+              }),
+            }),
+          }),
         }),
-      }),
+      ]),
     );
   });
 
@@ -755,21 +1420,22 @@ describe("approval lifecycle service", () => {
       },
     );
 
-    expect(host.storage.audit.append).toHaveBeenCalledWith(
-      "approvals",
-      expect.objectContaining({
-        event: "approval.remote_token.consume",
-        approvalId: "approval-1",
-        connectorId: "connector-1",
-        tokenId: "token-1",
-        decision: "approve",
-        resolvedBy: "connector:connector-1",
-      }),
+    expect(host.storage.audit.append).not.toHaveBeenCalled();
+    expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledWith(
+      "approval-1",
+      expect.arrayContaining([
+        expect.objectContaining({
+          operationId: "approval.remote_token.consume.audit:token-1",
+          delivery: expect.objectContaining({
+            kind: "audit",
+            payload: expect.objectContaining({
+              connectorId: "connector-1",
+              tokenId: "token-1",
+            }),
+          }),
+        }),
+      ]),
     );
-    expect(host.storage.approvals.mergeLinkage).toHaveBeenCalledWith("approval-1", {
-      connectorId: "connector-1",
-      tokenId: "token-1",
-    });
     expect(host.resolveApproval).toHaveBeenCalledWith(
       "approval-1",
       expect.objectContaining({
@@ -780,11 +1446,69 @@ describe("approval lifecycle service", () => {
         resolutionNote: "approved remotely",
         resolvedBy: "connector:connector-1",
       }),
+      {
+        remoteToken: {
+          connectorId: "connector-1",
+          tokenId: "token-1",
+        },
+      },
     );
-    expect(callOrder).toEqual(["audit-start", "audit-finish", "resolve"]);
+    expect(callOrder).toEqual(["resolve"]);
   });
 
-  it("rejects expired remote-token approvals before enqueueing effects", async () => {
+  it("replays the canonical result for an identical consumed-token retry without resolving twice", async () => {
+    const host = createApprovalHarness();
+    host.resolveApproval = vi.fn((approvalId, input, context) => resolveApproval(host, approvalId, input, context));
+    const tokenRecord = {
+      tokenId: "token-retry-1",
+      connectorId: "connector-1",
+      approvalId: "approval-1",
+    };
+    const input = {
+      decision: "approve" as const,
+      resolutionNote: "approved remotely",
+    };
+
+    const first = await resolveApprovalWithConsumedRemoteToken(host, tokenRecord, input);
+    const replay = await resolveApprovalWithConsumedRemoteToken(host, tokenRecord, input);
+
+    expect(first.approval.status).toBe("approved");
+    expect(replay.approval.status).toBe("approved");
+    expect(host.resolveApproval).toHaveBeenCalledTimes(1);
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledTimes(1);
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledTimes(1);
+
+    await expect(
+      resolveApprovalWithConsumedRemoteToken(host, tokenRecord, {
+        decision: "reject",
+      }),
+    ).rejects.toThrow(/already resolved as approved, not rejected/i);
+  });
+
+  it("rejects same-decision replay when another actor or token won the approval", async () => {
+    const host = createApprovalHarness({
+      approvalStatus: "approved",
+      resolvedAt: "2026-04-11T00:01:00.000Z",
+    });
+
+    await expect(
+      resolveApprovalWithConsumedRemoteToken(
+        host,
+        {
+          tokenId: "token-loser",
+          connectorId: "connector-1",
+          approvalId: "approval-1",
+        },
+        {
+          decision: "approve",
+          editedPayload: { command: "different request" },
+        },
+      ),
+    ).rejects.toThrow(/different actor or remote token/i);
+    expect(host.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes expired remote-token approvals without executing the requested decision", async () => {
     const host = createApprovalHarness({
       expiresAt: "2020-04-11T00:00:00.000Z",
     });
@@ -804,12 +1528,19 @@ describe("approval lifecycle service", () => {
       ),
     ).rejects.toThrow(/has expired and can no longer be resolved/i);
 
-    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
-    expect(host.enqueueApprovalResolutionEffects).not.toHaveBeenCalled();
-    expect(host.recordApprovalResolution).not.toHaveBeenCalled();
+    expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      expect.objectContaining({ allowExpired: true }),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ decision: "reject" }),
+      { allowExpired: true },
+    );
   });
 
-  it("reports expired approvals as failed in bulk resolution without enqueueing effects", async () => {
+  it("reports expired approvals as committed failures in bulk resolution while enqueueing recovery", async () => {
     const host = createApprovalHarness({
       expiresAt: "2020-04-11T00:00:00.000Z",
     });
@@ -828,9 +1559,16 @@ describe("approval lifecycle service", () => {
         error: expect.stringMatching(/has expired and can no longer be resolved/i),
       },
     ]);
-    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
-    expect(host.enqueueApprovalResolutionEffects).not.toHaveBeenCalled();
-    expect(host.recordApprovalResolution).not.toHaveBeenCalled();
+    expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      expect.objectContaining({ allowExpired: true }),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ decision: "reject" }),
+      { allowExpired: true },
+    );
   });
 
   it("resolves approvals through effect enqueue and durable-run wake processing", async () => {
@@ -904,6 +1642,7 @@ describe("approval lifecycle service", () => {
         executeApprovedPendingAction: vi.fn(),
         enqueueAfterHooks: host.hooksService.enqueueAfterHooks,
         resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
+        recordApprovalResolutionSignals: vi.fn(),
       },
     );
     host.enqueueApprovalResolutionEffects = vi.fn((approval, input) =>
@@ -936,7 +1675,45 @@ describe("approval lifecycle service", () => {
     expect(approvalEffectsStorage.completeEffect).toHaveBeenCalled();
   });
 
-  it("does not enqueue wake effects for expired approvals in the resolve-plus-effects flow", async () => {
+  it("refreshes the approval response from explicitly settled post-commit effects", async () => {
+    const host = createApprovalHarness();
+    const settledEffect: ApprovalEffectRecord = {
+      effectId: "effect-linked-wake",
+      approvalId: "approval-1",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-1",
+      idempotencyKey: "approval-1:linked_chat_turn_wake:chat_turn:turn-1",
+      status: "completed",
+      attemptCount: 1,
+      payload: { runId: "durable-turn-1" },
+      result: {
+        outcome: "woke",
+        turnId: "turn-1",
+        runId: "durable-turn-1",
+      },
+      version: 2,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:01:00.000Z",
+      completedAt: "2026-04-11T00:01:00.000Z",
+    };
+    host.awaitApprovalResolutionEffects = vi.fn(async () => [settledEffect]);
+
+    const result = await resolveApproval(host, "approval-1", {
+      decision: "approve",
+      resolvedBy: "operator",
+    });
+
+    expect(host.awaitApprovalResolutionEffects).toHaveBeenCalledWith("approval-1");
+    expect(result.resolutionEffects?.chatTurnResume).toEqual({
+      resumed: true,
+      turnId: "turn-1",
+      durableRunId: "durable-turn-1",
+      wakeOutcome: "woke",
+    });
+  });
+
+  it("enqueues wait-run and linked-turn recovery when a generic approval expires", async () => {
     const effectRows: Array<Record<string, unknown>> = [];
     const host = createApprovalHarness({
       expiresAt: "2020-04-11T00:00:00.000Z",
@@ -946,10 +1723,21 @@ describe("approval lifecycle service", () => {
       getRunId,
       markResolved: vi.fn(),
     } as never;
+    host.storage.approvals.mergeLinkage("approval-1", { turnId: "turn-1" });
     host.storage.approvalEffects = {
       upsert: vi.fn((input: Record<string, unknown>) => {
-        effectRows.push(input);
-        return input;
+        const effect = {
+          effectId: `effect-${effectRows.length + 1}`,
+          status: "pending",
+          attemptCount: 0,
+          result: {},
+          version: 1,
+          createdAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+          ...input,
+        };
+        effectRows.push(effect);
+        return effect;
       }),
       listByApproval: vi.fn(() => effectRows),
       completeEffect: vi.fn(),
@@ -972,10 +1760,11 @@ describe("approval lifecycle service", () => {
         executeApprovedPendingAction: vi.fn(),
         enqueueAfterHooks: host.hooksService.enqueueAfterHooks,
         resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
+        recordApprovalResolutionSignals: vi.fn(),
       },
     );
-    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) =>
-      effectsService.enqueueResolutionEffects(approval, input),
+    host.enqueueApprovalResolutionEffects = vi.fn((approval, input, options) =>
+      effectsService.enqueueResolutionEffects(approval, input, options),
     );
 
     await expect(
@@ -985,9 +1774,20 @@ describe("approval lifecycle service", () => {
       }),
     ).rejects.toThrow(/has expired and can no longer be resolved/i);
 
-    expect(effectRows).toEqual([]);
-    expect(host.enqueueApprovalResolutionEffects).not.toHaveBeenCalled();
-    expect(getRunId).not.toHaveBeenCalled();
+    expect(effectRows.map((effect) => effect.effectKind)).toEqual(
+      expect.arrayContaining([
+        "approval_resolution_signals",
+        "approval_wait_wake",
+        "linked_chat_turn_wake",
+        "approval_after_hooks",
+      ]),
+    );
+    expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      { allowExpired: true },
+    );
+    expect(getRunId).toHaveBeenCalledWith("approval-1");
     expect(host.wakeDurableRun).not.toHaveBeenCalled();
   });
 
@@ -1222,7 +2022,7 @@ describe("approval lifecycle service", () => {
     );
   });
 
-  it("adds parent session grants when delegated child approvals are allowed for the session", async () => {
+  it("keeps committed parent session grants when inline detail projection fails", async () => {
     const approval: ApprovalRequest = {
       approvalId: "approval-child",
       kind: "browser.search",
@@ -1239,12 +2039,16 @@ describe("approval lifecycle service", () => {
       createdAt: "2026-04-09T12:00:00.000Z",
       explanationStatus: "not_requested",
     };
-    const createGrant = vi.fn((input: ToolGrantCreateInput) => ({
-      grantId: `grant-${input.scopeRef}`,
-      ...input,
-      grantType: input.grantType ?? "persistent",
-      createdAt: "2026-04-09T12:00:01.000Z",
-    }));
+    const callOrder: string[] = [];
+    const createGrant = vi.fn((input: ToolGrantCreateInput) => {
+      callOrder.push(`grant:${input.scopeRef}`);
+      return {
+        grantId: `grant-${input.scopeRef}`,
+        ...input,
+        grantType: input.grantType ?? "persistent",
+        createdAt: "2026-04-09T12:00:01.000Z",
+      };
+    });
     const host = {
       storage: {
         approvals: {
@@ -1261,7 +2065,9 @@ describe("approval lifecycle service", () => {
             createdAt: "2026-04-09T12:00:00.000Z",
             details: {},
           })),
-          upsert: vi.fn(),
+          upsert: vi.fn(() => {
+            throw new Error("inline projection unavailable");
+          }),
         },
         chatDelegationSteps: {
           listParentsByChildSessionIds: vi.fn(
@@ -1289,20 +2095,23 @@ describe("approval lifecycle service", () => {
         createGrant,
       },
       publishRealtime: vi.fn(),
-      resolveApproval: vi.fn(async () => ({
-        approval: { ...approval, status: "approved" as const },
-        effects: [],
-        replay: {
+      resolveApproval: vi.fn(async () => {
+        callOrder.push("resolve");
+        return {
           approval: { ...approval, status: "approved" as const },
-          events: [],
-          pendingAction: undefined,
           effects: [],
-        },
-        resolutionEffects: {
-          proactiveRunIds: [],
-          chatTurnResume: { resumed: false },
-        },
-      })),
+          replay: {
+            approval: { ...approval, status: "approved" as const },
+            events: [],
+            pendingAction: undefined,
+            effects: [],
+          },
+          resolutionEffects: {
+            proactiveRunIds: [],
+            chatTurnResume: { resumed: false },
+          },
+        };
+      }),
     } as unknown as ApprovalLifecycleHost;
 
     const result = await resolveChatToolApproval(host, "child-session", "approval-child", "approve", {
@@ -1315,6 +2124,7 @@ describe("approval lifecycle service", () => {
       ["session", "child-session", "browser.search"],
       ["session", "parent-session", "browser.search"],
     ]);
+    expect(callOrder).toEqual(["resolve", "grant:child-session", "grant:parent-session"]);
     expect(host.storage.chatDelegationSteps.listParentsByChildSessionIds).toHaveBeenCalledWith(
       ["child-session"],
       "workspace-1",
@@ -1375,7 +2185,9 @@ describe("approval lifecycle service", () => {
         listGrants: vi.fn(() => []),
         createGrant,
       },
-      resolveApproval: vi.fn(),
+      resolveApproval: vi.fn(async () => {
+        throw new Error("Approval approval-1 has expired and can no longer be resolved.");
+      }),
     } as unknown as ApprovalLifecycleHost;
 
     await expect(
@@ -1386,7 +2198,7 @@ describe("approval lifecycle service", () => {
     ).rejects.toThrow(/has expired and can no longer be resolved/i);
 
     expect(createGrant).not.toHaveBeenCalled();
-    expect(host.resolveApproval).not.toHaveBeenCalled();
+    expect(host.resolveApproval).toHaveBeenCalledTimes(1);
   });
 
   it("terminalizes expired Code Mode chat approvals before creating persistent grants", async () => {
@@ -1423,6 +2235,7 @@ describe("approval lifecycle service", () => {
         toolName: "code_mode.run",
       },
     ]) as never;
+    host.resolveApproval = vi.fn((approvalId, input, context) => resolveApproval(host, approvalId, input, context));
 
     await expect(
       resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
@@ -1446,7 +2259,14 @@ describe("approval lifecycle service", () => {
       }),
     );
     expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
-    expect(host.resolveApproval).not.toHaveBeenCalled();
+    expect(host.resolveApproval).toHaveBeenCalledTimes(1);
+    expect(host.resolveApproval).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "approve",
+        resolvedBy: "operator-test",
+      }),
+    );
   });
 
   it("resumes an approval-blocked chat turn end to end and keeps duplicate wake processing idempotent", async () => {
@@ -1477,7 +2297,7 @@ describe("approval lifecycle service", () => {
       string,
       {
         workflowKey: string;
-        status: "waiting" | "queued";
+        status: "waiting" | "queued" | "completed";
         version: number;
       }
     >([
@@ -1513,14 +2333,34 @@ describe("approval lifecycle service", () => {
       updatedAt: "2026-04-11T00:00:00.000Z",
       details: {},
     }));
-    host.storage.chatToolRuns.listBySession = vi.fn(() => [
-      {
-        toolRunId: "tool-run-1",
-        turnId: "turn-1",
-        approvalId: "approval-1",
-        toolName: "shell.exec",
-      },
-    ]) as never;
+    const chatToolRunsPatch = vi.fn();
+    host.storage.chatToolRuns = {
+      listBySession: vi.fn(() => [
+        {
+          toolRunId: "tool-run-1",
+          turnId: "turn-1",
+          approvalId: "approval-1",
+          toolName: "shell.exec",
+          status: "approval_required",
+        },
+      ]),
+      listByTurn: vi.fn(() => [
+        {
+          toolRunId: "tool-run-1",
+          turnId: "turn-1",
+          sessionId: "session-1",
+          approvalId: "approval-1",
+          toolName: "shell.exec",
+          status: "approval_required",
+        },
+      ]),
+      patch: chatToolRunsPatch,
+    } as never;
+    const chatMessagesUpsert = vi.fn();
+    host.storage.chatMessages = {
+      upsert: chatMessagesUpsert,
+    } as never;
+    const chatTurnTracesPatch = vi.fn();
     host.storage.chatTurnTraces.get = vi.fn(() => ({
       turnId: "turn-1",
       sessionId: "session-1",
@@ -1529,6 +2369,44 @@ describe("approval lifecycle service", () => {
         runId: "durable-turn-1",
       },
     })) as never;
+    host.storage.chatTurnTraces.patch = chatTurnTracesPatch as never;
+    host.storage.durableRuns = {
+      getRun: vi.fn((runId: string) => {
+        const current = runStates.get(runId);
+        if (!current) {
+          throw new Error(`Unknown durable run ${runId}`);
+        }
+        return {
+          runId,
+          workflowKey: current.workflowKey,
+          status: current.status,
+          attemptCount: 0,
+          maxAttempts: 3,
+          version: current.version,
+          payload: {},
+          metadata: {},
+          createdAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:01:00.000Z",
+        };
+      }),
+      updateRun: vi.fn((input: { runId: string; status: "completed"; expectedVersion: number }) => {
+        const current = runStates.get(input.runId);
+        if (!current || current.version !== input.expectedVersion) {
+          throw new Error(`Durable run ${input.runId} version conflict.`);
+        }
+        const next = {
+          ...current,
+          status: input.status,
+          version: current.version + 1,
+        };
+        runStates.set(input.runId, next);
+        return next;
+      }),
+      createCheckpoint: vi.fn(),
+    } as never;
+    host.storage.chatDelegationSteps = {
+      listParentsByChildSessionIds: vi.fn(() => new Map()),
+    } as never;
     host.storage.approvalEffects = createInMemoryApprovalEffectsStore(effectRows) as never;
     host.wakeDurableRun = vi.fn((runId: string, event: { eventKey: string; correlationId?: string }) => {
       const current = runStates.get(runId);
@@ -1595,11 +2473,13 @@ describe("approval lifecycle service", () => {
         executeApprovedPendingAction,
         enqueueAfterHooks: host.hooksService.enqueueAfterHooks,
         resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
+        recordApprovalResolutionSignals: vi.fn(),
       },
     );
     host.enqueueApprovalResolutionEffects = vi.fn((approval, input) =>
       effectsService.enqueueResolutionEffects(approval, input),
     );
+    host.awaitApprovalResolutionEffects = vi.fn((approvalId) => effectsService.awaitResolutionEffects(approvalId));
 
     const resolution = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
       allowScope: "once",
@@ -1615,25 +2495,35 @@ describe("approval lifecycle service", () => {
       resumed: false,
       resumedTurnId: "turn-1",
     });
+    expect(host.awaitApprovalResolutionEffects).toHaveBeenCalledWith("approval-1");
     expect(markResolved).toHaveBeenCalledTimes(1);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
+    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
     expect(requestRunProcessing).toHaveBeenNthCalledWith(1, "approval-wait-1");
-    expect(requestRunProcessing).toHaveBeenNthCalledWith(2, "durable-turn-1");
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(pendingAction.resolutionStatus).toBe("executed");
+    expect(chatToolRunsPatch).toHaveBeenCalledWith("tool-run-1", expect.objectContaining({ status: "executed" }));
+    expect(chatMessagesUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        role: "assistant",
+      }),
+      expect.any(String),
+    );
+    expect(chatTurnTracesPatch).toHaveBeenCalledWith("turn-1", expect.objectContaining({ status: "completed" }));
     expect(processedEffects.map((effect) => [effect.effectKind, effect.status])).toEqual([
+      ["approval_resolution_signals", "completed"],
       ["pending_action_execute", "completed"],
       ["approval_wait_wake", "completed"],
-      ["linked_chat_turn_wake", "completed"],
+      ["linked_chat_turn_wake", "skipped"],
       ["approval_after_hooks", "completed"],
     ]);
     expect(processedSummary).toMatchObject({
       approvalWaitDurableRunId: "approval-wait-1",
       chatTurnResume: {
-        resumed: true,
+        resumed: false,
         turnId: "turn-1",
         durableRunId: "durable-turn-1",
-        wakeOutcome: "woke",
+        wakeOutcome: "skipped_not_waiting",
       },
     });
 
@@ -1644,8 +2534,8 @@ describe("approval lifecycle service", () => {
     });
     await Promise.allSettled([...backgroundTasks]);
 
-    expect(host.storage.approvalEffects.listByApproval("approval-1")).toHaveLength(4);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
+    expect(host.storage.approvalEffects.listByApproval("approval-1")).toHaveLength(5);
+    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(host.wakeDurableRun).toHaveBeenCalledTimes(2);
   });
@@ -1707,16 +2597,26 @@ function createApprovalHarness(input?: {
       return approval;
     }),
     get: vi.fn(() => approval),
-    resolve: vi.fn((_approvalId: string, request: { decision: "approve" | "reject" | "edit"; resolvedBy: string }) => {
-      approval = {
-        ...approval,
-        status: request.decision === "approve" ? "approved" : request.decision === "reject" ? "rejected" : "edited",
-        resolvedBy: request.resolvedBy,
-        resolutionNote: request.resolutionNote,
-        resolvedAt: "2026-04-11T00:01:00.000Z",
-      };
-      return approval;
-    }),
+    resolve: vi.fn(
+      (
+        _approvalId: string,
+        request: {
+          decision: "approve" | "reject" | "edit";
+          resolvedBy: string;
+          resolutionNote?: string;
+        },
+        options?: { resolvedAt?: string; allowExpired?: boolean },
+      ) => {
+        approval = {
+          ...approval,
+          status: request.decision === "approve" ? "approved" : request.decision === "reject" ? "rejected" : "edited",
+          resolvedBy: request.resolvedBy,
+          resolutionNote: request.resolutionNote,
+          resolvedAt: options?.resolvedAt ?? "2026-04-11T00:01:00.000Z",
+        };
+        return approval;
+      },
+    ),
     mergeLinkage: vi.fn((_approvalId: string, linkage: Record<string, unknown>) => {
       approval = {
         ...approval,
@@ -1735,6 +2635,8 @@ function createApprovalHarness(input?: {
       return true;
     }),
     list: vi.fn(() => []),
+    listPage: vi.fn(() => ({ items: [], nextCursor: undefined })),
+    listExpiredPending: vi.fn(() => []),
   };
 
   const host = {
@@ -1750,6 +2652,8 @@ function createApprovalHarness(input?: {
       },
       remoteActionTokens: {
         create: vi.fn(),
+        listByApprovalId: vi.fn(() => []),
+        expirePendingByApprovalId: vi.fn(() => 0),
       },
       audit: {
         append: vi.fn(async () => undefined),
@@ -1759,6 +2663,7 @@ function createApprovalHarness(input?: {
       },
       approvalEffects: {
         listByApproval: vi.fn(() => input?.approvalEffects ?? []),
+        claimNextPendingEffect: vi.fn(() => undefined),
       },
       approvalInbox: {
         findByApprovalAndToken: vi.fn(() => undefined),
@@ -1784,7 +2689,15 @@ function createApprovalHarness(input?: {
         find: vi.fn((runId: string) => codeModeRuns.find((run) => run.runId === runId)),
         upsert: vi.fn((record: CodeModeRunRecord) => record),
       },
-      runImmediateTransaction: <T>(callback: () => T) => callback(),
+      runImmediateTransaction: vi.fn(<T>(callback: () => T): T => {
+        const approvalBeforeTransaction = approval;
+        try {
+          return callback();
+        } catch (error) {
+          approval = approvalBeforeTransaction;
+          throw error;
+        }
+      }),
     },
     policyEngine: {
       listGrants: vi.fn(() => []),
@@ -1809,14 +2722,17 @@ function createApprovalHarness(input?: {
         runId: currentApproval.linkage?.durableRunId,
         workspaceId: currentApproval.linkage?.workspaceId,
       })),
-      primeApprovalLifecycle: vi.fn((_approvalId: string) => {
+      reserveApprovalWaitRun: vi.fn((currentApproval: typeof approval) => {
         approval = {
-          ...approval,
+          ...currentApproval,
           linkage: {
-            ...(approval.linkage ?? {}),
+            ...(currentApproval.linkage ?? {}),
             durableRunId: "approval-wait-1",
           },
         };
+        return approval;
+      }),
+      primeApprovalLifecycle: vi.fn((_approvalId: string) => {
         return approval;
       }),
     },
@@ -1832,12 +2748,29 @@ function createApprovalHarness(input?: {
     scheduleApprovalExplanation: vi.fn(),
     findProactiveDurableRunIdsForApproval: vi.fn(() => []),
     wakeDurableRun: vi.fn(),
-    recordApprovalResolution: vi.fn(async () => undefined),
+    enqueueApprovalObservabilityEffects: vi.fn(() => []),
+    enqueueApprovalWaitMaterialization: vi.fn(),
     enqueueApprovalResolutionEffects: vi.fn(),
+    awaitApprovalResolutionEffects: vi.fn(async (approvalId: string) =>
+      host.storage.approvalEffects.listByApproval(approvalId),
+    ),
     enqueueApprovalRemoteTokenDelivery: vi.fn(),
   };
 
-  return host as typeof host & ApprovalLifecycleHost;
+  return host as typeof host & ApprovalLifecycleHost & ApprovalRemoteActionContext;
+}
+
+function createRemoteActionTokenRecord(tokenId: string) {
+  return {
+    tokenId,
+    actionType: "approval.resolve" as const,
+    approvalId: "approval-1",
+    connectorId: "connector-1",
+    mutation: { approvalId: "approval-1" },
+    createdAt: "2026-04-11T00:00:00.000Z",
+    expiresAt: "2099-04-11T00:15:00.000Z",
+    state: "pending" as const,
+  };
 }
 
 function createCodeModeRunRecord(overrides: Partial<CodeModeRunRecord> = {}): CodeModeRunRecord {

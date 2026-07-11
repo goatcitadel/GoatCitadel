@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
+  ApprovalResolveInput,
   CapabilityArtifactRecord,
   CapabilityCatalogSnapshotRecord,
   CapabilityProposalEventRecord,
@@ -764,12 +765,14 @@ describe("CapabilitySystemService", () => {
   });
 
   it("rejects late-created Code Mode approvals when approval creation throws with an approval id", async () => {
-    const harness = await createHarness();
-    harness.createApproval.mockRejectedValueOnce(
-      Object.assign(new Error("approval audit unavailable"), {
+    const harness = await createHarness({ reserveApprovalWaitRun: true });
+    const createApproval = harness.createApproval.getMockImplementation();
+    harness.createApproval.mockImplementationOnce(async (input) => {
+      await createApproval!(input);
+      throw Object.assign(new Error("approval audit unavailable"), {
         approvalId: "approval-1",
-      }),
-    );
+      });
+    });
 
     await expect(
       harness.service.createCodeModeRun({
@@ -789,7 +792,7 @@ describe("CapabilitySystemService", () => {
         approvalId: "approval-1",
       }),
     });
-    expect(harness.storage.approvals.resolve).toHaveBeenCalledWith(
+    expect(harness.resolveApproval).toHaveBeenCalledWith(
       "approval-1",
       expect.objectContaining({
         decision: "reject",
@@ -797,6 +800,14 @@ describe("CapabilitySystemService", () => {
         resolutionNote: expect.stringContaining("approval audit unavailable"),
       }),
     );
+    expect(harness.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected" });
+    expect(harness.canonicalResolutionEvents).toEqual(["resolved"]);
+    expect(harness.canonicalResolutionEffects).toEqual([
+      "approval_wait_wake",
+      "approval_resolution_signal",
+      "approval_observability",
+    ]);
+    expect(harness.requestRunProcessing).toHaveBeenCalledWith("approval-wait-1");
     expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalId: "approval-1",
@@ -860,7 +871,7 @@ describe("CapabilitySystemService", () => {
   });
 
   it("fails pending Code Mode actions when registration fails after pending-action creation", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ reserveApprovalWaitRun: true });
     harness.storage.approvalEvents.append.mockImplementationOnce(() => {
       throw new Error("approval event store unavailable");
     });
@@ -887,7 +898,7 @@ describe("CapabilitySystemService", () => {
         errorCode: "approval_registration_failed",
       }),
     );
-    expect(harness.storage.approvals.resolve).toHaveBeenCalledWith(
+    expect(harness.resolveApproval).toHaveBeenCalledWith(
       "approval-1",
       expect.objectContaining({
         decision: "reject",
@@ -895,6 +906,13 @@ describe("CapabilitySystemService", () => {
       }),
     );
     expect(harness.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected" });
+    expect(harness.canonicalResolutionEvents).toEqual(["resolved"]);
+    expect(harness.canonicalResolutionEffects).toEqual([
+      "approval_wait_wake",
+      "approval_resolution_signal",
+      "approval_observability",
+    ]);
+    expect(harness.requestRunProcessing).toHaveBeenCalledWith("approval-wait-1");
   });
 
   it("rejects Code Mode approvals when registration fails before a pending action exists", async () => {
@@ -4025,6 +4043,7 @@ async function createHarness(input?: {
   dockerBackend?: CapabilityRuntimeConfig["codeModeDockerBackend"];
   aiderAdapter?: CapabilityRuntimeConfig["codeModeAiderAdapter"];
   invokeTool?: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+  reserveApprovalWaitRun?: boolean;
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
@@ -4048,13 +4067,39 @@ async function createHarness(input?: {
       status: "approved",
       payload: request.payload,
       preview: request.preview,
-      linkage: request.linkage,
+      linkage: {
+        ...request.linkage,
+        ...(input?.reserveApprovalWaitRun ? { durableRunId: "approval-wait-1" } : {}),
+      },
       createdAt: "2026-04-10T00:00:00.000Z",
       expiresAt: request.expiresAt ?? undefined,
       explanationStatus: "not_requested",
     };
     approvals.set(approval.approvalId, approval);
     return approval;
+  });
+  const canonicalResolutionEvents: string[] = [];
+  const canonicalResolutionEffects: string[] = [];
+  const requestRunProcessing = vi.fn();
+  const resolveApproval = vi.fn(async (approvalId: string, request: ApprovalResolveInput) => {
+    const approval = storage.approvals.resolve(approvalId, request);
+    storage.approvalEvents.append({
+      approvalId,
+      eventType: "resolved",
+      actorId: request.resolvedBy,
+      payload: { decision: request.decision, status: approval.status },
+    });
+    canonicalResolutionEvents.push("resolved");
+    canonicalResolutionEffects.push("approval_wait_wake", "approval_resolution_signal", "approval_observability");
+    if (approval.linkage?.durableRunId) {
+      requestRunProcessing(approval.linkage.durableRunId);
+    }
+    return {
+      approval,
+      effects: [],
+      replay: { approval, events: [], effects: [] },
+      durableRunId: approval.linkage?.durableRunId,
+    };
   });
 
   const service = new CapabilitySystemService({
@@ -4084,6 +4129,7 @@ async function createHarness(input?: {
     readSkillStates: () => new Map(),
     invokeTool,
     createApproval,
+    resolveApproval,
     publishRealtime,
     readPolicySnapshot: () => ({ mode: "test" }),
     resolvePolicyContext: input?.resolvePolicyContext,
@@ -4096,8 +4142,12 @@ async function createHarness(input?: {
     service,
     approvals,
     createApproval,
+    resolveApproval,
     publishRealtime,
     invokeTool,
+    canonicalResolutionEvents,
+    canonicalResolutionEffects,
+    requestRunProcessing,
   };
 }
 

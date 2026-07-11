@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { idempotencyHeaderPlugin } from "./idempotency.js";
+import { idempotencyHeaderPlugin, markMutationCommitted, markMutationCommittedFromError } from "./idempotency.js";
 
 type MutationStatus = "pending" | "completed" | "failed";
 
@@ -250,6 +250,78 @@ describe("idempotencyHeaderPlugin", () => {
       expect(first.statusCode).toBe(500);
       expect(second.statusCode).toBe(200);
       expect(attempts).toBe(2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not revive a committed mutation when response delivery later reports an error", async () => {
+    let attempts = 0;
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/approvals/:approvalId/resolve", async (request, reply) => {
+        attempts += 1;
+        markMutationCommitted(request);
+        return reply.code(500).send({ error: "response projection unavailable" });
+      });
+    });
+
+    try {
+      const headers = { "Idempotency-Key": "idem-approval-committed-response-failure" };
+      const payload = { decision: "approve" };
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-1/resolve",
+        headers,
+        payload,
+      });
+      const retry = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-1/resolve",
+        headers,
+        payload,
+      });
+
+      expect(first.statusCode).toBe(500);
+      expect(retry.statusCode).toBe(409);
+      expect(retry.json()).toEqual({
+        error: "Duplicate mutation blocked for this Idempotency-Key",
+      });
+      expect(attempts).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not revive a mutation-aware domain error after its cleanup transaction commits", async () => {
+    let attempts = 0;
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/approvals/:approvalId/resolve", async (request, reply) => {
+        attempts += 1;
+        const error = Object.assign(new Error("approval expired"), { mutationCommitted: true });
+        markMutationCommittedFromError(request, error);
+        return reply.code(400).send({ error: error.message });
+      });
+    });
+
+    try {
+      const headers = { "Idempotency-Key": "idem-approval-expiry-cleanup" };
+      const payload = { decision: "approve" };
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-expired/resolve",
+        headers,
+        payload,
+      });
+      const retry = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-expired/resolve",
+        headers,
+        payload,
+      });
+
+      expect(first.statusCode).toBe(400);
+      expect(retry.statusCode).toBe(409);
+      expect(attempts).toBe(1);
     } finally {
       await app.close();
     }

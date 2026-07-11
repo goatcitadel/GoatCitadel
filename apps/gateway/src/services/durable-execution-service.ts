@@ -37,6 +37,7 @@ import {
   type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
@@ -54,7 +55,7 @@ import {
 } from "./external-side-effect-runner-service.js";
 
 type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
-  Pick<Storage, "approvals" | "audit" | "chatMessages" | "externalSideEffectRuns">;
+  Pick<Storage, "approvals" | "audit" | "chatMessages" | "externalSideEffectRuns" | "remoteActionTokens">;
 
 /** Channel routing recorded on an autonomous turn's `metadata.autonomous`. */
 export interface AutonomousTurnDeliveryChannel {
@@ -154,6 +155,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
   commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult | Record<string, unknown>>;
   commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult | Record<string, unknown>>;
   invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse>;
+  readonly approvalRemoteTokenSecrets: Pick<ApprovalRemoteTokenSecretService, "resolve" | "delete">;
   computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number;
   resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string;
   listChatSessionProactiveRuns(sessionId: string, limit?: number): ProactiveRunRecord[];
@@ -231,6 +233,7 @@ type DurableConnectorDeliveryWorkflowHost = DurableWorkflowCompletionHost &
     | "commsActivity"
     | "isFeatureEnabled"
     | "invokeMcpTool"
+    | "approvalRemoteTokenSecrets"
     | "publishRealtime"
     | "resolveDurableRunHookWorkspaceId"
   >;
@@ -461,6 +464,19 @@ export function parseConnectorDeliveryWorkflowPayload(
   }
   if (payload.payload !== undefined && (typeof payload.payload !== "object" || Array.isArray(payload.payload))) {
     return undefined;
+  }
+  if (payload.approvalAction !== undefined) {
+    const approvalAction = payload.approvalAction;
+    if (
+      !approvalAction ||
+      typeof approvalAction !== "object" ||
+      typeof approvalAction.tokenId !== "string" ||
+      !approvalAction.tokenId.trim() ||
+      typeof approvalAction.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(approvalAction.expiresAt))
+    ) {
+      return undefined;
+    }
   }
   return payload as ConnectorDeliveryWorkflowPayload;
 }
@@ -1063,16 +1079,65 @@ export async function executeDurableConnectorDeliveryRun(
 ): Promise<void> {
   throwIfDurableWorkflowAborted(context);
   assertAutonomousDurableRunAllowed(host, run);
+  const { approvalRemoteTokenSecrets, publishRealtime, storage } = host;
   const payload = parseConnectorDeliveryWorkflowPayload(run);
   if (!payload) {
     throw new Error("Durable connector delivery payload is invalid or incomplete.");
+  }
+  const approvalActionTokenRef = payload.secretRefs?.approvalActionToken;
+  const approvalAction = payload.approvalAction;
+  if (approvalAction && Date.parse(approvalAction.expiresAt) <= Date.now()) {
+    if (approvalActionTokenRef) {
+      try {
+        approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
+      } catch {
+        // The terminal token state is authoritative. The approval expiry
+        // worker will retry keychain cleanup by token id.
+      }
+    }
+    try {
+      storage.remoteActionTokens.expirePendingAtOrBefore(approvalAction.tokenId, new Date().toISOString());
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) {
+        throw error;
+      }
+    }
+    const checkpointState = {
+      connectorId: payload.connectorId,
+      connectorType: payload.connectorType,
+      action: payload.action,
+      tokenId: approvalAction.tokenId,
+      expiresAt: approvalAction.expiresAt,
+      deliveryStatus: "expired",
+      error: "Approval remote-action delivery expired before dispatch.",
+    };
+    publishRealtime(
+      "connector_delivery_expired",
+      "connectors",
+      { runId: run.runId, ...checkpointState },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: buildConnectorDeliveryRealtimeLinks({
+          runId: run.runId,
+          connectorId: payload.connectorId,
+          payload: payload as unknown as Record<string, unknown>,
+        }),
+      },
+    );
+    failDurableWorkflowRun(host, run.runId, checkpointState);
+    return;
   }
   const connector = host.requireConnectorRecord(payload.connectorId);
   if (payload.simulateFailureReason?.trim()) {
     throw new Error(payload.simulateFailureReason.trim());
   }
   const operatorId = payload.operatorId ?? payload.authActorId ?? "system-durable";
-  const dispatch = await dispatchConnectorDelivery(connector, payload, {
+  const dispatchPayload =
+    connector.connectorType === "browser" && approvalActionTokenRef
+      ? hydrateBrowserApprovalActionToken(payload, approvalRemoteTokenSecrets.resolve(approvalActionTokenRef))
+      : payload;
+  const dispatch = await dispatchConnectorDelivery(connector, dispatchPayload, {
     commsSend: (input) => host.commsSend(input),
     commsReply: (input) => host.commsReply(input),
     commsReact: (input) => host.commsReact(input),
@@ -1110,6 +1175,14 @@ export async function executeDurableConnectorDeliveryRun(
     signal: context?.signal,
   });
   throwIfDurableWorkflowAborted(context);
+  if (connector.connectorType === "browser" && approvalActionTokenRef) {
+    try {
+      approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
+    } catch {
+      // The live-only browser delivery already completed; cleanup failure must
+      // not cause a duplicate durable replay.
+    }
+  }
   const checkpointState = {
     connectorId: connector.connectorId,
     connectorType: connector.connectorType,
@@ -1136,6 +1209,27 @@ export async function executeDurableConnectorDeliveryRun(
     },
   );
   completeDurableWorkflowRun(host, run.runId, checkpointState);
+}
+
+function hydrateBrowserApprovalActionToken(
+  payload: ConnectorDeliveryWorkflowPayload,
+  token: string,
+): ConnectorDeliveryWorkflowPayload {
+  const actionPayload = payload.payload ?? {};
+  const eventPayload =
+    actionPayload.payload && typeof actionPayload.payload === "object" && !Array.isArray(actionPayload.payload)
+      ? (actionPayload.payload as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    payload: {
+      ...actionPayload,
+      payload: {
+        ...eventPayload,
+        token,
+      },
+    },
+  };
 }
 
 export async function executeDurableHookDeliveryRun(

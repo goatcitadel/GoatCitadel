@@ -414,6 +414,7 @@ describe("approvals routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
     expect(response.json()).toMatchObject({
       tokenId: "rat_123",
       token: "grat_token",

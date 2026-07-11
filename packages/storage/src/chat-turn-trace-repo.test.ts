@@ -153,6 +153,26 @@ function setRawField(db: DatabaseClient, turnId: string, field: string, value: u
 }
 
 describe("ChatTurnTraceRepository", () => {
+  it("conditionally completes only while the observed lifecycle status still owns the turn", () => {
+    const { repo } = createStore();
+    repo.create(baseTrace({ status: "running" }));
+
+    const completed = repo.patchIfStatus("turn-a", ["running"], {
+      status: "completed",
+      assistantMessageId: "assistant-a",
+    });
+
+    assert.equal(completed?.status, "completed");
+    repo.patch("turn-a", { status: "cancelled" });
+    const lost = repo.patchIfStatus("turn-a", ["running"], {
+      status: "completed",
+      assistantMessageId: "assistant-late",
+    });
+    assert.equal(lost, undefined);
+    assert.equal(repo.get("turn-a").status, "cancelled");
+    assert.equal(repo.get("turn-a").assistantMessageId, "assistant-a");
+  });
+
   it("lists root and parent siblings for bounded branch rendering", () => {
     const { repo } = createStore();
     repo.create(baseTrace({ turnId: "root-a", userMessageId: "user-root-a", startedAt: "2026-03-26T00:00:01.000Z" }));

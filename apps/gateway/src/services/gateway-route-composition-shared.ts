@@ -78,6 +78,8 @@ export function createSettingsAuthRuntimeDependenciesForGateway(
     createApproval: (input) => gateway.createApproval(input),
     resolveApproval: (approvalId, input) => gateway.resolveApproval(approvalId, input),
     enqueueApprovalResolutionEffects: (approval, input) => gateway.enqueueApprovalResolutionEffects(approval, input),
+    enqueueApprovalObservabilityEffects: (approvalId, items) =>
+      gateway.approvalEffectsService.enqueueObservabilityEffects(approvalId, items),
     listApprovalEffects: (approvalId) => gateway.approvalEffectsService.listByApproval(approvalId),
     buildApprovalRealtimeLinks: (approval) => gateway.buildApprovalRealtimeLinks(approval),
     recordImprovementApprovalResolutionSignal: (approval) =>

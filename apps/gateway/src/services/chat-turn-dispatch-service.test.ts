@@ -3,7 +3,8 @@ import type { ChatTurnTraceRecord, DurableRunRecord } from "@goatcitadel/contrac
 import type { ChatTurnDispatchHost } from "./chat-turn-dispatch-service.js";
 import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
-vi.mock("./chat-turn-helpers.js", () => ({
+vi.mock("./chat-turn-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-turn-helpers.js")>()),
   dedupeChatCitations: (items: unknown[]) => items,
   splitIntoChunks: (value: string) => [value],
 }));
@@ -86,7 +87,7 @@ describe("chat turn dispatch durable ownership", () => {
 
     expect(host.backgroundTasks.size).toBe(0);
     expect(host.registerActiveChatTurnStream.mock.invocationCallOrder[0]).toBeLessThan(
-      (host.storage.chatTurnTraces.patch as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
+      (host.storage.chatTurnTraces.patchIfStatus as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
         Number.MAX_SAFE_INTEGER,
     );
     expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
@@ -98,8 +99,9 @@ describe("chat turn dispatch durable ownership", () => {
         }),
       }),
     );
-    expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+    expect(host.storage.chatTurnTraces.patchIfStatus).toHaveBeenCalledWith(
       "turn-1",
+      expect.arrayContaining(["running"]),
       expect.objectContaining({
         status: "failed",
       }),
@@ -160,14 +162,16 @@ describe("chat turn dispatch durable ownership", () => {
         surface: "chat",
       }),
     );
-    expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+    expect(host.storage.chatTurnTraces.patchIfStatus).toHaveBeenCalledWith(
       "turn-1",
+      ["running"],
       expect.objectContaining({
         status: "completed",
         assistantMessageId: "assistant-1",
       }),
     );
     expect(response.transport).toBe("integration");
+    expect(response.trace?.status).toBe("completed");
   });
 
   it("marks the integration trace failed if bookkeeping breaks after external delivery", async () => {
@@ -189,8 +193,9 @@ describe("chat turn dispatch durable ownership", () => {
     ).rejects.toThrow("local ingest failed");
 
     expect(host.commsSend).toHaveBeenCalled();
-    expect(host.storage.chatTurnTraces.patch).toHaveBeenLastCalledWith(
+    expect(host.storage.chatTurnTraces.patchIfStatus).toHaveBeenLastCalledWith(
       "turn-1",
+      expect.arrayContaining(["running"]),
       expect.objectContaining({
         status: "failed",
       }),
@@ -248,7 +253,7 @@ function createHost(
   beginDurableChatRun: ReturnType<typeof vi.fn>;
   recordDevDiagnostic: ReturnType<typeof vi.fn>;
 } {
-  const traceState =
+  let traceState =
     overrides.traceState ??
     ({
       turnId: "turn-1",
@@ -266,8 +271,15 @@ function createHost(
   const completeActiveChatTurnStream = vi.fn();
   const closeActiveChatTurnStream = vi.fn();
   const beginDurableChatRun = overrides.beginDurableChatRun ?? vi.fn(() => undefined);
-  const createTrace = vi.fn((input: Partial<ChatTurnTraceRecord>) => ({ ...traceState, ...input }));
-  const patchTrace = vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => ({ ...traceState, ...patch }));
+  const createTrace = vi.fn((input: Partial<ChatTurnTraceRecord>) => {
+    traceState = { ...traceState, ...input } as ChatTurnTraceRecord;
+    return traceState;
+  });
+  const patchTrace = vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => {
+    traceState = { ...traceState, ...patch } as ChatTurnTraceRecord;
+    return traceState;
+  });
+  const activeController = new AbortController();
   return {
     config: {
       assistant: {
@@ -285,6 +297,15 @@ function createHost(
       chatTurnTraces: {
         create: createTrace,
         patch: patchTrace,
+        patchIfStatus: vi.fn(
+          (_turnId: string, expected: ChatTurnTraceRecord["status"][], patch: Partial<ChatTurnTraceRecord>) => {
+            if (!expected.includes(traceState.status)) {
+              return undefined;
+            }
+            traceState = { ...traceState, ...patch } as ChatTurnTraceRecord;
+            return traceState;
+          },
+        ),
         get: vi.fn(() => traceState),
       },
     } as never,
@@ -303,9 +324,20 @@ function createHost(
     ensureSessionInternalToolGrant: vi.fn(),
     requireExecutedToolResult: vi.fn(),
     commsSend: vi.fn(),
-    ingestEvent: overrides.ingestEvent ?? vi.fn(),
+    ingestEvent:
+      overrides.ingestEvent ??
+      vi.fn(async (_idempotencyKey, _payload, options?: { onCommit?: () => void }) => {
+        options?.onCommit?.();
+      }),
     updateActiveLeafOrThrow: vi.fn(),
     publishRealtime: vi.fn(),
+    beginActiveChatTurnExecution: vi.fn(() => activeController),
+    endActiveChatTurnExecution: vi.fn(),
+    getActiveChatTurnExecution: vi.fn(() => ({ sessionId: "session-1", controller: activeController })),
+    markChatTurnCancelled: vi.fn((_sessionId, turnId) => {
+      traceState = { ...traceState, turnId, status: "cancelled" } as ChatTurnTraceRecord;
+      return traceState;
+    }),
   } as unknown as ChatTurnDispatchHost & {
     registerActiveChatTurnStream: ReturnType<typeof vi.fn>;
     persistChatStreamChunk: ReturnType<typeof vi.fn>;

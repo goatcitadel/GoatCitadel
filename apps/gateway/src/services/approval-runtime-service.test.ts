@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const lifecycle = vi.hoisted(() => ({
   createApproval: vi.fn(),
-  createApprovalRemoteActionToken: vi.fn(),
   createToolGrant: vi.fn(),
   getApprovalReplay: vi.fn(),
   listApprovals: vi.fn(),
@@ -10,13 +9,18 @@ const lifecycle = vi.hoisted(() => ({
   listToolGrants: vi.fn(),
   resolveApproval: vi.fn(),
   resolveApprovalsBulk: vi.fn(),
-  resolveApprovalWithRemoteToken: vi.fn(),
-  resolveApprovalWithRemoteTokenId: vi.fn(),
   resolveChatToolApproval: vi.fn(),
   revokeToolGrant: vi.fn(),
 }));
 
+const remoteActions = vi.hoisted(() => ({
+  createApprovalRemoteActionToken: vi.fn(),
+  resolveApprovalWithRemoteToken: vi.fn(),
+  resolveApprovalWithRemoteTokenId: vi.fn(),
+}));
+
 vi.mock("./approval-lifecycle-service.js", () => lifecycle);
+vi.mock("./approval-remote-action-service.js", () => remoteActions);
 
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 
@@ -27,9 +31,9 @@ describe("ApprovalRuntimeService", () => {
     lifecycle.createToolGrant.mockReturnValue({ grantId: "grant-2" });
     lifecycle.revokeToolGrant.mockReturnValue(true);
     lifecycle.createApproval.mockResolvedValue({ approvalId: "approval-1" });
-    lifecycle.createApprovalRemoteActionToken.mockReturnValue({ tokenId: "token-id", token: "token" });
-    lifecycle.resolveApprovalWithRemoteToken.mockResolvedValue({ approval: { approvalId: "approval-1" } });
-    lifecycle.resolveApprovalWithRemoteTokenId.mockResolvedValue({ approval: { approvalId: "approval-1" } });
+    remoteActions.createApprovalRemoteActionToken.mockReturnValue({ tokenId: "token-id", token: "token" });
+    remoteActions.resolveApprovalWithRemoteToken.mockResolvedValue({ approval: { approvalId: "approval-1" } });
+    remoteActions.resolveApprovalWithRemoteTokenId.mockResolvedValue({ approval: { approvalId: "approval-1" } });
     lifecycle.listApprovals.mockReturnValue([{ approvalId: "approval-1" }]);
     lifecycle.listApprovalsPage.mockReturnValue({ items: [{ approvalId: "approval-1" }], nextCursor: "next" });
     lifecycle.resolveApprovalsBulk.mockResolvedValue({ resolved: 1, failed: [] });
@@ -62,7 +66,11 @@ describe("ApprovalRuntimeService", () => {
       approval: { approvalId: "approval-1" },
     });
     await expect(
-      service.resolveApprovalWithRemoteTokenId({ tokenId: "token-id", decision: "reject" }),
+      service.resolveApprovalWithRemoteTokenId({
+        tokenId: "token-id",
+        connectorId: "mcp:srv-1",
+        decision: "reject",
+      }),
     ).resolves.toEqual({
       approval: { approvalId: "approval-1" },
     });

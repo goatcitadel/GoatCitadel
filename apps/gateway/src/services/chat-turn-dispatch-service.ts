@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { CHAT_TURN_ACTIVE_STATUSES, NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCitationRecord,
   ChatMessageRecord,
@@ -17,7 +17,13 @@ import type {
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { dedupeChatCitations, splitIntoChunks } from "./chat-turn-helpers.js";
+import {
+  ChatTurnCancelledError,
+  dedupeChatCitations,
+  patchChatTurnTraceIfStatus,
+  splitIntoChunks,
+  tryPatchChatTurnTraceIfStatus,
+} from "./chat-turn-helpers.js";
 import {
   ChatTurnStreamRegistrationMismatchError,
   type ActiveChatTurnStreamExecution,
@@ -289,51 +295,58 @@ export async function executePreparedAgentChatTurnBackground(
         durableRunId,
       },
     });
-    let currentTrace: ChatTurnTraceRecord | undefined;
+    let failureResult: ReturnType<typeof tryPatchChatTurnTraceIfStatus> | undefined;
     try {
-      currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+      const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+      failureResult = tryPatchChatTurnTraceIfStatus(
+        host.storage.chatTurnTraces,
+        prepared.turnId,
+        CHAT_TURN_ACTIVE_STATUSES,
+        {
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+          failure: {
+            failureClass: "unknown",
+            message: error instanceof Error ? error.message : "Chat stream execution failed.",
+            retryable: true,
+            recommendedAction: "retry",
+          },
+          completion: {
+            finishReason: currentTrace.completion?.finishReason,
+            status: "interrupted",
+            repaired: Boolean(currentTrace.completion?.repaired),
+          },
+        },
+      );
     } catch (lookupError) {
       if (!(lookupError instanceof NotFoundError)) {
         throw lookupError;
       }
     }
-    if (currentTrace) {
-      const patchedTrace = host.storage.chatTurnTraces.patch(prepared.turnId, {
-        status: "failed",
-        finishedAt: new Date().toISOString(),
-        failure: {
-          failureClass: "unknown",
-          message: error instanceof Error ? error.message : "Chat stream execution failed.",
-          retryable: true,
-          recommendedAction: "retry",
-        },
-        completion: {
-          finishReason: currentTrace.completion?.finishReason,
-          status: "interrupted",
-          repaired: Boolean(currentTrace.completion?.repaired),
-        },
-      });
+    if (failureResult?.patched) {
       host.persistChatStreamChunk(
         {
           type: "trace_update",
           sessionId,
           turnId: prepared.turnId,
-          trace: host.createHydratedChatTurnTrace(prepared.turnId, patchedTrace),
+          trace: host.createHydratedChatTurnTrace(prepared.turnId, failureResult.trace),
         },
         durableRunId,
         options.streamRegistration,
       );
     }
-    host.persistChatStreamChunk(
-      {
-        type: "error",
-        sessionId,
-        turnId: prepared.turnId,
-        error: error instanceof Error ? error.message : "Chat stream execution failed.",
-      },
-      durableRunId,
-      options.streamRegistration,
-    );
+    if (!failureResult || failureResult.patched) {
+      host.persistChatStreamChunk(
+        {
+          type: "error",
+          sessionId,
+          turnId: prepared.turnId,
+          error: error instanceof Error ? error.message : "Chat stream execution failed.",
+        },
+        durableRunId,
+        options.streamRegistration,
+      );
+    }
   } finally {
     if (options.streamRegistration.isActive()) {
       let finalTrace: ChatTurnTraceRecord | undefined;
@@ -438,41 +451,49 @@ function persistDurableUnavailableFailure(
       providerCallStarted: false,
     },
   });
-  const failedTrace = host.storage.chatTurnTraces.patch(prepared.turnId, {
-    status: "failed",
-    finishedAt: new Date().toISOString(),
-    failure: {
-      failureClass: "unknown",
-      message: "Durable execution could not start for this shipped operator surface.",
-      retryable: false,
-      recommendedAction: "check_gateway_connection",
-    },
-    completion: {
-      finishReason: "error",
-      status: "interrupted",
-      repaired: false,
-    },
-  });
-  host.persistChatStreamChunk(
+  const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+  const failureResult = tryPatchChatTurnTraceIfStatus(
+    host.storage.chatTurnTraces,
+    prepared.turnId,
+    CHAT_TURN_ACTIVE_STATUSES,
     {
-      type: "trace_update",
-      sessionId,
-      turnId: prepared.turnId,
-      trace: host.createHydratedChatTurnTrace(prepared.turnId, failedTrace),
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      failure: {
+        failureClass: "unknown",
+        message: "Durable execution could not start for this shipped operator surface.",
+        retryable: false,
+        recommendedAction: "check_gateway_connection",
+      },
+      completion: {
+        finishReason: currentTrace.completion?.finishReason ?? "error",
+        status: "interrupted",
+        repaired: Boolean(currentTrace.completion?.repaired),
+      },
     },
-    undefined,
-    streamRegistration,
   );
-  host.persistChatStreamChunk(
-    {
-      type: "error",
-      sessionId,
-      turnId: prepared.turnId,
-      error: "durable_unavailable: shipped Chat/Cowork/Code sends must allocate a durable run before execution.",
-    },
-    undefined,
-    streamRegistration,
-  );
+  if (failureResult.patched) {
+    host.persistChatStreamChunk(
+      {
+        type: "trace_update",
+        sessionId,
+        turnId: prepared.turnId,
+        trace: host.createHydratedChatTurnTrace(prepared.turnId, failureResult.trace),
+      },
+      undefined,
+      streamRegistration,
+    );
+    host.persistChatStreamChunk(
+      {
+        type: "error",
+        sessionId,
+        turnId: prepared.turnId,
+        error: "durable_unavailable: shipped Chat/Cowork/Code sends must allocate a durable run before execution.",
+      },
+      undefined,
+      streamRegistration,
+    );
+  }
   streamRegistration.complete();
   setTimeout(() => streamRegistration.close(), 30_000);
 }
@@ -487,7 +508,11 @@ export async function sendPreparedIntegrationChatTurn(
   options?: { abortSignal?: AbortSignal },
 ): Promise<ChatSendMessageResponse> {
   const startedAt = new Date().toISOString();
-  host.storage.chatTurnTraces.create({
+  const storage = host.storage;
+  const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "integration-send");
+  const detachAbortListener = bindAbortSignalToController(options?.abortSignal, controller);
+  let deliveryCommitted = false;
+  storage.chatTurnTraces.create({
     turnId: prepared.turnId,
     sessionId,
     userMessageId: prepared.userEventId,
@@ -507,6 +532,7 @@ export async function sendPreparedIntegrationChatTurn(
   });
 
   try {
+    assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
     if (!binding.connectionId || !binding.target) {
       throw new Error("Integration binding is missing connectionId or target");
     }
@@ -531,33 +557,14 @@ export async function sendPreparedIntegrationChatTurn(
         permissionProfileId: input.permissionProfileId,
         localOperatorOverrideId: input.localOperatorOverrideId,
         surface: input.mode ?? resolvePreparedTurnMode(prepared),
-        signal: options?.abortSignal,
+        signal: controller.signal,
       }),
     );
+    deliveryCommitted = true;
+    assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
     const assistantContent = `Delivered via integration ${binding.connectionId} to ${binding.target}.`;
     const assistantMessageId = prepared.assistantMessageId;
-    await host.ingestEvent(randomUUID(), {
-      eventId: assistantMessageId,
-      route: prepared.route,
-      actor: {
-        type: "system",
-        id: "integration",
-      },
-      message: {
-        role: "assistant",
-        content: assistantContent,
-      },
-    });
-    const assistantMessage: ChatMessageRecord = {
-      messageId: assistantMessageId,
-      sessionId,
-      role: "assistant",
-      actorType: "system",
-      actorId: "integration",
-      content: assistantContent,
-      timestamp: new Date().toISOString(),
-    };
-    const trace = host.storage.chatTurnTraces.patch(prepared.turnId, {
+    const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
       assistantMessageId,
       status: "completed",
       finishedAt: new Date().toISOString(),
@@ -578,7 +585,43 @@ export async function sendPreparedIntegrationChatTurn(
         truncated: prepared.resolvedGuidance.truncated,
       },
       citations: [],
-    });
+    };
+    let trace: ChatTurnTraceRecord | undefined;
+    await host.ingestEvent(
+      randomUUID(),
+      {
+        eventId: assistantMessageId,
+        route: prepared.route,
+        actor: {
+          type: "system",
+          id: "integration",
+        },
+        message: {
+          role: "assistant",
+          content: assistantContent,
+        },
+      },
+      {
+        onCommit: () => {
+          trace = patchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, ["running"], completionPatch);
+        },
+      },
+    );
+    trace ??= patchChatTurnTraceIfStatus(
+      storage.chatTurnTraces,
+      prepared.turnId,
+      ["running", "completed"],
+      completionPatch,
+    );
+    const assistantMessage: ChatMessageRecord = {
+      messageId: assistantMessageId,
+      sessionId,
+      role: "assistant",
+      actorType: "system",
+      actorId: "integration",
+      content: assistantContent,
+      timestamp: new Date().toISOString(),
+    };
     const hydratedTrace: ChatTurnTraceRecord = {
       ...trace,
       toolRuns: [],
@@ -607,7 +650,25 @@ export async function sendPreparedIntegrationChatTurn(
       routing: hydratedTrace.routing,
     };
   } catch (error) {
-    host.storage.chatTurnTraces.patch(prepared.turnId, {
+    let currentTrace: ChatTurnTraceRecord | undefined;
+    try {
+      currentTrace = storage.chatTurnTraces.get(prepared.turnId);
+    } catch {
+      currentTrace = undefined;
+    }
+    if (controller.signal.aborted || currentTrace?.status === "cancelled") {
+      if (currentTrace?.status !== "cancelled") {
+        host.markChatTurnCancelled(sessionId, prepared.turnId);
+      }
+      if (deliveryCommitted && !(error instanceof Error && error.message.includes("may already be committed"))) {
+        throw new Error(
+          `Chat turn ${prepared.turnId} was cancelled after integration delivery; the external delivery may already be committed.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    tryPatchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
       status: "failed",
       finishedAt: new Date().toISOString(),
       retrieval: prepared.retrievalTrace,
@@ -629,6 +690,50 @@ export async function sendPreparedIntegrationChatTurn(
       citations: [],
     });
     throw error;
+  } finally {
+    detachAbortListener?.();
+    host.endActiveChatTurnExecution(prepared.turnId, controller);
+  }
+}
+
+function bindAbortSignalToController(
+  externalSignal: AbortSignal | undefined,
+  controller: AbortController,
+): (() => void) | undefined {
+  if (!externalSignal) {
+    return undefined;
+  }
+  const abort = (): void => controller.abort();
+  if (externalSignal.aborted) {
+    abort();
+    return undefined;
+  }
+  externalSignal.addEventListener("abort", abort);
+  return () => externalSignal.removeEventListener("abort", abort);
+}
+
+function assertIntegrationCompletionWritable(
+  host: Pick<ChatTurnDispatchHost, "storage">,
+  turnId: string,
+  signal: AbortSignal,
+  deliveryCommitted: boolean,
+): void {
+  let status: ChatTurnTraceRecord["status"] | undefined;
+  try {
+    status = host.storage.chatTurnTraces.get(turnId).status;
+  } catch {
+    status = undefined;
+  }
+  if (signal.aborted || status === "cancelled") {
+    if (deliveryCommitted) {
+      throw new Error(
+        `Chat turn ${turnId} was cancelled after integration delivery; the external delivery may already be committed.`,
+      );
+    }
+    throw new ChatTurnCancelledError(turnId);
+  }
+  if (status && status !== "running") {
+    throw new Error(`Chat turn ${turnId} integration completion lost lifecycle ownership to ${status}.`);
   }
 }
 

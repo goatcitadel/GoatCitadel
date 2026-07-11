@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { markMutationCommitted } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -156,6 +157,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
           traceId: readTraceId(request.headers.traceparent, request.headers["x-goatcitadel-correlation-id"]),
           originSurface: readHeaderValue(request.headers["x-goatcitadel-origin-surface"]),
         });
+        markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
         return reply.code(400).send({
@@ -313,6 +315,14 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.get("/api/v1/auth/device-requests/:requestId/status", publicAuthRoute, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const existingVary = reply.getHeader("Vary");
+    reply.header(
+      "Vary",
+      typeof existingVary === "string" && existingVary.trim()
+        ? `${existingVary}, x-goatcitadel-device-request-secret`
+        : "x-goatcitadel-device-request-secret",
+    );
     const params = deviceRequestParamsSchema.safeParse(request.params);
     const headers = deviceRequestSecretHeaderSchema.safeParse(request.headers);
     if (!params.success || !headers.success) {

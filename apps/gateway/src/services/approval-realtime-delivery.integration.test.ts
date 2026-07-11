@@ -19,13 +19,24 @@ describe("browser approval realtime delivery", () => {
     const workflow = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),
       connector,
-      token: actionToken,
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       tokenId: "rat_123",
       expiresAt: "2026-07-10T00:00:00.000Z",
     });
     expect(workflow).toBeDefined();
+    expect(JSON.stringify(workflow)).not.toContain(actionToken);
+    const liveWorkflow = {
+      ...workflow!,
+      payload: {
+        ...workflow!.payload,
+        payload: {
+          ...((workflow!.payload?.payload as Record<string, unknown>) ?? {}),
+          token: actionToken,
+        },
+      },
+    };
 
-    await dispatchConnectorDelivery(connector, workflow!, {
+    await dispatchConnectorDelivery(connector, liveWorkflow, {
       commsSend: vi.fn(),
       commsReply: vi.fn(),
       commsReact: vi.fn(),

@@ -530,7 +530,7 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
     await expect(
       GatewayService.prototype.cancelLatestActiveChatTurnForSession.call(gateway, "session-1", "tester"),
     ).resolves.toMatchObject({
-      status: "cancelled",
+      status: "no_active_run",
       sessionId: "session-1",
       turnId: "turn-active",
       durableRunId: "trace-run",
@@ -651,6 +651,14 @@ describe("GatewayService retained stream facade behavior", () => {
       });
       return createdTrace;
     });
+    const patchIfStatus = vi.fn(
+      (turnId: string, expectedStatuses: ChatTurnTraceRecord["status"][], input: Partial<ChatTurnTraceRecord>) => {
+        if (!createdTrace || !expectedStatuses.includes(createdTrace.status)) {
+          return undefined;
+        }
+        return patch(turnId, input);
+      },
+    );
     const gateway = createGatewayHarness({
       chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
       recordDevDiagnostic: vi.fn(),
@@ -665,6 +673,7 @@ describe("GatewayService retained stream facade behavior", () => {
           }),
           create,
           patch,
+          patchIfStatus,
         },
         chatToolRuns: {
           listByTurn: vi.fn(() => []),
@@ -716,8 +725,9 @@ describe("GatewayService retained stream facade behavior", () => {
         },
       }),
     );
-    expect(patch).toHaveBeenCalledWith(
+    expect(patchIfStatus).toHaveBeenCalledWith(
       "turn-1",
+      expect.arrayContaining(["running"]),
       expect.objectContaining({
         status: "cancelled",
       }),

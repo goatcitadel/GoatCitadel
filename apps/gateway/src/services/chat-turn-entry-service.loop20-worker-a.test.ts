@@ -330,6 +330,7 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
           content: expect.stringContaining("the final assistant text was empty"),
         }),
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
       "turn-1",

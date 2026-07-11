@@ -6,6 +6,7 @@ import { Storage } from "@goatcitadel/storage";
 import type { ApprovalResolveInput, ImprovementRef } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImprovementService, type ImprovementServiceCallbacks } from "./improvement-service.js";
+import { RealtimeEventService } from "./realtime-event-service.js";
 import {
   readBlockerTemplateStrictness,
   readLiveIntentThreshold,
@@ -23,6 +24,7 @@ interface Harness {
   state: {
     failRoutingRestore: boolean;
     failRepairRestore: boolean;
+    failActivationAppliedPublish: boolean;
   };
 }
 
@@ -74,6 +76,243 @@ describe("ImprovementService activation ledger coverage", () => {
     expect(detail.candidate.status).toBe("rejected");
     expect(detail.candidate.suppressionUntil).toBeTruthy();
     expect(harness.routingPolicies[candidate.targetKey]).toBeUndefined();
+  });
+
+  it("restores the pre-activation snapshot when activation persistence fails after apply", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "persistence-failure");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+    const prepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql) => {
+      if (/UPDATE improvement_activations[\s\S]*SET status = 'active'/.test(sql)) {
+        return {
+          run: () => {
+            throw new Error("activation persistence unavailable");
+          },
+          get: () => undefined,
+          all: () => [],
+        };
+      }
+      return prepare(sql);
+    });
+
+    const failed = harness.service.handleActivationApprovalResolution(approval);
+
+    expect(failed).toMatchObject({ status: "failed" });
+    expect(harness.routingPolicies[candidate.targetKey]).toBeUndefined();
+  });
+
+  it("keeps an applied activation active and retries post-commit audit delivery", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "audit-retry");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+    harness.state.failActivationAppliedPublish = true;
+
+    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(/audit publish unavailable/);
+    expect(harness.service.getImprovementActivation(activation.activationId)).toMatchObject({ status: "active" });
+    expect(harness.routingPolicies[candidate.targetKey]).toBeDefined();
+
+    harness.state.failActivationAppliedPublish = false;
+    expect(harness.service.handleActivationApprovalResolution(approval)).toMatchObject({ status: "active" });
+    expect(harness.published.some((event) => event.eventType === "improvement_activation_applied")).toBe(true);
+  });
+
+  it("publishes one retained applied event across repeated active retries", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "audit-idempotency");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+
+    harness.service.handleActivationApprovalResolution(approval);
+    harness.service.handleActivationApprovalResolution(approval);
+
+    expect(harness.published.filter((event) => event.eventType === "improvement_activation_applied")).toHaveLength(1);
+  });
+
+  it("replays missing applied evidence after the activation is paused", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "paused-audit-retry");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+    harness.state.failActivationAppliedPublish = true;
+
+    expect(() => harness.service.handleActivationApprovalResolution(approval)).toThrow(/audit publish unavailable/);
+    harness.state.failActivationAppliedPublish = false;
+    expect(harness.service.pauseImprovementActivation(activation.activationId)).toMatchObject({ status: "paused" });
+
+    expect(harness.service.handleActivationApprovalResolution(approval)).toMatchObject({ status: "paused" });
+    expect(harness.published.filter((event) => event.eventType === "improvement_activation_applied")).toHaveLength(1);
+  });
+
+  it("dedupes persisted applied evidence when completion retries after a later pause", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "persisted-then-paused-audit");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+
+    expect(harness.service.handleActivationApprovalResolution(approval)).toMatchObject({ status: "active" });
+    expect(harness.service.pauseImprovementActivation(activation.activationId)).toMatchObject({ status: "paused" });
+    expect(harness.service.handleActivationApprovalResolution(approval)).toMatchObject({ status: "paused" });
+
+    expect(harness.published.filter((event) => event.eventType === "improvement_activation_applied")).toHaveLength(1);
+  });
+
+  it.each(["reject", "snooze"] as const)(
+    "does not apply a stale activation after the candidate is %sed",
+    async (operatorAction) => {
+      const harness = createHarness();
+      const candidate = createRoutingCandidate(harness.service, `deny-wins-${operatorAction}`);
+      const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+      if (operatorAction === "reject") {
+        harness.service.rejectImprovementCandidate(candidate.candidateId, { actorId: "operator-2" });
+      } else {
+        harness.service.snoozeImprovementCandidate(candidate.candidateId, { actorId: "operator-2" });
+      }
+      const approval = resolveApproval(harness, activation.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      });
+
+      const failed = harness.service.handleActivationApprovalResolution(approval);
+
+      expect(failed).toMatchObject({ status: "failed" });
+      expect(harness.service.getImprovementCandidateDetail(candidate.candidateId).candidate.status).toBe("rejected");
+      expect(harness.routingPolicies[candidate.targetKey]).toBeUndefined();
+    },
+  );
+
+  it.each(["reject", "snooze"] as const)(
+    "requires pause or rollback before an applied candidate can be %sed",
+    async (operatorAction) => {
+      const harness = createHarness();
+      const candidate = createRoutingCandidate(harness.service, `active-${operatorAction}`);
+      const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+      const approval = resolveApproval(harness, activation.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      });
+      harness.service.handleActivationApprovalResolution(approval);
+
+      const deny = () =>
+        operatorAction === "reject"
+          ? harness.service.rejectImprovementCandidate(candidate.candidateId, { actorId: "operator-2" })
+          : harness.service.snoozeImprovementCandidate(candidate.candidateId, { actorId: "operator-2" });
+
+      expect(deny).toThrow(/pause or roll it back/i);
+      expect(harness.service.getImprovementCandidateDetail(candidate.candidateId).candidate.status).toBe("approved");
+      expect(harness.routingPolicies[candidate.targetKey]).toBeDefined();
+    },
+  );
+
+  it("does not pause or roll back an activation that was never applied", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service, "pending-operator-control");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+
+    expect(() => harness.service.pauseImprovementActivation(activation.activationId)).toThrow(/must be active/i);
+    expect(() => harness.service.rollbackImprovementActivation(activation.activationId)).toThrow(
+      /must have been applied/i,
+    );
+    expect(harness.service.getImprovementActivation(activation.activationId)).toMatchObject({ status: "pending" });
+    expect(harness.service.getImprovementCandidateDetail(candidate.candidateId).candidate.status).toBe(
+      "approval_pending",
+    );
+  });
+
+  it("does not apply a candidate after another node wins the pending activation claim", async () => {
+    const applyRoutingPolicyCandidate = vi.fn((targetKey: string) => ({
+      refType: "routing_policy_config" as const,
+      refId: targetKey,
+    }));
+    const harness = createHarness({ applyRoutingPolicyCandidate });
+    const candidate = createRoutingCandidate(harness.service, "claim-loser");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+    const prepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql) => {
+      if (/UPDATE improvement_activations[\s\S]*SET updated_at = @claimAt/.test(sql)) {
+        return {
+          run: (params: unknown) => {
+            const input = params as { activationId: string };
+            prepare(
+              `UPDATE improvement_activations SET status = 'active', watch_status = 'watching' WHERE activation_id = ?`,
+            ).run(input.activationId);
+            return { changes: 0 };
+          },
+          get: () => undefined,
+          all: () => [],
+        };
+      }
+      return prepare(sql);
+    });
+
+    const applied = harness.service.handleActivationApprovalResolution(approval);
+
+    expect(applied).toMatchObject({ status: "active" });
+    expect(applyRoutingPolicyCandidate).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite a concurrent activation winner when the candidate claim loses first", async () => {
+    const applyRoutingPolicyCandidate = vi.fn((targetKey: string) => ({
+      refType: "routing_policy_config" as const,
+      refId: targetKey,
+    }));
+    const harness = createHarness({ applyRoutingPolicyCandidate });
+    const candidate = createRoutingCandidate(harness.service, "candidate-claim-loser");
+    const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
+    const approval = resolveApproval(harness, activation.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+    const originalTransaction = harness.storage.gatewaySql.runImmediateTransaction.bind(harness.storage.gatewaySql);
+    vi.spyOn(harness.storage.gatewaySql, "runImmediateTransaction").mockImplementationOnce((operation) => {
+      const now = new Date().toISOString();
+      harness.storage.gatewaySql
+        .prepare(
+          `
+          UPDATE improvement_candidates
+          SET status = 'approved', updated_at = @updatedAt
+          WHERE candidate_id = @candidateId
+        `,
+        )
+        .run({ candidateId: candidate.candidateId, updatedAt: now });
+      harness.storage.gatewaySql
+        .prepare(
+          `
+          UPDATE improvement_activations
+          SET status = 'active', watch_status = 'watching', watch_started_at = @watchStartedAt, updated_at = @updatedAt
+          WHERE activation_id = @activationId
+        `,
+        )
+        .run({ activationId: activation.activationId, watchStartedAt: now, updatedAt: now });
+      return originalTransaction(operation);
+    });
+
+    const winner = harness.service.handleActivationApprovalResolution(approval);
+
+    expect(winner).toMatchObject({ status: "active", watchStatus: "watching" });
+    expect(harness.service.getImprovementCandidateDetail(candidate.candidateId).candidate.status).toBe("approved");
+    expect(applyRoutingPolicyCandidate).not.toHaveBeenCalled();
   });
 
   it("blocks stale approval activation when the candidate revision has drifted", async () => {
@@ -433,7 +672,15 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
   const state = {
     failRoutingRestore: false,
     failRepairRestore: false,
+    failActivationAppliedPublish: false,
   };
+  const realtime = new RealtimeEventService({
+    storage,
+    getGatewayNodeId: () => "improvement-loop19-test",
+  });
+  realtime.subscribeRealtime((event) => {
+    published.push({ eventType: event.eventType, source: event.source, payload: event.payload });
+  });
   const ctx: ServiceContext = {
     storage,
     config: {} as never,
@@ -441,7 +688,10 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
     policyEngine: {} as never,
     gatewaySql: storage.gatewaySql,
     publishRealtime: (eventType, source, payload) => {
-      published.push({ eventType, source, payload });
+      if (state.failActivationAppliedPublish && eventType === "improvement_activation_applied") {
+        throw new Error("activation audit publish unavailable");
+      }
+      realtime.publishRealtime(eventType, source, payload);
     },
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,

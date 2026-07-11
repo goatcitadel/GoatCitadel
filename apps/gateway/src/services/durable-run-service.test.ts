@@ -145,6 +145,20 @@ describe("DurableRunService", () => {
     });
   });
 
+  it("rejects raw remote approval bearers before durable persistence", () => {
+    const runs = new Map<string, DurableRunRecord>();
+    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext);
+    const rawToken = `grat_${"p".repeat(43)}`;
+
+    expect(() =>
+      service.createDurableRun({
+        workflowKey: "connector.delivery",
+        payload: { interactiveActions: { callbackData: `gca:${rawToken}:a` } },
+      }),
+    ).toThrow(/cannot be persisted in durable run state/i);
+    expect(runs.size).toBe(0);
+  });
+
   it("requeues and resumes recoverable orphaned chat turn runs on worker startup", async () => {
     const runs = new Map<string, DurableRunRecord>([
       [

@@ -49,6 +49,7 @@ describe("sqlite schema migrations", () => {
 
     const approvalsIndexes = db.prepare("PRAGMA index_list(approvals)").all() as Array<{ name: string }>;
     assert.ok(approvalsIndexes.some((index) => index.name === "idx_approvals_status_created"));
+    assert.ok(approvalsIndexes.some((index) => index.name === "idx_approvals_status_expires_at"));
 
     const toolInvocationIndexes = db.prepare("PRAGMA index_list(tool_invocations)").all() as Array<{ name: string }>;
     assert.ok(toolInvocationIndexes.some((index) => index.name === "idx_tool_invocations_session_time"));
@@ -107,6 +108,199 @@ describe("sqlite schema migrations", () => {
     assert.ok(decisionTraceColumns.some((column) => column.name === "citadel_id"));
 
     db.close();
+  });
+
+  it("scrubs legacy device-token plaintext and revokes only undelivered grants", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-device-token-scrub-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const createdAt = "2026-06-20T00:00:00.000Z";
+    const tokenExpiresAt = "2099-01-01T00:00:00.000Z";
+    const insertRequest = db.prepare(`
+      INSERT INTO auth_device_requests (
+        request_id, approval_id, request_secret_hash, device_label, device_type,
+        status, created_at, expires_at, resolved_at, resolved_by,
+        approved_token_plaintext, approved_token_expires_at, delivered_at
+      ) VALUES (?, ?, ?, ?, 'desktop', 'approved', ?, ?, ?, 'operator:legacy', ?, ?, ?)
+    `);
+    const insertGrant = db.prepare(`
+      INSERT INTO auth_device_grants (
+        grant_id, request_id, token_hash, device_label, device_type,
+        granted_by, created_at, expires_at, metadata_json
+      ) VALUES (?, ?, ?, ?, 'desktop', 'operator:legacy', ?, ?, '{}')
+    `);
+
+    insertRequest.run(
+      "legacy-undelivered",
+      "legacy-approval-undelivered",
+      "request-secret-hash-undelivered",
+      "Legacy undelivered",
+      createdAt,
+      "2026-06-20T00:10:00.000Z",
+      "2026-06-20T00:01:00.000Z",
+      "legacy-plaintext-undelivered",
+      tokenExpiresAt,
+      null,
+    );
+    insertGrant.run(
+      "legacy-grant-undelivered",
+      "legacy-undelivered",
+      "legacy-token-hash-undelivered",
+      "Legacy undelivered",
+      createdAt,
+      tokenExpiresAt,
+    );
+    insertRequest.run(
+      "legacy-delivered",
+      "legacy-approval-delivered",
+      "request-secret-hash-delivered",
+      "Legacy delivered",
+      createdAt,
+      "2026-06-20T00:10:00.000Z",
+      "2026-06-20T00:01:00.000Z",
+      "legacy-plaintext-delivered",
+      tokenExpiresAt,
+      "2026-06-20T00:02:00.000Z",
+    );
+    insertGrant.run(
+      "legacy-grant-delivered",
+      "legacy-delivered",
+      "legacy-token-hash-delivered",
+      "Legacy delivered",
+      createdAt,
+      tokenExpiresAt,
+    );
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(137);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const undelivered = migrated
+      .prepare(
+        `SELECT status, approved_token_plaintext, approved_token_expires_at
+         FROM auth_device_requests WHERE request_id = ?`,
+      )
+      .get("legacy-undelivered") as {
+      status: string;
+      approved_token_plaintext: string | null;
+      approved_token_expires_at: string | null;
+    };
+    const delivered = migrated
+      .prepare(
+        `SELECT status, approved_token_plaintext
+         FROM auth_device_requests WHERE request_id = ?`,
+      )
+      .get("legacy-delivered") as { status: string; approved_token_plaintext: string | null };
+    const grants = migrated
+      .prepare("SELECT grant_id, revoked_at FROM auth_device_grants ORDER BY grant_id")
+      .all() as Array<{ grant_id: string; revoked_at: string | null }>;
+
+    assert.deepEqual(
+      { ...undelivered },
+      {
+        status: "expired",
+        approved_token_plaintext: null,
+        approved_token_expires_at: null,
+      },
+    );
+    assert.deepEqual({ ...delivered }, { status: "approved", approved_token_plaintext: null });
+    assert.equal(grants.find((grant) => grant.grant_id === "legacy-grant-undelivered")?.revoked_at !== null, true);
+    assert.equal(grants.find((grant) => grant.grant_id === "legacy-grant-delivered")?.revoked_at, null);
+
+    const firstRevokedAt = grants.find((grant) => grant.grant_id === "legacy-grant-undelivered")?.revoked_at;
+    migrated.prepare("DELETE FROM schema_migrations WHERE version = ?").run(137);
+    migrated.close();
+    const rerun = createDatabase({ dbPath });
+    const rerunGrant = rerun
+      .prepare("SELECT revoked_at FROM auth_device_grants WHERE grant_id = ?")
+      .get("legacy-grant-undelivered") as { revoked_at: string | null };
+    assert.equal(rerunGrant.revoked_at, firstRevokedAt);
+    rerun.close();
+  });
+
+  it("scrubs legacy remote approval bearers from durable and observability stores", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-remote-bearer-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const rawToken = `grat_${"m".repeat(43)}`;
+    const now = "2026-07-10T00:00:00.000Z";
+    const db = createDatabase({ dbPath });
+    db.prepare(
+      `
+      INSERT INTO durable_runs (
+        run_id, workflow_key, status, attempt_count, max_attempts, payload_json, metadata_json,
+        version, created_at, updated_at
+      ) VALUES (?, 'connector.delivery', 'queued', 0, 3, ?, '{}', 1, ?, ?)
+    `,
+    ).run("legacy-remote-run", JSON.stringify({ payload: { token: rawToken } }), now, now);
+    db.prepare(
+      `
+      INSERT INTO comms_deliveries (
+        delivery_id, connection_id, channel_key, target, payload_hash, payload_json, status,
+        attempts, max_attempts, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, 3, ?, ?)
+    `,
+    ).run(
+      "legacy-remote-delivery",
+      "connection-1",
+      "discord",
+      "channel-1",
+      "legacy-payload-hash",
+      JSON.stringify({ interactiveActions: { buttons: [{ callbackData: `gca:${rawToken}:a` }] } }),
+      now,
+      now,
+    );
+    db.prepare(
+      `
+      INSERT INTO approval_inbox_items (
+        inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
+        action_type, state, approval_kind, risk_level, approval_status, preview_json,
+        created_at, updated_at, expires_at, delivery_count, last_delivered_at
+      ) VALUES (?, ?, ?, 'mcp', ?, ?, ?, 'approval.resolve', 'pending', 'tool.invoke', 'danger',
+        'pending', '{}', ?, ?, ?, 1, ?)
+    `,
+    ).run(
+      "legacy-inbox",
+      "legacy-approval",
+      "mcp:server-1",
+      "server-1",
+      "legacy-token-id",
+      rawToken,
+      now,
+      now,
+      "2026-07-10T00:15:00.000Z",
+      now,
+    );
+    db.prepare(
+      `
+      INSERT INTO tool_invocations (
+        audit_event_id, timestamp, agent_id, session_id, tool_name, outcome, policy_reason, args_json
+      ) VALUES (?, ?, 'operator', 'session-1', 'channel.send', 'executed', 'allowed', ?)
+    `,
+    ).run("legacy-tool-invocation", now, JSON.stringify({ callbackData: `gca:${rawToken}:a` }));
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(139);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const durable = migrated
+      .prepare("SELECT status, payload_json FROM durable_runs WHERE run_id = ?")
+      .get("legacy-remote-run") as { status: string; payload_json: string };
+    const delivery = migrated
+      .prepare("SELECT status, delivery_status, payload_json FROM comms_deliveries WHERE delivery_id = ?")
+      .get("legacy-remote-delivery") as { status: string; delivery_status: string; payload_json: string };
+    const inbox = migrated
+      .prepare("SELECT token FROM approval_inbox_items WHERE inbox_item_id = ?")
+      .get("legacy-inbox") as { token: string };
+    const invocation = migrated
+      .prepare("SELECT args_json FROM tool_invocations WHERE audit_event_id = ?")
+      .get("legacy-tool-invocation") as { args_json: string };
+
+    assert.equal(durable.status, "failed");
+    assert.equal(delivery.status, "failed");
+    assert.equal(delivery.delivery_status, "manual_reconciliation_required");
+    assert.equal(inbox.token, "redacted:legacy-token-id");
+    assert.equal(JSON.stringify({ durable, delivery, inbox, invocation }).includes(rawToken), false);
+    assert.match(durable.payload_json, /\[REDACTED\]/);
+    assert.match(invocation.args_json, /\[REDACTED\]/);
+    migrated.close();
   });
 
   it("backfills legacy workspace-as-Citadel records during the parent-scope migration", () => {

@@ -11,17 +11,20 @@ import type {
 } from "@goatcitadel/contracts";
 import type {
   ApprovalReplayResult,
+  ApprovalResolutionContext,
   ApprovalResolveResult,
   RemoteApprovalActionTokenIssueResult,
 } from "./approval-types.js";
-import type { ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
+import type { ApprovalCreateCommitHook, ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
+import type { ApprovalRemoteActionContext } from "./approval-remote-action-service.js";
 import * as approvalLifecycleService from "./approval-lifecycle-service.js";
+import * as approvalRemoteActionService from "./approval-remote-action-service.js";
 
 export interface ApprovalRuntime {
   listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit?: number): ToolGrantRecord[];
   createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord;
   revokeToolGrant(grantId: string, revokedBy: string): boolean;
-  createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
+  createApproval(input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook): Promise<ApprovalRequest>;
   createApprovalRemoteActionToken(
     approvalId: string,
     input: {
@@ -39,6 +42,7 @@ export interface ApprovalRuntime {
   }): Promise<ApprovalResolveResult>;
   resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -52,8 +56,13 @@ export interface ApprovalRuntime {
     workspaceId?: string;
   }): ApprovalListResponse;
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
+  expirePendingApprovals(limit?: number): number;
   getApprovalReplay(approvalId: string, replayedBy?: string): ApprovalReplayResult;
-  resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
+  resolveApproval(
+    approvalId: string,
+    input: ApprovalResolveInput,
+    context?: ApprovalResolutionContext,
+  ): Promise<ApprovalResolveResult>;
   resolveChatToolApproval(
     sessionId: string,
     approvalId: string,
@@ -65,6 +74,7 @@ export interface ApprovalRuntime {
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
     grant?: ToolGrantRecord;
+    grantError?: string;
     resumed: boolean;
     resumedTurnId?: string;
     resumedRunId?: string;
@@ -72,7 +82,7 @@ export interface ApprovalRuntime {
 }
 
 export class ApprovalRuntimeService implements ApprovalRuntime {
-  public constructor(private readonly host: ApprovalLifecycleHost) {}
+  public constructor(private readonly host: ApprovalLifecycleHost & ApprovalRemoteActionContext) {}
 
   public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return approvalLifecycleService.listToolGrants(this.host, scope, scopeRef, limit);
@@ -86,8 +96,11 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.revokeToolGrant(this.host, grantId, revokedBy);
   }
 
-  public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    return approvalLifecycleService.createApproval(this.host, input);
+  public async createApproval(
+    input: ApprovalCreateInput,
+    onCreated?: ApprovalCreateCommitHook,
+  ): Promise<ApprovalRequest> {
+    return approvalLifecycleService.createApproval(this.host, input, onCreated);
   }
 
   public createApprovalRemoteActionToken(
@@ -98,7 +111,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
       expiresInMs?: number;
     },
   ): RemoteApprovalActionTokenIssueResult {
-    return approvalLifecycleService.createApprovalRemoteActionToken(this.host, approvalId, input);
+    return approvalRemoteActionService.createApprovalRemoteActionToken(this.host, approvalId, input);
   }
 
   public async resolveApprovalWithRemoteToken(input: {
@@ -108,17 +121,18 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     resolutionNote?: string;
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult> {
-    return approvalLifecycleService.resolveApprovalWithRemoteToken(this.host, input);
+    return approvalRemoteActionService.resolveApprovalWithRemoteToken(this.host, input);
   }
 
   public async resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult> {
-    return approvalLifecycleService.resolveApprovalWithRemoteTokenId(this.host, input);
+    return approvalRemoteActionService.resolveApprovalWithRemoteTokenId(this.host, input);
   }
 
   public listApprovals(status?: ApprovalRequest["status"], limit = 100, workspaceId?: string): ApprovalRequest[] {
@@ -138,12 +152,20 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.resolveApprovalsBulk(this.host, input);
   }
 
+  public expirePendingApprovals(limit = 100): number {
+    return approvalLifecycleService.expirePendingApprovals(this.host, limit);
+  }
+
   public getApprovalReplay(approvalId: string, replayedBy = "operator"): ApprovalReplayResult {
     return approvalLifecycleService.getApprovalReplay(this.host, approvalId, replayedBy);
   }
 
-  public async resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult> {
-    return approvalLifecycleService.resolveApproval(this.host, approvalId, input);
+  public async resolveApproval(
+    approvalId: string,
+    input: ApprovalResolveInput,
+    context?: ApprovalResolutionContext,
+  ): Promise<ApprovalResolveResult> {
+    return approvalLifecycleService.resolveApproval(this.host, approvalId, input, context);
   }
 
   public async resolveChatToolApproval(
@@ -157,6 +179,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
     grant?: ToolGrantRecord;
+    grantError?: string;
     resumed: boolean;
     resumedTurnId?: string;
     resumedRunId?: string;

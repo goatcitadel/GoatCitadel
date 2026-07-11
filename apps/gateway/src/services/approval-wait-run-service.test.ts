@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalRequest, DurableRunCreateRequest, DurableRunRecord } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  type ApprovalRequest,
+  type DurableRunCreateRequest,
+  type DurableRunRecord,
+} from "@goatcitadel/contracts";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import type { ServiceContext } from "./service-context.js";
 
@@ -73,6 +78,17 @@ describe("ApprovalWaitRunService", () => {
     expect(harness.approvalWaitRuns.getRunId("approval-1")).toBe("run-1");
   });
 
+  it("creates the durable run with the transactionally reserved run id", () => {
+    const harness = createHarness();
+    const reserved = harness.service.reserveApprovalWaitRun(createApproval());
+
+    const run = harness.service.ensureApprovalWaitDurableRun(reserved);
+
+    expect(reserved.linkage?.durableRunId).toBeTruthy();
+    expect(run?.runId).toBe(reserved.linkage?.durableRunId);
+    expect(harness.createdRuns[0]).toMatchObject({ runId: reserved.linkage?.durableRunId });
+  });
+
   it("primes approval lifecycle by attaching linkage and durable run id", () => {
     const harness = createHarness({
       attribution: {
@@ -114,10 +130,16 @@ function createHarness(
   const service = new ApprovalWaitRunService(ctx, {
     createDurableRun: (input) => {
       createdRuns.push(input);
-      return createDurableRunRecord(`run-${createdRuns.length}`);
+      return createDurableRunRecord(input.runId ?? `run-${createdRuns.length}`);
     },
-    getDurableRun: (runId) => createDurableRunRecord(runId),
+    getDurableRun: (runId) => {
+      if (!createdRuns.some((input) => input.runId === runId)) {
+        throw new NotFoundError({ entity: "Durable run", id: runId });
+      }
+      return createDurableRunRecord(runId);
+    },
     getRequestAttribution: () => options.attribution,
+    createApprovalWaitRunId: () => "run-1",
   });
 
   return {
@@ -161,6 +183,19 @@ function createApprovalWaitRunStore() {
   return {
     get: (approvalId: string) => rows.get(approvalId),
     getRunId: (approvalId: string) => rows.get(approvalId)?.runId,
+    createOrGet: (input: { approvalId: string; runId: string; createdAt?: string }) => {
+      const existing = rows.get(input.approvalId);
+      if (existing) {
+        return existing;
+      }
+      const row = {
+        approvalId: input.approvalId,
+        runId: input.runId,
+        createdAt: input.createdAt ?? "2026-04-10T11:00:00.000Z",
+      };
+      rows.set(input.approvalId, row);
+      return row;
+    },
     upsert: (input: { approvalId: string; runId: string; createdAt?: string; resolvedAt?: string | null }) => {
       const row = {
         approvalId: input.approvalId,

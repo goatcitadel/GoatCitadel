@@ -20,10 +20,11 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatTurnTraceRecord,
+  DurableRunRecord,
   GatewayEventInput,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { isChatTurnActiveStatus, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
@@ -37,6 +38,7 @@ import {
   dedupeChatCitations,
   detectDelegationRoles,
   inferDegradedAssistantTurnFailure,
+  patchChatTurnTraceIfStatus,
 } from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
@@ -335,6 +337,7 @@ async function runAgentSendChatMessageLlmPath(
       modelRouter: prepared.modelRouterDecision,
       signal: controller.signal,
     });
+    assertChatTurnCompletionWritable(host, prepared.turnId, controller.signal, [turnResult.turnTrace.status]);
     let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
       attempted: false,
       attemptCount: 0,
@@ -413,6 +416,7 @@ async function runAgentSendChatMessageLlmPath(
         modelRouter: prepared.modelRouterDecision,
         signal: controller.signal,
       });
+      assertChatTurnCompletionWritable(host, retryTurnId, controller.signal, [retryResult.turnTrace.status]);
       if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {
         turnId = retryTurnId;
         turnResult = retryResult;
@@ -513,30 +517,9 @@ async function runAgentSendChatMessageLlmPath(
         turnResult.turnTrace.routing.effectiveModel ?? turnResult.assistantModel ?? input.model ?? prepared.prefs.model,
     });
     const assistantEventId = prepared.assistantMessageId;
-    await host.ingestEvent(randomUUID(), {
-      eventId: assistantEventId,
-      route: prepared.route,
-      actor: {
-        type: "agent",
-        id: "assistant",
-      },
-      message: {
-        role: "assistant",
-        content: assistantText,
-      },
-      usage: assistantUsage,
-    });
-    const assistantMessage: ChatMessageRecord = {
-      messageId: assistantEventId,
-      sessionId,
-      role: "assistant",
-      actorType: "agent",
-      actorId: "assistant",
-      content: assistantText,
-      timestamp: new Date().toISOString(),
-    };
+    const storage = host.storage;
     const finalTraceStatus = turnResult.turnTrace.status === "failed" ? "failed" : "completed";
-    const trace = host.storage.chatTurnTraces.patch(turnId, {
+    const finalTracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
       assistantMessageId: assistantEventId,
       status: finalTraceStatus,
       finishedAt: new Date().toISOString(),
@@ -554,11 +537,47 @@ async function runAgentSendChatMessageLlmPath(
       },
       citations: dedupedTurnCitations,
       failure: persistedTurnFailure,
-    });
+    };
+    const completionOwnerStatuses = [
+      ...new Set(["running", turnResult.turnTrace.status]),
+    ] as ChatTurnTraceRecord["status"][];
+    let trace: ChatTurnTraceRecord | undefined;
+    assertChatTurnCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
+    await host.ingestEvent(
+      randomUUID(),
+      {
+        eventId: assistantEventId,
+        route: prepared.route,
+        actor: {
+          type: "agent",
+          id: "assistant",
+        },
+        message: {
+          role: "assistant",
+          content: assistantText,
+        },
+        usage: assistantUsage,
+      },
+      {
+        onCommit: () => {
+          trace = patchChatTurnTraceIfStatus(storage.chatTurnTraces, turnId, completionOwnerStatuses, finalTracePatch);
+        },
+      },
+    );
+    trace ??= patchChatTurnTraceIfStatus(storage.chatTurnTraces, turnId, completionOwnerStatuses, finalTracePatch);
+    const assistantMessage: ChatMessageRecord = {
+      messageId: assistantEventId,
+      sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: assistantText,
+      timestamp: new Date().toISOString(),
+    };
     let hydratedTrace: ChatTurnTraceRecord = {
       ...trace,
       citations: dedupedTurnCitations,
-      toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+      toolRuns: storage.chatToolRuns.listByTurn(turnId),
     };
     const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
       sessionId,
@@ -574,13 +593,13 @@ async function runAgentSendChatMessageLlmPath(
       trace: hydratedTrace,
     });
     if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-      hydratedTrace = host.storage.chatTurnTraces.patch(turnId, {
+      hydratedTrace = storage.chatTurnTraces.patch(turnId, {
         capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
         specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
       });
       hydratedTrace = {
         ...hydratedTrace,
-        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        toolRuns: storage.chatToolRuns.listByTurn(turnId),
       };
     }
     host.recordCapabilityGapFromTrace({
@@ -668,6 +687,34 @@ async function runAgentSendChatMessageLlmPath(
     disposeSubagentFanout?.();
     externalAbortListener?.();
     host.endActiveChatTurnExecution(prepared.turnId, controller);
+  }
+}
+
+function assertChatTurnCompletionWritable(
+  host: Pick<ChatTurnEntryHost, "storage">,
+  turnId: string,
+  signal: AbortSignal,
+  allowedTerminalStatuses: readonly ChatTurnTraceRecord["status"][] = [],
+): void {
+  if (signal.aborted) {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  let status: ChatTurnTraceRecord["status"];
+  try {
+    status = host.storage.chatTurnTraces.get(turnId).status;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      // The turn runtime may not have persisted its trace yet. The abort
+      // signal remains the completion fence in that compatibility case.
+      return;
+    }
+    throw error;
+  }
+  if (status === "cancelled") {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  if (isChatTurnTerminalStatus(status) && !allowedTerminalStatuses.includes(status)) {
+    throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership to ${status}.`);
   }
 }
 
@@ -1221,9 +1268,11 @@ export async function cancelChatTurn(
   turnId: string,
   cancelledBy?: string,
 ): Promise<ChatCancelTurnResponse> {
+  const storage = host.storage;
+  const cancelDurableChatRun = host.cancelDurableChatRun;
   let current: ChatTurnTraceRecord | undefined;
   try {
-    current = host.storage.chatTurnTraces.get(turnId);
+    current = storage.chatTurnTraces.get(turnId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
@@ -1247,14 +1296,53 @@ export async function cancelChatTurn(
     active.controller.abort(new ChatTurnCancelledError(turnId));
   }
   const durableRunId = current?.durable?.runId ?? activeStream?.runId;
-  if (durableRunId && host.cancelDurableChatRun) {
+  let durableCancellation: DurableRunRecord | undefined;
+  let durableCancellationError: unknown;
+  if (durableRunId && cancelDurableChatRun) {
     try {
-      host.cancelDurableChatRun(durableRunId, cancelledBy ?? "operator");
-    } catch {
-      // The chat trace still records the operator cancel even if the durable run already settled.
+      durableCancellation = cancelDurableChatRun(durableRunId, cancelledBy ?? "operator");
+    } catch (error) {
+      durableCancellationError = error;
+      try {
+        durableCancellation = storage.durableRuns.getRun(durableRunId);
+      } catch {
+        // Preserve the original cancellation error when canonical run truth is unavailable.
+      }
     }
   }
-  const trace = host.markChatTurnCancelled(sessionId, turnId, cancelledBy);
+  const durableTerminalWinner =
+    durableCancellation &&
+    (durableCancellation.status === "completed" ||
+      durableCancellation.status === "failed" ||
+      durableCancellation.status === "dead_lettered");
+  if (durableCancellationError && !durableTerminalWinner && durableCancellation?.status !== "cancelled") {
+    throw durableCancellationError;
+  }
+  const trace = durableTerminalWinner
+    ? (() => {
+        try {
+          return storage.chatTurnTraces.get(turnId);
+        } catch {
+          if (current) {
+            return current;
+          }
+          throw durableCancellationError ?? new Error(`Chat turn ${turnId} terminal projection is unavailable.`);
+        }
+      })()
+    : host.markChatTurnCancelled(sessionId, turnId, cancelledBy);
+  const durableTerminalProjectionAligned =
+    !durableTerminalWinner ||
+    (durableCancellation?.status === "completed" && trace.status === "completed") ||
+    ((durableCancellation?.status === "failed" || durableCancellation?.status === "dead_lettered") &&
+      trace.status === "failed");
+  if (!durableTerminalProjectionAligned || (durableTerminalWinner && isChatTurnActiveStatus(trace.status))) {
+    return {
+      sessionId,
+      turnId,
+      cancelled: false,
+      trace,
+    };
+  }
   host.persistChatStreamChunk(
     {
       type: "trace_update",

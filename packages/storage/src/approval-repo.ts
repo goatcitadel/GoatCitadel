@@ -43,6 +43,7 @@ export class ApprovalRepository {
   private readonly createStmt;
   private readonly listStmt;
   private readonly listByStatusStmt;
+  private readonly listExpiredPendingStmt;
   private readonly listPageStmt;
   private readonly listPageAfterStmt;
   private readonly listPageByStatusStmt;
@@ -56,6 +57,8 @@ export class ApprovalRepository {
   private readonly setShellExplanationsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const expiresAtValue = db.dialect === "postgres" ? "expires_at_ts" : "julianday(expires_at)";
+    const expiryBoundary = db.dialect === "postgres" ? "gc_try_parse_timestamptz(@now)" : "julianday(@now)";
     this.createStmt = db.prepare(`
       INSERT INTO approvals (
         approval_id, kind, risk_level, status, linkage_json, payload_json, preview_json,
@@ -69,6 +72,16 @@ export class ApprovalRepository {
     this.listByStatusStmt = db.prepare(
       "SELECT * FROM approvals WHERE status = @status ORDER BY created_at DESC LIMIT @limit",
     );
+    this.listExpiredPendingStmt = db.prepare(`
+      SELECT * FROM approvals
+      WHERE status = 'pending'
+        AND expires_at IS NOT NULL
+        AND ${expiresAtValue} IS NOT NULL
+        AND ${expiresAtValue} <= ${expiryBoundary}
+        AND (@excludedKind IS NULL OR kind <> @excludedKind)
+      ORDER BY ${expiresAtValue} ASC, approval_id ASC
+      LIMIT @limit
+    `);
     this.listPageStmt = db.prepare("SELECT * FROM approvals ORDER BY created_at DESC, approval_id DESC LIMIT @limit");
     this.listPageAfterStmt = db.prepare(`
       SELECT * FROM approvals
@@ -104,6 +117,7 @@ export class ApprovalRepository {
         resolution_note = @resolutionNote
       WHERE approval_id = @approvalId
         AND status = 'pending'
+        AND (@allowExpired = 1 OR expires_at IS NULL OR expires_at > @resolvedAt)
     `);
     this.updatePayloadStmt = db.prepare(`
       UPDATE approvals SET
@@ -204,6 +218,17 @@ export class ApprovalRepository {
     return mapped.filter((approval) => approval.linkage?.workspaceId === scopedWorkspaceId).slice(0, limit);
   }
 
+  public listExpiredPending(now = new Date().toISOString(), limit = 100, excludedKind?: string): ApprovalRequest[] {
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 100;
+    return toApprovalRows(
+      this.listExpiredPendingStmt.all({
+        now,
+        limit: boundedLimit,
+        excludedKind: excludedKind?.trim() || null,
+      }),
+    ).map(mapRow);
+  }
+
   public listPage(input: {
     status?: ApprovalRequest["status"];
     limit?: number;
@@ -282,8 +307,13 @@ export class ApprovalRepository {
     return rows.map(mapRow);
   }
 
-  public resolve(approvalId: string, input: ApprovalResolveInput): ApprovalRequest {
+  public resolve(
+    approvalId: string,
+    input: ApprovalResolveInput,
+    options?: { resolvedAt?: string; allowExpired?: boolean },
+  ): ApprovalRequest {
     const current = this.get(approvalId);
+    const resolvedAt = options?.resolvedAt ?? new Date().toISOString();
 
     const status: ApprovalRequest["status"] =
       input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "edited";
@@ -293,12 +323,26 @@ export class ApprovalRepository {
       status,
       linkageJson: serializeApprovalLinkage(current.linkage),
       payloadJson: JSON.stringify(embedApprovalLinkage(input.editedPayload ?? current.payload, current.linkage)),
-      resolvedAt: new Date().toISOString(),
+      resolvedAt,
       resolvedBy: input.resolvedBy,
       resolutionNote: input.resolutionNote ?? null,
+      allowExpired: options?.allowExpired ? 1 : 0,
     }).changes;
 
     if (changed < 1) {
+      const latest = this.get(approvalId);
+      const expiresAt = latest.expiresAt ? Date.parse(latest.expiresAt) : Number.NaN;
+      if (
+        latest.status === "pending" &&
+        !options?.allowExpired &&
+        Number.isFinite(expiresAt) &&
+        expiresAt <= Date.parse(resolvedAt)
+      ) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Approval ${approvalId} has expired and can no longer be resolved`,
+        });
+      }
       throw new ConflictError({ code: "STATE_CONFLICT", message: `Approval ${approvalId} is already resolved` });
     }
 

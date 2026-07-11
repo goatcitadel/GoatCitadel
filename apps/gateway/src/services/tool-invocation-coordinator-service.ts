@@ -235,6 +235,7 @@ export interface ToolInvocationCoordinatorHost {
   ): Promise<McpRuntimeInvocationResult>;
   resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
+    connectorId: string;
     decision: "approve" | "reject" | "edit";
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;

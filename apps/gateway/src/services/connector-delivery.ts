@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  redactStructuredSecrets,
   type ChannelActivityInput,
   type ChannelActivityResult,
   type ChannelAttachmentInput,
@@ -172,6 +173,7 @@ async function dispatchIntegrationChannelAction(
       message,
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
+      interactiveActionTemplate: normalizeInteractiveActionTemplate(actionPayload.interactiveActionTemplate),
       commitmentId: optionalString(actionPayload.commitmentId),
       ...governance,
       signal: deps.signal,
@@ -186,6 +188,7 @@ async function dispatchIntegrationChannelAction(
       message,
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
+      interactiveActionTemplate: normalizeInteractiveActionTemplate(actionPayload.interactiveActionTemplate),
       replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
       replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
       commitmentId: optionalString(actionPayload.commitmentId),
@@ -411,7 +414,7 @@ function dispatchBrowserRealtime(
     result: {
       eventType,
       source,
-      payload: eventPayload,
+      payload: redactStructuredSecrets(eventPayload).value,
     },
   };
 }
@@ -644,6 +647,47 @@ function normalizeInteractiveActions(value: unknown): ChannelSendInput["interact
   return {
     platform: optionalString(recordValue.platform),
     tokenId: optionalString(recordValue.tokenId),
+    buttons,
+  };
+}
+
+function normalizeInteractiveActionTemplate(value: unknown): ChannelSendInput["interactiveActionTemplate"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const recordValue = value as Record<string, unknown>;
+  const tokenId = optionalString(recordValue.tokenId);
+  const tokenRef = optionalString(recordValue.tokenRef);
+  const expiresAt = optionalString(recordValue.expiresAt);
+  if (
+    !tokenId ||
+    !tokenRef ||
+    !expiresAt ||
+    !Number.isFinite(Date.parse(expiresAt)) ||
+    !Array.isArray(recordValue.buttons)
+  ) {
+    return undefined;
+  }
+  const buttons = recordValue.buttons
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const button = item as Record<string, unknown>;
+      const decision = button.decision === "a" || button.decision === "r" ? button.decision : undefined;
+      return {
+        label: optionalString(button.label) ?? "",
+        decision,
+      };
+    })
+    .filter((item): item is { label: string; decision: "a" | "r" } => Boolean(item.label && item.decision))
+    .slice(0, 8);
+  if (buttons.length === 0) {
+    return undefined;
+  }
+  return {
+    platform: optionalString(recordValue.platform),
+    tokenId,
+    tokenRef,
+    expiresAt,
     buttons,
   };
 }

@@ -17,6 +17,7 @@ export interface EventIngestOptions {
   endpoint: string;
   idempotencyKey: string;
   payload: GatewayEventInput;
+  onCommit?: () => void;
 }
 
 /**
@@ -107,6 +108,7 @@ export class EventIngestService {
       });
 
       this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
+      options.onCommit?.();
 
       this.storage.sessions.applyUsage({
         sessionId: route.sessionId,

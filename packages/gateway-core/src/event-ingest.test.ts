@@ -141,10 +141,14 @@ describe("EventIngestService", () => {
     } as unknown as Storage;
 
     const service = new EventIngestService(storage);
+    const onCommit = vi.fn(() => {
+      expect(inTransaction).toBe(true);
+    });
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-1",
       payload: buildPayload(),
+      onCommit,
     });
 
     expect(result.accepted).toBe(true);
@@ -154,6 +158,7 @@ describe("EventIngestService", () => {
     expect(storage.transcriptOutbox.enqueue).toHaveBeenCalledTimes(1);
     expect(storage.transcripts.append).toHaveBeenCalledTimes(1);
     expect(storage.transcriptOutbox.markDelivered).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledTimes(1);
     expect(inTransaction).toBe(false);
   });
 

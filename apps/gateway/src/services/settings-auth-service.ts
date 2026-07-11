@@ -113,7 +113,12 @@ import {
   type CompanionSessionRecord,
 } from "./companion-auth-helpers.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
-import { deriveApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
+import {
+  deriveApprovalResolutionEffectsResult,
+  type ApprovalObservabilityEffectInput,
+} from "./approval-resolution-effects-service.js";
+import { buildApprovalResolutionObservabilityEffects } from "./approval-observability.js";
+import type { ApprovalResolutionContext } from "./approval-types.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { DeviceTokenVault } from "./device-token-vault.js";
 
@@ -154,6 +159,10 @@ export interface SettingsAuthRuntimeDependencies {
   createApproval(input: ApprovalCreateInput): Promise<{ approvalId: string }>;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   enqueueApprovalResolutionEffects(approval: ApprovalRequest, input: ApprovalResolveInput): ApprovalEffectRecord[];
+  enqueueApprovalObservabilityEffects(
+    approvalId: string,
+    items: readonly ApprovalObservabilityEffectInput[],
+  ): ApprovalEffectRecord[];
   listApprovalEffects(approvalId: string): ApprovalEffectRecord[];
   buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]>;
   recordImprovementApprovalResolutionSignal(approval: ApprovalRequest): void;
@@ -763,10 +772,22 @@ function assertAuthModeHasEffectiveCredential(plan: AuthRuntimeSettings["plan"])
   }
 }
 
+export class DeviceAccessExpiredAfterCommitError extends ConflictError {
+  public readonly mutationCommitted = true;
+
+  public constructor() {
+    super({
+      message: "Device access request expired before it could be approved.",
+    });
+    this.name = "DeviceAccessExpiredAfterCommitError";
+  }
+}
+
 export async function resolveDeviceAccessApproval(
   deps: SettingsAuthRuntimeDependencies,
   currentApproval: ApprovalRequest,
   input: ApprovalResolveInput,
+  context?: ApprovalResolutionContext,
 ): Promise<ApprovalResolveResult> {
   if (currentApproval.status !== "pending") {
     throw new ConflictError({
@@ -786,9 +807,7 @@ export async function resolveDeviceAccessApproval(
 
   const request = await expireDeviceAccessRequestIfNeeded(deps, existingRequest);
   if (request.status === "expired") {
-    throw new ConflictError({
-      message: "Device access request expired before it could be approved.",
-    });
+    throw new DeviceAccessExpiredAfterCommitError();
   }
   if (request.status !== "pending") {
     throw new ConflictError({
@@ -803,43 +822,16 @@ export async function resolveDeviceAccessApproval(
   const deviceTokenExpiresAt = deviceToken
     ? new Date(Date.now() + DEVICE_ACCESS_TOKEN_TTL_MS).toISOString()
     : undefined;
-  let approval: ApprovalRequest;
+  let approval!: ApprovalRequest;
+  let effects: ApprovalEffectRecord[] = [];
+  let events: ReturnType<SettingsAuthRuntimeDependencies["storage"]["approvalEvents"]["listByApprovalId"]> = [];
+  let tokenStoredByThisAttempt = false;
 
-  deps.storage.runImmediateTransaction(() => {
-    if (deviceToken) {
-      deps.gatewaySql
+  try {
+    deps.storage.runImmediateTransaction(() => {
+      const requestUpdate = deps.gatewaySql
         .prepare(
           `
-          INSERT INTO auth_device_grants (
-            grant_id, request_id, token_hash, device_label, device_type, platform,
-            granted_by, created_at, expires_at, metadata_json
-          ) VALUES (
-            @grantId, @requestId, @tokenHash, @deviceLabel, @deviceType, @platform,
-            @grantedBy, @createdAt, @expiresAt, @metadataJson
-          )
-        `,
-        )
-        .run({
-          grantId: randomUUID(),
-          requestId: request.requestId,
-          tokenHash: hashSensitiveToken(deviceToken),
-          deviceLabel: request.deviceLabel,
-          deviceType: request.deviceType,
-          platform: request.platform ?? null,
-          grantedBy: input.resolvedBy,
-          createdAt: resolvedAt,
-          expiresAt: deviceTokenExpiresAt ?? null,
-          metadataJson: JSON.stringify({
-            approvalId: currentApproval.approvalId,
-            requestedOrigin: request.requestedOrigin,
-            requestedIp: request.requestedIp,
-          }),
-        });
-    }
-
-    deps.gatewaySql
-      .prepare(
-        `
         UPDATE auth_device_requests
         SET status = @status,
             resolved_at = @resolvedAt,
@@ -849,88 +841,160 @@ export async function resolveDeviceAccessApproval(
             approved_token_expires_at = @approvedTokenExpiresAt
         WHERE request_id = @requestId
           AND status = 'pending'
+          AND expires_at > @resolvedAt
       `,
-      )
-      .run({
-        requestId: request.requestId,
-        status: requestStatus,
-        resolvedAt,
-        resolvedBy: input.resolvedBy,
-        resolutionNote: input.resolutionNote ?? null,
-        // SECURITY: the operator-equivalent device token is NEVER written to
-        // disk. The hashed token lives in auth_device_grants (above); the
-        // plaintext is stashed in the in-memory vault for single-use handoff on
-        // the device's next status poll. We keep approved_token_expires_at as
-        // non-secret metadata for the status response/UI, and keep the
-        // approved_token_plaintext column (always NULL now) for schema compat.
-        approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
+        )
+        .run({
+          requestId: request.requestId,
+          status: requestStatus,
+          resolvedAt,
+          resolvedBy: input.resolvedBy,
+          resolutionNote: input.resolutionNote ?? null,
+          // SECURITY: only the token hash is persisted. The plaintext remains
+          // in the process-local single-use vault until the winning status poll.
+          approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
+        });
+      if (requestUpdate.changes !== 1) {
+        throw new ConflictError({
+          message: "Device access request is no longer pending or has expired.",
+        });
+      }
+
+      if (deviceToken) {
+        deps.deviceTokenVault.store(request.requestId, deviceToken, deviceTokenExpiresAt);
+        tokenStoredByThisAttempt = true;
+      }
+
+      if (context?.remoteToken) {
+        deps.storage.approvals.mergeLinkage(currentApproval.approvalId, {
+          connectorId: context.remoteToken.connectorId,
+          tokenId: context.remoteToken.tokenId,
+        });
+      }
+
+      if (deviceToken) {
+        deps.gatewaySql
+          .prepare(
+            `
+          INSERT INTO auth_device_grants (
+            grant_id, request_id, token_hash, device_label, device_type, platform,
+            granted_by, created_at, expires_at, metadata_json
+          ) VALUES (
+            @grantId, @requestId, @tokenHash, @deviceLabel, @deviceType, @platform,
+            @grantedBy, @createdAt, @expiresAt, @metadataJson
+          )
+        `,
+          )
+          .run({
+            grantId: randomUUID(),
+            requestId: request.requestId,
+            tokenHash: hashSensitiveToken(deviceToken),
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform ?? null,
+            grantedBy: input.resolvedBy,
+            createdAt: resolvedAt,
+            expiresAt: deviceTokenExpiresAt ?? null,
+            metadataJson: JSON.stringify({
+              approvalId: currentApproval.approvalId,
+              requestedOrigin: request.requestedOrigin,
+              requestedIp: request.requestedIp,
+            }),
+          });
+      }
+
+      approval = deps.storage.approvals.resolve(currentApproval.approvalId, input);
+      deps.storage.approvalEvents.append({
+        approvalId: currentApproval.approvalId,
+        eventType: "resolved",
+        actorId: input.resolvedBy,
+        payload: {
+          decision: input.decision,
+          status: approval.status,
+        },
       });
+      deps.enqueueApprovalResolutionEffects(approval, input);
+      deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+        ...buildApprovalResolutionObservabilityEffects(approval, input),
+        {
+          operationId: `auth.device_request.resolve.audit:${request.requestId}`,
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: {
+              event: "auth.device_request.resolve",
+              requestId: request.requestId,
+              approvalId: currentApproval.approvalId,
+              status: requestStatus,
+              resolvedBy: input.resolvedBy,
+              deviceLabel: request.deviceLabel,
+              deviceType: request.deviceType,
+              platform: request.platform,
+              requestedIp: request.requestedIp,
+              deviceTokenExpiresAt,
+            },
+          },
+        },
+        {
+          operationId: `auth.device_request.resolve.realtime:${request.requestId}`,
+          delivery: {
+            kind: "realtime",
+            eventType: "auth_device_request_resolved",
+            source: "auth",
+            payload: {
+              requestId: request.requestId,
+              approvalId: currentApproval.approvalId,
+              status: requestStatus,
+              resolvedAt,
+              resolvedBy: input.resolvedBy,
+              deviceLabel: request.deviceLabel,
+              deviceType: request.deviceType,
+              platform: request.platform,
+              requestedIp: request.requestedIp,
+              deviceTokenExpiresAt,
+            },
+            options: {
+              eventClass: "domain_fact",
+              eventAuthority: "retained_stream",
+              links: {
+                approvalId: currentApproval.approvalId,
+              },
+              correlationId: currentApproval.approvalId,
+            },
+          },
+        },
+      ]);
+      effects = deps.listApprovalEffects(currentApproval.approvalId);
+      events = deps.storage.approvalEvents.listByApprovalId(currentApproval.approvalId);
 
-    approval = deps.storage.approvals.resolve(currentApproval.approvalId, input);
-    deps.storage.approvalEvents.append({
-      approvalId: currentApproval.approvalId,
-      eventType: "resolved",
-      actorId: input.resolvedBy,
-      payload: {
-        decision: input.decision,
-        status: approval.status,
-      },
+      // Settle the expiry boundary after every potentially blocking write/read
+      // in the transaction. In PostgreSQL an UPDATE can wait on a row lock while
+      // retaining the earlier `resolvedAt` bind value; this final fresh-clock
+      // check makes that stale timestamp incapable of authorizing a grant after
+      // the request's actual deadline. Throwing here rolls back the request,
+      // grant, approval, events, effects, and the process-local vault entry.
+      const commitRequest = getAuthDeviceRequestById(deps, request.requestId);
+      const commitBoundary = Date.now();
+      const commitExpiresAt = commitRequest ? Date.parse(commitRequest.expiresAt) : Number.NaN;
+      if (!commitRequest || !Number.isFinite(commitExpiresAt) || commitExpiresAt <= commitBoundary) {
+        throw new ConflictError({
+          message: "Device access request expired before the approval transaction committed.",
+        });
+      }
     });
-  });
-
-  // Stash the plaintext only AFTER the approval transaction commits, so a rolled
-  // back approval can never leave a deliverable token in the in-memory vault.
-  if (deviceToken) {
-    deps.deviceTokenVault.store(request.requestId, deviceToken, deviceTokenExpiresAt);
+  } catch (error) {
+    if (tokenStoredByThisAttempt) {
+      deps.deviceTokenVault.delete(request.requestId);
+    }
+    throw error;
   }
 
-  deps.enqueueApprovalResolutionEffects(approval!, input);
-  await recordApprovalResolution(deps, approval!, input);
-  await deps.storage.audit.append("approvals", {
-    event: "auth.device_request.resolve",
-    requestId: request.requestId,
-    approvalId: currentApproval.approvalId,
-    status: requestStatus,
-    resolvedBy: input.resolvedBy,
-    deviceLabel: request.deviceLabel,
-    deviceType: request.deviceType,
-    platform: request.platform,
-    requestedIp: request.requestedIp,
-    deviceTokenExpiresAt,
-  });
-
-  deps.publishRealtime(
-    "auth_device_request_resolved",
-    "auth",
-    {
-      requestId: request.requestId,
-      approvalId: currentApproval.approvalId,
-      status: requestStatus,
-      resolvedAt,
-      resolvedBy: input.resolvedBy,
-      deviceLabel: request.deviceLabel,
-      deviceType: request.deviceType,
-      platform: request.platform,
-      requestedIp: request.requestedIp,
-      deviceTokenExpiresAt,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId: currentApproval.approvalId,
-      },
-      correlationId: currentApproval.approvalId,
-    },
-  );
-
-  const effects = deps.listApprovalEffects(currentApproval.approvalId);
   return {
-    approval: approval!,
+    approval,
     effects,
     replay: {
-      approval: approval!,
-      events: deps.storage.approvalEvents.listByApprovalId(currentApproval.approvalId),
+      approval,
+      events,
       effects,
     },
     durableRunId: effects.find((effect) => effect.effectKind === "approval_wait_wake")?.targetId,
@@ -957,9 +1021,10 @@ export async function expireDeviceAccessRequestIfNeeded(
   };
   const resolvedAt = new Date().toISOString();
   let approval: ApprovalRequest | undefined;
+  let resolvedRequest: AuthDeviceRequestRecord | undefined;
 
   deps.storage.runImmediateTransaction(() => {
-    deps.gatewaySql
+    const requestUpdate = deps.gatewaySql
       .prepare(
         `
         UPDATE auth_device_requests
@@ -969,6 +1034,7 @@ export async function expireDeviceAccessRequestIfNeeded(
             resolution_note = @resolutionNote
         WHERE request_id = @requestId
           AND status = 'pending'
+          AND expires_at <= @resolvedAt
       `,
       )
       .run({
@@ -977,10 +1043,17 @@ export async function expireDeviceAccessRequestIfNeeded(
         resolvedBy: resolutionInput.resolvedBy,
         resolutionNote: resolutionInput.resolutionNote ?? null,
       });
+    if (requestUpdate.changes !== 1) {
+      resolvedRequest = getAuthDeviceRequestById(deps, request.requestId);
+      return;
+    }
 
     const currentApproval = deps.storage.approvals.get(request.approvalId);
     if (currentApproval.status === "pending") {
-      approval = deps.storage.approvals.resolve(request.approvalId, resolutionInput);
+      approval = deps.storage.approvals.resolve(request.approvalId, resolutionInput, {
+        resolvedAt,
+        allowExpired: true,
+      });
       deps.storage.approvalEvents.append({
         approvalId: request.approvalId,
         eventType: "resolved",
@@ -990,56 +1063,92 @@ export async function expireDeviceAccessRequestIfNeeded(
           status: approval.status,
         },
       });
+      deps.enqueueApprovalResolutionEffects(approval, resolutionInput);
     }
-  });
-
-  if (approval) {
-    deps.enqueueApprovalResolutionEffects(approval, resolutionInput);
-    await recordApprovalResolution(deps, approval, resolutionInput);
-  }
-  await deps.storage.audit.append("approvals", {
-    event: "auth.device_request.expire",
-    requestId: request.requestId,
-    approvalId: request.approvalId,
-    deviceLabel: request.deviceLabel,
-    deviceType: request.deviceType,
-    platform: request.platform,
-    requestedIp: request.requestedIp,
-  });
-
-  deps.publishRealtime(
-    "auth_device_request_resolved",
-    "auth",
-    {
-      requestId: request.requestId,
-      approvalId: request.approvalId,
-      status: "expired",
-      resolvedAt,
-      resolvedBy: resolutionInput.resolvedBy,
-      deviceLabel: request.deviceLabel,
-      deviceType: request.deviceType,
-      platform: request.platform,
-      requestedIp: request.requestedIp,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId: request.approvalId,
+    deps.enqueueApprovalObservabilityEffects(request.approvalId, [
+      ...(approval ? buildApprovalResolutionObservabilityEffects(approval, resolutionInput) : []),
+      {
+        operationId: `auth.device_request.expire.audit:${request.requestId}`,
+        delivery: {
+          kind: "audit",
+          stream: "approvals",
+          payload: {
+            event: "auth.device_request.expire",
+            requestId: request.requestId,
+            approvalId: request.approvalId,
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform,
+            requestedIp: request.requestedIp,
+          },
+        },
       },
-      correlationId: request.approvalId,
-    },
-  );
+      {
+        operationId: `auth.device_request.expire.realtime:${request.requestId}`,
+        delivery: {
+          kind: "realtime",
+          eventType: "auth_device_request_resolved",
+          source: "auth",
+          payload: {
+            requestId: request.requestId,
+            approvalId: request.approvalId,
+            status: "expired",
+            resolvedAt,
+            resolvedBy: resolutionInput.resolvedBy,
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform,
+            requestedIp: request.requestedIp,
+          },
+          options: {
+            eventClass: "domain_fact",
+            eventAuthority: "retained_stream",
+            links: {
+              approvalId: request.approvalId,
+            },
+            correlationId: request.approvalId,
+          },
+        },
+      },
+    ]);
+    resolvedRequest = getAuthDeviceRequestById(deps, request.requestId);
+  });
 
-  return (
-    getAuthDeviceRequestById(deps, request.requestId) ?? {
-      ...request,
-      status: "expired",
-      resolvedAt,
-      resolvedBy: resolutionInput.resolvedBy,
-      resolutionNote: resolutionInput.resolutionNote,
+  return resolvedRequest ?? request;
+}
+
+export async function expirePendingDeviceAccessRequests(
+  deps: SettingsAuthRuntimeDependencies,
+  limit = 100,
+): Promise<number> {
+  const now = new Date().toISOString();
+  const rows = deps.gatewaySql
+    .prepare(
+      `
+      SELECT request_id
+      FROM auth_device_requests
+      WHERE status = 'pending'
+        AND expires_at <= @now
+      ORDER BY expires_at ASC, request_id ASC
+      LIMIT @limit
+    `,
+    )
+    .all({ now, limit: clampInt(limit, 100, 1, 1000) }) as Array<{ request_id?: unknown }>;
+  let expired = 0;
+  for (const row of rows) {
+    if (typeof row.request_id !== "string") {
+      continue;
     }
-  );
+    const request = getAuthDeviceRequestById(deps, row.request_id);
+    if (!request || request.status !== "pending") {
+      continue;
+    }
+    const reconciled = await expireDeviceAccessRequestIfNeeded(deps, request);
+    if (reconciled.status === "expired") {
+      expired += 1;
+    }
+  }
+  return expired;
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,9 +1215,10 @@ export async function createDeviceAccessRequest(
   });
 
   try {
-    deps.gatewaySql
-      .prepare(
-        `
+    deps.storage.runImmediateTransaction(() => {
+      deps.gatewaySql
+        .prepare(
+          `
       INSERT INTO auth_device_requests (
         request_id, approval_id, request_secret_hash, device_label, device_type, platform,
         requested_origin, requested_ip, user_agent, status, created_at, expires_at
@@ -1117,74 +1227,82 @@ export async function createDeviceAccessRequest(
         @requestedOrigin, @requestedIp, @userAgent, @status, @createdAt, @expiresAt
       )
     `,
-      )
-      .run({
-        requestId,
-        approvalId: approval.approvalId,
-        requestSecretHash: hashSensitiveToken(requestSecret),
-        deviceLabel,
-        deviceType,
-        platform: platform ?? null,
-        requestedOrigin: requestedOrigin ?? null,
-        requestedIp: requestedIp ?? null,
-        userAgent: userAgent ?? null,
-        status: "pending",
-        createdAt,
-        expiresAt,
-      });
+        )
+        .run({
+          requestId,
+          approvalId: approval.approvalId,
+          requestSecretHash: hashSensitiveToken(requestSecret),
+          deviceLabel,
+          deviceType,
+          platform: platform ?? null,
+          requestedOrigin: requestedOrigin ?? null,
+          requestedIp: requestedIp ?? null,
+          userAgent: userAgent ?? null,
+          status: "pending",
+          createdAt,
+          expiresAt,
+        });
+      deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+        {
+          operationId: `auth.device_request.create.audit:${requestId}`,
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: {
+              event: "auth.device_request.create",
+              requestId,
+              approvalId: approval.approvalId,
+              deviceLabel,
+              deviceType,
+              platform,
+              requestedOrigin,
+              requestedIp,
+              correlationId,
+              traceId,
+              originSurface,
+            },
+          },
+        },
+        {
+          operationId: `auth.device_request.create.realtime:${requestId}`,
+          delivery: {
+            kind: "realtime",
+            eventType: "auth_device_request_created",
+            source: "auth",
+            payload: {
+              requestId,
+              approvalId: approval.approvalId,
+              deviceLabel,
+              deviceType,
+              platform,
+              requestedOrigin,
+              requestedIp,
+              correlationId,
+              traceId,
+              originSurface,
+              createdAt,
+              expiresAt,
+            },
+            options: {
+              eventClass: "domain_fact",
+              eventAuthority: "retained_stream",
+              links: {
+                approvalId: approval.approvalId,
+              },
+              correlationId: approval.approvalId,
+            },
+          },
+        },
+      ]);
+    });
   } catch (error) {
     try {
-      await deps.resolveApproval(approval.approvalId, {
-        decision: "reject",
-        resolvedBy: "system:auth-device-request",
-        resolutionNote: "Device request registration failed.",
-      });
+      rejectOrphanedDeviceAccessApproval(deps, approval.approvalId);
     } catch {
       // Best effort cleanup only.
     }
     throw error;
   }
-
-  await deps.storage.audit.append("approvals", {
-    event: "auth.device_request.create",
-    requestId,
-    approvalId: approval.approvalId,
-    deviceLabel,
-    deviceType,
-    platform,
-    requestedOrigin,
-    requestedIp,
-    correlationId,
-    traceId,
-    originSurface,
-  });
-
-  deps.publishRealtime(
-    "auth_device_request_created",
-    "auth",
-    {
-      requestId,
-      approvalId: approval.approvalId,
-      deviceLabel,
-      deviceType,
-      platform,
-      requestedOrigin,
-      requestedIp,
-      correlationId,
-      traceId,
-      originSurface,
-      createdAt,
-      expiresAt,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId: approval.approvalId,
-      },
-      correlationId: approval.approvalId,
-    },
-  );
 
   return {
     requestId,
@@ -1195,6 +1313,47 @@ export async function createDeviceAccessRequest(
     pollAfterMs: DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
     message: "Waiting for approval from another authenticated Mission Control session.",
   };
+}
+
+function rejectOrphanedDeviceAccessApproval(deps: SettingsAuthRuntimeDependencies, approvalId: string): void {
+  const input: ApprovalResolveInput = {
+    decision: "reject",
+    resolvedBy: "system:auth-device-request",
+    resolutionNote: "Device request registration failed.",
+  };
+  const commitRejection = (includeEffects: boolean) => {
+    const current = deps.storage.approvals.get(approvalId);
+    if (current.status !== "pending") {
+      return;
+    }
+    const approval = deps.storage.approvals.resolve(approvalId, input);
+    deps.storage.approvalEvents.append({
+      approvalId,
+      eventType: "resolved",
+      actorId: input.resolvedBy,
+      payload: {
+        decision: input.decision,
+        status: approval.status,
+        orphanCleanup: true,
+        degraded: !includeEffects,
+      },
+    });
+    if (includeEffects) {
+      deps.enqueueApprovalResolutionEffects(approval, input);
+      deps.enqueueApprovalObservabilityEffects(
+        approvalId,
+        buildApprovalResolutionObservabilityEffects(approval, input),
+      );
+    }
+  };
+  try {
+    deps.storage.runImmediateTransaction(() => commitRejection(true));
+  } catch {
+    // A device approval without its request row is permanently unusable. Keep
+    // the terminal approval/event even if an auxiliary effect store is down;
+    // the creation observability envelope remains durable for reconciliation.
+    deps.storage.runImmediateTransaction(() => commitRejection(false));
+  }
 }
 
 export async function getDeviceAccessRequestStatus(
@@ -1212,40 +1371,49 @@ export async function getDeviceAccessRequestStatus(
 
   const current = await expireDeviceAccessRequestIfNeeded(deps, request);
   if (current.status === "approved" && !current.deliveredAt) {
+    // A process that does not hold the plaintext must never burn the durable
+    // handoff marker. This preserves delivery by the approving node in a
+    // shared PostgreSQL deployment and after cross-node status polling.
+    const claimed = deps.deviceTokenVault.claim(current.requestId);
+    if (!claimed) {
+      return mapDeviceAccessStatusResponse(current);
+    }
     const deliveredAt = new Date().toISOString();
-    const result = deps.gatewaySql
-      .prepare(
-        `
+    let result: { changes?: number };
+    try {
+      result = deps.gatewaySql
+        .prepare(
+          `
       UPDATE auth_device_requests
       SET delivered_at = @deliveredAt,
           approved_token_plaintext = NULL
       WHERE request_id = @requestId
+        AND status = 'approved'
         AND delivered_at IS NULL
     `,
-      )
-      .run({
-        requestId: current.requestId,
-        deliveredAt,
-      });
-    if (result.changes === 0) {
+        )
+        .run({
+          requestId: current.requestId,
+          deliveredAt,
+        });
+    } catch (error) {
+      deps.deviceTokenVault.store(current.requestId, claimed.token, claimed.deviceTokenExpiresAt);
+      throw error;
+    }
+    if (result.changes !== 1) {
       // A concurrent poll already won the single-use delivery. This caller must
-      // not receive the token; drop any vault entry defensively and report the
-      // approved-but-awaiting-handoff status.
-      deps.deviceTokenVault.delete(current.requestId);
+      // not receive the token. The winning delivery already consumed the
+      // durable marker, so the local claim must remain burned.
       const refreshed = getAuthDeviceRequestById(deps, requestId);
       if (refreshed) {
         return mapDeviceAccessStatusResponse(refreshed);
       }
       return mapDeviceAccessStatusResponse(current);
     }
-    // This poll won the delivery race: hand off the plaintext from the in-memory
-    // vault exactly once. If the entry is gone (gateway restarted) or expired,
-    // the device simply keeps waiting / re-requests — no token, no rejection.
-    const claimed = deps.deviceTokenVault.claim(current.requestId);
-    return mapDeviceAccessStatusResponse(
-      current,
-      claimed ? { deviceToken: claimed.token, deviceTokenExpiresAt: claimed.deviceTokenExpiresAt } : undefined,
-    );
+    return mapDeviceAccessStatusResponse(current, {
+      deviceToken: claimed.token,
+      deviceTokenExpiresAt: claimed.deviceTokenExpiresAt,
+    });
   }
 
   return mapDeviceAccessStatusResponse(current);
@@ -1980,6 +2148,16 @@ export async function recordApprovalResolution(
       correlationId: approval.approvalId,
     },
   );
+  recordApprovalResolutionSignals(deps, approval);
+}
+
+export function recordApprovalResolutionSignals(
+  deps: Pick<
+    SettingsAuthRuntimeDependencies,
+    "recordImprovementApprovalResolutionSignal" | "handleActivationApprovalResolution"
+  >,
+  approval: ApprovalRequest,
+): void {
   deps.recordImprovementApprovalResolutionSignal(approval);
   deps.handleActivationApprovalResolution(approval);
 }

@@ -171,6 +171,126 @@ describe("ApprovalRepository", () => {
     assert.equal(repo.get(withExpiry.approvalId).expiresAt, "2026-03-22T16:15:00.000Z");
   });
 
+  it("lists bounded expired pending approvals in deadline order", () => {
+    const repo = createRepo();
+    const firstExpired = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "first" },
+      preview: { command: "first" },
+      expiresAt: "2026-03-20T09:00:00.000Z",
+    });
+    const secondExpired = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "second" },
+      preview: { command: "second" },
+      expiresAt: "2026-03-20T09:30:00.000Z",
+    });
+    const offsetExpired = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "offset-expired" },
+      preview: { command: "offset-expired" },
+      // 09:15Z: lexically later than the 10:00Z boundary, but chronologically expired.
+      expiresAt: "2026-03-20T11:15:00.000+02:00",
+    });
+    const excludedExpired = repo.create({
+      kind: "auth.device_access",
+      riskLevel: "danger",
+      payload: { requestId: "device-request" },
+      preview: { deviceLabel: "Tablet" },
+      expiresAt: "2026-03-20T08:45:00.000Z",
+    });
+    const alreadyResolved = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "resolved" },
+      preview: { command: "resolved" },
+      expiresAt: "2026-03-20T08:30:00.000Z",
+    });
+    repo.resolve(
+      alreadyResolved.approvalId,
+      { decision: "reject", resolvedBy: "operator" },
+      { resolvedAt: "2026-03-20T08:00:00.000Z" },
+    );
+    repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "future" },
+      preview: { command: "future" },
+      expiresAt: "2026-03-20T11:00:00.000Z",
+    });
+    repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "offset-future" },
+      preview: { command: "offset-future" },
+      // 11:30Z: lexically earlier than the boundary, but chronologically still active.
+      expiresAt: "2026-03-20T09:30:00.000-02:00",
+    });
+
+    assert.deepEqual(
+      repo
+        .listExpiredPending("2026-03-20T10:00:00.000Z", 1, "auth.device_access")
+        .map((approval) => approval.approvalId),
+      [firstExpired.approvalId],
+    );
+    assert.deepEqual(
+      repo.listExpiredPending("2026-03-20T10:00:00.000Z", 10).map((approval) => approval.approvalId),
+      [excludedExpired.approvalId, firstExpired.approvalId, offsetExpired.approvalId, secondExpired.approvalId],
+    );
+    assert.deepEqual(
+      repo
+        .listExpiredPending("2026-03-20T10:00:00.000Z", 10, "auth.device_access")
+        .map((approval) => approval.approvalId),
+      [firstExpired.approvalId, offsetExpired.approvalId, secondExpired.approvalId],
+    );
+  });
+
+  it("uses the approval expiry sweep index for representative pending history", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-expiry-plan-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const insert = db.prepare(`
+      INSERT INTO approvals (
+        approval_id, kind, risk_level, status, linkage_json, payload_json, preview_json,
+        explanation_status, created_at, expires_at
+      ) VALUES (
+        @approvalId, 'shell.exec', 'danger', @status, NULL, '{}', '{}',
+        'not_requested', @createdAt, @expiresAt
+      )
+    `);
+    for (let index = 0; index < 500; index += 1) {
+      insert.run({
+        approvalId: `approval-plan-${index}`,
+        status: index % 4 === 0 ? "approved" : "pending",
+        createdAt: `2026-03-19T${String(index % 24).padStart(2, "0")}:00:00.000Z`,
+        expiresAt: new Date(Date.parse("2026-03-20T00:00:00.000Z") + index * 60_000).toISOString(),
+      });
+    }
+
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT * FROM approvals
+         WHERE status = 'pending'
+           AND expires_at IS NOT NULL
+           AND julianday(expires_at) IS NOT NULL
+           AND julianday(expires_at) <= julianday(@now)
+           AND (@excludedKind IS NULL OR kind <> @excludedKind)
+         ORDER BY julianday(expires_at) ASC, approval_id ASC
+         LIMIT @limit`,
+      )
+      .all({
+        now: "2026-03-20T00:10:00.000Z",
+        excludedKind: "auth.device_access",
+        limit: 100,
+      }) as Array<{ detail?: string }>;
+
+    assert.match(plan.map((entry) => entry.detail ?? "").join("\n"), /idx_approvals_status_expires_at/);
+  });
+
   it("persists rollback notes without synthesizing missing values", () => {
     const repo = createRepo();
     const withoutRollback = repo.create({
@@ -214,6 +334,31 @@ describe("ApprovalRepository", () => {
     });
   });
 
+  it("rejects resolution at the approval expiry boundary", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+      expiresAt: "2026-03-20T10:00:00.000Z",
+    });
+
+    assert.throws(
+      () =>
+        repo.resolve(
+          created.approvalId,
+          {
+            decision: "approve",
+            resolvedBy: "operator",
+          },
+          { resolvedAt: "2026-03-20T10:00:00.000Z" },
+        ),
+      /expired/i,
+    );
+    assert.equal(repo.get(created.approvalId).status, "pending");
+  });
+
   it("allows only one concurrent resolver to win the same approval", async () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-repo-${randomUUID()}.db`);
     createdFiles.push(dbPath);
@@ -247,6 +392,48 @@ describe("ApprovalRepository", () => {
     const final = creatorRepo.get(created.approvalId);
     assert.equal(final.status, "approved");
     assert.ok(final.resolvedBy === "operator-a" || final.resolvedBy === "operator-b");
+  });
+
+  it("allows only one concurrent expiry reconciler to win an expired approval", async () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-expiry-repo-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const creatorRepo = createRepoAtPath(dbPath);
+    const resolverA = createRepoAtPath(dbPath);
+    const resolverB = createRepoAtPath(dbPath);
+    const created = creatorRepo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+      expiresAt: "2026-03-20T10:00:00.000Z",
+    });
+
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() =>
+        resolverA.resolve(
+          created.approvalId,
+          {
+            decision: "reject",
+            resolvedBy: "system:approval-expiry:a",
+          },
+          { resolvedAt: "2026-03-20T10:00:01.000Z", allowExpired: true },
+        ),
+      ),
+      Promise.resolve().then(() =>
+        resolverB.resolve(
+          created.approvalId,
+          {
+            decision: "reject",
+            resolvedBy: "system:approval-expiry:b",
+          },
+          { resolvedAt: "2026-03-20T10:00:01.000Z", allowExpired: true },
+        ),
+      ),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+    assert.equal(creatorRepo.get(created.approvalId).status, "rejected");
   });
 
   it("persists explicit approval linkage separately from the public payload", () => {

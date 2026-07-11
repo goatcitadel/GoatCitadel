@@ -37,6 +37,7 @@ export class ApprovalInboxRepository {
   private readonly listByStateStmt;
   private readonly updateOnRedeliveryStmt;
   private readonly updateResolutionStmt;
+  private readonly reconcileResolutionStmt;
   private readonly deleteByReceiverStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -105,6 +106,16 @@ export class ApprovalInboxRepository {
       WHERE inbox_item_id = @inboxItemId
         AND state = 'pending'
     `);
+    this.reconcileResolutionStmt = db.prepare(`
+      UPDATE approval_inbox_items
+      SET approval_status = @approvalStatus,
+          updated_at = @updatedAt,
+          resolved_at = COALESCE(resolved_at, @resolvedAt),
+          resolved_by = COALESCE(resolved_by, @resolvedBy),
+          last_error = COALESCE(@lastError, last_error)
+      WHERE inbox_item_id = @inboxItemId
+        AND state = @state
+    `);
     this.deleteByReceiverStmt = db.prepare(`
       DELETE FROM approval_inbox_items
       WHERE receiver_kind = @receiverKind
@@ -117,7 +128,8 @@ export class ApprovalInboxRepository {
     receiverId: string;
     approvalId: string;
     tokenId: string;
-    token: string;
+    /** Legacy input is accepted but never persisted. */
+    token?: string;
     approvalKind: string;
     riskLevel: ApprovalRequest["riskLevel"];
     approvalStatus: ApprovalRequest["status"];
@@ -129,7 +141,6 @@ export class ApprovalInboxRepository {
     const receiverId = input.receiverId.trim();
     const approvalId = input.approvalId.trim();
     const tokenId = input.tokenId.trim();
-    const token = input.token.trim();
     const now = input.receivedAt ?? new Date().toISOString();
     if (!connectorId) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "connectorId" });
@@ -142,9 +153,6 @@ export class ApprovalInboxRepository {
     }
     if (!tokenId) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "tokenId" });
-    }
-    if (!token) {
-      throw new ValidationError({ code: "FIELD_REQUIRED", field: "token" });
     }
 
     const current = this.getByReceiverAndToken("mcp", receiverId, tokenId);
@@ -290,6 +298,41 @@ export class ApprovalInboxRepository {
     if (update.changes === 0) {
       return this.get(inboxItemId);
     }
+    return this.get(inboxItemId);
+  }
+
+  /**
+   * Reconcile canonical approval truth without allowing a later actor to change
+   * the first terminal inbox decision. This repairs the approval status when an
+   * item was independently expired before the owning approval transaction
+   * reached the same terminal state.
+   */
+  public reconcileResolution(
+    inboxItemId: string,
+    input: {
+      state: Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited" | "expired" | "failed">;
+      approvalStatus: ApprovalRequest["status"];
+      resolvedAt?: string;
+      resolvedBy?: string;
+      lastError?: string;
+    },
+  ): ApprovalInboxItemRecord {
+    const current = this.get(inboxItemId);
+    if (current.state === "pending") {
+      return this.markResolved(inboxItemId, input);
+    }
+    if (current.state !== input.state) {
+      return current;
+    }
+    this.reconcileResolutionStmt.run({
+      inboxItemId,
+      state: input.state,
+      approvalStatus: input.approvalStatus,
+      updatedAt: input.resolvedAt ?? new Date().toISOString(),
+      resolvedAt: input.resolvedAt ?? current.resolvedAt ?? null,
+      resolvedBy: input.resolvedBy ?? current.resolvedBy ?? null,
+      lastError: input.lastError ?? null,
+    });
     return this.get(inboxItemId);
   }
 

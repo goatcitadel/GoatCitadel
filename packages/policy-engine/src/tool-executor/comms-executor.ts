@@ -6,6 +6,7 @@ import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@g
 import type { Storage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
+import { sanitizeForAudit } from "../tool-security.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -46,7 +47,9 @@ async function executeCommsToolWithBoundaryTracking(
     connectionId,
     channelKey: connection.key,
     target,
-    payload: { toolName, args },
+    // Provider execution keeps the raw in-memory arguments, but the delivery
+    // ledger must never retain bearer material embedded in interactive actions.
+    payload: sanitizeForAudit({ toolName, args }),
   });
   let providerMessageId: string | undefined;
   try {

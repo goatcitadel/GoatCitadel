@@ -130,7 +130,11 @@ export interface ChatTurnPrepHost {
   maybeAutoTitleChatSession(sessionId: string, content: string): void;
   normalizeWorkspaceId(workspaceId?: string): string;
   routeFromSession(session: SessionMeta): ChatTurnRoute;
-  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
+  ingestEvent(
+    idempotencyKey: string,
+    payload: GatewayEventInput,
+    options?: { onCommit?: () => void },
+  ): Promise<unknown>;
   patchSessionAutonomyPrefs(
     sessionId: string,
     input: Partial<

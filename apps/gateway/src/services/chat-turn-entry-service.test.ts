@@ -300,6 +300,36 @@ describe("agentSendChatMessage", () => {
     vi.clearAllMocks();
   });
 
+  it("does not resurrect a buffered turn cancelled after the runtime returns", async () => {
+    const host = createHost({
+      assistantContent: "Completed answer.",
+      assistantModel: "primary-model",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    const controller = new AbortController();
+    host.beginActiveChatTurnExecution = vi.fn(() => controller);
+    host.turnRuntime.run = vi.fn(async () => {
+      host.storage.chatTurnTraces.patch("turn-1", {
+        status: "cancelled",
+        completion: { status: "interrupted", repaired: false },
+      });
+      controller.abort();
+      return {
+        assistantContent: "Completed answer.",
+        assistantModel: "primary-model",
+        turnTrace: createTrace({ status: "completed" }),
+      };
+    }) as never;
+
+    await expect(agentSendChatMessage(host, "session-1", { content: "hello", mode: "chat" })).rejects.toThrow(
+      /cancelled/i,
+    );
+
+    expect(host.ingestEvent).not.toHaveBeenCalled();
+    expect(host.patchedTraces).not.toContainEqual(expect.objectContaining({ status: "completed" }));
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
+  });
+
   it("registers a turn-scoped agent.fanout executor before the runtime runs and disposes it afterwards", async () => {
     const host = createHost({
       assistantContent: "Completed answer.",
@@ -504,6 +534,7 @@ describe("agentSendChatMessage", () => {
         eventId: "assistant-1",
         message: { role: "assistant", content: "Completed answer." },
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
       "turn-1",
@@ -1030,6 +1061,85 @@ describe("agentSendChatMessage", () => {
     expect(host.cancelDurableChatRun).toHaveBeenCalledWith("durable-run-fast", "operator");
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1", "operator");
     expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1", "stream-registration-fast");
+  });
+
+  it("does not cancel Chat truth when durable approval materialization wins the terminal CAS", async () => {
+    const host = createHost({});
+    const runningTrace = createTrace({
+      status: "waiting_for_approval",
+      durable: { runId: "durable-run-race", status: "running" },
+    });
+    const completedTrace = createTrace({
+      status: "completed",
+      assistantMessageId: "assistant-approved-turn-1",
+      durable: { runId: "durable-run-race", status: "completed" },
+      finishedAt: "2026-05-14T00:00:02.000Z",
+    });
+    host.storage.chatTurnTraces.get = vi
+      .fn()
+      .mockReturnValueOnce(runningTrace)
+      .mockReturnValue(completedTrace) as never;
+    host.cancelDurableChatRun = vi.fn(() => ({
+      runId: "durable-run-race",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 5,
+      payload: {},
+      createdAt: "2026-05-14T00:00:00.000Z",
+      updatedAt: "2026-05-14T00:00:02.000Z",
+      finishedAt: "2026-05-14T00:00:02.000Z",
+    }));
+
+    await expect(cancelChatTurn(host, "session-1", "turn-1", "operator")).resolves.toEqual(
+      expect.objectContaining({
+        cancelled: false,
+        trace: completedTrace,
+      }),
+    );
+
+    expect(host.cancelDurableChatRun).toHaveBeenCalledWith("durable-run-race", "operator");
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
+  });
+
+  it("leaves an active stream open while a durable completion winner is still projecting Chat truth", async () => {
+    const host = createHost({});
+    const waitingTrace = createTrace({
+      status: "waiting_for_approval",
+      durable: { runId: "durable-run-projecting", status: "running" },
+    });
+    host.storage.chatTurnTraces.get = vi.fn(() => waitingTrace) as never;
+    host.getActiveChatTurnStream = vi.fn(() => ({
+      registrationId: "stream-registration-projecting",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "durable-run-projecting",
+    })) as never;
+    host.cancelDurableChatRun = vi.fn(() => ({
+      runId: "durable-run-projecting",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 5,
+      payload: {},
+      createdAt: "2026-05-14T00:00:00.000Z",
+      updatedAt: "2026-05-14T00:00:02.000Z",
+      finishedAt: "2026-05-14T00:00:02.000Z",
+    }));
+
+    await expect(cancelChatTurn(host, "session-1", "turn-1", "operator")).resolves.toEqual(
+      expect.objectContaining({
+        cancelled: false,
+        trace: waitingTrace,
+      }),
+    );
+
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
+    expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(host.completeActiveChatTurnStream).not.toHaveBeenCalled();
+    expect(host.closeActiveChatTurnStream).not.toHaveBeenCalled();
   });
 
   it("keeps terminal cancellation idempotent while a completed stream registration is retained", async () => {

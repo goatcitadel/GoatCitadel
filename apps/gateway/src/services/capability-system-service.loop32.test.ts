@@ -75,6 +75,7 @@ function createService(input: {
         }),
       ),
       createApproval,
+      resolveApproval: vi.fn(),
       publishRealtime: vi.fn(),
       readPolicySnapshot: () => ({ mode: "test" }),
     }),

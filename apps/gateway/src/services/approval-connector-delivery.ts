@@ -1,17 +1,84 @@
+import { randomUUID } from "node:crypto";
 import {
   redactStructuredSecrets,
   type ApprovalRequest,
   type ConnectorDeliveryWorkflowPayload,
   type ConnectorCapabilityId,
   type ConnectorRecord,
+  type DurableRunCreateRequest,
+  type DurableRunRecord,
 } from "@goatcitadel/contracts";
+import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 
 const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
+
+export interface ApprovalRemoteTokenDeliveryRuntime {
+  readonly tokenSecrets: Pick<ApprovalRemoteTokenSecretService, "store" | "delete">;
+  readonly requestAttribution: { traceId?: string; originSurface?: string };
+  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
+}
+
+export function enqueueApprovalRemoteTokenConnectorDelivery(
+  runtime: ApprovalRemoteTokenDeliveryRuntime,
+  input: {
+    approval: ApprovalRequest;
+    connector: ConnectorRecord;
+    tokenRecord: { token: string; tokenId: string; expiresAt: string };
+  },
+): DurableRunRecord | undefined {
+  const needsSecret =
+    input.connector.connectorType === "browser" ||
+    (input.connector.connectorType === "integration_connection" &&
+      hasEnabledCapability(input.connector, "interactive_actions"));
+  let tokenRef: string | undefined;
+  try {
+    tokenRef = needsSecret ? runtime.tokenSecrets.store(input.tokenRecord.tokenId, input.tokenRecord.token) : undefined;
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: input.approval,
+      connector: input.connector,
+      tokenRef,
+      tokenId: input.tokenRecord.tokenId,
+      expiresAt: input.tokenRecord.expiresAt,
+    });
+    if (!payload) {
+      if (tokenRef) {
+        runtime.tokenSecrets.delete(tokenRef);
+      }
+      return undefined;
+    }
+    return runtime.createDurableRun({
+      runId: randomUUID(),
+      workflowKey: "connector.delivery",
+      payload: stripUndefined({
+        ...payload,
+        traceId: runtime.requestAttribution.traceId,
+        originSurface: payload.originSurface ?? runtime.requestAttribution.originSurface,
+      }),
+      metadata: {
+        approvalId: input.approval.approvalId,
+        connectorId: input.connector.connectorId,
+        connectorType: input.connector.connectorType,
+        deliveryKind: "approval.remote_token",
+        tokenId: input.tokenRecord.tokenId,
+      },
+    });
+  } catch (error) {
+    if (tokenRef) {
+      try {
+        runtime.tokenSecrets.delete(tokenRef);
+      } catch {
+        // Preserve the enqueue error; an orphaned keychain value is safer than
+        // copying the bearer into durable state.
+      }
+    }
+    throw error;
+  }
+}
 
 export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
   approval: ApprovalRequest;
   connector: ConnectorRecord;
-  token: string;
+  tokenRef?: string;
   tokenId: string;
   expiresAt: string;
 }): ConnectorDeliveryWorkflowPayload | undefined {
@@ -26,13 +93,18 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
       ) {
         return undefined;
       }
+      if (!input.tokenRef) {
+        return undefined;
+      }
       return {
         version: "connector.delivery.v1",
         connectorId: input.connector.connectorId,
         connectorType: input.connector.connectorType,
         action: "realtime.emit",
         correlationId: input.approval.approvalId,
+        approvalAction: { tokenId: input.tokenId, expiresAt: input.expiresAt },
         ...buildApprovalDeliveryGovernance(input.approval),
+        secretRefs: { approvalActionToken: input.tokenRef },
         payload: {
           eventType: "approval_remote_action_ready",
           source: "approvals",
@@ -51,27 +123,32 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
       if (!target) {
         return undefined;
       }
-      const interactiveActions = hasEnabledCapability(input.connector, "interactive_actions")
-        ? {
-            platform: readIntegrationActionPlatform(input.connector),
-            tokenId: input.tokenId,
-            buttons: [
-              { label: "Approve", callbackData: `gca:${input.token}:a` },
-              { label: "Deny", callbackData: `gca:${input.token}:r` },
-            ],
-          }
-        : undefined;
+      const interactiveActionTemplate =
+        hasEnabledCapability(input.connector, "interactive_actions") && input.tokenRef
+          ? {
+              platform: readIntegrationActionPlatform(input.connector),
+              tokenId: input.tokenId,
+              tokenRef: input.tokenRef,
+              expiresAt: input.expiresAt,
+              buttons: [
+                { label: "Approve", decision: "a" as const },
+                { label: "Deny", decision: "r" as const },
+              ],
+            }
+          : undefined;
       return {
         version: "connector.delivery.v1",
         connectorId: input.connector.connectorId,
         connectorType: input.connector.connectorType,
         action: "channel.send",
         correlationId: input.approval.approvalId,
+        approvalAction: { tokenId: input.tokenId, expiresAt: input.expiresAt },
         ...buildApprovalDeliveryGovernance(input.approval),
+        ...(interactiveActionTemplate && input.tokenRef ? { secretRefs: { approvalActionToken: input.tokenRef } } : {}),
         payload: {
           target,
-          message: buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActions)),
-          interactiveActions,
+          message: buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActionTemplate)),
+          interactiveActionTemplate,
         },
       };
     }
@@ -89,6 +166,7 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
         connectorType: input.connector.connectorType,
         action: "mcp.invoke",
         correlationId: input.approval.approvalId,
+        approvalAction: { tokenId: input.tokenId, expiresAt: input.expiresAt },
         ...buildApprovalDeliveryGovernance(input.approval),
         payload: {
           approvalId: input.approval.approvalId,
@@ -123,7 +201,6 @@ function readIntegrationActionPlatform(connector: ConnectorRecord): string {
 
 function buildApprovalDeliveryEnvelope(input: {
   approval: ApprovalRequest;
-  token: string;
   tokenId: string;
   expiresAt: string;
 }): Record<string, unknown> {
@@ -138,7 +215,6 @@ function buildApprovalDeliveryEnvelope(input: {
     linkage: buildApprovalDeliveryLinkage(publicApproval),
     governance,
     tokenId: input.tokenId,
-    token: input.token,
     actionType: "approval.resolve",
     expiresAt: input.expiresAt,
   };
@@ -229,7 +305,6 @@ function stripUndefined<T extends Record<string, unknown>>(input: T): T {
 function buildIntegrationApprovalDeliveryMessage(
   input: {
     approval: ApprovalRequest;
-    token: string;
     tokenId: string;
     expiresAt: string;
   },

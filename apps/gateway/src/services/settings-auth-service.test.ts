@@ -8,6 +8,7 @@ import type { ApprovalCreateInput, ApprovalRequest, ApprovalResolveInput } from 
 import {
   createDeviceAccessRequest,
   expireDeviceAccessRequestIfNeeded,
+  expirePendingDeviceAccessRequests,
   exchangeCompanionSessionFromDeviceGrant,
   getActiveAuthDeviceGrantById,
   getAuthDeviceRequestById,
@@ -267,6 +268,24 @@ function buildAuthHarness(): AuthHarness {
       storage.approvals.resolve(approvalId, input),
     ),
     enqueueApprovalResolutionEffects: vi.fn(() => []),
+    enqueueApprovalObservabilityEffects: vi.fn((_approvalId, items) => {
+      for (const item of items) {
+        if (item.delivery.kind === "audit") {
+          auditRecords.push({
+            timestamp: new Date().toISOString(),
+            ...item.delivery.payload,
+          });
+        } else {
+          realtimeEvents.push({
+            eventType: item.delivery.eventType,
+            source: item.delivery.source,
+            payload: item.delivery.payload,
+            options: item.delivery.options as Record<string, unknown> | undefined,
+          });
+        }
+      }
+      return [];
+    }),
     listApprovalEffects: vi.fn(() => []),
     buildApprovalRealtimeLinks: vi.fn((approval: ApprovalRequest) => ({ approvalId: approval.approvalId })),
     recordImprovementApprovalResolutionSignal: vi.fn(),
@@ -1412,6 +1431,137 @@ describe("settings-auth-service device access lifecycle", () => {
     );
   });
 
+  it("rolls back the device grant, request, approval, and plaintext handoff when effect enqueue fails", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(
+      harness.deps,
+      {
+        deviceLabel: "Rollback laptop",
+        deviceType: "desktop",
+        platform: "Windows",
+      },
+      {
+        requestedOrigin: "http://127.0.0.1:5173",
+        requestedIp: "127.0.0.1",
+      },
+    );
+    vi.mocked(harness.deps.enqueueApprovalObservabilityEffects).mockImplementationOnce(() => {
+      throw new Error("approval observability store unavailable");
+    });
+
+    await expect(
+      resolveDeviceAccessApproval(harness.deps, harness.storage.approvals.get(request.approvalId), {
+        decision: "approve",
+        resolvedBy: "operator:test",
+      }),
+    ).rejects.toThrow("approval observability store unavailable");
+
+    expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
+    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
+  });
+
+  it("preserves the winning device token when concurrent approval attempts race", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    const staleApproval = harness.storage.approvals.get(request.approvalId);
+
+    const outcomes = await Promise.allSettled([
+      resolveDeviceAccessApproval(harness.deps, staleApproval, {
+        decision: "approve",
+        resolvedBy: "operator:first",
+      }),
+      resolveDeviceAccessApproval(harness.deps, staleApproval, {
+        decision: "approve",
+        resolvedBy: "operator:second",
+      }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(listDeviceAccessGrants(harness.deps)).toHaveLength(1);
+    const winningToken = harness.deviceTokenVault.claim(request.requestId);
+    expect(winningToken?.token).toBeDefined();
+    expect(validateDeviceAccessToken(harness.deps, winningToken!.token)).toMatchObject({
+      actorId: expect.stringMatching(/^device:/),
+      grantId: expect.any(String),
+    });
+  });
+
+  it("refuses a device grant when the request expires at the winning transaction boundary", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    const originalTransaction = harness.deps.storage.runImmediateTransaction.bind(harness.deps.storage);
+    vi.spyOn(harness.deps.storage, "runImmediateTransaction").mockImplementation((operation) => {
+      harness.storage.gatewaySql
+        .prepare(
+          `
+          UPDATE auth_device_requests
+          SET expires_at = @expiresAt
+          WHERE request_id = @requestId
+        `,
+        )
+        .run({
+          requestId: request.requestId,
+          expiresAt: new Date(Date.now() - 1_000).toISOString(),
+        });
+      return originalTransaction(operation);
+    });
+
+    await expect(
+      resolveDeviceAccessApproval(harness.deps, harness.storage.approvals.get(request.approvalId), {
+        decision: "approve",
+        resolvedBy: "operator:test",
+      }),
+    ).rejects.toThrow(/no longer pending or has expired/i);
+
+    expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
+    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
+  });
+
+  it("rolls back when a device request expires while its approval transaction is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = new Date("2026-07-10T12:00:00.000Z");
+      vi.setSystemTime(startedAt);
+      const harness = buildAuthHarness();
+      const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+      harness.storage.gatewaySql
+        .prepare(
+          `
+          UPDATE auth_device_requests
+          SET expires_at = @expiresAt
+          WHERE request_id = @requestId
+        `,
+        )
+        .run({
+          requestId: request.requestId,
+          expiresAt: new Date(startedAt.getTime() + 1_000).toISOString(),
+        });
+      vi.mocked(harness.deps.enqueueApprovalObservabilityEffects).mockImplementationOnce(() => {
+        vi.setSystemTime(new Date(startedAt.getTime() + 2_000));
+        return [];
+      });
+
+      await expect(
+        resolveDeviceAccessApproval(harness.deps, harness.storage.approvals.get(request.approvalId), {
+          decision: "approve",
+          resolvedBy: "operator:test",
+        }),
+      ).rejects.toThrow(/expired before the approval transaction committed/i);
+
+      expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
+      expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
+      expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+      expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("expires stale pending device requests through status polling", async () => {
     const harness = buildAuthHarness();
     const request = await createDeviceAccessRequest(
@@ -1447,8 +1597,33 @@ describe("settings-auth-service device access lifecycle", () => {
     });
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("rejected");
     expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:auth-device-expiry" }),
+    );
     expect(harness.auditRecords.map((record) => record.event)).toEqual(
       expect.arrayContaining(["auth.device_request.expire", "approval.resolve"]),
+    );
+  });
+
+  it("proactively expires stale device requests that are never polled", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(
+      harness.deps,
+      { deviceLabel: "Unpolled browser", deviceType: "browser" },
+      {},
+    );
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt WHERE request_id = @requestId")
+      .run({ requestId: request.requestId, expiresAt: new Date(Date.now() - 1_000).toISOString() });
+
+    await expect(expirePendingDeviceAccessRequests(harness.deps, 10)).resolves.toBe(1);
+
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("expired");
+    expect(harness.storage.approvals.get(request.approvalId).status).toBe("rejected");
+    expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
+      expect.objectContaining({ resolvedBy: "system:auth-device-expiry" }),
     );
   });
 
@@ -1470,14 +1645,7 @@ describe("settings-auth-service device access lifecycle", () => {
       ? (await vi.mocked(harness.deps.createApproval).mock.results[0].value).approvalId
       : undefined;
     expect(approvalId).toBeDefined();
-    expect(vi.mocked(harness.deps.resolveApproval)).toHaveBeenCalledWith(
-      approvalId,
-      expect.objectContaining({
-        decision: "reject",
-        resolvedBy: "system:auth-device-request",
-        resolutionNote: "Device request registration failed.",
-      }),
-    );
+    expect(vi.mocked(harness.deps.resolveApproval)).not.toHaveBeenCalled();
     expect(harness.storage.approvals.get(approvalId!).status).toBe("rejected");
     expect(harness.auditRecords.map((record) => record.event)).not.toContain("auth.device_request.create");
   });
@@ -1615,11 +1783,9 @@ describe("settings-auth-service device access lifecycle", () => {
     const expired = await expireDeviceAccessRequestIfNeeded(harness.deps, stored!);
     expect(expired).toMatchObject({
       requestId: expiringRequest.requestId,
-      status: "expired",
-      resolvedBy: "system:auth-device-expiry",
-      resolutionNote: "Device access request expired before approval.",
+      status: "pending",
     });
-    expect(harness.storage.approvals.get(expiringRequest.approvalId).status).toBe("rejected");
+    expect(harness.storage.approvals.get(expiringRequest.approvalId).status).toBe("pending");
   });
 
   it("handles status-delivery races, cleanup failures, and inactive device grants", async () => {
@@ -1677,10 +1843,11 @@ describe("settings-auth-service device access lifecycle", () => {
       }
       return cleanupPrepare(sql);
     });
-    vi.mocked(cleanupHarness.deps.resolveApproval).mockRejectedValueOnce(new Error("approval store offline"));
     await expect(createDeviceAccessRequest(cleanupHarness.deps, { deviceType: "desktop" }, {})).rejects.toThrow(
       "sqlite write failed",
     );
+    const cleanupApprovalId = (await vi.mocked(cleanupHarness.deps.createApproval).mock.results[0]!.value).approvalId;
+    expect(cleanupHarness.storage.approvals.get(cleanupApprovalId).status).toBe("rejected");
 
     const grantHarness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(grantHarness);
@@ -1737,6 +1904,59 @@ describe("settings-auth-service device token is never at rest", () => {
     expect(second.deviceToken).toBeUndefined();
     // Absence is framed as "awaiting handoff", never as a rejection.
     expect(second.message).toContain("secure handoff");
+  });
+
+  it("does not burn the handoff when a different gateway node lacks the plaintext", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    await approveDeviceRequest(harness, request.approvalId);
+    const otherNodeDeps = {
+      ...harness.deps,
+      deviceTokenVault: new DeviceTokenVault(),
+    };
+
+    const remotePoll = await getDeviceAccessRequestStatus(otherNodeDeps, request.requestId, request.requestSecret);
+    expect(remotePoll.status).toBe("approved");
+    expect(remotePoll.deviceToken).toBeUndefined();
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.deliveredAt).toBeUndefined();
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(true);
+
+    const approvingNodePoll = await getDeviceAccessRequestStatus(
+      harness.deps,
+      request.requestId,
+      request.requestSecret,
+    );
+    expect(approvingNodePoll.deviceToken).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.deliveredAt).toBeDefined();
+  });
+
+  it("restores the plaintext vault entry when the delivery CAS throws", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    await approveDeviceRequest(harness, request.approvalId);
+    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (sql.includes("SET delivered_at = @deliveredAt")) {
+        return new Proxy(statement, {
+          get(target, property, receiver) {
+            if (property === "run") {
+              return () => {
+                throw new Error("delivery CAS unavailable");
+              };
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        }) as never;
+      }
+      return statement;
+    });
+
+    await expect(getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret)).rejects.toThrow(
+      "delivery CAS unavailable",
+    );
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(true);
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.deliveredAt).toBeUndefined();
   });
 
   it("does not deliver a token whose vault entry has already expired", async () => {

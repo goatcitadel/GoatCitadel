@@ -4,8 +4,11 @@ import type {
   ApprovalEffectRecord,
   ApprovalEffectStatus,
   ApprovalEffectTargetKind,
+  ApprovalObservabilityAttribution,
+  ApprovalObservabilityDelivery,
+  ApprovalObservabilityEnvelope,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -38,10 +41,13 @@ export class ApprovalEffectRepository {
   private readonly getByIdempotencyKeyStmt;
   private readonly getByTargetStmt;
   private readonly listByApprovalStmt;
+  private readonly lockApprovalForObservabilityStmt;
   private readonly upsertStmt;
   private readonly claimCandidatesStmt;
+  private readonly claimObservabilityCandidatesStmt;
   private readonly claimEffectStmt;
   private readonly renewLeaseStmt;
+  private readonly deferEffectStmt;
   private readonly completeEffectStmt;
   private readonly skipEffectStmt;
   private readonly failEffectStmt;
@@ -72,6 +78,15 @@ export class ApprovalEffectRepository {
       WHERE approval_id = ?
       ORDER BY created_at ASC, effect_id ASC
     `);
+    this.lockApprovalForObservabilityStmt =
+      db.dialect === "postgres"
+        ? db.prepare(`
+            SELECT approval_id
+            FROM approvals
+            WHERE approval_id = ?
+            FOR UPDATE
+          `)
+        : undefined;
     this.upsertStmt = db.prepare(`
       INSERT INTO approval_effects (
         effect_id, approval_id, effect_kind, target_kind, target_id, idempotency_key, status,
@@ -82,9 +97,7 @@ export class ApprovalEffectRepository {
         @attemptCount, @payloadJson, @resultJson, @lastError, @claimedBy, @claimedAt,
         @leaseExpiresAt, @version, @createdAt, @updatedAt, @completedAt
       )
-      ON CONFLICT(idempotency_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        updated_at = excluded.updated_at
+      ON CONFLICT(idempotency_key) DO NOTHING
     `);
     this.claimCandidatesStmt = db.prepare(`
       SELECT *
@@ -93,17 +106,31 @@ export class ApprovalEffectRepository {
           status = 'pending'
           OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= @now)
         )
+        AND effect_kind <> 'approval_observability'
       ORDER BY
         CASE effect_kind
-          WHEN 'pending_action_execute' THEN 0
-          WHEN 'approval_wait_wake' THEN 1
-          WHEN 'proactive_run_wake' THEN 2
-          WHEN 'linked_chat_turn_wake' THEN 3
-          WHEN 'orchestration_parent_wake' THEN 4
-          ELSE 5
+          WHEN 'approval_wait_materialize' THEN 0
+          WHEN 'approval_resolution_signals' THEN 1
+          WHEN 'pending_action_execute' THEN 2
+          WHEN 'approval_wait_wake' THEN 3
+          WHEN 'proactive_run_wake' THEN 4
+          WHEN 'linked_chat_turn_wake' THEN 5
+          WHEN 'orchestration_parent_wake' THEN 6
+          ELSE 7
         END ASC,
         created_at ASC,
         effect_id ASC
+      LIMIT @limit
+    `);
+    this.claimObservabilityCandidatesStmt = db.prepare(`
+      SELECT *
+      FROM approval_effects
+      WHERE (
+          status = 'pending'
+          OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= @now)
+        )
+        AND effect_kind = 'approval_observability'
+      ORDER BY created_at ASC, effect_id ASC
       LIMIT @limit
     `);
     this.claimEffectStmt = db.prepare(`
@@ -126,6 +153,17 @@ export class ApprovalEffectRepository {
     this.renewLeaseStmt = db.prepare(`
       UPDATE approval_effects
       SET lease_expires_at = @leaseExpiresAt,
+          updated_at = @updatedAt,
+          version = version + 1
+      WHERE effect_id = @effectId
+        AND status = 'running'
+        AND claimed_by = @workerId
+    `);
+    this.deferEffectStmt = db.prepare(`
+      UPDATE approval_effects
+      SET result_json = @resultJson,
+          last_error = @lastError,
+          lease_expires_at = @leaseExpiresAt,
           updated_at = @updatedAt,
           version = version + 1
       WHERE effect_id = @effectId
@@ -264,7 +302,90 @@ export class ApprovalEffectRepository {
       updatedAt,
       completedAt: input.completedAt ?? existing?.completedAt ?? null,
     });
-    return this.getByIdempotencyKey(idempotencyKey) as ApprovalEffectRecord;
+    const persisted = this.getByIdempotencyKey(idempotencyKey) as ApprovalEffectRecord;
+    assertApprovalEffectIdempotencyMatch(persisted, {
+      approvalId: input.approvalId,
+      effectKind: input.effectKind,
+      targetKind: input.targetKind,
+      targetId: input.targetId,
+      payload: input.payload ?? existing?.payload ?? {},
+    });
+    return persisted;
+  }
+
+  public upsertObservabilityBatch(input: {
+    approvalId: string;
+    occurredAt: string;
+    attribution?: ApprovalObservabilityAttribution;
+    items: readonly {
+      operationId: string;
+      delivery: ApprovalObservabilityDelivery;
+    }[];
+  }): ApprovalEffectRecord[] {
+    return this.db.transaction("immediate", () => {
+      if (this.lockApprovalForObservabilityStmt) {
+        const locked = this.lockApprovalForObservabilityStmt.get(input.approvalId);
+        if (!locked) {
+          throw new NotFoundError({ entity: "approval", id: input.approvalId });
+        }
+      }
+
+      const latestEntry = this.listByApproval(input.approvalId)
+        .filter((effect) => effect.effectKind === "approval_observability")
+        .map((effect) => ({ effect, envelope: readStoredApprovalObservabilityEnvelope(effect.payload) }))
+        .filter((entry): entry is { effect: ApprovalEffectRecord; envelope: ApprovalObservabilityEnvelope } =>
+          Boolean(entry.envelope),
+        )
+        .sort((left, right) => left.envelope.orderIndex - right.envelope.orderIndex)
+        .at(-1);
+      const latestEnvelope = latestEntry?.envelope;
+      let orderIndex = (latestEnvelope?.orderIndex ?? 0) + 1;
+      let predecessorDeliveryId = latestEnvelope?.deliveryId;
+      const occurredAtMs = Date.parse(input.occurredAt);
+      const latestCreatedAtMs = latestEntry ? Date.parse(latestEntry.effect.createdAt) : Number.NaN;
+      let nextCreatedAtMs = Math.max(
+        Number.isFinite(occurredAtMs) ? occurredAtMs : Date.now(),
+        Number.isFinite(latestCreatedAtMs) ? latestCreatedAtMs + 1 : Number.NEGATIVE_INFINITY,
+      );
+      const effects: ApprovalEffectRecord[] = [];
+
+      for (const item of input.items) {
+        const deliveryId = buildApprovalObservabilityDeliveryId(input.approvalId, item.operationId);
+        const existing = this.getByIdempotencyKey(deliveryId);
+        const existingEnvelope = existing ? readStoredApprovalObservabilityEnvelope(existing.payload) : undefined;
+        const envelope: ApprovalObservabilityEnvelope = existingEnvelope
+          ? { ...existingEnvelope, delivery: item.delivery }
+          : {
+              schemaVersion: "approval_observability.v1",
+              deliveryId,
+              operationId: item.operationId,
+              occurredAt: input.occurredAt,
+              orderIndex,
+              ...(predecessorDeliveryId ? { predecessorDeliveryId } : {}),
+              ...(input.attribution ? { attribution: input.attribution } : {}),
+              delivery: item.delivery,
+            };
+        const createdAt = new Date(nextCreatedAtMs).toISOString();
+        effects.push(
+          this.upsert({
+            approvalId: input.approvalId,
+            effectKind: "approval_observability",
+            targetKind: "approval",
+            targetId: item.operationId,
+            idempotencyKey: deliveryId,
+            payload: envelope as unknown as Record<string, unknown>,
+            ...(!existingEnvelope ? { createdAt, updatedAt: createdAt } : {}),
+          }),
+        );
+        if (!existingEnvelope) {
+          predecessorDeliveryId = deliveryId;
+          orderIndex += 1;
+          nextCreatedAtMs += 1;
+        }
+      }
+
+      return effects;
+    });
   }
 
   public claimNextPendingEffect(
@@ -273,7 +394,26 @@ export class ApprovalEffectRepository {
     leaseExpiresAt: string,
     limit = 25,
   ): ApprovalEffectRecord | undefined {
-    const candidates = this.claimCandidatesStmt.all({
+    return this.claimNextEffectFrom(this.claimCandidatesStmt, workerId, now, leaseExpiresAt, limit);
+  }
+
+  public claimNextPendingObservabilityEffect(
+    workerId: string,
+    now: string,
+    leaseExpiresAt: string,
+    limit = 25,
+  ): ApprovalEffectRecord | undefined {
+    return this.claimNextEffectFrom(this.claimObservabilityCandidatesStmt, workerId, now, leaseExpiresAt, limit);
+  }
+
+  private claimNextEffectFrom(
+    candidatesStmt: { all(...params: unknown[]): unknown[] },
+    workerId: string,
+    now: string,
+    leaseExpiresAt: string,
+    limit: number,
+  ): ApprovalEffectRecord | undefined {
+    const candidates = candidatesStmt.all({
       now,
       limit: Math.max(1, limit),
     }) as ApprovalEffectRow[];
@@ -306,6 +446,29 @@ export class ApprovalEffectRepository {
       workerId,
       leaseExpiresAt,
       updatedAt: now,
+    });
+    return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
+  }
+
+  public deferEffectForRetry(
+    effectId: string,
+    workerId: string,
+    _expectedVersion: number,
+    input: {
+      result: Record<string, unknown>;
+      lastError: string;
+      retryAt: string;
+      updatedAt?: string;
+    },
+  ): ApprovalEffectRecord | undefined {
+    const updatedAt = input.updatedAt ?? new Date().toISOString();
+    const update = this.deferEffectStmt.run({
+      effectId,
+      workerId,
+      resultJson: JSON.stringify(input.result),
+      lastError: input.lastError,
+      leaseExpiresAt: input.retryAt,
+      updatedAt,
     });
     return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
   }
@@ -400,6 +563,65 @@ export function buildApprovalEffectIdempotencyKey(input: {
   targetId: string;
 }): string {
   return `${input.approvalId}:${input.effectKind}:${input.targetKind}:${input.targetId}`;
+}
+
+export function buildApprovalObservabilityDeliveryId(approvalId: string, operationId: string): string {
+  return `approval-observability:${approvalId}:${operationId}`;
+}
+
+function assertApprovalEffectIdempotencyMatch(
+  persisted: ApprovalEffectRecord,
+  input: Pick<ApprovalEffectRecord, "approvalId" | "effectKind" | "targetKind" | "targetId" | "payload">,
+): void {
+  const identityMatches =
+    persisted.approvalId === input.approvalId &&
+    persisted.effectKind === input.effectKind &&
+    persisted.targetKind === input.targetKind &&
+    persisted.targetId === input.targetId;
+  const payloadMatches = stableJson(persisted.payload) === stableJson(input.payload);
+  if (identityMatches && payloadMatches) {
+    return;
+  }
+  throw new ConflictError({
+    code: "STATE_CONFLICT",
+    message: `Approval effect idempotency payload mismatch for ${persisted.idempotencyKey}.`,
+  });
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function readStoredApprovalObservabilityEnvelope(
+  payload: Record<string, unknown>,
+): ApprovalObservabilityEnvelope | undefined {
+  if (
+    payload.schemaVersion !== "approval_observability.v1" ||
+    typeof payload.deliveryId !== "string" ||
+    !payload.deliveryId.trim() ||
+    typeof payload.operationId !== "string" ||
+    !payload.operationId.trim() ||
+    typeof payload.occurredAt !== "string" ||
+    typeof payload.orderIndex !== "number" ||
+    !Number.isInteger(payload.orderIndex) ||
+    payload.orderIndex < 1 ||
+    !payload.delivery ||
+    typeof payload.delivery !== "object" ||
+    Array.isArray(payload.delivery)
+  ) {
+    return undefined;
+  }
+  return payload as unknown as ApprovalObservabilityEnvelope;
 }
 
 function mapApprovalEffectRow(row: ApprovalEffectRow): ApprovalEffectRecord {

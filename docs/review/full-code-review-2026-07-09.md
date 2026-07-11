@@ -6,7 +6,8 @@
 - Serial delivery:
   - `codex/review-00-proof-integrity` merged as PR #205 at `df0b3576ac1c4ae32efb44f6d94593b0886c7949`
   - `codex/review-01-network-side-effects` merged as PR #206 at `4df18536833a453c0e31f3a164c8d988abb14bc4`
-  - `codex/review-02-secret-projection-containment` is the current security branch
+  - `codex/review-02-secret-projection-containment` merged as PR #207 at `a183833af23ffb73cb48233736ff913d4796eb6e`
+  - `codex/review-03-approval-commit-truth` is the current approval/data-integrity branch
 - Canonical product surface: one Chat surface backed by the Gateway runtime
 - Finding priorities: correctness, security, data durability, orchestration/agentic behavior, performance, runtime truth, and operator-facing UX behavior
 - Excluded local state: `.env`, runtime databases, transcripts, audit logs, backups, dependency trees, build output, generated verification artifacts, and ignored legacy Mission Control residue
@@ -211,7 +212,7 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: executable configuration, persisted evidence, and public/model DTOs share raw objects; redaction is neither key-aware enough nor URL/string-aware.
 - Fix: reject inline secrets where secret references are required, introduce sanitized public/evidence/model projections, migrate persisted credentials forward to secret references, and preserve only resolvable references in executable state.
 - Focused proof: storage/API/explainer redaction regressions; broad proof: artifact redaction, auth matrix, migration parity, and channel/A2A lanes.
-- Status: `in progress on review-02 — broad response/model/evidence containment and safe editable-projection round trips are implemented with focused proof; the forward secret-reference migration and the explicitly queued secondary public surfaces remain open, so FR-103 is not closed by this branch`
+- Status: `in progress — review-02 delivered broad response/model/evidence containment; review-03 removes remote-approval plaintext bearers from durable state and scrubs historical rows, but the remaining forward secret-reference migration and secondary public-surface queue keep FR-103 open`
 
 #### Review-02 containment scope and evidence
 
@@ -241,7 +242,20 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Root cause: post-commit observability failure is represented as mutation failure, and HTTP-status-only idempotency finalization cannot distinguish commit state.
 - Fix: durable audit/realtime outbox or explicit committed-result contract, with resumable remote-token claims and idempotency completion after committed mutations.
 - Focused proof: post-commit failure injection; broad proof: approvals, remote resolution, durable recovery, auth matrix, and fast lane.
-- Status: `open — approval atomicity branch`
+- Status: `fixed and proven on review-03 — canonical approval mutations commit with their events/effect envelopes; fallible follow-up work is leased and retryable; committed errors cannot revive an idempotency claim`
+
+#### Review-03 approval commit-truth closure evidence
+
+- Canonical ownership: generic, bulk, Chat-tool, Code Mode, device-access, improvement-activation, remote-token, and expiry paths now route approval resolution through the lifecycle or their explicit transaction owner. Approval state, linkage, events, pending-action state, wait reservations, remote-token invalidation, and durable effect envelopes commit together.
+- Commit/result truth: audit and realtime delivery moved behind an idempotent observability effect lane with immutable predecessor ordering. A bounded post-commit settlement read returns a completed quick resume when the action worker finishes and otherwise reports the durable follow-up as pending; audit/realtime or settlement failure can no longer turn a committed approval into an HTTP-level retryable mutation. Approval, Chat-tool, device-access, remote-token, and tool-grant routes explicitly preserve committed idempotency state.
+- Race and recovery proof: pending approvals, including never-polled device requests, are proactively expired. Operator resolution, expiry, duplicate remote claims, Code Mode terminalization, wait-run materialization, pending-action execution, improvement activation, and Chat cancellation/completion use transaction, lease, fingerprint, or compare-and-swap ownership instead of last-writer-wins state. Approval effect workers heartbeat leases, recover expired claims, and keep observability retryable without replaying an already executed action.
+- Remote approval containment: raw `grat_...` bearers are generated only for one-time return/final transport hydration. Durable connector runs carry opaque token IDs plus OS-keychain references, reject raw bearers, bind opaque-ID resolution to the authenticated connector, enforce expiry at claim and dispatch, and retry protected-secret cleanup without replaying a successful external delivery. SQLite v139 and PostgreSQL v81 scrub historical durable, approval, audit, realtime, tool, and connector rows; frozen historical migration text was not modified.
+- Chat commit truth: terminal cancellation/failure/completion uses status compare-and-swap ownership. Assistant message ingestion and the winning trace transition share the EventIngest transaction, so cancellation cannot leave a cancelled trace with a newly committed assistant response and late failure cannot overwrite another terminal winner.
+- Focused and owning proof: the approval lifecycle/effect/remote-token/device/connector/Chat race suites passed; contracts passed 355 tests, policy passed 641, the complete storage and Gateway suites passed, and contracts, gateway-core, storage, policy, and Gateway typechecks passed. A disposable PostgreSQL 16 instance passed migrator/client, complete-ledger replay plus scrub, comms CAS, and concurrent observability predecessor/creation-order tests (4/4).
+- Named proof on final source: auth matrix `2026-07-11T00-59-54-196Z-auth-matrix-7e94b617`; security evals `2026-07-11T01-00-08-490Z-security-evals-453280bd`; API compatibility `2026-07-11T01-00-12-758Z-api-compat-67823484`; channels runtime `2026-07-11T01-00-25-654Z-agentic-channels-runtime-0bda0d04`; runtime truth `2026-07-11T01-00-48-645Z-runtime-truth-daf56ece`; durable recovery `2026-07-11T01-02-01-202Z-durable-recovery-a03b34c1`; realtime truth `2026-07-11T01-02-24-797Z-realtime-truth-9fc6b8b5`; agentic contracts `2026-07-11T01-02-43-813Z-agentic-contracts-f56d8514`; agentic governance `2026-07-11T01-03-11-694Z-agentic-governance-412be0a0`; operator proof `2026-07-11T01-04-03-471Z-operator-proof-8fa7ed6b`; Code Mode sandbox `2026-07-11T01-04-49-161Z-code-mode-sandbox-61365ead`. MCP conformance, artifact redaction, migration parity, supply-chain, documentation, lint, and diff checks also passed.
+- Broad proof: `verify:fast` passed as `2026-07-11T00-54-02-345Z-fast-915690ab`. The exact-source architecture rerun passed as `2026-07-11T01-11-19-828Z-architecture-metrics-c944676b` with GatewayService at 8,329 lines, 268 public methods, 58 internal methods, 884 typed host reads, and 274 Chat host reads; every metric is at or below the existing baseline, so no ratchet was widened.
+- Independent adversarial closure: production-source token searches found only generation, validation, redaction, explicit durable rejection, and forward scrub logic; no raw bearer persistence path remained. Direct approval mutations were traced to the lifecycle, device transaction owner, or explicit test/dev-verification paths. The final operator artifact contains no predecessor-order, blocked-predecessor, or settlement-failure marker, and the disposable PostgreSQL fixture left no temporary data directory. Residual availability risk is explicit: OS-keychain references are node-local, so a durable connector run claimed by another physical host sharing PostgreSQL can fail closed until worker/keychain affinity is designed. Historical external backups and excluded audit-log files are not rewritten by the forward database scrub.
+- Review-03 local verdict: the branch is safe to publish for exact-SHA hosted checks. This closes FR-104, FR-117, FR-118, and FR-119; it does not close the overall full-codebase review or the remaining FR-103 queue.
 
 ### FR-105 — A2A credentials do not enforce transport, method, or workspace scope
 
@@ -362,6 +376,36 @@ The independent runtime, agentic, storage, provider, memory, integration, and na
 - Fix: seed one reusable Chat session, place agentic and governed code starter tasks inside Chat, return `/chat`, retain compatibility flags as false, and assert current product truth in install proof.
 - Focused proof: demo route 9/9; broad proof: install smoke 7/7 and operator proof 3/3 on the final Review-02 source.
 - Status: `fixed on review-02 — one canonical Chat demo session is idempotent and release proof no longer requires retired primary surfaces`
+
+### FR-117 — Real PostgreSQL proof did not replay the complete migration ledger
+
+- Severity: `high`; confidence: `high`; release tier: `test-harness/release-ops`; certainty: `confirmed`.
+- Evidence: existing real-PostgreSQL tests constructed current schemas or exercised narrow migrator cases instead of applying every historical migration in order. A complete replay exposed PostgreSQL v79 SQL using the reserved alias `grant`, which the prior lane never parsed or executed.
+- Reproduction: provision an empty PostgreSQL 16 database and apply migrations 1 through 80; v79 fails before current-head tests can run.
+- Root cause: live database proof validated current behavior without proving that an actual historical database could traverse the full release ledger.
+- Fix: add a disposable-PostgreSQL full-ledger test that applies versions 1–80, seeds representative historical plaintext rows, applies v81, and verifies the forward scrub; rename the v79 alias without changing historical schema semantics.
+- Focused proof: complete-ledger PostgreSQL replay/scrub test; broad proof: real PostgreSQL suite, migration parity, storage typecheck, and fast lane.
+- Status: `fixed and proven on review-03 — PostgreSQL 16 replays the complete ledger and the new forward scrub from an empty database`
+
+### FR-118 — Remote approval bearers persisted beyond their one-time transport boundary
+
+- Severity: `high`; confidence: `high`; release tier: `shipped`; certainty: `confirmed`.
+- Evidence: connector delivery payloads/checkpoints and adjacent approval/audit/realtime/tool rows could retain raw `grat_...` bearer values; opaque token-ID resolution did not require the calling connector; protected values could outlive expiry or terminal delivery.
+- Reproduction: issue an interactive remote approval action, inspect the durable connector run and derivative rows, then resolve its opaque token ID from a different connector or leave it undispatched past expiry.
+- Root cause: token generation, durable orchestration, transport hydration, connector authorization, and secret cleanup shared one raw DTO instead of an opaque-record plus protected-secret boundary.
+- Fix: persist only token IDs, expiry metadata, and OS-keychain references; hydrate the bearer at the final browser/channel transport; bind opaque-ID claims to the connector; fail closed at claim/dispatch expiry; make cleanup retryable; reject raw durable bearers; scrub historical database rows with forward migrations.
+- Focused proof: secret-store, connector-delivery, durable-run, opaque-claim, expiry, cleanup, and migration regressions; broad proof: auth matrix, artifact redaction, channels runtime, MCP conformance, migration parity, PostgreSQL, and security evals.
+- Status: `fixed and proven on review-03 — the bearer is one-time response/final-transport data, not durable orchestration state`
+
+### FR-119 — Chat terminal writers could commit mutually inconsistent winners
+
+- Severity: `high`; confidence: `high`; release tier: `shipped`; certainty: `confirmed`.
+- Evidence: cancellation, background failure, non-stream completion, and streaming completion patched the same trace without a terminal ownership compare-and-swap; assistant message ingestion and trace completion used separate transactions.
+- Reproduction: pause immediately before assistant-message persistence, cancel the turn, then release completion; the assistant message could commit after the trace became cancelled, or a late failure/completion could overwrite a different terminal state.
+- Root cause: abort checks were advisory snapshots and terminal state/message writes lacked one transactional owner.
+- Fix: add repository status-CAS support and retrying cancellation ownership, preserve existing terminal winners, propagate non-NotFound ownership errors, and execute assistant-message upsert plus the winning trace transition inside one EventIngest transaction callback.
+- Focused proof: cancellation/completion/failure race tests for streamed and non-streamed turns plus EventIngest rollback tests; broad proof: Gateway, durable recovery, realtime truth, operator proof, and fast lane.
+- Status: `fixed and proven on review-03 — cancellation, failure, and completion cannot overwrite another terminal winner or split message/trace commit truth`
 
 ## Confirmed Medium Queue
 

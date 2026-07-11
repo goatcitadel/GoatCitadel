@@ -114,6 +114,7 @@ export class ChatTurnTraceRepository {
   private readonly getStmt;
   private readonly insertStmt;
   private readonly patchStmt;
+  private readonly patchIfStatusStmt;
   private readonly listBySessionStmt;
   private readonly listCompletedSinceStmt;
   private readonly listActiveStmt;
@@ -167,6 +168,33 @@ export class ChatTurnTraceRepository {
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
         finished_at = @finishedAt
       WHERE turn_id = @turnId
+    `);
+    this.patchIfStatusStmt = db.prepare(`
+      UPDATE chat_turn_traces
+      SET
+        parent_turn_id = @parentTurnId,
+        branch_kind = @branchKind,
+        source_turn_id = @sourceTurnId,
+        assistant_message_id = @assistantMessageId,
+        execution_plan_id = @executionPlanId,
+        status = @status,
+        model = @model,
+        routing_json = @routingJson,
+        retrieval_json = @retrievalJson,
+        reflection_json = @reflectionJson,
+        proactive_json = @proactiveJson,
+        completion_json = @completionJson,
+        durable_json = @durableJson,
+        orchestration_json = @orchestrationJson,
+        guidance_json = @guidanceJson,
+        loop_guard_json = @loopGuardJson,
+        pending_user_input_json = @pendingUserInputJson,
+        citations_json = @citationsJson,
+        failure_json = @failureJson,
+        capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
+        specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
+        finished_at = @finishedAt
+      WHERE turn_id = @turnId AND status = @expectedStatus
     `);
     this.listBySessionStmt = db.prepare(`
       SELECT * FROM chat_turn_traces
@@ -248,9 +276,34 @@ export class ChatTurnTraceRepository {
 
   public patch(turnId: string, input: ChatTurnTracePatchInput): ChatTurnTraceRecord {
     const current = this.get(turnId);
+    this.patchStmt.run(this.buildPatchParams(turnId, input, current));
+    return this.get(turnId);
+  }
+
+  public patchIfStatus(
+    turnId: string,
+    expectedStatuses: readonly ChatTurnTraceRecord["status"][],
+    input: ChatTurnTracePatchInput,
+  ): ChatTurnTraceRecord | undefined {
+    const current = this.get(turnId);
+    if (!expectedStatuses.includes(current.status)) {
+      return undefined;
+    }
+    const result = this.patchIfStatusStmt.run({
+      ...this.buildPatchParams(turnId, input, current),
+      expectedStatus: current.status,
+    });
+    return result.changes > 0 ? this.get(turnId) : undefined;
+  }
+
+  private buildPatchParams(
+    turnId: string,
+    input: ChatTurnTracePatchInput,
+    current: ChatTurnTraceRecord,
+  ): Record<string, unknown> {
     const hasFailure = Object.prototype.hasOwnProperty.call(input, "failure");
     const hasPendingUserInput = Object.prototype.hasOwnProperty.call(input, "pendingUserInput");
-    this.patchStmt.run({
+    return {
       turnId,
       parentTurnId: input.parentTurnId !== undefined ? input.parentTurnId : (current.parentTurnId ?? null),
       branchKind: input.branchKind ?? current.branchKind,
@@ -288,8 +341,7 @@ export class ChatTurnTraceRepository {
         input.specialistCandidateSuggestions ?? current.specialistCandidateSuggestions ?? [],
       ),
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
-    });
-    return this.get(turnId);
+    };
   }
 
   /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */

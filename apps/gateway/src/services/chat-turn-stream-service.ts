@@ -27,7 +27,7 @@ import type {
   RuntimeDecisionTraceAppendInput,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { CHAT_TURN_ACTIVE_STATUSES, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
@@ -54,6 +54,7 @@ import {
   isIncompleteDelegatedTraceFailure,
   isChatTurnCancelledError,
   mergeExecutionPlanStepStatuses,
+  patchChatTurnTraceIfStatus,
   renderExecutionPlanAsMarkdown,
   splitIntoChunks,
   toTitleCase,
@@ -1547,6 +1548,7 @@ export async function* streamPreparedAgentChatTurn(
   const effectivePermissionProfileId = inputPolicyContext?.permissionProfileId ?? input.permissionProfileId;
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
+  const chatTurnTraces = host.storage.chatTurnTraces;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   host.steerService?.registerActiveTurn?.({ sessionId, turnId });
@@ -1717,19 +1719,6 @@ export async function* streamPreparedAgentChatTurn(
           input.model ??
           prepared.prefs.model,
       });
-      await host.ingestEvent(randomUUID(), {
-        eventId: assistantMessageId,
-        route: prepared.route,
-        actor: {
-          type: "agent",
-          id: "assistant",
-        },
-        message: {
-          role: "assistant",
-          content: finalText,
-        },
-      });
-
       const orchestrationCitations = dedupeChatCitations([
         ...(prepared.threadKnowledgeCitations ?? []),
         ...orchestrationResult.citations,
@@ -1752,55 +1741,89 @@ export async function* streamPreparedAgentChatTurn(
             : orchestrationResult.summary.status === "partial"
               ? "partial"
               : "completed";
-
-      let hydratedTrace: ChatTurnTraceRecord = {
-        ...host.storage.chatTurnTraces.patch(turnId, {
-          assistantMessageId,
-          executionPlanId: orchestrationResult.executionPlanId,
-          status: orchestrationTraceStatus,
-          ...(orchestrationResult.summary.status === "running" ? {} : { finishedAt: new Date().toISOString() }),
-          model:
+      const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
+        assistantMessageId,
+        executionPlanId: orchestrationResult.executionPlanId,
+        status: orchestrationTraceStatus,
+        ...(orchestrationResult.summary.status === "running" ? {} : { finishedAt: new Date().toISOString() }),
+        model:
+          orchestrationResult.finalStep?.model ??
+          orchestrationResult.summary.steps.at(-1)?.model ??
+          modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
+          input.model ??
+          prepared.prefs.model,
+        routing: {
+          primaryProviderId: input.providerId ?? prepared.prefs.providerId,
+          primaryModel: input.model ?? prepared.prefs.model,
+          effectiveProviderId:
+            orchestrationResult.finalStep?.providerId ??
+            orchestrationResult.summary.steps.at(-1)?.providerId ??
+            modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
+            input.providerId ??
+            prepared.prefs.providerId,
+          effectiveModel:
             orchestrationResult.finalStep?.model ??
             orchestrationResult.summary.steps.at(-1)?.model ??
             modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
             input.model ??
             prepared.prefs.model,
-          routing: {
-            primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-            primaryModel: input.model ?? prepared.prefs.model,
-            effectiveProviderId:
-              orchestrationResult.finalStep?.providerId ??
-              orchestrationResult.summary.steps.at(-1)?.providerId ??
-              modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ??
-              input.providerId ??
-              prepared.prefs.providerId,
-            effectiveModel:
-              orchestrationResult.finalStep?.model ??
-              orchestrationResult.summary.steps.at(-1)?.model ??
-              modeOrchestration.orchestrationPlan.steps.at(0)?.model ??
-              input.model ??
-              prepared.prefs.model,
-            modelRouter: prepared.modelRouterDecision,
+          modelRouter: prepared.modelRouterDecision,
+        },
+        retrieval: prepared.retrievalTrace,
+        reflection: {
+          attempted: false,
+          attemptCount: 0,
+          outcome: "not_needed",
+        },
+        proactive: {
+          runId: prepared.autonomy.lastProactiveRunId,
+          mode: prepared.autonomy.proactiveMode,
+        },
+        orchestration: orchestrationResult.summary,
+        guidance: {
+          workspaceId: prepared.workspaceId,
+          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+          truncated: prepared.resolvedGuidance.truncated,
+        },
+        citations: orchestrationCitations,
+      };
+      let committedTrace: ChatTurnTraceRecord | undefined;
+      assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      await host.ingestEvent(
+        randomUUID(),
+        {
+          eventId: assistantMessageId,
+          route: prepared.route,
+          actor: {
+            type: "agent",
+            id: "assistant",
           },
-          retrieval: prepared.retrievalTrace,
-          reflection: {
-            attempted: false,
-            attemptCount: 0,
-            outcome: "not_needed",
+          message: {
+            role: "assistant",
+            content: finalText,
           },
-          proactive: {
-            runId: prepared.autonomy.lastProactiveRunId,
-            mode: prepared.autonomy.proactiveMode,
+        },
+        {
+          onCommit: () => {
+            committedTrace = patchChatTurnTraceIfStatus(
+              chatTurnTraces,
+              turnId,
+              CHAT_TURN_ACTIVE_STATUSES,
+              completionPatch,
+            );
           },
-          orchestration: orchestrationResult.summary,
-          guidance: {
-            workspaceId: prepared.workspaceId,
-            globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-            workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-            truncated: prepared.resolvedGuidance.truncated,
-          },
-          citations: orchestrationCitations,
-        }),
+        },
+      );
+      committedTrace ??= patchChatTurnTraceIfStatus(
+        chatTurnTraces,
+        turnId,
+        [...CHAT_TURN_ACTIVE_STATUSES, orchestrationTraceStatus],
+        completionPatch,
+      );
+
+      let hydratedTrace: ChatTurnTraceRecord = {
+        ...committedTrace,
         toolRuns: orchestrationToolRuns,
       };
       host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
@@ -2111,6 +2134,8 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
+    assertChatStreamCompletionWritable(host, turnId, controller.signal);
+
     if (!approvalRequired && !userInputRequired && !finalText.trim()) {
       const preRepairContent = finalText;
       finalText = buildEmptyAssistantTurnFallbackText();
@@ -2134,6 +2159,8 @@ export async function* streamPreparedAgentChatTurn(
         }
       }
     }
+
+    assertChatStreamCompletionWritable(host, turnId, controller.signal);
 
     if (approvalRequired) {
       host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
@@ -2282,6 +2309,7 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     if (finalText.trim()) {
+      assertChatStreamCompletionWritable(host, turnId, controller.signal);
       const currentTraceBeforeWrite = host.storage.chatTurnTraces.get(turnId);
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
@@ -2295,51 +2323,69 @@ export async function* streamPreparedAgentChatTurn(
           currentTraceBeforeWrite.routing?.effectiveProviderId ?? currentTraceBeforeWrite.routing?.primaryProviderId,
         model: currentTraceBeforeWrite.routing?.effectiveModel ?? currentTraceBeforeWrite.model,
       });
-      await host.ingestEvent(randomUUID(), {
-        eventId: assistantMessageId,
-        route: prepared.route,
-        actor: {
-          type: "agent",
-          id: "assistant",
+      assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
+        assistantMessageId,
+        status: "completed",
+        ...(streamLayerRepaired
+          ? {
+              completion: {
+                status: "complete",
+                repaired: true,
+                repair: streamLayerRepair,
+              },
+            }
+          : {}),
+        finishedAt: new Date().toISOString(),
+        retrieval: prepared.retrievalTrace,
+        reflection: {
+          attempted: false,
+          attemptCount: 0,
+          outcome: "not_needed",
         },
-        message: {
-          role: "assistant",
-          content: finalText,
+        proactive: {
+          runId: prepared.autonomy.lastProactiveRunId,
+          mode: prepared.autonomy.proactiveMode,
         },
-        usage: assistantUsage,
-      });
+        guidance: {
+          workspaceId: prepared.workspaceId,
+          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+          truncated: prepared.resolvedGuidance.truncated,
+        },
+        citations: dedupeChatCitations(streamCitations),
+      };
+      const completionOwnerStatuses = ["running", "completed"] as const;
+      let committedTrace: ChatTurnTraceRecord | undefined;
+      await host.ingestEvent(
+        randomUUID(),
+        {
+          eventId: assistantMessageId,
+          route: prepared.route,
+          actor: {
+            type: "agent",
+            id: "assistant",
+          },
+          message: {
+            role: "assistant",
+            content: finalText,
+          },
+          usage: assistantUsage,
+        },
+        {
+          onCommit: () => {
+            committedTrace = patchChatTurnTraceIfStatus(
+              chatTurnTraces,
+              turnId,
+              completionOwnerStatuses,
+              completionPatch,
+            );
+          },
+        },
+      );
+      committedTrace ??= patchChatTurnTraceIfStatus(chatTurnTraces, turnId, completionOwnerStatuses, completionPatch);
       let hydratedTrace: ChatTurnTraceRecord = {
-        ...host.storage.chatTurnTraces.patch(turnId, {
-          assistantMessageId,
-          status: "completed",
-          ...(streamLayerRepaired
-            ? {
-                completion: {
-                  status: "complete",
-                  repaired: true,
-                  repair: streamLayerRepair,
-                },
-              }
-            : {}),
-          finishedAt: new Date().toISOString(),
-          retrieval: prepared.retrievalTrace,
-          reflection: {
-            attempted: false,
-            attemptCount: 0,
-            outcome: "not_needed",
-          },
-          proactive: {
-            runId: prepared.autonomy.lastProactiveRunId,
-            mode: prepared.autonomy.proactiveMode,
-          },
-          guidance: {
-            workspaceId: prepared.workspaceId,
-            globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-            workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-            truncated: prepared.resolvedGuidance.truncated,
-          },
-          citations: dedupeChatCitations(streamCitations),
-        }),
+        ...committedTrace,
         toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
       };
       host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
@@ -2500,6 +2546,33 @@ export async function* streamPreparedAgentChatTurn(
     externalAbortListener?.();
     host.steerService?.unregisterActiveTurn?.({ sessionId, turnId });
     host.endActiveChatTurnExecution(turnId, controller);
+  }
+}
+
+function assertChatStreamCompletionWritable(
+  host: Pick<ChatTurnStreamHost, "storage">,
+  turnId: string,
+  signal: AbortSignal,
+): void {
+  if (signal.aborted) {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  let status: ChatTurnTraceRecord["status"];
+  try {
+    status = host.storage.chatTurnTraces.get(turnId).status;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      // The stream runtime may not have persisted its initial trace yet. The
+      // abort signal remains the completion fence in that compatibility case.
+      return;
+    }
+    throw error;
+  }
+  if (status === "cancelled") {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  if (isChatTurnTerminalStatus(status) && status !== "completed") {
+    throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership to ${status}.`);
   }
 }
 

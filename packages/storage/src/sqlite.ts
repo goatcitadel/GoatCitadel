@@ -1622,11 +1622,197 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           addColumnIfMissingIfTableExists(db, "prompt_packs", "content_sha256", "TEXT");
         },
       },
+      {
+        version: 137,
+        name: "scrub_legacy_device_token_plaintext",
+        up: scrubLegacyDeviceTokenPlaintext,
+      },
+      {
+        version: 138,
+        name: "approval_expiry_sweep_index_parity",
+        up: (db) => {
+          if (tableExists(db, "approvals")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_approvals_status_expires_at
+                ON approvals(status, julianday(expires_at), approval_id)
+                WHERE expires_at IS NOT NULL;
+            `);
+          }
+        },
+      },
+      {
+        version: 139,
+        name: "scrub_legacy_remote_approval_bearers",
+        up: scrubLegacyRemoteApprovalBearers,
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function scrubLegacyDeviceTokenPlaintext(db: DatabaseSync): void {
+  if (!tableExists(db, "auth_device_requests")) {
+    return;
+  }
+  const scrubbedAt = new Date().toISOString();
+  const resolutionNote =
+    "Legacy device credential was revoked because its plaintext handoff predated secure in-memory delivery. Request access again.";
+  if (tableExists(db, "auth_device_grants")) {
+    db.prepare(
+      `
+      UPDATE auth_device_grants
+      SET revoked_at = COALESCE(revoked_at, @scrubbedAt)
+      WHERE revoked_at IS NULL
+        AND request_id IN (
+          SELECT request_id
+          FROM auth_device_requests
+          WHERE approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+        )
+    `,
+    ).run({ scrubbedAt });
+  }
+  db.prepare(
+    `
+    UPDATE auth_device_requests
+    SET status = CASE
+          WHEN approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+          THEN 'expired'
+          ELSE status
+        END,
+        resolution_note = CASE
+          WHEN approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+          THEN COALESCE(NULLIF(TRIM(resolution_note), ''), @resolutionNote)
+          ELSE resolution_note
+        END,
+        approved_token_expires_at = CASE
+          WHEN approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+          THEN NULL
+          ELSE approved_token_expires_at
+        END,
+        approved_token_plaintext = NULL
+    WHERE approved_token_plaintext IS NOT NULL
+  `,
+  ).run({ resolutionNote });
+}
+
+function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {
+  const now = new Date().toISOString();
+  if (tableExists(db, "durable_runs")) {
+    db.prepare(
+      `
+      UPDATE durable_runs
+      SET status = 'failed',
+          finished_at = COALESCE(finished_at, @now),
+          last_error = COALESCE(
+            last_error,
+            'Legacy remote approval bearer was removed from durable state; issue a new remote action token.'
+          ),
+          updated_at = @now,
+          version = version + 1
+      WHERE workflow_key = 'connector.delivery'
+        AND payload_json LIKE '%grat_%'
+        AND status IN ('queued', 'running', 'waiting', 'paused')
+    `,
+    ).run({ now });
+  }
+  if (tableExists(db, "comms_deliveries")) {
+    db.prepare(
+      `
+      UPDATE comms_deliveries
+      SET status = 'failed',
+          delivery_status = 'manual_reconciliation_required',
+          next_attempt_at = NULL,
+          error = COALESCE(
+            error,
+            'Legacy remote approval bearer was removed before delivery; issue a new remote action token.'
+          ),
+          updated_at = @now
+      WHERE payload_json LIKE '%grat_%'
+        AND status IN ('queued', 'running', 'retrying')
+    `,
+    ).run({ now });
+  }
+
+  const textColumns: ReadonlyArray<{ table: string; columns: readonly string[] }> = [
+    { table: "durable_runs", columns: ["payload_json", "metadata_json", "last_error"] },
+    { table: "durable_checkpoints", columns: ["state_json"] },
+    { table: "durable_run_events", columns: ["payload_json"] },
+    { table: "comms_deliveries", columns: ["payload_json", "error", "stale_reason"] },
+    { table: "realtime_events", columns: ["payload_json"] },
+    { table: "approval_events", columns: ["payload_json"] },
+    {
+      table: "approvals",
+      columns: [
+        "linkage_json",
+        "payload_json",
+        "preview_json",
+        "explanation_json",
+        "explanation_error",
+        "resolution_note",
+        "shell_explanations_json",
+      ],
+    },
+    { table: "pending_approval_actions", columns: ["request_json", "result_json"] },
+    { table: "tool_invocations", columns: ["args_json", "result_json", "policy_reason"] },
+    { table: "policy_blocks", columns: ["details_json", "reason"] },
+    { table: "approval_effects", columns: ["payload_json", "last_error"] },
+    {
+      table: "external_side_effect_runs",
+      columns: ["request_payload_json", "response_payload_json", "error_text"],
+    },
+    { table: "runtime_decision_traces", columns: ["payload_json"] },
+  ];
+  for (const target of textColumns) {
+    scrubLegacyRemoteApprovalBearerColumns(db, target.table, target.columns);
+  }
+  if (tableExists(db, "approval_inbox_items")) {
+    db.prepare(
+      `
+      UPDATE approval_inbox_items
+      SET token = 'redacted:' || token_id
+      WHERE token LIKE '%grat_%'
+    `,
+    ).run();
+  }
+}
+
+function scrubLegacyRemoteApprovalBearerColumns(
+  db: DatabaseSync,
+  tableName: string,
+  columnNames: readonly string[],
+): void {
+  if (!tableExists(db, tableName)) {
+    return;
+  }
+  const existingColumns = new Set(
+    (db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  );
+  for (const columnName of columnNames) {
+    if (!existingColumns.has(columnName)) {
+      continue;
+    }
+    const table = quoteSqliteIdentifier(tableName);
+    const column = quoteSqliteIdentifier(columnName);
+    const rows = db
+      .prepare(`SELECT rowid AS row_id, ${column} AS value FROM ${table} WHERE ${column} LIKE '%grat_%'`)
+      .all() as Array<{ row_id: number | bigint; value: string }>;
+    const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
+    for (const row of rows) {
+      update.run(row.value.replace(/\bgrat_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]"), row.row_id);
+    }
+  }
+}
 
 function createDryRunCommitSchema(db: DatabaseSync): void {
   db.exec(`

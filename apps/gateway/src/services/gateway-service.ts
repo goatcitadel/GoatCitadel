@@ -47,6 +47,7 @@ import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
+import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
@@ -359,6 +360,7 @@ import { MemoryContextService } from "./memory-context-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
@@ -598,7 +600,7 @@ import {
   policyContextHasOperatorApproval,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
-import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
 import {
   commsActivity as commsActivityImpl,
   commsSend as commsSendImpl,
@@ -723,6 +725,7 @@ export class GatewayService {
   private readonly eventIngestService: EventIngestService;
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
+  private readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
   public readonly orchestrationEngine: OrchestrationEngine;
@@ -917,6 +920,10 @@ export class GatewayService {
       describeState: describeBrowserSessionState,
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
+      // Tool-policy approval creation must enter the canonical lifecycle. A
+      // direct policy-engine storage write would omit the durable wait run and
+      // retryable approval observability envelope.
+      createApproval: (input, onCreated) => this.createApproval(input, onCreated),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
@@ -932,6 +939,10 @@ export class GatewayService {
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
+    this.approvalRemoteTokenSecrets = new ApprovalRemoteTokenSecretService(
+      secretStore,
+      this.storage.remoteActionTokens,
+    );
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -964,6 +975,7 @@ export class GatewayService {
       readSkillStates: () => this.skillStateService.readSkillStates(),
       invokeTool: (request) => this.invokeTool(request),
       createApproval: (input) => this.createApproval(input),
+      resolveApproval: (approvalId, input) => this.resolveApproval(approvalId, input),
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
       },
@@ -1321,6 +1333,22 @@ export class GatewayService {
       executeApprovedPendingAction: (approvalId, signal) => this.executeApprovedPendingAction(approvalId, signal),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
+      recordApprovalResolutionSignals: (approval) => {
+        this.improvementService.recordApprovalResolutionSignal(approval);
+        this.improvementService.handleActivationApprovalResolution(approval);
+      },
+      materializeApprovalWaitRun: (approvalId) => {
+        this.approvalWaitRunService.primeApprovalLifecycle(approvalId);
+        const runId = this.storage.approvalWaitRuns.getRunId(approvalId);
+        return runId ? this.getDurableRun(runId) : undefined;
+      },
+      reconcileExpiredApprovals: (limit) => this.approvalRuntime.expirePendingApprovals(limit),
+      reconcileExpiredDeviceAccessRequests: (limit) =>
+        settingsAuthService.expirePendingDeviceAccessRequests(
+          createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+          limit,
+        ),
+      approvalRemoteTokenSecrets: this.approvalRemoteTokenSecrets,
     });
     this.approvalRuntime = new ApprovalRuntimeService({
       storage: this.storage,
@@ -1339,27 +1367,30 @@ export class GatewayService {
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),
-      consumeRemoteActionToken: (token, actionType) => this.consumeRemoteActionToken(token, actionType),
-      consumeRemoteActionTokenById: (tokenId, actionType) => this.consumeRemoteActionTokenById(tokenId, actionType),
-      resolveApproval: (approvalId, input) => this.approvalRuntime.resolveApproval(approvalId, input),
-      resolveDeviceAccessApproval: (current, input) =>
+      consumeRemoteActionToken: (token, actionType, options) =>
+        this.consumeRemoteActionToken(token, actionType, options),
+      consumeRemoteActionTokenById: (tokenId, actionType, options) =>
+        this.consumeRemoteActionTokenById(tokenId, actionType, options),
+      resolveApproval: (approvalId, input, context) => this.approvalRuntime.resolveApproval(approvalId, input, context),
+      resolveDeviceAccessApproval: (current, input, context) =>
         settingsAuthService.resolveDeviceAccessApproval(
           createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
           current,
           input,
+          context,
         ),
       executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       scheduleApprovalExplanation: (approval) => this.scheduleApprovalExplanation(approval),
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
       wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
-      recordApprovalResolution: (approval, input) =>
-        settingsAuthService.recordApprovalResolution(
-          createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-          approval,
-          input,
-        ),
-      enqueueApprovalResolutionEffects: (approval, input) => this.enqueueApprovalResolutionEffects(approval, input),
+      enqueueApprovalObservabilityEffects: (approvalId, items) =>
+        this.approvalEffectsService.enqueueObservabilityEffects(approvalId, items),
+      enqueueApprovalWaitMaterialization: (approval) =>
+        this.approvalEffectsService.enqueueApprovalWaitMaterialization(approval),
+      enqueueApprovalResolutionEffects: (approval, input, options) =>
+        this.enqueueApprovalResolutionEffects(approval, input, options),
+      awaitApprovalResolutionEffects: (approvalId) => this.approvalEffectsService.awaitResolutionEffects(approvalId),
       enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
@@ -1749,6 +1780,7 @@ export class GatewayService {
           commsActivity: (input) => this.commsActivity(input),
           isFeatureEnabled: (feature) => this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
           invokeMcpTool: (input) => this.invokeMcpTool(input),
+          approvalRemoteTokenSecrets: this.approvalRemoteTokenSecrets,
           resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
           publishRealtime: (eventType, source, payload, options) => {
             this.publishRealtime(eventType, source, payload, options);
@@ -1894,7 +1926,7 @@ export class GatewayService {
       beginDurableChatRun: (prepared, input, threadEventType) =>
         this.beginDurableChatRun(prepared, input, threadEventType),
       cancelDurableChatRun: (runId, actorId) => {
-        this.cancelDurableRun(runId, actorId);
+        return this.cancelDurableRun(runId, actorId);
       },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
@@ -1925,7 +1957,7 @@ export class GatewayService {
       getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
       inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
         this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
-      ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
+      ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
       listLlmModels: (providerId) => this.listLlmModels(providerId),
@@ -2041,7 +2073,7 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
       getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
-      ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
+      ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
       updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
         this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
@@ -2330,11 +2362,16 @@ export class GatewayService {
     );
   }
 
-  public async ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<GatewayEventResult> {
+  public async ingestEvent(
+    idempotencyKey: string,
+    payload: GatewayEventInput,
+    options?: { onCommit?: () => void },
+  ): Promise<GatewayEventResult> {
     const result = await this.eventIngestService.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey,
       payload,
+      ...(options?.onCommit ? { onCommit: options.onCommit } : {}),
     });
 
     this.publishRealtime(
@@ -3237,8 +3274,15 @@ export class GatewayService {
               !this.isDurableRunTerminalStatus(initialDurableStatus) &&
               finalDurableStatus === "cancelled",
             );
+      const cancellationWon =
+        result.cancelled === true ||
+        (result.cancelled === undefined &&
+          result.trace.status === "cancelled" &&
+          finalDurableStatus !== "completed" &&
+          finalDurableStatus !== "failed" &&
+          finalDurableStatus !== "dead_lettered");
       return {
-        status: "cancelled",
+        status: cancellationWon ? "cancelled" : "no_active_run",
         sessionId,
         turnId,
         durableRunId,
@@ -4013,6 +4057,7 @@ export class GatewayService {
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
     grant?: ToolGrantRecord;
+    grantError?: string;
     resumed: boolean;
     resumedTurnId?: string;
     resumedRunId?: string;
@@ -5739,8 +5784,11 @@ export class GatewayService {
     return this.approvalRuntime.revokeToolGrant(grantId, revokedBy);
   }
 
-  public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    const approval = await this.approvalRuntime.createApproval(input);
+  public async createApproval(
+    input: ApprovalCreateInput,
+    onCreated?: ApprovalCreateCommitHook,
+  ): Promise<ApprovalRequest> {
+    const approval = await this.approvalRuntime.createApproval(input, onCreated);
     this.recordRuntimeDecision({
       kind: "approval_requested",
       scope: this.buildApprovalDecisionScope(approval),
@@ -5802,6 +5850,7 @@ export class GatewayService {
 
   public async resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -5857,33 +5906,14 @@ export class GatewayService {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       return undefined;
     }
-    const requestAttribution = this.getCurrentRequestAttribution();
-    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
-      approval,
-      connector,
-      token: tokenRecord.token,
-      tokenId: tokenRecord.tokenId,
-      expiresAt: tokenRecord.expiresAt,
-    });
-    if (!payload) {
-      return undefined;
-    }
-    return this.createDurableRun({
-      workflowKey: "connector.delivery",
-      payload:
-        toPlainRecord({
-          ...payload,
-          traceId: requestAttribution.traceId,
-          originSurface: payload.originSurface ?? requestAttribution.originSurface,
-        }) ?? {},
-      metadata: {
-        approvalId: approval.approvalId,
-        connectorId: connector.connectorId,
-        connectorType: connector.connectorType,
-        deliveryKind: "approval.remote_token",
-        tokenId: tokenRecord.tokenId,
+    return enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets: this.approvalRemoteTokenSecrets,
+        requestAttribution: this.getCurrentRequestAttribution(),
+        createDurableRun: (input) => this.createDurableRun(input),
       },
-    });
+      { approval, connector, tokenRecord },
+    );
   }
 
   /**
@@ -6041,8 +6071,9 @@ export class GatewayService {
   /** @internal */ public enqueueApprovalResolutionEffects(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
+    options?: import("./approval-resolution-effects-service.js").ApprovalResolutionEffectEnqueueOptions,
   ): ApprovalEffectRecord[] {
-    const effects = this.approvalEffectsService.enqueueResolutionEffects(approval, input);
+    const effects = this.approvalEffectsService.enqueueResolutionEffects(approval, input, options);
     this.recordRuntimeDecision({
       kind: "approval_resolved",
       scope: this.buildApprovalDecisionScope(approval),
@@ -6132,15 +6163,21 @@ export class GatewayService {
   /** @internal */ public consumeRemoteActionToken(
     token: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
+    options?: approvalRemoteTokenService.RemoteActionTokenClaimOptions,
   ): RemoteActionTokenRecord {
-    return approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
+    return options
+      ? approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType, options)
+      : approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
   }
 
   /** @internal */ public consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
+    options?: approvalRemoteTokenService.RemoteActionTokenClaimOptions,
   ): RemoteActionTokenRecord {
-    return approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
+    return options
+      ? approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType, options)
+      : approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
   public listSkills(): SkillListItem[] {
@@ -6844,7 +6881,9 @@ export class GatewayService {
   private async sendQueuedChannelDelivery(
     input: ChannelDeliveryRuntimeSendInput,
   ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
-    return sendQueuedChannelDeliveryImpl((sendInput) => commsSendImpl(this.buildCommsHost(), sendInput), input);
+    return sendQueuedChannelDeliveryImpl((sendInput) => commsSendImpl(this.buildCommsHost(), sendInput), input, {
+      tokenSecrets: this.approvalRemoteTokenSecrets,
+    });
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {

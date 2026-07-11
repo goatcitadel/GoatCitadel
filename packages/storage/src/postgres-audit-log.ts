@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import { sanitizeForAudit, type AuditStream } from "./audit-log.js";
+import { sanitizeForAudit, type AuditAppendOptions, type AuditStream } from "./audit-log.js";
 import { getRequestAttribution } from "./request-attribution.js";
 
 export class PostgresAuditLog {
@@ -32,6 +32,7 @@ export class PostgresAuditLog {
         @actorId,
         @payload
       )
+      ON CONFLICT (stream_name, event_id) DO NOTHING
     `);
     this.listStmt = db.prepare(`
       SELECT payload
@@ -41,11 +42,16 @@ export class PostgresAuditLog {
     `);
   }
 
-  public async append(stream: AuditStream, payload: Record<string, unknown>): Promise<void> {
-    const attribution = getRequestAttribution();
+  public async append(
+    stream: AuditStream,
+    payload: Record<string, unknown>,
+    options?: AuditAppendOptions,
+  ): Promise<void> {
+    const attribution = options?.attribution ?? getRequestAttribution();
     const baseRecord = {
-      timestamp: new Date().toISOString(),
       ...payload,
+      timestamp:
+        options?.occurredAt ?? (typeof payload.timestamp === "string" ? payload.timestamp : new Date().toISOString()),
       correlationId: payload.correlationId ?? attribution?.correlationId,
       traceId: payload.traceId ?? attribution?.traceId,
       originSurface: payload.originSurface ?? attribution?.originSurface,
@@ -53,6 +59,7 @@ export class PostgresAuditLog {
       deviceId: payload.deviceId ?? attribution?.deviceId,
       grantId: payload.grantId ?? attribution?.grantId,
       companionSessionId: payload.companionSessionId ?? attribution?.companionSessionId,
+      ...(options?.deliveryId ? { eventId: options.deliveryId, deliveryId: options.deliveryId } : {}),
     };
     const sanitizedRecord = sanitizeForAudit(baseRecord);
     this.db.transaction("immediate", () => {
@@ -61,7 +68,7 @@ export class PostgresAuditLog {
       const payloadJson = sanitizeJsonbPayloadText(JSON.stringify(sanitizeJsonValueForJsonb(sanitizedRecord)));
       this.insertStmt.run({
         streamName: stream,
-        eventId: String(payload.eventId ?? randomUUID()),
+        eventId: options?.deliveryId ?? String(payload.eventId ?? randomUUID()),
         eventSequence: nextSequence,
         occurredAt: String(baseRecord.timestamp),
         actorId: typeof baseRecord.actorId === "string" ? baseRecord.actorId : null,

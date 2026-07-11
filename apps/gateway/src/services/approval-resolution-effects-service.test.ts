@@ -1,15 +1,18 @@
 import type {
   ApprovalEffectRecord,
+  ApprovalObservabilityEnvelope,
   ApprovalRequest,
   ChatDelegationStepRecord,
   ChatTurnTraceRecord,
   DurableWakeResult,
 } from "@goatcitadel/contracts";
+import { getRequestAttribution, runWithRequestAttribution } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
+import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import type { ServiceContext } from "./service-context.js";
 
 describe("approval-resolution-effects-service", () => {
@@ -50,6 +53,614 @@ describe("approval-resolution-effects-service", () => {
         wakeOutcome: "woke",
       },
     });
+  });
+
+  it("surfaces a queued linked-turn durable run id before the wake result exists", () => {
+    const result = deriveApprovalResolutionEffectsResult([
+      createEffect({
+        effectKind: "linked_chat_turn_wake",
+        targetKind: "chat_turn",
+        targetId: "turn-queued",
+        status: "pending",
+        payload: { runId: "durable-queued" },
+        result: {},
+      }),
+    ]);
+
+    expect(result?.chatTurnResume).toEqual({
+      resumed: false,
+      turnId: "turn-queued",
+      durableRunId: "durable-queued",
+      wakeOutcome: undefined,
+    });
+  });
+
+  it("captures attribution and delegates observability allocation to the atomic repository batch", () => {
+    const effect = createEffect({
+      effectId: "observability-effect-1",
+      approvalId: "approval-1",
+      effectKind: "approval_observability",
+      targetKind: "approval",
+      targetId: "approval-resolved-audit-v1",
+      idempotencyKey: "approval-observability:approval-1:approval-resolved-audit-v1",
+    });
+    const upsertObservabilityBatch = vi.fn(() => [effect]);
+    const requestEffectProcessing = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { upsertObservabilityBatch },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+    service.requestEffectProcessing = requestEffectProcessing;
+
+    const [first] = runWithRequestAttribution({ actorId: "operator-first", traceId: "trace-first" }, () =>
+      service.enqueueObservabilityEffects("approval-1", [
+        {
+          operationId: "approval-resolved-audit-v1",
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: { action: "approval.resolved", approvalId: "approval-1" },
+          },
+        },
+      ]),
+    );
+    const [duplicate] = runWithRequestAttribution({ actorId: "operator-retry", traceId: "trace-retry" }, () =>
+      service.enqueueObservabilityEffects("approval-1", [
+        {
+          operationId: "approval-resolved-audit-v1",
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: { action: "approval.resolved", approvalId: "approval-1" },
+          },
+        },
+      ]),
+    );
+
+    expect(duplicate?.effectId).toBe(first?.effectId);
+    expect(upsertObservabilityBatch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        approvalId: "approval-1",
+        occurredAt: expect.any(String),
+        attribution: { actorId: "operator-first", traceId: "trace-first" },
+        items: [
+          {
+            operationId: "approval-resolved-audit-v1",
+            delivery: {
+              kind: "audit",
+              stream: "approvals",
+              payload: { action: "approval.resolved", approvalId: "approval-1" },
+            },
+          },
+        ],
+      }),
+    );
+    expect(upsertObservabilityBatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        approvalId: "approval-1",
+        attribution: { actorId: "operator-retry", traceId: "trace-retry" },
+      }),
+    );
+    expect(requestEffectProcessing).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists and enforces per-approval observability predecessor order", async () => {
+    const persisted = new Map<string, ApprovalEffectRecord>();
+    const upsert = vi.fn((input: Record<string, unknown>) => {
+      const key = String(input.idempotencyKey);
+      const existing = persisted.get(key);
+      if (existing) {
+        return existing;
+      }
+      const effect = createEffect({
+        effectId: `observability-${persisted.size + 1}`,
+        approvalId: String(input.approvalId),
+        effectKind: "approval_observability",
+        targetKind: "approval",
+        targetId: String(input.targetId),
+        idempotencyKey: key,
+        payload: input.payload as Record<string, unknown>,
+      });
+      persisted.set(key, effect);
+      return effect;
+    });
+    const upsertObservabilityBatch = vi.fn(
+      (input: {
+        approvalId: string;
+        occurredAt: string;
+        attribution?: ApprovalObservabilityEnvelope["attribution"];
+        items: Array<{ operationId: string; delivery: ApprovalObservabilityEnvelope["delivery"] }>;
+      }) => {
+        const latest = [...persisted.values()]
+          .map((effect) => effect.payload as unknown as ApprovalObservabilityEnvelope)
+          .sort((left, right) => left.orderIndex - right.orderIndex)
+          .at(-1);
+        let orderIndex = (latest?.orderIndex ?? 0) + 1;
+        let predecessorDeliveryId = latest?.deliveryId;
+        return input.items.map((item) => {
+          const deliveryId = `approval-observability:${input.approvalId}:${item.operationId}`;
+          const effect = upsert({
+            approvalId: input.approvalId,
+            targetId: item.operationId,
+            idempotencyKey: deliveryId,
+            payload: {
+              schemaVersion: "approval_observability.v1",
+              deliveryId,
+              operationId: item.operationId,
+              occurredAt: input.occurredAt,
+              orderIndex,
+              ...(predecessorDeliveryId ? { predecessorDeliveryId } : {}),
+              ...(input.attribution ? { attribution: input.attribution } : {}),
+              delivery: item.delivery,
+            },
+          });
+          predecessorDeliveryId = deliveryId;
+          orderIndex += 1;
+          return effect;
+        });
+      },
+    );
+    const append = vi.fn(async () => undefined);
+    const deferEffectForRetry = vi.fn(
+      (effectId: string, claimedBy: string, _version: number, input: { result: Record<string, unknown> }) => {
+        const current = [...persisted.values()].find((effect) => effect.effectId === effectId)!;
+        const next = { ...current, claimedBy, result: input.result };
+        persisted.set(current.idempotencyKey, next);
+        return next;
+      },
+    );
+    const completeEffect = vi.fn((effectId: string) => {
+      const current = [...persisted.values()].find((effect) => effect.effectId === effectId)!;
+      const next = { ...current, status: "completed" as const };
+      persisted.set(current.idempotencyKey, next);
+      return next;
+    });
+    const approvalEffects = {
+      upsert,
+      upsertObservabilityBatch,
+      listByApproval: vi.fn(() => [...persisted.values()]),
+      getByIdempotencyKey: vi.fn((key: string) => persisted.get(key)),
+      get: vi.fn((effectId: string) => [...persisted.values()].find((effect) => effect.effectId === effectId)!),
+      deferEffectForRetry,
+      completeEffect,
+      failEffect: vi.fn(),
+    };
+    const service = new ApprovalEffectsService(
+      {
+        storage: { approvalEffects, audit: { append } },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
+    );
+    service.requestEffectProcessing = vi.fn();
+
+    service.enqueueObservabilityEffects("approval-ordered", [
+      {
+        operationId: "approval.create.audit",
+        delivery: { kind: "audit", stream: "approvals", payload: { event: "approval.create" } },
+      },
+      {
+        operationId: "approval.create.realtime",
+        delivery: { kind: "realtime", eventType: "approval_created", source: "approvals", payload: {} },
+      },
+    ]);
+    service.enqueueObservabilityEffects("approval-ordered", [
+      {
+        operationId: "approval.resolve.audit",
+        delivery: { kind: "audit", stream: "approvals", payload: { event: "approval.resolve" } },
+      },
+      {
+        operationId: "approval.resolve.realtime",
+        delivery: { kind: "realtime", eventType: "approval_resolved", source: "approvals", payload: {} },
+      },
+    ]);
+
+    const ordered = [...persisted.values()].map((effect) => effect.payload as unknown as ApprovalObservabilityEnvelope);
+    expect(ordered.map((envelope) => envelope.orderIndex)).toEqual([1, 2, 3, 4]);
+    expect(ordered.map((envelope) => envelope.predecessorDeliveryId)).toEqual([
+      undefined,
+      ordered[0]?.deliveryId,
+      ordered[1]?.deliveryId,
+      ordered[2]?.deliveryId,
+    ]);
+
+    const resolveAuditKey = ordered[2]!.deliveryId;
+    const createRealtimeKey = ordered[1]!.deliveryId;
+    let resolveAudit = claimEffectForService(service, {
+      ...persisted.get(resolveAuditKey)!,
+      status: "running",
+      attemptCount: 1,
+    });
+    persisted.set(resolveAuditKey, resolveAudit);
+    await (service as unknown as { executeClaimedEffect(effectId: string): Promise<void> }).executeClaimedEffect(
+      resolveAudit.effectId,
+    );
+    expect(append).not.toHaveBeenCalled();
+    expect(deferEffectForRetry).toHaveBeenCalledOnce();
+
+    persisted.set(createRealtimeKey, { ...persisted.get(createRealtimeKey)!, status: "completed" });
+    resolveAudit = claimEffectForService(service, { ...persisted.get(resolveAuditKey)!, status: "running" });
+    persisted.set(resolveAuditKey, resolveAudit);
+    await (service as unknown as { executeClaimedEffect(effectId: string): Promise<void> }).executeClaimedEffect(
+      resolveAudit.effectId,
+    );
+    expect(append).toHaveBeenCalledOnce();
+    expect(completeEffect).toHaveBeenCalledOnce();
+  });
+
+  it("delivers audit and realtime approval observability effects", async () => {
+    const append = vi.fn(async () => undefined);
+    const completeEffect = vi.fn(() => ({ completed: true }));
+    const publishRealtime = vi.fn();
+    let effect = createEffect({
+      effectKind: "approval_observability",
+      targetKind: "approval",
+      targetId: "audit-op",
+      status: "running",
+      attemptCount: 1,
+      payload: createObservabilityEnvelope({
+        deliveryId: "approval-observability:approval-1:audit-op",
+        operationId: "audit-op",
+        delivery: {
+          kind: "audit",
+          stream: "approvals",
+          payload: { action: "approval.resolved", approvalId: "approval-1" },
+        },
+      }),
+    });
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { get: vi.fn(() => effect), completeEffect, failEffect: vi.fn() },
+          audit: { append },
+        },
+        publishRealtime,
+      } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
+    );
+    effect = claimEffectForService(service, effect);
+    const execute = service as unknown as { executeClaimedEffect(effectId: string): Promise<void> };
+
+    await execute.executeClaimedEffect(effect.effectId);
+
+    expect(append).toHaveBeenCalledWith(
+      "approvals",
+      {
+        action: "approval.resolved",
+        approvalId: "approval-1",
+      },
+      {
+        deliveryId: "approval-observability:approval-1:audit-op",
+        occurredAt: "2026-07-10T10:00:00.000Z",
+        attribution: { actorId: "operator-1", traceId: "trace-1" },
+      },
+    );
+    expect(completeEffect).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({
+        result: {
+          delivered: true,
+          deliveryState: "delivered",
+          deliveryKind: "audit",
+          deliveryId: "approval-observability:approval-1:audit-op",
+          operationId: "audit-op",
+          occurredAt: "2026-07-10T10:00:00.000Z",
+        },
+      }),
+    );
+
+    effect = claimEffectForService(
+      service,
+      createEffect({
+        effectId: "effect-realtime",
+        effectKind: "approval_observability",
+        targetKind: "approval",
+        targetId: "realtime-op",
+        status: "running",
+        attemptCount: 1,
+        payload: createObservabilityEnvelope({
+          deliveryId: "approval-observability:approval-1:realtime-op",
+          operationId: "realtime-op",
+          delivery: {
+            kind: "realtime",
+            eventType: "approval_resolved",
+            source: "approvals",
+            payload: { approvalId: "approval-1", status: "approved" },
+            options: {
+              eventClass: "domain_fact",
+              eventAuthority: "durable_history",
+              links: { approvalId: "approval-1" },
+              correlationId: "approval-1",
+            },
+          },
+        }),
+      }),
+    );
+    await execute.executeClaimedEffect(effect.effectId);
+
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_resolved",
+      "approvals",
+      {
+        approvalId: "approval-1",
+        status: "approved",
+        [APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY]: {
+          deliveryId: "approval-observability:approval-1:realtime-op",
+          occurredAt: "2026-07-10T10:00:00.000Z",
+          attribution: { actorId: "operator-1", traceId: "trace-1" },
+        },
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "durable_history",
+        links: { approvalId: "approval-1" },
+        correlationId: "approval-1",
+      },
+    );
+    expect(completeEffect).toHaveBeenLastCalledWith(
+      "effect-realtime",
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({
+        result: {
+          delivered: true,
+          deliveryState: "delivered",
+          deliveryKind: "realtime",
+          deliveryId: "approval-observability:approval-1:realtime-op",
+          operationId: "realtime-op",
+          occurredAt: "2026-07-10T10:00:00.000Z",
+        },
+      }),
+    );
+  });
+
+  it("keeps observability recoverable through a fourth attempt across worker restarts", async () => {
+    const append = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("audit file busy-1"))
+      .mockRejectedValueOnce(new Error("audit file busy-2"))
+      .mockRejectedValueOnce(new Error("audit file busy-3"))
+      .mockResolvedValueOnce(undefined);
+    const failEffect = vi.fn();
+    let effect = createEffect({
+      effectKind: "approval_observability",
+      targetKind: "approval",
+      targetId: "audit-op",
+      status: "running",
+      attemptCount: 0,
+      payload: createObservabilityEnvelope({
+        deliveryId: "approval-observability:approval-1:audit-op",
+        operationId: "audit-op",
+        delivery: {
+          kind: "audit",
+          stream: "approvals",
+          payload: { action: "approval.resolved" },
+        },
+      }),
+    });
+    const deferEffectForRetry = vi.fn(
+      (
+        _effectId: string,
+        claimedBy: string,
+        _version: number,
+        input: { result: Record<string, unknown>; lastError: string; retryAt: string; updatedAt: string },
+      ) => {
+        effect = {
+          ...effect,
+          claimedBy,
+          updatedAt: input.updatedAt,
+          leaseExpiresAt: input.retryAt,
+          result: input.result,
+          lastError: input.lastError,
+          version: effect.version + 1,
+        };
+        return effect;
+      },
+    );
+    const completeEffect = vi.fn(() => {
+      effect = { ...effect, status: "completed", claimedBy: undefined, leaseExpiresAt: undefined };
+      return effect;
+    });
+    const storage = {
+      approvalEffects: {
+        get: vi.fn(() => effect),
+        deferEffectForRetry,
+        completeEffect,
+        failEffect,
+      },
+      audit: { append },
+    };
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const restartedWorker = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        createApprovalEffectDeps(),
+      );
+      effect = claimEffectForService(restartedWorker, {
+        ...effect,
+        status: "running",
+        attemptCount: attempt,
+        version: effect.version + 1,
+      });
+      await (
+        restartedWorker as unknown as { executeClaimedEffect(effectId: string): Promise<void> }
+      ).executeClaimedEffect(effect.effectId);
+    }
+
+    expect(append).toHaveBeenCalledTimes(4);
+    expect(deferEffectForRetry).toHaveBeenCalledTimes(3);
+    expect(completeEffect).toHaveBeenCalledOnce();
+    expect(failEffect).not.toHaveBeenCalled();
+    expect(effect.status).toBe("completed");
+  });
+
+  it("retries an idempotent delivery when completion acknowledgement is lost", async () => {
+    const failEffect = vi.fn();
+    const append = vi.fn(async () => undefined);
+    let effect = createEffect({
+      effectKind: "approval_observability",
+      targetKind: "approval",
+      targetId: "audit-op",
+      status: "running",
+      attemptCount: 1,
+      payload: createObservabilityEnvelope({
+        deliveryId: "approval-observability:approval-1:audit-completion-op",
+        operationId: "audit-completion-op",
+        delivery: {
+          kind: "audit",
+          stream: "approvals",
+          payload: { action: "approval.resolved" },
+        },
+      }),
+    });
+    const completeEffect = vi
+      .fn()
+      .mockReturnValueOnce(undefined)
+      .mockImplementationOnce(() => {
+        effect = { ...effect, status: "completed" };
+        return effect;
+      });
+    const deferEffectForRetry = vi.fn(() => effect);
+    const storage = {
+      approvalEffects: { get: vi.fn(() => effect), completeEffect, deferEffectForRetry, failEffect },
+      audit: { append },
+    };
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const worker = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        createApprovalEffectDeps(),
+      );
+      effect = claimEffectForService(worker, { ...effect, status: "running", attemptCount: attempt });
+      await (worker as unknown as { executeClaimedEffect(effectId: string): Promise<void> }).executeClaimedEffect(
+        effect.effectId,
+      );
+    }
+
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(deferEffectForRetry).toHaveBeenCalledOnce();
+    expect(completeEffect).toHaveBeenCalledTimes(2);
+    expect(failEffect).not.toHaveBeenCalled();
+  });
+
+  it("drains observability while an action-lane effect is still hung", async () => {
+    const action = createEffect({
+      effectId: "effect-action-hung",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-1",
+      status: "pending",
+    });
+    const observability = createEffect({
+      effectId: "effect-observability-independent",
+      effectKind: "approval_observability",
+      targetKind: "approval",
+      targetId: "approval.resolve.audit",
+      idempotencyKey: "approval-observability:approval-1:approval.resolve.audit",
+      status: "pending",
+      payload: createObservabilityEnvelope({
+        deliveryId: "approval-observability:approval-1:approval.resolve.audit",
+        operationId: "approval.resolve.audit",
+        delivery: { kind: "audit", stream: "approvals", payload: { event: "approval.resolve" } },
+      }),
+    });
+    const effects = new Map([
+      [action.effectId, action],
+      [observability.effectId, observability],
+    ]);
+    let actionClaimed = false;
+    let observabilityClaimed = false;
+    const append = vi.fn(async () => undefined);
+    const completeEffect = vi.fn((effectId: string) => {
+      const current = effects.get(effectId)!;
+      const next = { ...current, status: "completed" as const };
+      effects.set(effectId, next);
+      return next;
+    });
+    const backgroundTasks = new Set<Promise<void>>();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            claimNextPendingEffect: vi.fn((workerId: string) => {
+              if (actionClaimed) {
+                return undefined;
+              }
+              actionClaimed = true;
+              const claimed = { ...action, status: "running" as const, claimedBy: workerId, attemptCount: 1 };
+              effects.set(action.effectId, claimed);
+              return claimed;
+            }),
+            claimNextPendingObservabilityEffect: vi.fn((workerId: string) => {
+              if (observabilityClaimed) {
+                return undefined;
+              }
+              observabilityClaimed = true;
+              const claimed = {
+                ...observability,
+                status: "running" as const,
+                claimedBy: workerId,
+                attemptCount: 1,
+              };
+              effects.set(observability.effectId, claimed);
+              return claimed;
+            }),
+            get: vi.fn((effectId: string) => effects.get(effectId)!),
+            getByIdempotencyKey: vi.fn(() => undefined),
+            completeEffect,
+            failEffect: vi.fn(),
+            renewEffectLease: vi.fn((effectId: string) => effects.get(effectId)),
+            listByApproval: vi.fn(() => [...effects.values()]),
+          },
+          audit: { append },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      { ...createApprovalEffectDeps(), backgroundTasks },
+    );
+    let releaseAction!: () => void;
+    const actionGate = new Promise<void>((resolve) => {
+      releaseAction = resolve;
+    });
+    const internal = service as unknown as {
+      executeClaimedEffect(effectId: string, signal?: AbortSignal): Promise<void>;
+    };
+    const executeClaimedEffect = internal.executeClaimedEffect.bind(service);
+    internal.executeClaimedEffect = vi.fn((effectId, signal) =>
+      effectId === action.effectId ? actionGate : executeClaimedEffect(effectId, signal),
+    );
+
+    service.startWorker();
+    await vi.waitFor(() => expect(append).toHaveBeenCalledOnce());
+
+    expect(effects.get(action.effectId)?.status).toBe("running");
+    expect(completeEffect).toHaveBeenCalledWith(
+      observability.effectId,
+      expect.any(String),
+      expect.any(Number),
+      expect.any(Object),
+    );
+    releaseAction();
+    await Promise.all([...backgroundTasks]);
+    service.stopWorker();
   });
 
   it("enqueues the canonical approval effect set from current linkage", () => {
@@ -133,6 +744,7 @@ describe("approval-resolution-effects-service", () => {
     );
 
     expect(upsert.mock.calls.map(([input]) => input.effectKind)).toEqual([
+      "approval_resolution_signals",
       "pending_action_execute",
       "approval_wait_wake",
       "proactive_run_wake",
@@ -140,6 +752,245 @@ describe("approval-resolution-effects-service", () => {
       "approval_inbox_follow_up",
       "approval_after_hooks",
     ]);
+  });
+
+  it("enqueues an expired inbox follow-up for every remote token bound to the approval", () => {
+    const upsert = vi.fn((input: Record<string, unknown>) =>
+      createEffect({
+        effectId: String(input.targetId),
+        approvalId: String(input.approvalId),
+        effectKind: input.effectKind as ApprovalEffectRecord["effectKind"],
+        targetKind: input.targetKind as ApprovalEffectRecord["targetKind"],
+        targetId: String(input.targetId),
+        payload: (input.payload as Record<string, unknown>) ?? {},
+      }),
+    );
+    const listByApprovalId = vi.fn(() => [
+      {
+        tokenId: "token-consumed",
+        actionType: "approval.resolve" as const,
+        approvalId: "approval-1",
+        connectorId: "connector-1",
+        mutation: {},
+        createdAt: "2026-04-11T00:00:00.000Z",
+        expiresAt: "2026-04-11T00:10:00.000Z",
+        state: "consumed" as const,
+        consumedAt: "2026-04-11T00:01:00.000Z",
+        consumedBy: "connector:connector-1",
+      },
+      {
+        tokenId: "token-expired",
+        actionType: "approval.resolve" as const,
+        approvalId: "approval-1",
+        connectorId: "connector-2",
+        mutation: {},
+        createdAt: "2026-04-11T00:00:01.000Z",
+        expiresAt: "2026-04-11T00:10:00.000Z",
+        state: "expired" as const,
+      },
+    ]);
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { upsert },
+          approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+          pendingApprovalActions: { find: vi.fn(() => undefined) },
+          remoteActionTokens: { listByApprovalId },
+          approvalInbox: {
+            findByApprovalAndToken: vi.fn((approvalId: string, tokenId: string) => ({
+              approvalId,
+              tokenId,
+              inboxItemId: `inbox-${tokenId}`,
+            })),
+          },
+          chatInlineApprovals: { get: vi.fn(() => undefined) },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
+    );
+
+    service.enqueueResolutionEffects(
+      {
+        approvalId: "approval-1",
+        kind: "shell.exec",
+        riskLevel: "danger",
+        status: "rejected",
+        payload: {},
+        preview: {},
+        createdAt: "2026-04-11T00:00:00.000Z",
+        expiresAt: "2026-04-11T00:01:00.000Z",
+        resolvedAt: "2026-04-11T00:02:00.000Z",
+        resolvedBy: "system:approval-expiry",
+        explanationStatus: "not_requested",
+      },
+      {
+        decision: "reject",
+        resolvedBy: "system:approval-expiry",
+      },
+      { allowExpired: true },
+    );
+
+    const followUps = upsert.mock.calls
+      .map(([input]) => input)
+      .filter((input) => input.effectKind === "approval_inbox_follow_up");
+    expect(listByApprovalId).toHaveBeenCalledWith("approval-1");
+    expect(followUps).toEqual([
+      expect.objectContaining({
+        targetId: "token-consumed",
+        payload: expect.objectContaining({
+          connectorId: "connector-1",
+          inboxItemId: "inbox-token-consumed",
+          inboxState: "expired",
+        }),
+      }),
+      expect.objectContaining({
+        targetId: "token-expired",
+        payload: expect.objectContaining({
+          connectorId: "connector-2",
+          inboxItemId: "inbox-token-expired",
+          inboxState: "expired",
+        }),
+      }),
+    ]);
+  });
+
+  it("retries post-commit approval resolution signals without duplicating idempotent signal state", async () => {
+    const appliedApprovals = new Set<string>();
+    let firstAttempt = true;
+    const recordApprovalResolutionSignals = vi.fn((approval: ApprovalRequest) => {
+      appliedApprovals.add(approval.approvalId);
+      if (firstAttempt) {
+        firstAttempt = false;
+        throw new Error("signal projection unavailable");
+      }
+    });
+    let effect = createEffect({
+      effectKind: "approval_resolution_signals",
+      targetKind: "approval",
+      targetId: "approval-1",
+      status: "running",
+      attemptCount: 1,
+    });
+    const deferEffectForRetry = vi.fn(() => effect);
+    const completeEffect = vi.fn(() => ({ ...effect, status: "completed" }));
+    const storage = {
+      approvals: {
+        get: vi.fn(() => ({
+          approvalId: "approval-1",
+          kind: "capability.activate",
+          riskLevel: "danger",
+          status: "approved",
+          payload: {},
+          preview: {},
+          createdAt: "2026-07-10T10:00:00.000Z",
+          explanationStatus: "not_requested",
+        })) as () => ApprovalRequest,
+      },
+      approvalEffects: {
+        get: vi.fn(() => effect),
+        deferEffectForRetry,
+        completeEffect,
+      },
+    };
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+        ...createApprovalEffectDeps(),
+        recordApprovalResolutionSignals,
+      });
+      effect = claimEffectForService(service, { ...effect, attemptCount: attempt, status: "running" });
+      await (service as unknown as { executeClaimedEffect(effectId: string): Promise<void> }).executeClaimedEffect(
+        effect.effectId,
+      );
+    }
+
+    expect(recordApprovalResolutionSignals).toHaveBeenCalledTimes(2);
+    expect(appliedApprovals).toEqual(new Set(["approval-1"]));
+    expect(deferEffectForRetry).toHaveBeenCalledOnce();
+    expect(completeEffect).toHaveBeenCalledOnce();
+  });
+
+  it("retries reserved wait-run materialization until the durable run exists", async () => {
+    let effect = createEffect({
+      effectKind: "approval_wait_materialize" as never,
+      targetKind: "durable_run",
+      targetId: "reserved-run-1",
+      status: "running",
+      attemptCount: 1,
+    });
+    let firstAttempt = true;
+    const materializeApprovalWaitRun = vi.fn(() => {
+      if (firstAttempt) {
+        firstAttempt = false;
+        throw new Error("durable run store unavailable");
+      }
+      return { runId: "reserved-run-1", status: "waiting" } as never;
+    });
+    const deferEffectForRetry = vi.fn(() => effect);
+    const completeEffect = vi.fn(() => ({ ...effect, status: "completed" }));
+    const storage = {
+      approvalEffects: {
+        get: vi.fn(() => effect),
+        deferEffectForRetry,
+        completeEffect,
+        failEffect: vi.fn(),
+      },
+    };
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const service = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          materializeApprovalWaitRun,
+        } as never,
+      );
+      effect = claimEffectForService(service, { ...effect, attemptCount: attempt, status: "running" });
+      await (service as unknown as { executeClaimedEffect(effectId: string): Promise<void> }).executeClaimedEffect(
+        effect.effectId,
+      );
+    }
+
+    expect(materializeApprovalWaitRun).toHaveBeenCalledTimes(2);
+    expect(deferEffectForRetry).toHaveBeenCalledOnce();
+    expect(completeEffect).toHaveBeenCalledOnce();
+  });
+
+  it("defers an approval wait wake while its reserved durable run is not materialized", async () => {
+    const effect = createEffect({
+      effectKind: "approval_wait_wake",
+      targetKind: "durable_run",
+      targetId: "reserved-run-1",
+      status: "running",
+      attemptCount: 1,
+    });
+    const wakeDurableRun = vi.fn();
+    const deferEffectForRetry = vi.fn(() => effect);
+    const storage = {
+      durableRuns: {
+        getRun: vi.fn(() => {
+          throw new Error("Durable run reserved-run-1 not found");
+        }),
+      },
+      approvalEffects: {
+        get: vi.fn(() => effect),
+        deferEffectForRetry,
+      },
+    };
+    const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+      ...createApprovalEffectDeps(),
+      wakeDurableRun,
+    });
+    const claimed = claimEffectForService(service, effect);
+    storage.approvalEffects.get = vi.fn(() => claimed);
+
+    await (service as unknown as { executeClaimedEffect(effectId: string): Promise<void> }).executeClaimedEffect(
+      effect.effectId,
+    );
+
+    expect(wakeDurableRun).not.toHaveBeenCalled();
+    expect(deferEffectForRetry).toHaveBeenCalledOnce();
   });
 
   it("does not wake a linked turn when the turn trace belongs to another session", () => {
@@ -215,6 +1066,7 @@ describe("approval-resolution-effects-service", () => {
     );
 
     expect(upsert.mock.calls.map(([input]) => input.effectKind)).toEqual([
+      "approval_resolution_signals",
       "pending_action_execute",
       "approval_after_hooks",
     ]);
@@ -1114,6 +1966,9 @@ describe("approval-resolution-effects-service", () => {
               },
             })),
           },
+          chatInlineApprovals: {
+            get: vi.fn(() => undefined),
+          },
         },
         publishRealtime: vi.fn(),
       } as unknown as ServiceContext,
@@ -1153,6 +2008,296 @@ describe("approval-resolution-effects-service", () => {
         }),
       }),
     );
+  });
+
+  it("retries Chat materialization from the stored executed result without re-firing the action", async () => {
+    const effect = createEffect({
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-1",
+    });
+    const completeEffect = vi.fn();
+    const deferEffectForRetry = vi.fn(() => ({ ...effect, status: "pending" as const }));
+    const executeApprovedPendingAction = vi.fn();
+    const pendingAction = {
+      approvalId: "approval-1",
+      actionType: "tool.invoke",
+      request: { toolName: "shell.exec", args: { command: "pwd" } },
+      createdAt: "2026-04-11T00:00:00.000Z",
+      resolutionStatus: "executed",
+      result: {
+        outcome: "executed",
+        auditEventId: "audit-1",
+        result: { ok: true },
+      },
+    } as const;
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            failEffect: vi.fn(),
+            skipEffect: vi.fn(),
+            completeEffect,
+            deferEffectForRetry,
+          },
+          pendingApprovalActions: { find: vi.fn(() => pendingAction) },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction,
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+    const materialize = vi
+      .spyOn(
+        service as unknown as {
+          materializeExecutedChatApproval(
+            currentEffect: ApprovalEffectRecord,
+            currentAction: typeof pendingAction,
+            result: Record<string, unknown> | undefined,
+          ): void;
+        },
+        "materializeExecutedChatApproval",
+      )
+      .mockImplementationOnce(() => {
+        throw new Error("chat projection unavailable");
+      });
+
+    await (
+      service as unknown as {
+        handlePendingActionExecute(currentEffect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handlePendingActionExecute(effect);
+
+    expect(executeApprovedPendingAction).not.toHaveBeenCalled();
+    expect(materialize).toHaveBeenCalledWith(effect, pendingAction, pendingAction.result);
+    expect(deferEffectForRetry).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({ lastError: "chat projection unavailable" }),
+    );
+    expect(completeEffect).not.toHaveBeenCalled();
+
+    materialize.mockImplementation(() => undefined);
+    await (
+      service as unknown as {
+        handlePendingActionExecute(currentEffect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handlePendingActionExecute(effect);
+
+    expect(executeApprovedPendingAction).not.toHaveBeenCalled();
+    expect(completeEffect).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          resolutionStatus: "executed",
+          result: pendingAction.result,
+        }),
+      }),
+    );
+  });
+
+  it("does not overwrite a durable run cancelled between materialization read and completion CAS", () => {
+    const runningRun = {
+      runId: "durable-cancel-race",
+      status: "running",
+      version: 4,
+      metadata: {},
+    };
+    const cancelledRun = {
+      ...runningRun,
+      status: "cancelled",
+      version: 5,
+    };
+    const getRun = vi.fn().mockReturnValueOnce(runningRun).mockReturnValue(cancelledRun);
+    const updateRun = vi.fn(() => {
+      throw new Error("Durable run durable-cancel-race update conflict");
+    });
+    const createCheckpoint = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          durableRuns: { getRun, updateRun, createCheckpoint },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    expect(() =>
+      (
+        service as unknown as {
+          completeDurableRunIfPresent(
+            runId: string,
+            input: { now: string; outputText: string; checkpointState: Record<string, unknown> },
+          ): void;
+        }
+      ).completeDurableRunIfPresent("durable-cancel-race", {
+        now: "2026-04-11T00:00:00.000Z",
+        outputText: "done",
+        checkpointState: { status: "completed" },
+      }),
+    ).not.toThrow();
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: 4 }));
+    expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("preserves cancelled Chat and delegation truth when cancellation wins the materialization CAS", () => {
+    const effect = createEffect({
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-1",
+    });
+    let trace: ChatTurnTraceRecord = {
+      turnId: "turn-cancel-race",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      branchKind: "append",
+      status: "waiting_for_approval",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: "2026-04-11T00:00:00.000Z",
+      toolRuns: [],
+      citations: [],
+      routing: {},
+      durable: { runId: "durable-cancel-race", status: "running" },
+    };
+    const runningRun = {
+      runId: "durable-cancel-race",
+      status: "running" as const,
+      version: 4,
+      metadata: {},
+    };
+    const cancelledRun = {
+      ...runningRun,
+      status: "cancelled" as const,
+      version: 5,
+    };
+    let durableRun = runningRun as typeof runningRun | typeof cancelledRun;
+    const chatMessagesUpsert = vi.fn();
+    const chatTurnTracesPatch = vi.fn();
+    const delegationParents = vi.fn(() => new Map());
+    const updateRun = vi.fn(() => {
+      durableRun = cancelledRun;
+      trace = {
+        ...trace,
+        status: "cancelled",
+        completion: { status: "interrupted", repaired: false },
+        durable: { ...trace.durable!, status: "cancelled" },
+      };
+      throw new Error("Durable run durable-cancel-race update conflict");
+    });
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          chatInlineApprovals: {
+            get: vi.fn(() => ({
+              approvalId: "approval-1",
+              sessionId: "session-1",
+              turnId: "turn-cancel-race",
+              toolName: "shell.exec",
+              status: "pending",
+              reason: "Needs approval",
+              createdAt: "2026-04-11T00:00:00.000Z",
+            })),
+            upsert: vi.fn(),
+          },
+          chatToolRuns: {
+            listByTurn: vi.fn(() => [
+              {
+                toolRunId: "tool-run-1",
+                turnId: "turn-cancel-race",
+                sessionId: "session-1",
+                toolName: "shell.exec",
+                approvalId: "approval-1",
+                status: "approval_required",
+              },
+            ]),
+            patch: vi.fn(),
+          },
+          chatMessages: { upsert: chatMessagesUpsert },
+          chatTurnTraces: {
+            get: vi.fn(() => trace),
+            patch: chatTurnTracesPatch,
+          },
+          durableRuns: {
+            getRun: vi.fn(() => durableRun),
+            updateRun,
+            createCheckpoint: vi.fn(),
+          },
+          chatDelegationSteps: {
+            listParentsByChildSessionIds: delegationParents,
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    expect(() =>
+      (
+        service as unknown as {
+          materializeExecutedChatApproval(
+            currentEffect: ApprovalEffectRecord,
+            pendingAction: {
+              approvalId: string;
+              actionType: string;
+              request: Record<string, unknown>;
+              createdAt: string;
+              resolutionStatus: string;
+            },
+            result: Record<string, unknown>,
+          ): void;
+        }
+      ).materializeExecutedChatApproval(
+        effect,
+        {
+          approvalId: "approval-1",
+          actionType: "tool.invoke",
+          request: { toolName: "shell.exec", args: { command: "pwd" } },
+          createdAt: "2026-04-11T00:00:00.000Z",
+          resolutionStatus: "executed",
+        },
+        { outcome: "executed", result: { ok: true } },
+      ),
+    ).not.toThrow();
+
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: 4 }));
+    expect(trace.status).toBe("cancelled");
+    expect(trace.durable?.status).toBe("cancelled");
+    expect(chatMessagesUpsert).not.toHaveBeenCalled();
+    expect(chatTurnTracesPatch).not.toHaveBeenCalled();
+    expect(delegationParents).not.toHaveBeenCalled();
   });
 
   it("emits explicit retained-stream metadata when an approval wait wake is skipped", async () => {
@@ -1217,6 +2362,89 @@ describe("approval-resolution-effects-service", () => {
         },
       },
     );
+  });
+
+  it("sets both lane guards synchronously for same-tick requests from different attribution contexts", async () => {
+    const backgroundTasks = new Set<Promise<void>>();
+    const actionWorkerAttributions: unknown[] = [];
+    const observabilityWorkerAttributions: unknown[] = [];
+    const claimNextPendingEffect = vi.fn(() => {
+      actionWorkerAttributions.push(getRequestAttribution());
+      return undefined;
+    });
+    const claimNextPendingObservabilityEffect = vi.fn(() => {
+      observabilityWorkerAttributions.push(getRequestAttribution());
+      return undefined;
+    });
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            claimNextPendingEffect,
+            claimNextPendingObservabilityEffect,
+            listByApproval: vi.fn(() => []),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      { ...createApprovalEffectDeps(), backgroundTasks },
+    );
+
+    runWithRequestAttribution({ actorId: "operator-a" }, () => service.requestEffectProcessing());
+    runWithRequestAttribution({ actorId: "operator-b" }, () => service.requestEffectProcessing());
+
+    expect(backgroundTasks.size).toBe(2);
+    await Promise.all([...backgroundTasks]);
+    expect(claimNextPendingEffect).toHaveBeenCalledOnce();
+    expect(claimNextPendingObservabilityEffect).toHaveBeenCalledOnce();
+    expect(actionWorkerAttributions).toEqual([{}]);
+    expect(observabilityWorkerAttributions).toEqual([{}]);
+    expect(backgroundTasks.size).toBe(0);
+    service.stopWorker();
+  });
+
+  it("reconciles generic and device approval expiry without one sweep blocking the other", async () => {
+    const backgroundTasks = new Set<Promise<void>>();
+    const reconcileExpiredApprovals = vi.fn(() => 2);
+    const reconcileExpiredDeviceAccessRequests = vi.fn(async () => {
+      throw new Error("device expiry sweep failed");
+    });
+    const reconcileExpiredRemoteActionTokens = vi.fn(() => 3);
+    const publishRealtime = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            claimNextPendingEffect: vi.fn(() => undefined),
+            listByApproval: vi.fn(() => []),
+          },
+        },
+        publishRealtime,
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        backgroundTasks,
+        reconcileExpiredApprovals,
+        reconcileExpiredDeviceAccessRequests,
+        approvalRemoteTokenSecrets: {
+          reconcileExpired: reconcileExpiredRemoteActionTokens,
+          deleteById: vi.fn(),
+        },
+      },
+    );
+
+    service.requestEffectProcessing();
+    await Promise.all([...backgroundTasks]);
+
+    expect(reconcileExpiredApprovals).toHaveBeenCalledWith(100);
+    expect(reconcileExpiredDeviceAccessRequests).toHaveBeenCalledWith(100);
+    expect(reconcileExpiredRemoteActionTokens).toHaveBeenCalledWith(100);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_effect_worker_failed",
+      "approvals",
+      expect.objectContaining({ lane: "action", error: "device expiry sweep failed" }),
+    );
+    service.stopWorker();
   });
 
   it("stops polling when the worker is stopped", async () => {
@@ -1897,9 +3125,71 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
-  it("falls back from stale inbox ids and persists pending inbox follow-up resolution", async () => {
+  it("defers a remote-token follow-up until terminal keychain cleanup succeeds", async () => {
     const completeEffect = vi.fn();
-    const markResolved = vi.fn(() => ({
+    const deferEffectForRetry = vi.fn((_effectId, _workerId, _version, input) =>
+      createEffect({
+        status: "pending",
+        result: input.result,
+        lastError: input.lastError,
+      }),
+    );
+    const deleteApprovalRemoteActionTokenSecretById = vi.fn(() => {
+      throw new Error("keychain temporarily unavailable");
+    });
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect: vi.fn(), completeEffect, deferEffectForRetry },
+          approvalInbox: {
+            get: vi.fn(),
+            findByApprovalAndToken: vi.fn(() => undefined),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        approvalRemoteTokenSecrets: {
+          reconcileExpired: vi.fn(),
+          deleteById: deleteApprovalRemoteActionTokenSecretById,
+        },
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleApprovalInboxFollowUp(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleApprovalInboxFollowUp(
+      createEffect({
+        effectKind: "approval_inbox_follow_up",
+        targetKind: "remote_token",
+        targetId: "token-cleanup",
+        status: "running",
+        payload: { decision: "reject", approvalStatus: "rejected" },
+      }),
+    );
+
+    expect(deleteApprovalRemoteActionTokenSecretById).toHaveBeenCalledWith("token-cleanup");
+    expect(deferEffectForRetry).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        lastError: "keychain temporarily unavailable",
+        result: expect.objectContaining({
+          deliveryState: "secret_cleanup_retry_scheduled",
+          tokenId: "token-cleanup",
+        }),
+      }),
+    );
+    expect(completeEffect).not.toHaveBeenCalled();
+  });
+
+  it("falls back from stale inbox ids and reconciles pending inbox follow-up resolution", async () => {
+    const completeEffect = vi.fn();
+    const reconcileResolution = vi.fn(() => ({
       inboxItemId: "inbox-live",
       state: "approved",
       approvalStatus: "approved",
@@ -1917,7 +3207,7 @@ describe("approval-resolution-effects-service", () => {
               state: "pending",
               approvalStatus: "pending",
             })),
-            markResolved,
+            reconcileResolution,
           },
         },
         publishRealtime: vi.fn(),
@@ -1952,7 +3242,7 @@ describe("approval-resolution-effects-service", () => {
       }),
     );
 
-    expect(markResolved).toHaveBeenCalledWith(
+    expect(reconcileResolution).toHaveBeenCalledWith(
       "inbox-live",
       expect.objectContaining({
         state: "approved",
@@ -1970,6 +3260,76 @@ describe("approval-resolution-effects-service", () => {
           tokenId: "token-1",
           state: "approved",
         },
+      }),
+    );
+  });
+
+  it("repairs same-terminal inbox approval metadata without rewriting terminal state", async () => {
+    const completeEffect = vi.fn();
+    const reconcileResolution = vi.fn(() => ({
+      inboxItemId: "inbox-1",
+      state: "expired",
+      approvalStatus: "rejected",
+      resolvedAt: "2026-04-11T00:00:30.000Z",
+      resolvedBy: "system:approval-expiry",
+    }));
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect: vi.fn(), completeEffect },
+          approvalInbox: {
+            get: vi.fn(() => ({
+              inboxItemId: "inbox-1",
+              state: "expired",
+              approvalStatus: "pending",
+              resolvedAt: "2026-04-11T00:00:30.000Z",
+            })),
+            findByApprovalAndToken: vi.fn(),
+            reconcileResolution,
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
+    );
+
+    await (
+      service as unknown as {
+        handleApprovalInboxFollowUp(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleApprovalInboxFollowUp(
+      createEffect({
+        effectKind: "approval_inbox_follow_up",
+        targetKind: "remote_token",
+        targetId: "token-1",
+        payload: {
+          inboxItemId: "inbox-1",
+          inboxState: "expired",
+          decision: "reject",
+          approvalStatus: "rejected",
+          resolvedBy: "system:approval-expiry",
+        },
+      }),
+    );
+
+    expect(reconcileResolution).toHaveBeenCalledWith(
+      "inbox-1",
+      expect.objectContaining({
+        state: "expired",
+        approvalStatus: "rejected",
+        resolvedBy: "system:approval-expiry",
+      }),
+    );
+    expect(completeEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          inboxItemId: "inbox-1",
+          tokenId: "token-1",
+          state: "expired",
+        }),
       }),
     );
   });
@@ -2064,6 +3424,11 @@ describe("approval-resolution-effects-service", () => {
               approvalStatus: "rejected",
             })),
             findByApprovalAndToken: vi.fn(),
+            reconcileResolution: vi.fn(() => ({
+              inboxItemId: "inbox-1",
+              state: "rejected",
+              approvalStatus: "rejected",
+            })),
           },
         },
         publishRealtime: vi.fn(),
@@ -2132,5 +3497,40 @@ function createEffect(overrides: Partial<ApprovalEffectRecord>): ApprovalEffectR
     createdAt: "2026-04-11T00:00:00.000Z",
     updatedAt: "2026-04-11T00:00:00.000Z",
     ...overrides,
+  };
+}
+
+function createApprovalEffectDeps() {
+  return {
+    backgroundTasks: new Set<Promise<void>>(),
+    wakeDurableRun: vi.fn(),
+    requestRunProcessing: vi.fn(),
+    findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+    executeCodeModePendingApproval: vi.fn(),
+    executeApprovedPendingAction: vi.fn(),
+    enqueueAfterHooks: vi.fn(),
+    resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+    recordApprovalResolutionSignals: vi.fn(),
+  };
+}
+
+function createObservabilityEnvelope(
+  input: Pick<ApprovalObservabilityEnvelope, "deliveryId" | "operationId" | "delivery"> &
+    Partial<ApprovalObservabilityEnvelope>,
+): Record<string, unknown> {
+  return {
+    schemaVersion: "approval_observability.v1",
+    occurredAt: "2026-07-10T10:00:00.000Z",
+    orderIndex: 1,
+    attribution: { actorId: "operator-1", traceId: "trace-1" },
+    ...input,
+  };
+}
+
+function claimEffectForService(service: ApprovalEffectsService, effect: ApprovalEffectRecord): ApprovalEffectRecord {
+  const worker = service as unknown as { workerId: string; observabilityWorkerId: string };
+  return {
+    ...effect,
+    claimedBy: effect.effectKind === "approval_observability" ? worker.observabilityWorkerId : worker.workerId,
   };
 }

@@ -491,6 +491,15 @@ describe("gateway service host guard", () => {
       .map(({ relativePath }) => relativePath);
     expect(inlineHostBuilders).toEqual([]);
   }, 15_000);
+
+  it("routes policy-engine approval creation through the canonical Gateway lifecycle", async () => {
+    const files = await readServiceSources();
+    const gatewayService = files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "";
+
+    expect(gatewayService).toMatch(
+      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,500}createApproval: \(input, onCreated\) => this\.createApproval\(input, onCreated\)/,
+    );
+  }, 15_000);
 });
 
 function normalizeTypeAlias(source: string): string {

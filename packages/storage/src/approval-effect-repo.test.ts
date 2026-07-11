@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { Worker } from "node:worker_threads";
 import { ApprovalEffectRepository, buildApprovalEffectIdempotencyKey } from "./approval-effect-repo.js";
 import { createDatabase } from "./sqlite.js";
 
@@ -92,19 +93,30 @@ describe("ApprovalEffectRepository", () => {
       [pending.effectId],
     );
 
-    const updatedByIdempotency = repo.upsert({
+    assert.throws(
+      () =>
+        repo.upsert({
+          approvalId: "approval-1",
+          effectKind: "approval_wait_wake",
+          targetKind: "durable_run",
+          targetId: "run-1",
+          payload: { reason: "edited" },
+          status: "failed",
+          updatedAt: "2026-03-21T10:01:00.000Z",
+        }),
+      /idempotency payload mismatch/i,
+    );
+    const unchangedByIdempotency = repo.upsert({
       approvalId: "approval-1",
       effectKind: "approval_wait_wake",
       targetKind: "durable_run",
       targetId: "run-1",
-      payload: { reason: "edited" },
-      status: "failed",
-      updatedAt: "2026-03-21T10:01:00.000Z",
+      payload: { reason: "approved" },
     });
-    assert.equal(updatedByIdempotency.effectId, pending.effectId);
-    assert.equal(updatedByIdempotency.status, "pending");
-    assert.deepEqual(updatedByIdempotency.payload, { reason: "edited" });
-    assert.equal(updatedByIdempotency.updatedAt, "2026-03-21T10:01:00.000Z");
+    assert.equal(unchangedByIdempotency.effectId, pending.effectId);
+    assert.equal(unchangedByIdempotency.status, "pending");
+    assert.deepEqual(unchangedByIdempotency.payload, { reason: "approved" });
+    assert.equal(unchangedByIdempotency.updatedAt, "2026-03-21T10:00:00.000Z");
 
     const claimed = repo.claimNextPendingEffect("worker-1", "2026-03-21T10:02:00.000Z", "2026-03-21T10:07:00.000Z", 0);
     assert.equal(claimed?.effectId, pending.effectId);
@@ -133,6 +145,17 @@ describe("ApprovalEffectRepository", () => {
     assert.equal(renewed?.leaseExpiresAt, "2026-03-21T10:08:00.000Z");
     assert.equal(renewed?.version, 3);
 
+    const deferred = repo.deferEffectForRetry(pending.effectId, "worker-1", renewed!.version, {
+      result: { deliveryState: "retry_scheduled", attemptCount: 1 },
+      lastError: "audit unavailable",
+      retryAt: "2026-03-21T10:09:00.000Z",
+      updatedAt: "2026-03-21T10:03:30.000Z",
+    });
+    assert.equal(deferred?.status, "running");
+    assert.equal(deferred?.leaseExpiresAt, "2026-03-21T10:09:00.000Z");
+    assert.equal(deferred?.lastError, "audit unavailable");
+    assert.deepEqual(deferred?.result, { deliveryState: "retry_scheduled", attemptCount: 1 });
+
     assert.equal(
       repo.completeEffect(pending.effectId, "other-worker", renewed!.version, {
         result: { ignored: true },
@@ -140,7 +163,7 @@ describe("ApprovalEffectRepository", () => {
       }),
       undefined,
     );
-    const completed = repo.completeEffect(pending.effectId, "worker-1", claimed!.version, {
+    const completed = repo.completeEffect(pending.effectId, "worker-1", deferred!.version, {
       result: { resumed: true },
       updatedAt: "2026-03-21T10:04:00.000Z",
     });
@@ -259,6 +282,202 @@ describe("ApprovalEffectRepository", () => {
 
     assert.equal(claimed?.effectId, pendingAction.effectId);
     assert.equal(claimed?.effectKind, "pending_action_execute");
+  });
+
+  it("keeps observability on an independent filtered claim lane", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-observability");
+    const createdAt = "2026-03-21T10:00:00.000Z";
+    const action = repo.upsert({
+      approvalId: "approval-observability",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-observability",
+      payload: { action: true },
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const observability = repo.upsert({
+      approvalId: "approval-observability",
+      effectKind: "approval_observability",
+      targetKind: "approval",
+      targetId: "approval.resolve.audit",
+      payload: { deliveryId: "delivery-1" },
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    assert.equal(
+      repo.claimNextPendingEffect("action-worker", createdAt, "2026-03-21T10:05:00.000Z")?.effectId,
+      action.effectId,
+    );
+    assert.equal(
+      repo.claimNextPendingObservabilityEffect("observability-worker", createdAt, "2026-03-21T10:05:00.000Z")?.effectId,
+      observability.effectId,
+    );
+  });
+
+  it("allocates one immutable predecessor chain for an observability batch", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-observability-batch");
+
+    const effects = repo.upsertObservabilityBatch({
+      approvalId: "approval-observability-batch",
+      occurredAt: "2026-03-21T10:00:00.000Z",
+      attribution: { actorId: "operator-batch" },
+      items: [
+        {
+          operationId: "created-audit-v1",
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: { action: "approval.created" },
+          },
+        },
+        {
+          operationId: "resolved-audit-v1",
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: { action: "approval.resolved" },
+          },
+        },
+      ],
+    });
+
+    assert.equal(effects.length, 2);
+    assert.deepEqual(effects[0]?.payload, {
+      schemaVersion: "approval_observability.v1",
+      deliveryId: "approval-observability:approval-observability-batch:created-audit-v1",
+      operationId: "created-audit-v1",
+      occurredAt: "2026-03-21T10:00:00.000Z",
+      orderIndex: 1,
+      attribution: { actorId: "operator-batch" },
+      delivery: {
+        kind: "audit",
+        stream: "approvals",
+        payload: { action: "approval.created" },
+      },
+    });
+    assert.deepEqual(effects[1]?.payload, {
+      schemaVersion: "approval_observability.v1",
+      deliveryId: "approval-observability:approval-observability-batch:resolved-audit-v1",
+      operationId: "resolved-audit-v1",
+      occurredAt: "2026-03-21T10:00:00.000Z",
+      orderIndex: 2,
+      predecessorDeliveryId: "approval-observability:approval-observability-batch:created-audit-v1",
+      attribution: { actorId: "operator-batch" },
+      delivery: {
+        kind: "audit",
+        stream: "approvals",
+        payload: { action: "approval.resolved" },
+      },
+    });
+
+    const [duplicate] = repo.upsertObservabilityBatch({
+      approvalId: "approval-observability-batch",
+      occurredAt: "2026-03-21T10:05:00.000Z",
+      attribution: { actorId: "operator-retry" },
+      items: [
+        {
+          operationId: "created-audit-v1",
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: { action: "approval.created" },
+          },
+        },
+      ],
+    });
+    assert.deepEqual(duplicate?.payload, effects[0]?.payload);
+    assert.throws(
+      () =>
+        repo.upsertObservabilityBatch({
+          approvalId: "approval-observability-batch",
+          occurredAt: "2026-03-21T10:05:00.000Z",
+          attribution: { actorId: "operator-retry" },
+          items: [
+            {
+              operationId: "created-audit-v1",
+              delivery: {
+                kind: "audit",
+                stream: "approvals",
+                payload: { action: "approval.created.edited" },
+              },
+            },
+          ],
+        }),
+      /idempotency payload mismatch/i,
+    );
+  });
+
+  it("persists observability chain timestamps in predecessor order before claiming", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-observability-claim-order");
+    const occurredAt = "2026-03-21T10:00:00.000Z";
+
+    const firstBatch = repo.upsertObservabilityBatch({
+      approvalId: "approval-observability-claim-order",
+      occurredAt,
+      items: [
+        {
+          operationId: "create-audit",
+          delivery: { kind: "audit", stream: "approvals", payload: { event: "create" } },
+        },
+        {
+          operationId: "create-realtime",
+          delivery: {
+            kind: "realtime",
+            eventType: "approval_created",
+            source: "approvals",
+            payload: { event: "create" },
+          },
+        },
+      ],
+    });
+    const [resolvedAudit] = repo.upsertObservabilityBatch({
+      approvalId: "approval-observability-claim-order",
+      occurredAt,
+      items: [
+        {
+          operationId: "resolve-audit",
+          delivery: { kind: "audit", stream: "approvals", payload: { event: "resolve" } },
+        },
+      ],
+    });
+
+    assert.ok(firstBatch[0]);
+    assert.ok(firstBatch[1]);
+    assert.ok(resolvedAudit);
+    assert.ok(firstBatch[0].createdAt < firstBatch[1].createdAt);
+    assert.ok(firstBatch[1].createdAt < resolvedAudit.createdAt);
+    assert.equal(
+      repo.claimNextPendingObservabilityEffect("observability-worker", occurredAt, "2026-03-21T10:05:00.000Z")
+        ?.effectId,
+      firstBatch[0].effectId,
+    );
+  });
+
+  it("serializes concurrent SQLite observability batches into one predecessor chain", async () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-effect-concurrent-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const repo = new ApprovalEffectRepository(db);
+    const approvalId = "approval-observability-concurrent";
+    insertApproval(db, approvalId);
+
+    try {
+      await runConcurrentObservabilityWorkers({
+        kind: "sqlite",
+        workerOptions: { dbPath },
+        approvalId,
+        countPerWorker: 30,
+      });
+
+      assertSingleObservabilityChain(repo.listByApproval(approvalId), 60);
+    } finally {
+      db.close();
+    }
   });
 
   it("claims linked child chat-turn wakes before orchestration parent wakes", () => {
@@ -455,3 +674,142 @@ describe("ApprovalEffectRepository", () => {
     assert.equal(legacy.version, 1);
   });
 });
+
+interface ConcurrentObservabilityWorkerInput {
+  kind: "sqlite" | "postgres";
+  workerOptions: Record<string, unknown>;
+  approvalId: string;
+  countPerWorker: number;
+}
+
+async function runConcurrentObservabilityWorkers(input: ConcurrentObservabilityWorkerInput): Promise<void> {
+  const startGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const workers = ["left", "right"].map(
+    (prefix) =>
+      new Worker(CONCURRENT_OBSERVABILITY_WORKER_SOURCE, {
+        eval: true,
+        workerData: {
+          ...input,
+          prefix,
+          startGate,
+          repoModuleUrl: new URL("./approval-effect-repo.ts", import.meta.url).href,
+          sqliteModuleUrl: new URL("./sqlite.ts", import.meta.url).href,
+          postgresModuleUrl: new URL("./postgres/sync.ts", import.meta.url).href,
+          tsxApiUrl: import.meta.resolve("tsx/esm/api"),
+        },
+      }),
+  );
+  const ready = workers.map((worker) => waitForWorkerReady(worker));
+  await Promise.all(ready);
+  Atomics.store(new Int32Array(startGate), 0, 1);
+  Atomics.notify(new Int32Array(startGate), 0);
+  await Promise.all(workers.map((worker) => waitForWorkerCompletion(worker)));
+}
+
+function waitForWorkerReady(worker: Worker): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (message: unknown) => {
+      if (isWorkerMessage(message, "ready")) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+    };
+    worker.on("message", onMessage);
+    worker.on("error", onError);
+  });
+}
+
+function waitForWorkerCompletion(worker: Worker): Promise<void> {
+  return new Promise((resolve, reject) => {
+    worker.on("message", (message: unknown) => {
+      if (isWorkerMessage(message, "done")) {
+        resolve();
+      } else if (isWorkerMessage(message, "error")) {
+        reject(new Error(String((message as { error?: unknown }).error ?? "Concurrent observability worker failed.")));
+      }
+    });
+    worker.on("error", reject);
+    worker.on("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`Concurrent observability worker exited with code ${code}.`));
+      }
+    });
+  });
+}
+
+function isWorkerMessage(value: unknown, type: string): boolean {
+  return Boolean(value && typeof value === "object" && (value as { type?: unknown }).type === type);
+}
+
+function assertSingleObservabilityChain(
+  effects: readonly { payload: Record<string, unknown> }[],
+  expectedCount: number,
+) {
+  const envelopes = effects
+    .map((effect) => effect.payload)
+    .filter((payload) => payload.schemaVersion === "approval_observability.v1")
+    .sort((left, right) => Number(left.orderIndex) - Number(right.orderIndex));
+  assert.equal(envelopes.length, expectedCount);
+  assert.deepEqual(
+    envelopes.map((envelope) => Number(envelope.orderIndex)),
+    Array.from({ length: expectedCount }, (_, index) => index + 1),
+  );
+  for (let index = 1; index < envelopes.length; index += 1) {
+    assert.equal(envelopes[index]?.predecessorDeliveryId, envelopes[index - 1]?.deliveryId);
+  }
+}
+
+const CONCURRENT_OBSERVABILITY_WORKER_SOURCE = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+
+  void (async () => {
+    const { tsImport } = await import(workerData.tsxApiUrl);
+    const { ApprovalEffectRepository } = await tsImport(workerData.repoModuleUrl, workerData.repoModuleUrl);
+    let db;
+    if (workerData.kind === "sqlite") {
+      const { createDatabase } = await tsImport(workerData.sqliteModuleUrl, workerData.repoModuleUrl);
+      db = createDatabase(workerData.workerOptions);
+    } else {
+      const { PostgresSyncDatabaseClient } = await tsImport(workerData.postgresModuleUrl, workerData.repoModuleUrl);
+      db = new PostgresSyncDatabaseClient(workerData.workerOptions);
+    }
+    const repo = new ApprovalEffectRepository(db);
+    parentPort.postMessage({ type: "ready" });
+    Atomics.wait(new Int32Array(workerData.startGate), 0, 0);
+    try {
+      for (let index = 0; index < workerData.countPerWorker; index += 1) {
+        repo.upsertObservabilityBatch({
+          approvalId: workerData.approvalId,
+          occurredAt: "2026-03-21T10:00:00.000Z",
+          attribution: { actorId: "operator-" + workerData.prefix },
+          items: [
+            {
+              operationId: workerData.prefix + "-" + index,
+              delivery: {
+                kind: "audit",
+                stream: "approvals",
+                payload: { action: "approval.concurrent", index },
+              },
+            },
+          ],
+        });
+      }
+      parentPort.postMessage({ type: "done" });
+    } catch (error) {
+      parentPort.postMessage({
+        type: "error",
+        error: error instanceof Error ? error.stack ?? error.message : String(error),
+      });
+    } finally {
+      db.close();
+    }
+  })();
+`;

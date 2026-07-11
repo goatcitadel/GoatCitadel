@@ -617,6 +617,36 @@ describe("Postgres runtime schema generation", () => {
     assert.match(migration.sql, /idx_capability_scope_assignments_lookup/);
   });
 
+  it("ships an idempotent Postgres scrub for legacy device-token plaintext", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "scrub_legacy_device_token_plaintext");
+    assert.ok(migration, "expected Postgres legacy device-token scrub migration");
+    assert.match(migration.sql, /UPDATE auth_device_grants AS device_grant/);
+    assert.match(migration.sql, /device_grant\.revoked_at IS NULL/);
+    assert.match(migration.sql, /request\.delivered_at IS NULL/);
+    assert.match(migration.sql, /approved_token_plaintext = NULL/);
+    assert.match(migration.sql, /THEN 'expired'/);
+  });
+
+  it("ships the indexed Postgres approval expiry sweep migration", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "approval_expiry_sweep_index_parity");
+    assert.ok(migration, "expected Postgres approval expiry sweep index migration");
+    assert.match(migration.sql, /idx_approvals_status_expires_at/);
+    assert.match(migration.sql, /ON approvals\(status, expires_at_ts ASC, approval_id ASC\)/);
+    assert.match(migration.sql, /WHERE expires_at_ts IS NOT NULL/);
+  });
+
+  it("ships a Postgres scrub for legacy remote approval bearer persistence", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "scrub_legacy_remote_approval_bearers");
+    assert.ok(migration, "expected Postgres legacy remote approval bearer scrub migration");
+    assert.match(migration.sql, /UPDATE durable_runs/);
+    assert.match(migration.sql, /UPDATE comms_deliveries/);
+    assert.match(migration.sql, /UPDATE approval_inbox_items/);
+    assert.match(migration.sql, /UPDATE tool_invocations/);
+    assert.match(migration.sql, /UPDATE audit_events/);
+    assert.match(migration.sql, /regexp_replace/);
+    assert.match(migration.sql, /Legacy remote approval bearer was removed/);
+  });
+
   it("auto-derives capability_scope_assignments into the runtime schema", () => {
     const sql = buildPostgresRuntimeSchemaSql();
     assert.match(sql, /capability_scope_assignments/);

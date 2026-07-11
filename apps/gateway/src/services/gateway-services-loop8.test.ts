@@ -308,6 +308,7 @@ describe("Loop 8 gateway service coverage", () => {
       readSkillStates,
       invokeTool: vi.fn(),
       createApproval: vi.fn(async (input: ApprovalCreateInput) => createApprovalRequest(input)),
+      resolveApproval: vi.fn(),
       publishRealtime,
       readPolicySnapshot: () => ({ profile: "loop8" }),
     });

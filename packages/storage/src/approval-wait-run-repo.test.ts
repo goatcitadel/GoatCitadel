@@ -39,6 +39,30 @@ function createRepos(): {
 }
 
 describe("ApprovalWaitRunRepository", () => {
+  it("reserves the first run id without allowing a competing overwrite", () => {
+    const { approvals, approvalWaitRuns: repo } = createRepos();
+    const approval = approvals.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: {},
+      preview: {},
+    });
+
+    const first = repo.createOrGet({
+      approvalId: approval.approvalId,
+      runId: "reserved-run-a",
+      createdAt: "2026-04-10T11:00:00.000Z",
+    });
+    const competing = repo.createOrGet({
+      approvalId: approval.approvalId,
+      runId: "reserved-run-b",
+      createdAt: "2026-04-10T11:00:01.000Z",
+    });
+
+    assert.equal(first.runId, "reserved-run-a");
+    assert.equal(competing.runId, "reserved-run-a");
+  });
+
   it("creates, replaces, and resolves approval wait run mappings", () => {
     const { approvals, approvalWaitRuns: repo, durableRuns } = createRepos();
     const approval = approvals.create({

@@ -33,6 +33,18 @@ export interface ChannelSendInput extends ChannelGovernanceInput {
     tokenId?: string;
     buttons: Array<{ label: string; callbackData: string }>;
   };
+  /**
+   * Persistable template for approval actions whose bearer remains in the OS
+   * keychain until the final provider transport. Runtime-only callers hydrate
+   * this into `interactiveActions`; public API callers should not set it.
+   */
+  interactiveActionTemplate?: {
+    platform?: string;
+    tokenId: string;
+    tokenRef: string;
+    expiresAt: string;
+    buttons: Array<{ label: string; decision: "a" | "r" }>;
+  };
   replyToMessageId?: string;
   replyToPartIndex?: number;
   effectId?: string;

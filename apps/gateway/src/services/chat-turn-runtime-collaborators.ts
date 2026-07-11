@@ -26,7 +26,11 @@ export interface ChatTurnRealtimeEmitter {
 }
 
 export interface ChatTurnTranscriptIngress {
-  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
+  ingestEvent(
+    idempotencyKey: string,
+    payload: GatewayEventInput,
+    options?: { onCommit?: () => void },
+  ): Promise<unknown>;
 }
 
 export interface ChatTurnActiveExecutionControl {
@@ -112,7 +116,7 @@ export interface ChatTurnDurableRunOwner {
    * (`cancelDurableRun`). Optional because not every dispatch host owns a
    * durable kernel (e.g., tests).
    */
-  cancelDurableChatRun?(runId: string, actorId?: string): void;
+  cancelDurableChatRun?(runId: string, actorId?: string): DurableRunRecord | undefined;
 }
 
 export interface ChatTurnMemorySideEffects {

@@ -980,9 +980,9 @@ describe("durable-execution-service orchestration workflow", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval,
       connector,
-      token: "token-secret",
+      tokenRef: "keychain:goatcitadel:approval-remote-action:token-1",
       tokenId: "token-1",
-      expiresAt: "2026-05-18T00:15:00.000Z",
+      expiresAt: "2099-05-18T00:15:00.000Z",
     });
     expect(payload).toBeDefined();
     const run = buildRunWithPayload("connector.delivery", payload!);
@@ -1024,6 +1024,145 @@ describe("durable-execution-service orchestration workflow", () => {
           workspaceId: "workspace-real",
         }),
       }),
+    );
+  });
+
+  it("hydrates browser approval bearer only for live dispatch and keeps durable proof redacted", async () => {
+    const rawToken = `grat_${"d".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:token-browser";
+    const connector = {
+      connectorId: "browser:mission-control",
+      connectorType: "browser",
+      sourceId: "mission-control-web",
+      status: "active",
+      capabilities: [
+        { id: "approvals", enabled: true },
+        { id: "interactive_actions", enabled: true },
+      ],
+      metadata: {},
+    } as unknown as ConnectorRecord;
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: {
+        approvalId: "approval-browser",
+        kind: "tool.invoke",
+        riskLevel: "danger",
+        status: "pending",
+        payload: {},
+        preview: {},
+        createdAt: "2026-07-10T00:00:00.000Z",
+      } as ApprovalRequest,
+      connector,
+      tokenRef,
+      tokenId: "token-browser",
+      expiresAt: "2099-07-10T00:15:00.000Z",
+    });
+    const run = buildRunWithPayload("connector.delivery", payload!);
+    const updateRun = vi.fn();
+    const createCheckpoint = vi.fn();
+    const deleteApprovalRemoteActionTokenSecret = vi.fn();
+    vi.mocked(dispatchConnectorDelivery).mockResolvedValue({
+      capabilityId: "interactive_actions",
+      dispatchKind: "browser_realtime",
+      result: { payload: { token: "[REDACTED]" } },
+    } as never);
+    const host = {
+      requireConnectorRecord: vi.fn(() => connector),
+      approvalRemoteTokenSecrets: {
+        resolve: vi.fn(() => rawToken),
+        delete: deleteApprovalRemoteActionTokenSecret,
+      },
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => run),
+          updateRun,
+          createCheckpoint,
+        },
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime: vi.fn(),
+      resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
+    };
+
+    expect(JSON.stringify(run)).not.toContain(rawToken);
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(dispatchConnectorDelivery).toHaveBeenCalledWith(
+      connector,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          payload: expect.objectContaining({ token: rawToken }),
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(deleteApprovalRemoteActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    expect(JSON.stringify(updateRun.mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(createCheckpoint.mock.calls)).not.toContain(rawToken);
+  });
+
+  it("fails an expired approval connector delivery before hydrating or dispatching its bearer", async () => {
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:token-expired";
+    const payload = {
+      version: "connector.delivery.v1" as const,
+      connectorId: "browser:mission-control",
+      connectorType: "browser",
+      action: "realtime.emit",
+      approvalAction: {
+        tokenId: "token-expired",
+        expiresAt: "2020-07-10T00:15:00.000Z",
+      },
+      secretRefs: { approvalActionToken: tokenRef },
+      payload: { eventType: "approval_remote_action_ready", payload: { approvalId: "approval-expired" } },
+    };
+    const run = buildRunWithPayload("connector.delivery", payload);
+    const updateRun = vi.fn();
+    const createCheckpoint = vi.fn();
+    const expirePendingAtOrBefore = vi.fn(() => ({ state: "expired" }));
+    const deleteApprovalRemoteActionTokenSecret = vi.fn();
+    const requireConnectorRecord = vi.fn();
+    const publishRealtime = vi.fn();
+    const host = {
+      requireConnectorRecord,
+      approvalRemoteTokenSecrets: {
+        resolve: vi.fn(),
+        delete: deleteApprovalRemoteActionTokenSecret,
+      },
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => run),
+          updateRun,
+          createCheckpoint,
+        },
+        remoteActionTokens: { expirePendingAtOrBefore },
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime,
+    };
+
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(deleteApprovalRemoteActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    expect(expirePendingAtOrBefore).toHaveBeenCalledWith("token-expired", expect.any(String));
+    expect(requireConnectorRecord).not.toHaveBeenCalled();
+    expect(dispatchConnectorDelivery).not.toHaveBeenCalled();
+    expect(updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        lastError: "Approval remote-action delivery expired before dispatch.",
+      }),
+    );
+    expect(createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkpointKind: "run_failed",
+        state: expect.objectContaining({ deliveryStatus: "expired", tokenId: "token-expired" }),
+      }),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "connector_delivery_expired",
+      "connectors",
+      expect.objectContaining({ tokenId: "token-expired" }),
+      expect.any(Object),
     );
   });
 

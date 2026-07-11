@@ -136,6 +136,7 @@ vi.mock("./chat-turn-trace-hydration.js", () => ({
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { ChatTurnExecutionRegistry, ChatTurnWriteConflictError } from "./chat-turn-execution-registry.js";
 import { GatewayService } from "./gateway-service.js";
+import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatSessionService from "./chat-session-service.js";
@@ -151,6 +152,7 @@ import * as settingsAuthService from "./settings-auth-service.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const systemSettingsStore = new Map<string, unknown>();
+  const secretStoreValues = new Map<string, string>();
   const systemSettings = {
     get: vi.fn((key: string) => (systemSettingsStore.has(key) ? { value: systemSettingsStore.get(key) } : undefined)),
     set: vi.fn((key: string, value: unknown) => {
@@ -160,6 +162,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   Object.assign(gateway, {
     runtimeDecisionRecorder: { record: vi.fn() },
+    secretStore: {
+      setSecret: vi.fn((account: string, value: string) => secretStoreValues.set(account, value)),
+      getSecret: vi.fn((account: string) => secretStoreValues.get(account)),
+      deleteSecret: vi.fn((account: string) => secretStoreValues.delete(account)),
+    },
     backgroundTasks: new Set<Promise<unknown>>(),
     chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
     syntheticPermissionProfiles: new Map(),
@@ -270,6 +277,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
           state: "consumed",
           ...patch,
         })),
+        expirePendingAtOrBefore: vi.fn((tokenId: string) => ({ tokenId, state: "expired" })),
         updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
           tokenId,
           state,
@@ -296,6 +304,10 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     },
   });
   Object.assign(gateway, overrides);
+  gateway.approvalRemoteTokenSecrets = new ApprovalRemoteTokenSecretService(
+    gateway.secretStore,
+    gateway.storage.remoteActionTokens,
+  );
   return { gateway, systemSettings, systemSettingsStore };
 }
 
@@ -564,6 +576,7 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteTokenId.call(gateway, {
         tokenId: "token-id",
+        connectorId: "mcp:srv-1",
         decision: "approved",
       } as never),
     ).resolves.toMatchObject({ remoteId: true });
@@ -777,7 +790,10 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
       ConflictError,
     );
-    expect(gateway.storage.remoteActionTokens.updateState).toHaveBeenCalledWith("token-1", "expired");
+    expect(gateway.storage.remoteActionTokens.expirePendingAtOrBefore).toHaveBeenCalledWith(
+      "token-1",
+      expect.any(String),
+    );
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => undefined);
     expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
       NotFoundError,
@@ -820,10 +836,15 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
           originSurface: "cowork",
           runId: "run-approval-1",
           permissionProfileId: "safe",
+          secretRefs: expect.objectContaining({
+            approvalActionToken: "keychain:goatcitadel:approval-remote-action:token-2",
+          }),
         }),
         metadata: expect.objectContaining({ approvalId: "approval-1", connectorId: "browser-1" }),
       }),
     );
+    expect(JSON.stringify(createDurableRun.mock.calls[0]?.[0])).not.toContain("remote-token");
+    expect(gateway.secretStore.setSecret).toHaveBeenCalledWith("approval-remote-action:token-2", "remote-token");
 
     gateway.isFeatureEnabled = vi.fn(() => false);
     expect(

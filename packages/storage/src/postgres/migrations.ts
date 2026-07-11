@@ -2261,4 +2261,176 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
     `,
   },
+  {
+    version: 79,
+    name: "scrub_legacy_device_token_plaintext",
+    sql: `
+      UPDATE auth_device_grants AS device_grant
+      SET revoked_at = COALESCE(
+        device_grant.revoked_at,
+        to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      )
+      FROM auth_device_requests AS request
+      WHERE device_grant.request_id = request.request_id
+        AND device_grant.revoked_at IS NULL
+        AND request.approved_token_plaintext IS NOT NULL
+        AND btrim(request.approved_token_plaintext) <> ''
+        AND request.delivered_at IS NULL;
+
+      UPDATE auth_device_requests
+      SET status = CASE
+            WHEN approved_token_plaintext IS NOT NULL
+              AND btrim(approved_token_plaintext) <> ''
+              AND delivered_at IS NULL
+            THEN 'expired'
+            ELSE status
+          END,
+          resolution_note = CASE
+            WHEN approved_token_plaintext IS NOT NULL
+              AND btrim(approved_token_plaintext) <> ''
+              AND delivered_at IS NULL
+            THEN COALESCE(
+              NULLIF(btrim(resolution_note), ''),
+              'Legacy device credential was revoked because its plaintext handoff predated secure in-memory delivery. Request access again.'
+            )
+            ELSE resolution_note
+          END,
+          approved_token_expires_at = CASE
+            WHEN approved_token_plaintext IS NOT NULL
+              AND btrim(approved_token_plaintext) <> ''
+              AND delivered_at IS NULL
+            THEN NULL
+            ELSE approved_token_expires_at
+          END,
+          approved_token_plaintext = NULL
+      WHERE approved_token_plaintext IS NOT NULL;
+    `,
+  },
+  {
+    version: 80,
+    name: "approval_expiry_sweep_index_parity",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_approvals_status_expires_at
+        ON approvals(status, expires_at_ts ASC, approval_id ASC)
+      WHERE expires_at_ts IS NOT NULL;
+    `,
+  },
+  {
+    version: 81,
+    name: "scrub_legacy_remote_approval_bearers",
+    sql: `
+      UPDATE durable_runs
+      SET status = 'failed',
+          finished_at = COALESCE(
+            finished_at,
+            to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          ),
+          last_error = COALESCE(
+            last_error,
+            'Legacy remote approval bearer was removed from durable state; issue a new remote action token.'
+          ),
+          updated_at = to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          version = version + 1
+      WHERE workflow_key = 'connector.delivery'
+        AND payload_json LIKE '%grat_%'
+        AND status IN ('queued', 'running', 'waiting', 'paused');
+
+      UPDATE comms_deliveries
+      SET status = 'failed',
+          delivery_status = 'manual_reconciliation_required',
+          next_attempt_at = NULL,
+          error = COALESCE(
+            error,
+            'Legacy remote approval bearer was removed before delivery; issue a new remote action token.'
+          ),
+          updated_at = to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      WHERE payload_json LIKE '%grat_%'
+        AND status IN ('queued', 'running', 'retrying');
+
+      UPDATE durable_runs
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          metadata_json = regexp_replace(metadata_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          last_error = regexp_replace(last_error, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%' OR metadata_json LIKE '%grat_%' OR last_error LIKE '%grat_%';
+
+      UPDATE durable_checkpoints
+      SET state_json = regexp_replace(state_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE state_json LIKE '%grat_%';
+
+      UPDATE durable_run_events
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%';
+
+      UPDATE comms_deliveries
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          error = regexp_replace(error, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          stale_reason = regexp_replace(stale_reason, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%' OR error LIKE '%grat_%' OR stale_reason LIKE '%grat_%';
+
+      UPDATE realtime_events
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%';
+
+      UPDATE approval_inbox_items
+      SET token = 'redacted:' || token_id
+      WHERE token LIKE '%grat_%';
+
+      UPDATE approval_events
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%';
+
+      UPDATE approvals
+      SET linkage_json = regexp_replace(linkage_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          preview_json = regexp_replace(preview_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          explanation_json = regexp_replace(explanation_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          explanation_error = regexp_replace(explanation_error, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          resolution_note = regexp_replace(resolution_note, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          shell_explanations_json = regexp_replace(shell_explanations_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE linkage_json LIKE '%grat_%'
+         OR payload_json LIKE '%grat_%'
+         OR preview_json LIKE '%grat_%'
+         OR explanation_json LIKE '%grat_%'
+         OR explanation_error LIKE '%grat_%'
+         OR resolution_note LIKE '%grat_%'
+         OR shell_explanations_json LIKE '%grat_%';
+
+      UPDATE pending_approval_actions
+      SET request_json = regexp_replace(request_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          result_json = regexp_replace(result_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE request_json LIKE '%grat_%' OR result_json LIKE '%grat_%';
+
+      UPDATE tool_invocations
+      SET args_json = regexp_replace(args_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          result_json = regexp_replace(result_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          policy_reason = regexp_replace(policy_reason, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE args_json LIKE '%grat_%' OR result_json LIKE '%grat_%' OR policy_reason LIKE '%grat_%';
+
+      UPDATE policy_blocks
+      SET details_json = regexp_replace(details_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          reason = regexp_replace(reason, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE details_json LIKE '%grat_%' OR reason LIKE '%grat_%';
+
+      UPDATE approval_effects
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          last_error = regexp_replace(last_error, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%' OR last_error LIKE '%grat_%';
+
+      UPDATE external_side_effect_runs
+      SET request_payload_json = regexp_replace(request_payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          response_payload_json = regexp_replace(response_payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g'),
+          error_text = regexp_replace(error_text, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE request_payload_json LIKE '%grat_%'
+         OR response_payload_json LIKE '%grat_%'
+         OR error_text LIKE '%grat_%';
+
+      UPDATE runtime_decision_traces
+      SET payload_json = regexp_replace(payload_json, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')
+      WHERE payload_json LIKE '%grat_%';
+
+      UPDATE audit_events
+      SET payload = regexp_replace(payload::text, '\\mgrat_[A-Za-z0-9_-]{16,}\\M', '[REDACTED]', 'g')::jsonb
+      WHERE payload::text LIKE '%grat_%';
+    `,
+  },
 ];

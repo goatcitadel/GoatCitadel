@@ -19,6 +19,20 @@ vi.mock("./chat-turn-helpers.js", () => ({
     failure?.failureClass === "tool_run_budget_exceeded",
   isChatTurnCancelledError: () => false,
   mergeExecutionPlanStepStatuses: (_steps: unknown, next: unknown) => next,
+  patchChatTurnTraceIfStatus: (
+    repository: {
+      get(turnId: string): ChatTurnTraceRecord;
+      patch(turnId: string, input: Partial<ChatTurnTraceRecord>): ChatTurnTraceRecord;
+      patchIfStatus?: (
+        turnId: string,
+        expected: ChatTurnTraceRecord["status"][],
+        input: Partial<ChatTurnTraceRecord>,
+      ) => ChatTurnTraceRecord | undefined;
+    },
+    turnId: string,
+    expected: ChatTurnTraceRecord["status"][],
+    input: Partial<ChatTurnTraceRecord>,
+  ) => repository.patchIfStatus?.(turnId, expected, input) ?? repository.patch(turnId, input),
   renderExecutionPlanAsMarkdown: () => "execution plan",
   splitIntoChunks: (value: string) => [value],
   toTitleCase: (value: string) => value,
@@ -1062,6 +1076,68 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
     expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
   });
+
+  it("does not resurrect a turn cancelled after the provider's terminal chunk", async () => {
+    const host = createHost();
+    let controller: AbortController | undefined;
+    host.beginActiveChatTurnExecution = vi.fn(() => {
+      controller = new AbortController();
+      return controller;
+    }) as never;
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Provider finished before cancellation.",
+      };
+      controller?.abort();
+    }) as never;
+    const cancelledTrace = {
+      ...createPreparedTurn().turnTrace,
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      parentTurnId: "turn-0",
+      branchKind: "append",
+      status: "cancelled",
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: "2026-04-18T00:00:00.000Z",
+      toolRuns: [],
+      citations: [],
+      routing: {},
+    } as ChatTurnTraceRecord;
+    host.markChatTurnCancelled = vi.fn(() => cancelledTrace) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "cancel after terminal chunk", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      { skipMessageStart: true },
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(host.ingestEvent).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ actor: { type: "agent", id: "assistant" } }),
+    );
+    expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+      "turn-1",
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(chunks.some((chunk) => chunk.type === "done")).toBe(false);
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "trace_update", trace: cancelledTrace }));
+  });
 });
 
 describe("isTerminalSynthesisStep", () => {
@@ -1155,6 +1231,7 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
       expect.objectContaining({
         message: expect.objectContaining({ role: "assistant", content: finalText }),
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
   });
 
@@ -1283,6 +1360,7 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
       expect.objectContaining({
         message: expect.objectContaining({ content: "Recovered authoritative final answer." }),
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
   });
 });

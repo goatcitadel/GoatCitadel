@@ -1271,9 +1271,23 @@ describe("executeTool", () => {
           connectionId: "conn-slack",
           message: "Build green again.",
           attachments: [{ title: "Runbook", url: "https://example.com/runbook" }],
+          interactiveActions: {
+            platform: "slack",
+            tokenId: "rat-secret-proof",
+            buttons: [
+              {
+                label: "Approve",
+                callbackData: `gca:grat_${"s".repeat(43)}:a`,
+              },
+            ],
+          },
         },
         agentId: "operator",
         sessionId: "sess-slack",
+        authContext: {
+          boundary: "tool_host_boundary",
+          secretRefs: ["keychain:goatcitadel:approval-remote-action:rat-secret-proof"],
+        },
       },
       {
         ...policyConfig,
@@ -1290,6 +1304,8 @@ describe("executeTool", () => {
         target: "#build-alerts",
       }),
     );
+    expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).not.toContain(`grat_${"s".repeat(43)}`);
+    expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).toContain("[REDACTED]");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://slack.com/api/chat.postMessage",
       expect.objectContaining({

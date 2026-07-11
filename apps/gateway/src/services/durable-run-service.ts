@@ -63,6 +63,14 @@ const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
 const COWORK_WORKFLOW_TIMEOUT_RESUME_EVENT = "cowork.turn.operator_resume";
 const AUTONOMY_KILL_SWITCH_RESUME_EVENT = "autonomy.v1.enabled";
 
+function containsRawRemoteApprovalBearer(value: unknown): boolean {
+  try {
+    return /\bgrat_[A-Za-z0-9_-]{16,}\b/.test(JSON.stringify(value));
+  } catch {
+    return false;
+  }
+}
+
 class DurableWorkflowTimeoutError extends Error {
   public constructor(
     public readonly runId: string,
@@ -427,7 +435,11 @@ export class DurableRunService {
       retryPolicy,
       waitForEvent: input.waitForEvent ?? null,
     };
+    if (containsRawRemoteApprovalBearer(input.payload) || containsRawRemoteApprovalBearer(metadata)) {
+      throw new Error("Raw remote approval bearer cannot be persisted in durable run state; use a secret reference.");
+    }
     const run = this.ctx.storage.durableRuns.createRun({
+      runId: input.runId,
       workflowKey,
       status,
       attemptCount: 0,

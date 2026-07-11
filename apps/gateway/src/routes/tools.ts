@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { DeploymentProfile, LocalOperatorOverrideRecord, PermissionProfileRecord } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
+import { markMutationCommitted } from "../plugins/idempotency.js";
 
 const RATE_LIMIT_GENERAL_MAX = 500;
 const RATE_LIMIT_MUTATION_MAX = 180;
@@ -550,6 +551,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
           ...parsed.data,
           createdBy: request.authActorId,
         });
+        markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
@@ -573,6 +575,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: `Tool grant ${params.data.grantId} not found or already revoked` });
       }
 
+      markMutationCommitted(request);
       return reply.send({ revoked: true, grantId: params.data.grantId, revokedBy: request.authActorId });
     },
   );

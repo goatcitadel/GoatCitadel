@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { redactStructuredSecrets } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -140,8 +141,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
           ...approvalInput,
           ...(Object.keys(linkage).length > 0 ? { linkage } : {}),
         });
+        markMutationCommitted(request);
         return reply.code(201).send(projectApprovalPublicResponse(approval));
       } catch (error) {
+        markMutationCommittedFromError(request, error);
         return sendRouteError(reply, error, request.log);
       }
     },
@@ -177,6 +180,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ),
       );
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -192,8 +196,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         resolvedBy: resolveActorId(request),
       });
+      markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -214,8 +220,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         ...parsed.data,
         resolvedBy: resolveActorId(request),
       });
+      markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -236,8 +244,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         expiresInMs: parsed.data.expiresInMs,
         issuedBy: resolveActorId(request),
       });
-      return reply.code(201).send(token);
+      markMutationCommitted(request);
+      return reply.header("Cache-Control", "private, no-store").code(201).send(token);
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -250,8 +260,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       const result = await approvals.resolveApprovalWithRemoteToken(parsed.data);
+      markMutationCommitted(request);
       return reply.send(projectApprovalPublicResponse(result));
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
@@ -267,6 +279,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         projectApprovalPublicResponse(approvals.getApprovalReplay(approvalId, resolveActorId(request))),
       );
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });

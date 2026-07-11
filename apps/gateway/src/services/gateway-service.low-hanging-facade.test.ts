@@ -470,11 +470,17 @@ describe("GatewayService low-hanging facade delegation", () => {
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteTokenId.call(gateway, {
         tokenId: "token-id",
+        connectorId: "mcp:srv-1",
         decision: "reject",
         resolvedBy: "tester",
       }),
     ).resolves.toEqual({
-      input: { tokenId: "token-id", decision: "reject", resolvedBy: "tester" },
+      input: {
+        tokenId: "token-id",
+        connectorId: "mcp:srv-1",
+        decision: "reject",
+        resolvedBy: "tester",
+      },
       source: "token-id",
     });
     expect(GatewayService.prototype.listApprovals.call(gateway, "pending", 3)).toEqual([

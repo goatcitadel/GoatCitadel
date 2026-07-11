@@ -8,13 +8,16 @@ import {
   type RealtimeEventLinks,
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
+import { randomUUID } from "node:crypto";
 import type { RequestAttribution, Storage } from "@goatcitadel/storage";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { buildApprovalRealtimeLinks } from "./approval-observability.js";
 
 export interface ApprovalWaitRunServiceDeps {
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
   getDurableRun(runId: string): DurableRunRecord;
   getRequestAttribution?: () => RequestAttribution | undefined;
+  createApprovalWaitRunId?: () => string;
 }
 
 export interface ApprovalWaitRunServiceContext {
@@ -47,22 +50,20 @@ export class ApprovalWaitRunService {
   }
 
   public buildApprovalRealtimeLinks(approval: ApprovalRequest): RealtimeEventLinks {
-    return {
-      approvalId: approval.approvalId,
-      sessionId: approval.linkage?.sessionId,
-      taskId: approval.linkage?.taskId,
-      runId: approval.linkage?.runId ?? approval.linkage?.durableRunId,
-      proactiveRunId: approval.linkage?.proactiveRunId,
-      workspaceId: approval.linkage?.workspaceId,
-      connectorId: approval.linkage?.connectorId,
-      tokenId: approval.linkage?.tokenId,
-    };
+    return buildApprovalRealtimeLinks(approval);
   }
 
   public primeApprovalLifecycle(approvalId: string, linkage?: ApprovalLinkage): ApprovalRequest {
     let approval = this.ctx.storage.approvals.get(approvalId);
     if (linkage) {
       approval = this.ctx.storage.approvals.mergeLinkage(approvalId, linkage);
+    }
+    const existingReservation = this.ctx.storage.approvalWaitRuns.get(approval.approvalId);
+    if (approval.status !== "pending" && !existingReservation) {
+      return approval;
+    }
+    if (approval.status === "pending") {
+      approval = this.reserveApprovalWaitRun(approval);
     }
     const waitRun = this.ensureApprovalWaitDurableRun(approval);
     if (waitRun?.runId && approval.linkage?.durableRunId !== waitRun.runId) {
@@ -71,48 +72,79 @@ export class ApprovalWaitRunService {
     return approval;
   }
 
+  /**
+   * Reserves the wait-run identity in the approval transaction. Resolution can
+   * then enqueue a wake against that identity even if durable-run materializing
+   * happens on another node after the approval commits.
+   */
+  public reserveApprovalWaitRun(approval: ApprovalRequest): ApprovalRequest {
+    if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled") || approval.status !== "pending") {
+      return approval;
+    }
+    const preferredRunId =
+      approval.linkage?.durableRunId?.trim() || this.deps.createApprovalWaitRunId?.() || randomUUID();
+    const reservation = this.ctx.storage.approvalWaitRuns.createOrGet({
+      approvalId: approval.approvalId,
+      runId: preferredRunId,
+    });
+    if (approval.linkage?.durableRunId === reservation.runId) {
+      return approval;
+    }
+    return this.ctx.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: reservation.runId });
+  }
+
   public ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
     if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
       return undefined;
     }
-    const existing = this.ctx.storage.approvalWaitRuns.get(approval.approvalId);
-    if (existing?.runId) {
+    let reservation = this.ctx.storage.approvalWaitRuns.get(approval.approvalId);
+    if (!reservation && approval.status === "pending") {
+      this.reserveApprovalWaitRun(approval);
+      reservation = this.ctx.storage.approvalWaitRuns.get(approval.approvalId);
+    }
+    if (!reservation?.runId) {
+      return undefined;
+    }
+    if (reservation.runId) {
       try {
-        return this.deps.getDurableRun(existing.runId);
+        return this.deps.getDurableRun(reservation.runId);
       } catch (error) {
         if (!(error instanceof NotFoundError)) {
           throw error;
         }
-        // Fall through and repair the mapping with a new waiting run.
+        // Fall through and materialize the transactionally reserved identity.
       }
     }
     const requestAttribution = this.getCurrentRequestAttribution();
-    const run = this.deps.createDurableRun({
-      workflowKey: "approval.wait",
-      payload: approvalWaitPayloadToRecord({
-        version: "approval.wait.v1",
-        approvalId: approval.approvalId,
-        approvalKind: approval.kind,
-        createdAt: approval.createdAt,
-        correlationId: requestAttribution.correlationId,
-        traceId: requestAttribution.traceId,
-        originSurface: requestAttribution.originSurface,
-      }),
-      metadata: {
-        approvalId: approval.approvalId,
-        approvalKind: approval.kind,
-      },
-      waitForEvent: {
-        eventKey: "approval.resolved",
-        correlationId: approval.approvalId,
-      },
-    });
-    this.ctx.storage.approvalWaitRuns.upsert({
-      approvalId: approval.approvalId,
-      runId: run.runId,
-      createdAt: new Date().toISOString(),
-    });
-    return run;
+    try {
+      return this.deps.createDurableRun({
+        runId: reservation.runId,
+        workflowKey: "approval.wait",
+        payload: approvalWaitPayloadToRecord({
+          version: "approval.wait.v1",
+          approvalId: approval.approvalId,
+          approvalKind: approval.kind,
+          createdAt: approval.createdAt,
+          correlationId: requestAttribution.correlationId,
+          traceId: requestAttribution.traceId,
+          originSurface: requestAttribution.originSurface,
+        }),
+        metadata: {
+          approvalId: approval.approvalId,
+          approvalKind: approval.kind,
+        },
+        waitForEvent: {
+          eventKey: "approval.resolved",
+          correlationId: approval.approvalId,
+        },
+      });
+    } catch (error) {
+      try {
+        return this.deps.getDurableRun(reservation.runId);
+      } catch {
+        throw error;
+      }
+    }
   }
 
   private getCurrentRequestAttribution(): {
