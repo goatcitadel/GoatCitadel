@@ -48,13 +48,19 @@ export function isTelegramApprovalActionConnectorReady(
 }
 
 export function isAllowedSecretEnvName(envName: string): boolean {
-  const trimmedEnvName = envName.trim().toUpperCase();
-  return CHANNEL_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(trimmedEnvName));
+  const trimmedEnvName = envName.trim();
+  return (
+    trimmedEnvName === trimmedEnvName.toUpperCase() &&
+    CHANNEL_SECRET_ENV_PATTERNS.some((pattern) => pattern.test(trimmedEnvName))
+  );
 }
 
 export function isAllowedTelegramBotTokenEnvName(envName: string): boolean {
-  const trimmedEnvName = envName.trim().toUpperCase();
-  return TELEGRAM_BOT_TOKEN_ENV_PATTERNS.some((pattern) => pattern.test(trimmedEnvName));
+  const trimmedEnvName = envName.trim();
+  return (
+    trimmedEnvName === trimmedEnvName.toUpperCase() &&
+    TELEGRAM_BOT_TOKEN_ENV_PATTERNS.some((pattern) => pattern.test(trimmedEnvName))
+  );
 }
 
 /**

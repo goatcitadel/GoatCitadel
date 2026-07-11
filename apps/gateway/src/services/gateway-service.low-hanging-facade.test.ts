@@ -722,11 +722,17 @@ describe("GatewayService low-hanging facade delegation", () => {
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteToken.call(gateway, {
         token: "token",
+        connectorId: "browser:mission-control",
         decision: "approve",
         resolvedBy: "tester",
       }),
     ).resolves.toEqual({
-      input: { token: "token", decision: "approve", resolvedBy: "tester" },
+      input: {
+        token: "token",
+        connectorId: "browser:mission-control",
+        decision: "approve",
+        resolvedBy: "tester",
+      },
       source: "token",
     });
     await expect(

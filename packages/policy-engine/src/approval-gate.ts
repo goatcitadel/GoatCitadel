@@ -69,6 +69,10 @@ export class ApprovalGate {
       const extension = onCreated?.(approval);
       if (isApprovalCreateCommitFinalizer(extension)) {
         extension.finalize(approval);
+      } else if (Array.isArray(extension) && extension.length > 0) {
+        throw new Error(
+          "Compatibility approval creation cannot commit observability effects without the canonical approval creation runtime.",
+        );
       }
     });
     try {

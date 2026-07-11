@@ -21,6 +21,12 @@ describe("channel approval action secret hydration", () => {
     ).toThrow(/cannot be queued/i);
   });
 
+  it("rejects raw approval bearers hidden in an interactive action template", () => {
+    const rawToken = `grat_${"t".repeat(43)}`;
+
+    expect(() => buildChannelDeliveryPayload(createInput(rawToken), "telegram")).toThrow(/cannot be queued/i);
+  });
+
   it("persists only a keychain reference and carries the template to the protected tool-host boundary", async () => {
     const rawToken = `grat_${"h".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_123";

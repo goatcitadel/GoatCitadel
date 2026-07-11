@@ -226,14 +226,18 @@ describe("GatewayService loop 27 large service coverage", () => {
     });
 
     expect(
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " raw-token ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " raw-token ", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toMatchObject({
       tokenId: "token-1",
       state: "consumed",
       consumedBy: "connector:conn-1",
     });
     expect(
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-2 ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-2 ", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toMatchObject({
       tokenId: "token-2",
       state: "consumed",
@@ -251,7 +255,9 @@ describe("GatewayService loop 27 large service coverage", () => {
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => pending);
     gateway.storage.remoteActionTokens.consumePending = vi.fn(() => undefined);
     expect(() =>
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toThrow("already been consumed");
 
     gateway.storage.remoteActionTokens.get = vi.fn(() => ({
@@ -260,7 +266,9 @@ describe("GatewayService loop 27 large service coverage", () => {
       tokenId: "expired-token",
     }));
     expect(() =>
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "expired-token", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "expired-token", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toThrow("expired");
     expect(gateway.storage.remoteActionTokens.expirePendingAtOrBefore).toHaveBeenCalledWith(
       "expired-token",
@@ -313,7 +321,9 @@ describe("GatewayService loop 27 large service coverage", () => {
       tokenId: "token-y",
     }));
     expect(() =>
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "replayed-token", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "replayed-token", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toThrow(/already been consumed/i);
   });
 

@@ -233,7 +233,7 @@ export async function resolveApprovalWithRemoteToken(
   context: ApprovalRemoteActionContext,
   input: {
     token: string;
-    connectorId?: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;

@@ -58,6 +58,9 @@ export class RealtimeEventService implements RealtimePublisher {
       throw new Error(`Explicit realtime metadata is required for protected event ${source}:${eventType}.`);
     }
     const deliveryEnvelope = readApprovalObservabilityRealtimeEnvelope(payload);
+    if (APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY in payload && !deliveryEnvelope) {
+      throw new Error("Invalid approval observability realtime envelope; refusing non-idempotent persistence.");
+    }
     const publicPayload = stripApprovalObservabilityRealtimeEnvelope(payload);
     const projectedPayload = redactStructuredSecrets(publicPayload).value;
     const persisted = deliveryEnvelope

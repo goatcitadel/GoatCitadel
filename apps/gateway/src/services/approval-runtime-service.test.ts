@@ -62,7 +62,13 @@ describe("ApprovalRuntimeService", () => {
       tokenId: "token-id",
       token: "token",
     });
-    await expect(service.resolveApprovalWithRemoteToken({ token: "token", decision: "approve" })).resolves.toEqual({
+    await expect(
+      service.resolveApprovalWithRemoteToken({
+        token: "token",
+        connectorId: "browser:mission-control",
+        decision: "approve",
+      }),
+    ).resolves.toEqual({
       approval: { approvalId: "approval-1" },
     });
     await expect(

@@ -185,6 +185,45 @@ describe("RealtimeEventRepository", () => {
     assert.equal(first.event.payload.deliveryId, input.deliveryId);
   });
 
+  it("does not derive idempotent delivery attribution from changing ambient request context", () => {
+    const repo = createRepo();
+    const input = {
+      deliveryId: "approval-observability:approval-1:resolve-realtime-no-attribution",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+    };
+    const first = runWithRequestAttribution({ actorId: "ambient-first" }, () =>
+      repo.appendIdempotent(
+        "approval_resolved",
+        "approvals",
+        { approvalId: "approval-1" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+        input,
+      ),
+    );
+    const retry = runWithRequestAttribution({ actorId: "ambient-retry" }, () =>
+      repo.appendIdempotent(
+        "approval_resolved",
+        "approvals",
+        { approvalId: "approval-1" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+        input,
+      ),
+    );
+
+    assert.equal(first.inserted, true);
+    assert.equal(retry.inserted, false);
+    assert.equal(first.event.payload.actorId, undefined);
+    assert.equal(retry.event.payload.actorId, undefined);
+  });
+
   it("rejects delivery-id reuse with a different realtime payload", () => {
     const repo = createRepo();
     const input = {

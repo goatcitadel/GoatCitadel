@@ -134,7 +134,7 @@ export class RealtimeEventRepository {
       options,
       input.occurredAt,
       input.deliveryId,
-      input.attribution,
+      input.attribution ?? {},
     );
   }
 

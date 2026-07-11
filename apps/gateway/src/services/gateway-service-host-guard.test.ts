@@ -499,6 +499,9 @@ describe("gateway service host guard", () => {
     expect(gatewayService).toMatch(
       /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,500}createApproval: \(input, onCreated\) => this\.createApproval\(input, onCreated\)/,
     );
+    expect(gatewayService).toMatch(
+      /new CapabilitySystemService\(\{[\s\S]{0,800}resolveApproval: \(approvalId, input\) => this\.resolveApproval\(approvalId, input\)/,
+    );
   }, 15_000);
 });
 

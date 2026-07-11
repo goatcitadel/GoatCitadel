@@ -114,4 +114,23 @@ describe("ApprovalGate", () => {
     expect(create).not.toHaveBeenCalled();
     expect(append).not.toHaveBeenCalled();
   });
+
+  it("fails closed instead of silently dropping bare observability effects in compatibility mode", async () => {
+    const { storage, append } = createStorage();
+    const gate = new ApprovalGate(storage);
+
+    await expect(
+      gate.create(buildInput(), () => [
+        {
+          operationId: "compatibility-audit",
+          delivery: {
+            kind: "audit",
+            stream: "tool_invocations",
+            payload: { event: "approval.created" },
+          },
+        },
+      ]),
+    ).rejects.toThrow(/canonical approval creation runtime/i);
+    expect(append).not.toHaveBeenCalled();
+  });
 });

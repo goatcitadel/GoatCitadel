@@ -409,7 +409,7 @@ describe("approvals routes", () => {
       method: "POST",
       url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/remote-token",
       payload: {
-        connectorId: "mission-control",
+        connectorId: "  mission-control  ",
       },
     });
 

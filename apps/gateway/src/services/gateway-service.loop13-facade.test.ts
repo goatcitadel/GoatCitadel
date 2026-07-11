@@ -570,6 +570,7 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteToken.call(gateway, {
         token: "token",
+        connectorId: "browser:mission-control",
         decision: "approved",
       } as never),
     ).resolves.toMatchObject({ remote: true });
@@ -776,20 +777,28 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     gateway.storage.remoteActionTokens.get = vi.fn(() => currentToken);
 
     expect(
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " secret ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " secret ", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
     ).toMatchObject({ tokenId: "token-1", state: "consumed" });
     expect(
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-1 ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-1 ", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
     ).toMatchObject({ tokenId: "token-1", state: "consumed" });
 
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({ ...currentToken, actionType: "other.action" }));
-    expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
-      ConflictError,
-    );
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
+    ).toThrow(ConflictError);
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({ ...currentToken, expiresAt: expired }));
-    expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
-      ConflictError,
-    );
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
+    ).toThrow(ConflictError);
     expect(gateway.storage.remoteActionTokens.expirePendingAtOrBefore).toHaveBeenCalledWith(
       "token-1",
       expect.any(String),

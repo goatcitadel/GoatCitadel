@@ -94,9 +94,15 @@ function consumeResolvedRemoteActionToken(
     });
   }
   const expectedConnectorId = options?.expectedConnectorId?.trim();
-  if (expectedConnectorId && current.connectorId !== expectedConnectorId) {
+  const boundConnectorId = current.connectorId.trim();
+  if (boundConnectorId && !expectedConnectorId) {
     throw new ConflictError({
-      message: `Remote action token is bound to connector ${current.connectorId}, not ${expectedConnectorId}.`,
+      message: `Remote action token is bound to connector ${boundConnectorId}; connector binding is required.`,
+    });
+  }
+  if (boundConnectorId && boundConnectorId !== expectedConnectorId) {
+    throw new ConflictError({
+      message: `Remote action token is bound to connector ${boundConnectorId}, not ${expectedConnectorId}.`,
     });
   }
 

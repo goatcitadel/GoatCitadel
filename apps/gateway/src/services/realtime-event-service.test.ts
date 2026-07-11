@@ -90,6 +90,32 @@ describe("RealtimeEventService", () => {
     warn.mockRestore();
   });
 
+  it("rejects a malformed reserved observability envelope before non-idempotent persistence", () => {
+    const storage = fakeStorage();
+    const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
+
+    expect(() =>
+      service.publishRealtime(
+        "approval_resolved",
+        "approvals",
+        {
+          approvalId: "approval-1",
+          [APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY]: {
+            deliveryId: "approval-observability:approval-1:resolve-realtime",
+            occurredAt: "not-a-timestamp",
+          },
+        },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+      ),
+    ).toThrow(/invalid approval observability realtime envelope/i);
+    expect(storage.realtimeEvents.append).not.toHaveBeenCalled();
+    expect(storage.realtimeEvents.appendIdempotent).not.toHaveBeenCalled();
+  });
+
   it("projects new and legacy realtime payloads without mutating caller or storage truth", () => {
     const rawPayload = {
       webhookUrl: "https://hooks.example.test/services/team/realtime-secret",

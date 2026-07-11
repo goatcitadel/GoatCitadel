@@ -119,7 +119,7 @@ export type IntegrationWebhookRouteLike = {
   }>;
   resolveApprovalWithRemoteToken: (input: {
     token: string;
-    connectorId?: string;
+    connectorId: string;
     decision: "approve" | "reject";
     resolvedBy?: string;
   }) => Promise<{

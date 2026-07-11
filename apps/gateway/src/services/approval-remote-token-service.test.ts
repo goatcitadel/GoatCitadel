@@ -76,10 +76,12 @@ describe("approval remote token request claims", () => {
 
     const first = consumeRemoteActionToken(harness.host, " grat_raw_token ", "approval.resolve", {
       claimFingerprint: "sha256:approve-request",
+      expectedConnectorId: "mission-control",
     });
     vi.setSystemTime(new Date("2026-07-10T12:05:00.000Z"));
     const resumed = consumeRemoteActionToken(harness.host, "grat_raw_token", "approval.resolve", {
       claimFingerprint: "sha256:approve-request",
+      expectedConnectorId: "mission-control",
     });
 
     expect(first.state).toBe("consumed");
@@ -92,6 +94,7 @@ describe("approval remote token request claims", () => {
     expect(() =>
       consumeRemoteActionToken(harness.host, "grat_raw_token", "approval.resolve", {
         claimFingerprint: "sha256:deny-request",
+        expectedConnectorId: "mission-control",
       }),
     ).toThrow(/claimed by a different request/);
   });
@@ -103,9 +106,11 @@ describe("approval remote token request claims", () => {
 
     const first = consumeRemoteActionTokenById(harness.host, ` ${token.tokenId} `, "approval.resolve", {
       claimFingerprint: "sha256:edited-request",
+      expectedConnectorId: "mission-control",
     });
     const resumed = consumeRemoteActionTokenById(harness.host, token.tokenId, "approval.resolve", {
       claimFingerprint: "sha256:edited-request",
+      expectedConnectorId: "mission-control",
     });
 
     expect(first.state).toBe("consumed");
@@ -113,6 +118,7 @@ describe("approval remote token request claims", () => {
     expect(() =>
       consumeRemoteActionTokenById(harness.host, token.tokenId, "approval.resolve", {
         claimFingerprint: "sha256:other-edit",
+        expectedConnectorId: "mission-control",
       }),
     ).toThrow(/claimed by a different request/);
   });
@@ -128,6 +134,24 @@ describe("approval remote token request claims", () => {
         expectedConnectorId: "integration:other-channel",
       }),
     ).toThrow(/connector/i);
+    expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("pending");
+  });
+
+  it("rejects a connector-bound raw token when the caller omits the connector binding", () => {
+    const harness = createHarness();
+    harnesses.push(harness);
+    const token = issueApprovalToken(
+      harness,
+      "grat_missing_connector_binding",
+      "2099-07-10T13:00:00.000Z",
+      "integration:conn-telegram",
+    );
+
+    expect(() =>
+      consumeRemoteActionToken(harness.host, "grat_missing_connector_binding", "approval.resolve", {
+        claimFingerprint: "sha256:missing-connector",
+      }),
+    ).toThrow(/connector binding/i);
     expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("pending");
   });
 
@@ -166,10 +190,16 @@ describe("approval remote token request claims", () => {
     harnesses.push(harness);
     issueApprovalToken(harness, "grat_legacy_token");
 
-    expect(consumeRemoteActionToken(harness.host, "grat_legacy_token", "approval.resolve").state).toBe("consumed");
-    expect(() => consumeRemoteActionToken(harness.host, "grat_legacy_token", "approval.resolve")).toThrow(
-      /already been consumed/,
-    );
+    expect(
+      consumeRemoteActionToken(harness.host, "grat_legacy_token", "approval.resolve", {
+        expectedConnectorId: "mission-control",
+      }).state,
+    ).toBe("consumed");
+    expect(() =>
+      consumeRemoteActionToken(harness.host, "grat_legacy_token", "approval.resolve", {
+        expectedConnectorId: "mission-control",
+      }),
+    ).toThrow(/already been consumed/);
   });
 
   it("expires a pending token before any resumable claim can be recorded", () => {
@@ -180,6 +210,7 @@ describe("approval remote token request claims", () => {
     expect(() =>
       consumeRemoteActionToken(harness.host, "grat_expired_token", "approval.resolve", {
         claimFingerprint: "sha256:too-late",
+        expectedConnectorId: "mission-control",
       }),
     ).toThrow(/has expired/);
     expect(harness.deleteRemoteActionTokenSecretById).toHaveBeenCalledWith(token.tokenId);
@@ -190,6 +221,7 @@ describe("approval remote token request claims", () => {
     expect(() =>
       consumeRemoteActionTokenById(harness.host, token.tokenId, "approval.resolve", {
         claimFingerprint: "sha256:too-late",
+        expectedConnectorId: "mission-control",
       }),
     ).toThrow(/has expired/);
   });

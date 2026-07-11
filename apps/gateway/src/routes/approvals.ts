@@ -60,6 +60,7 @@ const bulkResolveSchema = z.object({
 const remoteTokenSchema = z.object({
   connectorId: z
     .string()
+    .trim()
     .min(1)
     .transform((connectorId) => (connectorId === "mission-control" ? "browser:mission-control" : connectorId)),
   expiresInMs: z

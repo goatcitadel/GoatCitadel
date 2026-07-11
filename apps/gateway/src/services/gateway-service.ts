@@ -5870,7 +5870,7 @@ export class GatewayService {
 
   public async resolveApprovalWithRemoteToken(input: {
     token: string;
-    connectorId?: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;

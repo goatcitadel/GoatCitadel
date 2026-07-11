@@ -35,7 +35,7 @@ export interface ApprovalRuntime {
   ): RemoteApprovalActionTokenIssueResult;
   resolveApprovalWithRemoteToken(input: {
     token: string;
-    connectorId?: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -117,7 +117,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
 
   public async resolveApprovalWithRemoteToken(input: {
     token: string;
-    connectorId?: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;

@@ -124,7 +124,7 @@ export interface DiscordRuntimeBridgeHost {
   requireChatSession(sessionId: string): ChatSessionRecord;
   resolveApprovalWithRemoteToken(input: {
     token: string;
-    connectorId?: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;

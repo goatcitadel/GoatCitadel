@@ -35,7 +35,11 @@ type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
 type ChannelDeliverySender = (input: ChannelSendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
 
 export function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string): Record<string, unknown> {
-  if (/grat_[A-Za-z0-9_-]{43}/.test(JSON.stringify(input.interactiveActions ?? null))) {
+  const interactiveApprovalPayload = JSON.stringify({
+    interactiveActions: input.interactiveActions ?? null,
+    interactiveActionTemplate: input.interactiveActionTemplate ?? null,
+  });
+  if (/grat_[A-Za-z0-9_-]{43}/.test(interactiveApprovalPayload)) {
     throw new Error("Raw remote approval bearer cannot be queued; use an interactive action secret reference.");
   }
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "");

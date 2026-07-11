@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
   extractMigrationNames,
@@ -167,4 +168,15 @@ test("fails when Postgres runtime schema stops consuming the SQLite blueprint en
     "Postgres runtime schema renderer must consume SQLite blueprint field: table.foreignKeys",
     "Postgres runtime schema renderer must consume SQLite blueprint field: table.seedRows",
   ]);
+});
+
+test("builds contracts before the source-level migration integrity test", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const command = packageJson.scripts?.["verify:storage:migration-parity"];
+
+  assert.equal(typeof command, "string");
+  const buildIndex = command.indexOf("pnpm --filter @goatcitadel/contracts build");
+  const sourceTestIndex = command.indexOf("tsx --test src/postgres-migration-integrity.test.ts");
+  assert.ok(buildIndex >= 0, "migration parity must build the contracts runtime dependency");
+  assert.ok(sourceTestIndex > buildIndex, "contracts must be built before the source-level integrity test");
 });

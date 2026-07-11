@@ -35,9 +35,9 @@ export async function executeApprovedExternalRuntimeSideEffect(
   try {
     return await execution;
   } finally {
-    if (inFlight.get(input.approvalId) === execution) {
-      inFlight.delete(input.approvalId);
-    }
+    // This invocation is the only writer for the key until its promise settles;
+    // concurrent callers return the same promise above.
+    inFlight.delete(input.approvalId);
   }
 }
 
