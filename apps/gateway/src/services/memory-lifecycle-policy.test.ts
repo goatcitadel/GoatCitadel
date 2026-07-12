@@ -77,30 +77,51 @@ describe("memory-lifecycle-policy", () => {
     });
   });
 
-  it("matches workspace-scoped memory items through one shared rule", () => {
+  it("gives canonical workspace scope precedence over legacy metadata", () => {
     const normalizeWorkspaceId = (workspaceId?: string) => workspaceId?.trim() || DEFAULT_MEMORY_WORKSPACE_ID;
+    const canonical = {
+      namespace: "shared.preferences",
+      workspaceId: "workspace-a",
+      metadata: { workspaceId: "workspace-b" },
+    } as never;
+
+    expect(matchesMemoryWorkspaceScope(canonical, "workspace-a", normalizeWorkspaceId)).toBe(true);
+    expect(matchesMemoryWorkspaceScope(canonical, "workspace-b", normalizeWorkspaceId)).toBe(false);
+    expect(matchesMemoryWorkspaceScope(canonical, "default", normalizeWorkspaceId)).toBe(false);
     expect(
       matchesMemoryWorkspaceScope(
-        {
-          namespace: "workspace-a.preferences",
-          metadata: {},
-        } as never,
-        "workspace-a",
-        normalizeWorkspaceId,
-      ),
-    ).toBe(true);
-    expect(
-      matchesMemoryWorkspaceScope(
-        {
-          namespace: "shared.preferences",
-          metadata: {
-            workspaceId: "workspace-b",
-          },
-        } as never,
+        { ...canonical, workspaceId: " workspace-a " } as never,
         "workspace-a",
         normalizeWorkspaceId,
       ),
     ).toBe(false);
+  });
+
+  it("keeps legacy metadata scope isolated while treating genuinely unscoped items as global", () => {
+    const normalizeWorkspaceId = (workspaceId?: string) => workspaceId?.trim() || DEFAULT_MEMORY_WORKSPACE_ID;
+    const legacy = {
+      namespace: "shared.preferences",
+      metadata: { workspaceId: " workspace-a " },
+    } as never;
+    const global = {
+      namespace: "shared.preferences",
+      metadata: {},
+    } as never;
+    const blankLegacy = {
+      namespace: "shared.preferences",
+      metadata: { workspaceId: "   " },
+    } as never;
+    const nonStringLegacy = {
+      namespace: "shared.preferences",
+      metadata: { workspaceId: 42 },
+    } as never;
+
+    expect(matchesMemoryWorkspaceScope(legacy, "workspace-a", normalizeWorkspaceId)).toBe(true);
+    expect(matchesMemoryWorkspaceScope(legacy, "workspace-b", normalizeWorkspaceId)).toBe(false);
+    expect(matchesMemoryWorkspaceScope(global, "workspace-a", normalizeWorkspaceId)).toBe(true);
+    expect(matchesMemoryWorkspaceScope(global, "workspace-b", normalizeWorkspaceId)).toBe(true);
+    expect(matchesMemoryWorkspaceScope(blankLegacy, "workspace-a", normalizeWorkspaceId)).toBe(true);
+    expect(matchesMemoryWorkspaceScope(nonStringLegacy, "workspace-a", normalizeWorkspaceId)).toBe(true);
   });
 
   it("suppresses duplicate maintenance recommendations inside the active window", () => {

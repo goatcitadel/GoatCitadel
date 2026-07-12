@@ -119,20 +119,31 @@ export function decideLearnedMemoryWrite(input: {
 }
 
 export function matchesMemoryWorkspaceScope(
-  item: Pick<MemoryItemRecord, "namespace" | "metadata"> & { metadata: Record<string, unknown> },
+  item: Pick<MemoryItemRecord, "metadata" | "workspaceId"> & { metadata: Record<string, unknown> },
   workspaceId: string,
   normalizeWorkspaceId: (workspaceId?: string) => string,
-  defaultWorkspaceId = DEFAULT_MEMORY_WORKSPACE_ID,
 ): boolean {
-  const explicitWorkspaceId =
-    typeof item.metadata.workspaceId === "string" ? normalizeWorkspaceId(item.metadata.workspaceId) : undefined;
-  if (explicitWorkspaceId) {
-    return explicitWorkspaceId === workspaceId;
+  const requestedWorkspaceId = normalizeWorkspaceId(workspaceId);
+  const canonicalWorkspaceId = item.workspaceId as unknown;
+  if (canonicalWorkspaceId !== undefined) {
+    if (
+      typeof canonicalWorkspaceId !== "string" ||
+      !canonicalWorkspaceId.trim() ||
+      canonicalWorkspaceId !== canonicalWorkspaceId.trim()
+    ) {
+      return false;
+    }
+    return canonicalWorkspaceId === requestedWorkspaceId;
   }
-  if (workspaceId === defaultWorkspaceId) {
-    return true;
+
+  const metadata =
+    item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata) ? item.metadata : {};
+  const legacyWorkspaceId = metadata.workspaceId;
+  if (typeof legacyWorkspaceId === "string" && legacyWorkspaceId.trim()) {
+    return normalizeWorkspaceId(legacyWorkspaceId) === requestedWorkspaceId;
   }
-  return item.namespace.startsWith(`${workspaceId}.`) || item.namespace.startsWith(`${workspaceId}/`);
+
+  return true;
 }
 
 export function shouldSuppressMaintenanceRecommendation(input: {

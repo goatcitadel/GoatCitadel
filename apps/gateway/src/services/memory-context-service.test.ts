@@ -10,6 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { generateEmbedding } from "@goatcitadel/policy-engine";
 import { MemoryContextService } from "./memory-context-service.js";
+import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
 
 // P0-#3: the ranker only counts the embedding signal when a real embedding
 // provider is active. Tests that exercise the semantic-vector path report a real
@@ -653,12 +654,30 @@ describe("MemoryContextService", () => {
           metadata: {
             embedding: [0.1, 0.2, 0.3],
             retrievalHints: ["browser automation", "external research"],
+            workspaceId: "workspace-b",
           },
+          workspaceId: "workspace-a",
           pinned: true,
           status: "active",
           lifecycleState: "active",
           createdAt: "2026-05-30T18:00:00.000Z",
           updatedAt: "2026-05-30T18:05:00.000Z",
+        },
+        {
+          itemId: "mem-foreign",
+          namespace: "workspace/default",
+          title: "Foreign browser governance",
+          content: "FOREIGN_WORKSPACE_SENTINEL browser sessions bypass scoped grants.",
+          metadata: {
+            workspaceId: "workspace-b",
+            embedding: [0.1, 0.2, 0.3],
+            retrievalHints: ["browser automation", "external research"],
+          },
+          pinned: true,
+          status: "active",
+          lifecycleState: "active",
+          createdAt: "2026-05-30T18:00:00.000Z",
+          updatedAt: "2026-05-30T18:06:00.000Z",
         },
       ],
     });
@@ -713,6 +732,7 @@ describe("MemoryContextService", () => {
       scope: "chat",
       prompt: "How should browser sessions be governed?",
       workspace: "memory",
+      workspaceId: "workspace-a",
       forceRefresh: true,
       queryEmbedding: [0.1, 0.2, 0.3],
     });
@@ -738,6 +758,8 @@ describe("MemoryContextService", () => {
         }),
       }),
     ]);
+    expect(storage.memoryMaintenance.queries).toEqual([{ limit: 8, workspaceId: "workspace-a" }]);
+    expect(pack.citations.some((citation) => citation.sourceRef === "mem-foreign")).toBe(false);
     expect(llmService.chatCompletions).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
@@ -747,6 +769,7 @@ describe("MemoryContextService", () => {
         ]),
       }),
     );
+    expect(JSON.stringify(llmService.chatCompletions.mock.calls[0]?.[0])).not.toContain("FOREIGN_WORKSPACE_SENTINEL");
   });
 
   it("generates a query embedding from the prompt and marks stored items as embedding-used (W1)", async () => {
@@ -1324,6 +1347,7 @@ function createStorage(
 ) {
   const contexts = new Map<string, MemoryContextPack & { cacheKey: string }>();
   const runs: Array<Record<string, unknown>> = [];
+  const memoryItemQueries: Array<{ limit: number; workspaceId?: string }> = [];
   return {
     memoryContexts: {
       upsert(input: Omit<MemoryContextPack, "contextId" | "createdAt"> & { cacheKey: string }) {
@@ -1409,8 +1433,14 @@ function createStorage(
       },
     },
     memoryMaintenance: {
-      listActiveMemoryItems(limit = 200) {
-        return (options.memoryItems ?? []).slice(0, limit);
+      queries: memoryItemQueries,
+      listActiveMemoryItems(limit = 200, workspaceId?: string) {
+        memoryItemQueries.push({ limit, workspaceId });
+        return (options.memoryItems ?? [])
+          .filter((item) =>
+            workspaceId ? matchesMemoryWorkspaceScope(item, workspaceId, (value) => value?.trim() || "default") : true,
+          )
+          .slice(0, limit);
       },
     },
   };

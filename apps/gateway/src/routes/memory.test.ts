@@ -40,10 +40,10 @@ describe("memory routes", () => {
     app = built.app;
     await app.register(memoryRoutes);
 
-    const response = await app.inject({ method: "GET", url: "/api/v1/memory/items" });
+    const response = await app.inject({ method: "GET", url: "/api/v1/memory/items?workspaceId=workspace-a" });
 
     expect(response.statusCode).toBe(200);
-    expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ status: "active" }));
+    expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", status: "active" }));
   });
 
   it("rejects bulk forget without any criteria", async () => {

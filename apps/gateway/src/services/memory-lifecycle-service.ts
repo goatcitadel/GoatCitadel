@@ -83,6 +83,7 @@ import {
   type BrowserContentGuardResult,
 } from "@goatcitadel/contracts";
 import { assertWritePathInJail, scanBrowserContentGuard } from "@goatcitadel/policy-engine";
+import { buildMemoryWorkspaceScopeSql } from "@goatcitadel/storage";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
@@ -92,6 +93,7 @@ import { normalizeMemoryForgetCriteria } from "./security-utils.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { buildMemoryActionLedgerEntry, buildMemoryChangeLedgerPayload } from "./memory-action-ledger.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
+import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
 
 export interface MemoryFileEntry {
   relativePath: string;
@@ -787,6 +789,7 @@ export class MemoryLifecycleService {
   public listMemoryItems(
     input: {
       namespace?: string;
+      workspaceId?: string;
       status?: MemoryItemRecord["status"] | "all";
       query?: string;
       limit?: number;
@@ -794,6 +797,7 @@ export class MemoryLifecycleService {
   ): MemoryItemRecord[] {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const namespace = input.namespace?.trim();
+    const workspaceId = input.workspaceId?.trim();
     const status = input.status && input.status !== "all" ? input.status : undefined;
     const query = input.query?.trim().toLowerCase();
     const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
@@ -803,6 +807,10 @@ export class MemoryLifecycleService {
     if (namespace) {
       clauses.push("namespace = @namespace");
       params.namespace = namespace;
+    }
+    if (workspaceId) {
+      clauses.push(buildMemoryWorkspaceScopeSql(this.deps.admin.gatewaySql.dialect));
+      params.workspaceId = workspaceId;
     }
     if (status) {
       clauses.push("status = @status");
@@ -825,7 +833,7 @@ export class MemoryLifecycleService {
       .prepare(
         `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
-             created_at, updated_at, forgotten_at
+             created_at, updated_at, forgotten_at, workspace_id
       FROM memory_items
       WHERE ${clauses.join(" AND ")}
       ORDER BY updated_at DESC
@@ -845,6 +853,7 @@ export class MemoryLifecycleService {
       created_at: string;
       updated_at: string;
       forgotten_at: string | null;
+      workspace_id: string | null;
     }>;
 
     return rows.map((row) => mapMemoryItemRow(this.deps.admin, row));
@@ -871,7 +880,7 @@ export class MemoryLifecycleService {
       .prepare(
         `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
-             created_at, updated_at, forgotten_at
+             created_at, updated_at, forgotten_at, workspace_id
       FROM memory_items
       WHERE status = 'active'
         AND expires_at IS NOT NULL
@@ -893,6 +902,7 @@ export class MemoryLifecycleService {
       created_at: string;
       updated_at: string;
       forgotten_at: string | null;
+      workspace_id: string | null;
     }>;
 
     return {
@@ -915,7 +925,7 @@ export class MemoryLifecycleService {
       .prepare(
         `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
-             created_at, updated_at, forgotten_at
+             created_at, updated_at, forgotten_at, workspace_id
       FROM memory_items
       WHERE status = 'active'
         AND expires_at IS NOT NULL
@@ -938,6 +948,7 @@ export class MemoryLifecycleService {
       created_at: string;
       updated_at: string;
       forgotten_at: string | null;
+      workspace_id: string | null;
     }>;
 
     const forgottenItems = rows.map((row) =>
@@ -980,7 +991,7 @@ export class MemoryLifecycleService {
       .prepare(
         `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
-             created_at, updated_at, forgotten_at
+             created_at, updated_at, forgotten_at, workspace_id
       FROM memory_items
       WHERE status = 'active'
         AND expires_at IS NOT NULL
@@ -1003,6 +1014,7 @@ export class MemoryLifecycleService {
       created_at: string;
       updated_at: string;
       forgotten_at: string | null;
+      workspace_id: string | null;
     }>;
     return {
       totalCount: Number(countRows?.totalCount ?? 0),
@@ -1536,8 +1548,8 @@ export class MemoryLifecycleService {
       candidateIssues.set(candidate.dedupKey, candidate);
     };
 
-    const memoryItems = this.listMemoryItems({ status: "all", limit }).filter((item) =>
-      memoryItemMatchesWorkspace(item, workspaceId),
+    const memoryItems = this.listMemoryItems({ workspaceId, status: "all", limit }).filter((item) =>
+      matchesMemoryWorkspaceScope(item, workspaceId, normalizeStructuredWorkspaceId),
     );
     const learnings = this.listMemoryLearnings({ workspaceId, status: "all", limit });
     const feedback = this.listMemoryFeedback({ workspaceId, status: "open", limit });
@@ -3027,21 +3039,6 @@ function mapLearningStalenessToQualitySeverity(
     return "low";
   }
   return "medium";
-}
-
-function memoryItemMatchesWorkspace(item: MemoryItemRecord, workspaceId: string): boolean {
-  if (workspaceId === "default") {
-    return true;
-  }
-  const metadataWorkspace =
-    readRecordString(item.metadata, "workspaceId") ??
-    readRecordString(item.metadata, "workspace") ??
-    readRecordString(item.metadata, "workspace_id");
-  return (
-    metadataWorkspace === workspaceId ||
-    item.namespace.startsWith(`${workspaceId}/`) ||
-    item.namespace.startsWith(`${workspaceId}.`)
-  );
 }
 
 interface NearDuplicateMemoryItems {

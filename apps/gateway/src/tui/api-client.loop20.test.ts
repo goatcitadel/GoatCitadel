@@ -140,6 +140,7 @@ describe("TuiApiClient loop20 tails", () => {
       }
       if (url.includes("/api/v1/memory/items?")) {
         expect(url).toContain("namespace=work");
+        expect(url).toContain("workspaceId=workspace-1");
         expect(url).toContain("status=forgotten");
         expect(url).toContain("query=needle");
         return jsonResponse({ items: [] });
@@ -235,6 +236,7 @@ describe("TuiApiClient loop20 tails", () => {
     await expect(
       client.listMemoryItems({
         namespace: "work",
+        workspaceId: "workspace-1",
         status: "forgotten",
         query: "needle",
         limit: 5,

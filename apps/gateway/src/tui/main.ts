@@ -19,6 +19,7 @@ import {
   formatSessionSummary,
   formatTimestamp,
   parseTuiArgs,
+  resolveTuiMemoryWorkspaceLabel,
   summarizeText,
   toText,
   type HomeView,
@@ -944,6 +945,7 @@ async function viewMemoryLifecycle(client: TuiApiClient): Promise<void> {
     console.table(
       memoryItems.map((item) => ({
         itemId: toText(item.itemId),
+        workspace: resolveTuiMemoryWorkspaceLabel(item),
         namespace: toText(item.namespace),
         title: toText(item.title),
         status: toText(item.status),

@@ -167,6 +167,7 @@ const CHECK_GROUPS = Object.freeze({
           "--reporter",
           "verbose",
           "src/services/channel-delivery-runtime-service.test.ts",
+          "src/services/chat-command-service.runtime.test.ts",
           "src/routes/comms.test.ts",
         ],
         {
@@ -177,6 +178,7 @@ const CHECK_GROUPS = Object.freeze({
             "marks overdue queued deliveries stale without sending",
             "lists channel delivery runtime records with retry and stale state visible",
             "filters channel delivery runtime records by connection id and caps the limit",
+            "uses channel /memory as lookup while preserving chat memory mode commands",
           ],
         },
       ),

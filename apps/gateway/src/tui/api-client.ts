@@ -807,6 +807,7 @@ export class TuiApiClient {
 
   public async listMemoryItems(input?: {
     namespace?: string;
+    workspaceId?: string;
     status?: "active" | "forgotten" | "all";
     query?: string;
     limit?: number;
@@ -815,6 +816,9 @@ export class TuiApiClient {
     query.set("limit", String(input?.limit ?? 120));
     if (input?.namespace) {
       query.set("namespace", input.namespace);
+    }
+    if (input?.workspaceId) {
+      query.set("workspaceId", input.workspaceId);
     }
     if (input?.status) {
       query.set("status", input.status);

@@ -102,6 +102,7 @@ const maintenanceRecommendationParamsSchema = z.object({
 
 const listItemsQuerySchema = z.object({
   namespace: z.string().optional(),
+  workspaceId: z.string().trim().min(1).optional(),
   // Finding (memory privacy): default to "active" so a request that omits `status`
   // does NOT return forgotten items' content. Callers must opt in explicitly with
   // `status=forgotten` or `status=all` to see forgotten records.

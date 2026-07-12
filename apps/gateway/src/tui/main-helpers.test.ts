@@ -8,6 +8,7 @@ import {
   formatSessionSummary,
   formatTimestamp,
   parseTuiArgs,
+  resolveTuiMemoryWorkspaceLabel,
   summarizeText,
   toText,
 } from "./main-helpers.js";
@@ -119,6 +120,14 @@ describe("TUI main helpers", () => {
     expect(toText(circular)).toBe("");
     expect(asRecord({ ok: true })).toEqual({ ok: true });
     expect(asRecord([])).toEqual({});
+    expect(
+      resolveTuiMemoryWorkspaceLabel({ workspaceId: "workspace-a", metadata: { workspaceId: "workspace-b" } }),
+    ).toBe("workspace-a");
+    expect(resolveTuiMemoryWorkspaceLabel({ metadata: { workspaceId: " workspace-a " } })).toBe("workspace-a");
+    expect(resolveTuiMemoryWorkspaceLabel({ metadata: {} })).toBe("global");
+    expect(resolveTuiMemoryWorkspaceLabel({ workspaceId: " workspace-a ", metadata: {} })).toBe(
+      "invalid canonical scope",
+    );
     expect(formatTimestamp("")).toBe("unknown");
     expect(formatTimestamp("still-pending")).toBe("still-pending");
     expect(summarizeText("  alpha \n beta  ")).toBe("alpha beta");

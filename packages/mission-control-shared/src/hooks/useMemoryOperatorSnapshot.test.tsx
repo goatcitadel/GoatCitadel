@@ -462,6 +462,7 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.data?.memoryRetrievalStatus?.fallbackMode).toBe("available");
     expect(latest?.data?.memoryAdminState).toBe("enabled");
     expect(latest?.policyDraft?.timeZone).toBe("America/Los_Angeles");
+    expect(apiMocks.fetchMemoryItems).toHaveBeenCalledWith({ workspaceId: "default", limit: 200, status: "all" });
     expect(apiMocks.fetchMemoryEntities).toHaveBeenCalledWith({ workspaceId: "default", status: "all", limit: 80 });
     expect(apiMocks.fetchMemoryRelations).toHaveBeenCalledWith({ workspaceId: "default", status: "all", limit: 80 });
     expect(apiMocks.fetchMemoryDecisions).toHaveBeenCalledWith({

@@ -2209,6 +2209,93 @@ test(
 );
 
 test(
+  "real Postgres scopes canonical and legacy memory items before the result limit",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_memory_scope_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString() });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      await scopedPool.query(`
+        INSERT INTO memory_items (
+          item_id, namespace, title, content, metadata_json, pinned,
+          ttl_override_seconds, expires_at, status, created_at, updated_at, workspace_id
+        )
+        SELECT
+          'mem-legacy-b-' || series::text,
+          'shared.notes',
+          'Foreign B',
+          'Must not enter workspace A',
+          '{"workspaceId":"workspace-b"}',
+          0,
+          NULL,
+          NULL,
+          'active',
+          '2026-04-02T10:00:00.000Z',
+          '2026-04-02T10:00:00.000Z',
+          NULL
+        FROM generate_series(1, 200) AS series
+      `);
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-memory-scope-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      const insert = syncClient.prepare(`
+        INSERT INTO memory_items (
+          item_id, namespace, title, content, metadata_json, pinned,
+          ttl_override_seconds, expires_at, status, created_at, updated_at, workspace_id
+        ) VALUES (?, 'shared.notes', ?, 'content', ?, 0, NULL, NULL, 'active', ?, ?, ?)
+      `);
+      insert.run(
+        "mem-canonical-a",
+        "Canonical A",
+        '{"workspaceId":"workspace-b"}',
+        "2026-04-01T08:00:00.000Z",
+        "2026-04-01T08:00:00.000Z",
+        "workspace-a",
+      );
+      insert.run(
+        "mem-legacy-a",
+        "Legacy A",
+        '{"workspaceId":"workspace-a"}',
+        "2026-04-01T07:00:00.000Z",
+        "2026-04-01T07:00:00.000Z",
+        null,
+      );
+      insert.run("mem-global", "Global", "{}", "2026-04-01T06:00:00.000Z", "2026-04-01T06:00:00.000Z", null);
+
+      const repo = new MemoryMaintenanceRepository(syncClient);
+      assert.deepEqual(
+        repo
+          .listActiveMemoryItems(3, "workspace-a")
+          .map((item) => item.itemId)
+          .sort(),
+        ["mem-canonical-a", "mem-global", "mem-legacy-a"],
+      );
+    } finally {
+      syncClient?.close();
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
   "real Postgres serializes cross-child background counters and workspace maintenance enqueue decisions",
   { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
   async () => {

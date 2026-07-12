@@ -36,6 +36,7 @@ class FakeMemoryMaintenanceRepo {
   public readonly changedSessionCounts: Map<string, number>;
   public readonly eligibleSessions: Map<string, EligibleSession[]>;
   public readonly activeMemoryItems: MemoryItemRecord[] = [];
+  public readonly activeMemoryItemQueries: Array<{ limit: number; workspaceId?: string }> = [];
   public readonly recentToolArtifacts: Array<{
     artifactId: string;
     sessionId: string;
@@ -213,8 +214,21 @@ class FakeMemoryMaintenanceRepo {
     return (this.eligibleSessions.get(workspaceId) ?? []).slice(0, limit);
   }
 
-  public listActiveMemoryItems(limit = 200): MemoryItemRecord[] {
-    return this.activeMemoryItems.slice(0, limit);
+  public listActiveMemoryItems(limit = 200, workspaceId?: string): MemoryItemRecord[] {
+    this.activeMemoryItemQueries.push({ limit, workspaceId });
+    return this.activeMemoryItems
+      .filter((item) => {
+        if (!workspaceId) {
+          return true;
+        }
+        const canonicalWorkspaceId = item.workspaceId?.trim();
+        if (canonicalWorkspaceId) {
+          return canonicalWorkspaceId === workspaceId;
+        }
+        const legacyWorkspaceId = typeof item.metadata.workspaceId === "string" ? item.metadata.workspaceId.trim() : "";
+        return !legacyWorkspaceId || legacyWorkspaceId === workspaceId;
+      })
+      .slice(0, limit);
   }
 
   public listRecentToolArtifacts(workspaceId?: string, since?: string, limit = 100): typeof this.recentToolArtifacts {
@@ -805,6 +819,80 @@ describe("MemoryMaintenanceService durable execution", () => {
       expect(latestMarkdown).toContain("# Workspace Memory");
       expect(latestMarkdown).toContain("Dream keeps source refs.");
       expect(latestMarkdown).not.toContain("# Workspace Memory\n\n# Workspace Memory");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("scopes memory items before the source limit and preserves target plus global provenance", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-02T10:30:00.000Z"));
+
+    try {
+      const harness = createHarness();
+      for (let index = 0; index < 200; index += 1) {
+        harness.memoryMaintenance.activeMemoryItems.push(
+          makeMemoryItem({
+            itemId: `mem-foreign-${index}`,
+            title: `FOREIGN-B-${index}`,
+            content: "Must never enter workspace A maintenance.",
+            namespace: "shared.notes",
+            workspaceId: undefined,
+            metadata: { workspaceId: "workspace-b" },
+            updatedAt: `2026-04-02T10:${String(index % 60).padStart(2, "0")}:00.000Z`,
+          }),
+        );
+      }
+      harness.memoryMaintenance.activeMemoryItems.push(
+        makeMemoryItem({
+          itemId: "mem-target-a",
+          title: "TARGET-A",
+          content: "Canonical workspace A memory.",
+          namespace: "shared.notes",
+          workspaceId: "workspace-a",
+          metadata: { workspaceId: "workspace-b" },
+          updatedAt: "2026-04-01T08:00:00.000Z",
+        }),
+        makeMemoryItem({
+          itemId: "mem-global",
+          title: "GLOBAL-MEMORY",
+          content: "Genuinely global memory.",
+          namespace: "shared.notes",
+          workspaceId: undefined,
+          metadata: {},
+          updatedAt: "2026-04-01T07:00:00.000Z",
+        }),
+      );
+      harness.service.patchPolicy("workspace-a", {
+        enabled: true,
+        runMode: "manual",
+        timingStrategy: "recommendation_first",
+        timeZone: "UTC",
+        minHoursSinceLastSuccess: 1,
+        minChangedSessions: 1,
+        providerId: "ollama",
+        model: "qwen3",
+      });
+
+      const queuedRun = harness.service.runNow({ workspaceId: "workspace-a", triggerSource: "manual" });
+      const result = await harness.service.executeDurableRun(harness.callbacks.getDurableRun(queuedRun.durableRunId!));
+
+      expect(result.status).toBe("completed");
+      expect(harness.memoryMaintenance.activeMemoryItemQueries).toContainEqual({
+        limit: 200,
+        workspaceId: "workspace-a",
+      });
+      expect(
+        harness.service
+          .getRunProvenance(queuedRun.runId)
+          .sources.filter((source) => source.sourceKind === "memory_item")
+          .map((source) => source.sourceRef)
+          .sort(),
+      ).toEqual(["mem-global", "mem-target-a"]);
+      const prompt = harness.chatCompletions.mock.calls[0]?.[0].messages?.[1]?.content;
+      expect(prompt).toContain("TARGET-A");
+      expect(prompt).toContain("GLOBAL-MEMORY");
+      expect(prompt).not.toContain("FOREIGN-B");
     } finally {
       vi.useRealTimers();
     }

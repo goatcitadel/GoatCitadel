@@ -108,6 +108,7 @@ export interface ChatCommandDependencies {
   listChatSessions(query?: ChatSessionListQuery): ChatSessionRecord[];
   listMemoryItems(input?: {
     namespace?: string;
+    workspaceId?: string;
     status?: MemoryItemRecord["status"] | "all";
     query?: string;
     limit?: number;
@@ -1400,7 +1401,7 @@ function searchChannelMemory(
     }));
   let lifecycle: ChannelLookupResult[];
   try {
-    lifecycle = deps.listMemoryItems({ namespace: workspaceId, status: "active", query, limit: 5 }).map((item) => ({
+    lifecycle = deps.listMemoryItems({ workspaceId, status: "active", query, limit: 5 }).map((item) => ({
       source: "memory" as const,
       id: item.itemId,
       label: item.title || item.namespace,

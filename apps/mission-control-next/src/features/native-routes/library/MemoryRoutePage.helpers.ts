@@ -263,6 +263,21 @@ export function readMetadataString(metadata: unknown, key: string): string | und
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+export function resolveMemoryItemWorkspaceLabel(item: Pick<MemoryItemRecord, "workspaceId" | "metadata">): string {
+  const canonicalWorkspaceId = item.workspaceId as unknown;
+  if (canonicalWorkspaceId !== undefined) {
+    if (
+      typeof canonicalWorkspaceId !== "string" ||
+      !canonicalWorkspaceId.trim() ||
+      canonicalWorkspaceId !== canonicalWorkspaceId.trim()
+    ) {
+      return "invalid canonical scope";
+    }
+    return canonicalWorkspaceId;
+  }
+  return readMetadataString(item.metadata, "workspaceId") ?? "global";
+}
+
 export function readMetadataStringList(metadata: unknown, key: string): string[] {
   const value = asRecord(metadata)?.[key];
   if (typeof value === "string" && value.trim()) {

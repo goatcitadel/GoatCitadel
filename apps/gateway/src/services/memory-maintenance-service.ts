@@ -927,7 +927,7 @@ export class MemoryMaintenanceService {
 
   private readRelevantMemoryItems(workspaceId: string, runId: string): MemoryMaintenanceRunSourceRecord[] {
     const items = this.ctx.storage.memoryMaintenance
-      .listActiveMemoryItems(200)
+      .listActiveMemoryItems(200, workspaceId)
       .filter((item) => this.memoryItemMatchesWorkspace(item, workspaceId))
       .slice(0, MAX_MEMORY_ITEM_SOURCES);
 
@@ -1004,15 +1004,10 @@ export class MemoryMaintenanceService {
   }
 
   private memoryItemMatchesWorkspace(
-    item: Pick<MemoryItemRecord, "namespace" | "metadata"> & { metadata: Record<string, unknown> },
+    item: Pick<MemoryItemRecord, "metadata" | "workspaceId"> & { metadata: Record<string, unknown> },
     workspaceId: string,
   ): boolean {
-    return matchesMemoryWorkspaceScope(
-      item,
-      workspaceId,
-      this.normalizeWorkspaceId.bind(this),
-      DEFAULT_MEMORY_WORKSPACE_ID,
-    );
+    return matchesMemoryWorkspaceScope(item, workspaceId, this.normalizeWorkspaceId.bind(this));
   }
 
   private async generateConsolidatedArtifact(input: {

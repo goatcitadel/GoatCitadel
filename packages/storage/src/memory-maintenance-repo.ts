@@ -142,6 +142,37 @@ export interface WorkspaceToolArtifactRecord {
   createdAt: string;
 }
 
+export function buildMemoryWorkspaceScopeSql(dialect: DatabaseClient["dialect"]): string {
+  if (dialect !== "sqlite" && dialect !== "postgres") {
+    throw new TypeError("Memory workspace scope SQL requires an explicit database dialect.");
+  }
+  const legacyWorkspaceExpr =
+    dialect === "postgres"
+      ? `CASE
+          WHEN jsonb_typeof(metadata_doc -> 'workspaceId') = 'string'
+            THEN NULLIF(BTRIM(metadata_doc ->> 'workspaceId'), '')
+        END`
+      : `CASE
+          WHEN json_valid(metadata_json) = 1 THEN
+            CASE
+              WHEN json_type(metadata_json, '$.workspaceId') = 'text'
+                THEN NULLIF(TRIM(json_extract(metadata_json, '$.workspaceId')), '')
+            END
+        END`;
+  // Canonical workspace IDs are normalized on write. Keep exact equality so
+  // idx_memory_items_workspace remains usable; padded/blank canonical rows fail closed.
+  return `(
+    workspace_id = @workspaceId
+    OR (
+      workspace_id IS NULL
+      AND (
+        (${legacyWorkspaceExpr}) IS NULL
+        OR (${legacyWorkspaceExpr}) = @workspaceId
+      )
+    )
+  )`;
+}
+
 export class MemoryMaintenanceRepository {
   private readonly getPolicyStmt;
   private readonly upsertPolicyStmt;
@@ -175,6 +206,7 @@ export class MemoryMaintenanceRepository {
   private readonly listRecentToolArtifactsSinceStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const memoryWorkspaceScopeSql = buildMemoryWorkspaceScopeSql(db.dialect);
     this.getPolicyStmt = db.prepare(`
       SELECT *
       FROM workspace_memory_maintenance_policies
@@ -565,7 +597,7 @@ export class MemoryMaintenanceRepository {
       FROM memory_items
       WHERE status = 'active'
         AND (expires_at IS NULL OR expires_at > @now)
-        AND (workspace_id = @workspaceId OR workspace_id IS NULL)
+        AND ${memoryWorkspaceScopeSql}
       ORDER BY pinned DESC, updated_at DESC
       LIMIT @limit
     `);
@@ -638,8 +670,8 @@ export class MemoryMaintenanceRepository {
   public listActiveMemoryItems(limit = 200, workspaceId?: string): MemoryItemRecord[] {
     const nowIso = new Date().toISOString();
     const scopedWorkspaceId = workspaceId?.trim();
-    // A workspace-scoped read returns that workspace's items plus global items
-    // (workspace_id IS NULL), so unscoped/global memory remains visible everywhere.
+    // Scope before ORDER/LIMIT. Canonical workspace_id wins; rows without it use
+    // legacy metadata.workspaceId when present, otherwise they are global.
     const rows = (
       scopedWorkspaceId
         ? this.listActiveMemoryItemsByWorkspaceStmt.all({

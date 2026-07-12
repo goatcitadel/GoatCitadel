@@ -12,7 +12,7 @@ import type {
   MemoryMaintenanceRunSourceRecord,
   MemoryMaintenanceStateRecord,
 } from "@goatcitadel/contracts";
-import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
+import { MemoryMaintenanceRepository, buildMemoryWorkspaceScopeSql } from "./memory-maintenance-repo.js";
 import { createDatabase } from "./sqlite.js";
 
 const createdFiles: string[] = [];
@@ -676,19 +676,24 @@ describe("MemoryMaintenanceRepository", () => {
 });
 
 describe("MemoryMaintenanceRepository workspace scoping", () => {
-  function seedMemoryItem(db: ReturnType<typeof createDatabase>, itemId: string, workspaceId: string | null): void {
-    const now = new Date().toISOString();
+  function seedMemoryItem(
+    db: ReturnType<typeof createDatabase>,
+    itemId: string,
+    workspaceId: string | null,
+    metadata: Record<string, unknown> = {},
+    updatedAt = new Date().toISOString(),
+  ): void {
     db.prepare(
       `
       INSERT INTO memory_items (
         item_id, namespace, title, content, metadata_json, pinned,
         ttl_override_seconds, expires_at, status, created_at, updated_at, workspace_id
       ) VALUES (
-        @itemId, 'default', @itemId, 'content', '{}', 0,
-        NULL, NULL, 'active', @now, @now, @workspaceId
+        @itemId, 'default', @itemId, 'content', @metadataJson, 0,
+        NULL, NULL, 'active', @updatedAt, @updatedAt, @workspaceId
       )
     `,
-    ).run({ itemId, now, workspaceId });
+    ).run({ itemId, metadataJson: JSON.stringify(metadata), updatedAt, workspaceId });
   }
 
   it("returns only the requested workspace's items plus global items when scoped", () => {
@@ -702,5 +707,63 @@ describe("MemoryMaintenanceRepository workspace scoping", () => {
 
     const unscoped = repo.listActiveMemoryItems(999);
     assert.equal(unscoped.length, 3);
+  });
+
+  it("applies canonical and legacy workspace scope before the result limit", () => {
+    const { repo, db } = createRepoWithDb();
+    for (let index = 0; index < 200; index += 1) {
+      seedMemoryItem(
+        db,
+        `mem-legacy-b-${index}`,
+        null,
+        { workspaceId: "workspace-b" },
+        `2026-04-02T10:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      );
+    }
+    seedMemoryItem(db, "mem-canonical-b", "workspace-b", {}, "2026-04-02T11:00:00.000Z");
+    seedMemoryItem(db, "mem-padded-canonical-a", " workspace-a ", {}, "2026-04-02T11:01:00.000Z");
+    seedMemoryItem(db, "mem-canonical-a", "workspace-a", { workspaceId: "workspace-b" }, "2026-04-01T08:00:00.000Z");
+    seedMemoryItem(db, "mem-legacy-a", null, { workspaceId: "workspace-a" }, "2026-04-01T07:00:00.000Z");
+    seedMemoryItem(db, "mem-global", null, {}, "2026-04-01T06:00:00.000Z");
+
+    assert.deepEqual(
+      repo
+        .listActiveMemoryItems(3, "workspace-a")
+        .map((item) => item.itemId)
+        .sort(),
+      ["mem-canonical-a", "mem-global", "mem-legacy-a"],
+    );
+  });
+
+  it("keeps canonical workspace lookup on the workspace index", () => {
+    assert.throws(() => buildMemoryWorkspaceScopeSql(undefined as never), /requires an explicit database dialect/);
+    const { db } = createRepoWithDb();
+    const plan = db
+      .prepare(
+        `
+        EXPLAIN QUERY PLAN
+        SELECT item_id
+        FROM memory_items
+        WHERE status = 'active'
+          AND (expires_at IS NULL OR expires_at > @now)
+          AND ${buildMemoryWorkspaceScopeSql("sqlite")}
+        ORDER BY pinned DESC, updated_at DESC
+        LIMIT @limit
+      `,
+      )
+      .all({ now: "2026-04-01T00:00:00.000Z", workspaceId: "workspace-a", limit: 20 }) as Array<{
+      detail?: string;
+    }>;
+    const details = plan.map((row) => row.detail ?? "");
+    assert.equal(
+      details.some((detail) => /SCAN memory_items/i.test(detail)),
+      false,
+      details.join("\n"),
+    );
+    assert.equal(
+      details.some((detail) => /idx_memory_items_workspace/i.test(detail)),
+      true,
+      details.join("\n"),
+    );
   });
 });

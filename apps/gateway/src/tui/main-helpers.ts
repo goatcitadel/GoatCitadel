@@ -220,6 +220,22 @@ export function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+export function resolveTuiMemoryWorkspaceLabel(item: Record<string, unknown>): string {
+  const canonicalWorkspaceId = item.workspaceId;
+  if (canonicalWorkspaceId !== undefined) {
+    if (
+      typeof canonicalWorkspaceId !== "string" ||
+      !canonicalWorkspaceId.trim() ||
+      canonicalWorkspaceId !== canonicalWorkspaceId.trim()
+    ) {
+      return "invalid canonical scope";
+    }
+    return canonicalWorkspaceId;
+  }
+  const legacyWorkspaceId = asRecord(item.metadata).workspaceId;
+  return typeof legacyWorkspaceId === "string" && legacyWorkspaceId.trim() ? legacyWorkspaceId.trim() : "global";
+}
+
 export function formatSessionSummary(session: Record<string, unknown>): string {
   const sessionId = toText(session.sessionId) || "unknown";
   const title = toText(session.title) || "(untitled)";

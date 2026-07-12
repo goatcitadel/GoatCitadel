@@ -9,6 +9,7 @@ export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
 export interface MemoryItemHost {
   gatewaySql: {
+    readonly dialect: "sqlite" | "postgres";
     prepare(sql: string): {
       get(...args: unknown[]): unknown;
       all(...args: unknown[]): unknown[];
@@ -31,22 +32,29 @@ interface MemoryItemRow {
   created_at: string;
   updated_at: string;
   forgotten_at: string | null;
+  workspace_id: string | null;
 }
 
 export function mapMemoryItemRow(host: MemoryItemHost, row: MemoryItemRow): MemoryItemRecord {
   const status = MEMORY_ITEM_STATUS_VALUES.has(row.status) ? row.status : "active";
   const expiresAt = row.expires_at ?? undefined;
   const forgottenAt = row.forgotten_at ?? undefined;
+  const parsedMetadata = host.tryParseJson<unknown>(row.metadata_json, {});
+  const metadata =
+    parsedMetadata && typeof parsedMetadata === "object" && !Array.isArray(parsedMetadata)
+      ? (parsedMetadata as Record<string, unknown>)
+      : {};
   return {
     itemId: row.item_id,
     namespace: row.namespace,
     title: row.title,
     content: row.content,
-    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    metadata,
     pinned: Boolean(row.pinned),
     ttlOverrideSeconds: row.ttl_override_seconds ?? undefined,
     expiresAt,
     status,
+    workspaceId: row.workspace_id ?? undefined,
     lifecycleState: deriveMemoryItemLifecycleState({
       status,
       expiresAt,
@@ -63,7 +71,7 @@ export function requireMemoryItem(host: MemoryItemHost, itemId: string): MemoryI
     .prepare(
       `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
-             created_at, updated_at, forgotten_at
+             created_at, updated_at, forgotten_at, workspace_id
       FROM memory_items
       WHERE item_id = ?
     `,

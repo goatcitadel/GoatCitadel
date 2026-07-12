@@ -246,9 +246,10 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     await requestJson(gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
       method: "POST",
       body: {
+        workspaceId,
         namespace: "mission-control-next",
         title: "Mission Control Next shell posture",
-        content: "Chat is the default lane, Cowork owns structured work, and Code stays workbench-first.",
+        content: "Chat owns conversation, structured agentic work, and governed code-capability context.",
         metadata: {
           tags: ["verification", "ui"],
           source: "verification",
