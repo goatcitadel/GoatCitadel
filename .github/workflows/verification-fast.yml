@@ -83,6 +83,11 @@ jobs:
           GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
         run: pnpm --filter @goatcitadel/gateway test:postgres:auth
 
+      - name: Run real Postgres Gateway memory lifecycle lane
+        env:
+          GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
+        run: pnpm --filter @goatcitadel/gateway test:postgres:memory
+
       - name: Enforce production coverage gate
         run: pnpm coverage:collect && pnpm coverage:gate:production
 

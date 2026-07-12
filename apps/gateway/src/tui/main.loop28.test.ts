@@ -11,6 +11,9 @@ const state = vi.hoisted(() => ({
   selectQueue: [] as string[],
   inputQueue: [] as string[],
   passwordQueue: [] as string[],
+  confirmQueue: [] as boolean[],
+  inputMessages: [] as string[],
+  confirmMessages: [] as string[],
 }));
 
 vi.mock("../env-file.js", () => ({
@@ -29,9 +32,15 @@ vi.mock("ora", () => ({
 
 vi.mock("@inquirer/prompts", () => ({
   select: vi.fn(async () => state.selectQueue.shift() ?? "exit"),
-  input: vi.fn(async () => state.inputQueue.shift() ?? "operator"),
+  input: vi.fn(async (options: { message: string }) => {
+    state.inputMessages.push(options.message);
+    return state.inputQueue.shift() ?? "operator";
+  }),
   password: vi.fn(async () => state.passwordQueue.shift() ?? "secret-token"),
-  confirm: vi.fn(async () => true),
+  confirm: vi.fn(async (options: { message: string }) => {
+    state.confirmMessages.push(options.message);
+    return state.confirmQueue.shift() ?? true;
+  }),
 }));
 
 vi.mock("./profile.js", () => ({
@@ -491,6 +500,9 @@ describe("tui main loop28 entry coverage", () => {
     state.selectQueue = [];
     state.inputQueue = [];
     state.passwordQueue = [];
+    state.confirmQueue = [];
+    state.inputMessages = [];
+    state.confirmMessages = [];
     process.exitCode = undefined;
   });
 
@@ -1052,8 +1064,10 @@ describe("tui main loop28 entry coverage", () => {
       "ops",
       "runtime",
       "memory-1, memory-2",
+      "workspace-1",
       "ops",
       "old",
+      "forget-action-1",
       "",
       "",
       "",
@@ -1073,6 +1087,7 @@ describe("tui main loop28 entry coverage", () => {
       "",
       "",
     ];
+    state.confirmQueue = [false, true];
     state.loadResolvedProfile.mockResolvedValue({
       profileName: "ops",
       filePath: "profile.json",
@@ -1093,7 +1108,15 @@ describe("tui main loop28 entry coverage", () => {
       itemIds: ["memory-1", "memory-2"],
       namespace: "ops",
       query: "old",
+      workspaceId: "workspace-1",
+      includeGlobal: false,
+      actionId: "forget-action-1",
+      source: "tui",
     });
+    expect(state.inputMessages).toContain("Workspace ID scope (blank = all workspaces)");
+    expect(state.confirmMessages).toContain(
+      "Include global memories with workspace workspace-1? Default excludes global memories.",
+    );
     expect(state.client.listMemoryItemHistory).toHaveBeenCalledWith("memory-1", 80);
     expect(state.client.runCronJob).toHaveBeenCalledWith("job-1");
     expect(state.client.startCronJob).toHaveBeenCalledWith("job-1");
@@ -1113,6 +1136,44 @@ describe("tui main loop28 entry coverage", () => {
     });
     expect(state.client.updateTask).toHaveBeenCalledWith("task-1", { status: "done" });
     expect(state.client.reloadSkills).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("makes an unscoped bulk forget explicitly confirm all-workspace authority", async () => {
+    vi.spyOn(console, "clear").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "table").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    state.selectQueue = ["memory", "active", "forget-many", "exit"];
+    state.inputQueue = ["", "", "", "memory-1", "", "ops", "stale", "all-scope-action", ""];
+    state.loadResolvedProfile.mockResolvedValue({
+      profileName: "ops",
+      filePath: "profile.json",
+      profile: {
+        gatewayBaseUrl: "http://127.0.0.1:8787",
+        pollIntervalsMs: { activity: 10 },
+      },
+      auth: {
+        mode: "none",
+      },
+    });
+    process.argv = ["node", "main.ts"];
+
+    await import("./main.js");
+    await waitFor(() => state.liveStop.mock.calls.length === 1);
+
+    expect(state.client.forgetMemory).toHaveBeenCalledWith({
+      itemIds: ["memory-1"],
+      namespace: "ops",
+      query: "stale",
+      workspaceId: undefined,
+      includeGlobal: undefined,
+      actionId: "all-scope-action",
+      source: "tui",
+    });
+    expect(state.confirmMessages).toContain(
+      "Forget all matching criteria across all workspaces? This cannot be undone.",
+    );
     expect(process.exitCode).toBeUndefined();
   });
 

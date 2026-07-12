@@ -29,6 +29,8 @@ import type {
   MemoryFeedbackRecord,
   MemoryFeedbackStatus,
   MemoryFeedbackTargetKind,
+  MemoryForgetRequest,
+  MemoryForgetResponse,
   MemoryItemRecord,
   MemoryLearningInput,
   MemoryLearningRecord,
@@ -76,6 +78,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   ConflictError,
+  MEMORY_FORGET_MAX_ITEM_IDS,
   NotFoundError,
   PolicyViolationError,
   ValidationError,
@@ -91,7 +94,11 @@ import { withMemoryEmbeddingMetadata } from "./memory-embedding-metadata.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
-import { buildMemoryActionLedgerEntry, buildMemoryChangeLedgerPayload } from "./memory-action-ledger.js";
+import {
+  buildMemoryActionContext,
+  buildMemoryActionLedgerEntry,
+  buildMemoryChangeLedgerPayload,
+} from "./memory-action-ledger.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
 
@@ -99,6 +106,29 @@ export interface MemoryFileEntry {
   relativePath: string;
   size: number;
   modifiedAt: string;
+}
+
+export interface MemoryForgetCommitHooks {
+  /** Runs as the final write inside the canonical memory transaction. */
+  onCommit?: () => void;
+  /** Runs immediately after the canonical memory transaction commits. */
+  afterCommit?: () => void;
+}
+
+interface MemoryForgetSelectionRow {
+  item_id: string;
+  namespace: string;
+  title: string;
+  content: string;
+  metadata_json: string | null;
+  pinned: number;
+  ttl_override_seconds: number | null;
+  expires_at: string | null;
+  status: MemoryItemRecord["status"];
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+  workspace_id: string | null;
 }
 
 interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
@@ -1105,8 +1135,18 @@ export class MemoryLifecycleService {
     return updated;
   }
 
-  public forgetMemoryItem(itemId: string, actorId = "operator"): MemoryItemRecord {
-    return this.forgetMemoryItemInternal(itemId, actorId, { requireFeature: true });
+  public forgetMemoryItem(itemId: string, actorId = "operator", hooks: MemoryForgetCommitHooks = {}): MemoryItemRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const current = requireMemoryItem(this.deps.admin, itemId);
+    const result = this.forgetMemory(
+      {
+        itemIds: [itemId],
+        actorId,
+        source: "gateway.memory.forget_item",
+      },
+      hooks,
+    );
+    return result.items[0] ?? (current.status === "forgotten" ? current : requireMemoryItem(this.deps.admin, itemId));
   }
 
   private forgetMemoryItemInternal(
@@ -1151,29 +1191,221 @@ export class MemoryLifecycleService {
   }
 
   public forgetMemory(
-    input: {
-      itemIds?: string[];
-      namespace?: string;
-      query?: string;
-      actorId?: string;
-    } = {},
-  ): { forgottenCount: number; itemIds: string[]; items: MemoryItemRecord[] } {
+    input: MemoryForgetRequest & { actorId?: string } = {},
+    hooks: MemoryForgetCommitHooks = {},
+  ): MemoryForgetResponse {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    if ((input.itemIds?.length ?? 0) > MEMORY_FORGET_MAX_ITEM_IDS) {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "itemIds",
+        message: `Memory forget accepts at most ${MEMORY_FORGET_MAX_ITEM_IDS} explicit item IDs.`,
+      });
+    }
+    if (input.itemIds?.some((itemId) => typeof itemId !== "string" || !itemId.trim())) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "itemIds" });
+    }
+
     const criteria = normalizeMemoryForgetCriteria(input);
     if (!criteria.hasCriteria) {
-      throw new Error("Memory forget requires at least one criterion: itemIds, namespace, or query.");
+      throw new ValidationError({
+        code: "FIELD_REQUIRED",
+        field: "itemIds",
+        message: "Memory forget requires at least one criterion: itemIds, namespace, or query.",
+      });
     }
-    const actorId = input.actorId?.trim() || "operator";
-    const targets = criteria.hasItemIds
-      ? criteria.itemIds
-      : this.listMemoryItems({
-          namespace: criteria.namespace,
-          status: "active",
-          query: criteria.query,
-          limit: 2_000,
-        }).map((item) => item.itemId);
-    const forgottenItems = targets.map((itemId) => this.forgetMemoryItem(itemId, actorId));
+
+    const workspaceId = input.workspaceId?.trim() || undefined;
+    const includeGlobal = input.includeGlobal === true;
+    if (input.includeGlobal !== undefined && !workspaceId) {
+      throw new ValidationError({
+        code: "FIELD_REQUIRED",
+        field: "workspaceId",
+        message: "Memory forget includeGlobal requires an explicit workspaceId.",
+      });
+    }
+    const effectiveIncludeGlobal = workspaceId ? includeGlobal : true;
+
+    const action = buildMemoryActionContext({
+      actionId: input.actionId,
+      ownerId: input.actorId?.trim() || "operator",
+      source: input.source,
+      defaultSource: "gateway.memory.forget",
+    });
+    const normalizedItemIds = [...criteria.itemIds].sort(compareMemoryItemIds);
+    const criteriaDigest = createHash("sha256")
+      .update(
+        JSON.stringify({
+          itemIds: normalizedItemIds,
+          namespace: criteria.namespace ?? null,
+          query: criteria.query ?? null,
+          workspaceId: workspaceId ?? null,
+          includeGlobal: effectiveIncludeGlobal,
+        }),
+      )
+      .digest("hex");
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+
+    const transactionResult = runTransaction(() => {
+      const clauses = ["1 = 1"];
+      const params: Record<string, string | number | null> = {};
+      if (normalizedItemIds.length > 0) {
+        const placeholders = normalizedItemIds.map((itemId, index) => {
+          const key = `itemId${index}`;
+          params[key] = itemId;
+          return `@${key}`;
+        });
+        clauses.push(`item_id IN (${placeholders.join(", ")})`);
+      }
+      if (criteria.namespace) {
+        clauses.push("namespace = @namespace");
+        params.namespace = criteria.namespace;
+      }
+      if (workspaceId) {
+        clauses.push(
+          buildMemoryWorkspaceScopeSql(this.deps.admin.gatewaySql.dialect, {
+            includeGlobal,
+          }),
+        );
+        params.workspaceId = workspaceId;
+      }
+      if (criteria.query) {
+        clauses.push(`(
+          LOWER(title) LIKE @query ESCAPE @escapeCharacter
+          OR LOWER(content) LIKE @query ESCAPE @escapeCharacter
+          OR LOWER(namespace) LIKE @query ESCAPE @escapeCharacter
+        )`);
+        params.query = `%${escapeMemoryLikePattern(criteria.query.toLowerCase())}%`;
+        params.escapeCharacter = "\\";
+      }
+      if (!criteria.hasItemIds) {
+        clauses.push("status = 'active'");
+        clauses.push("(expires_at IS NULL OR expires_at > @now)");
+        params.now = new Date().toISOString();
+      }
+
+      const lockClause = this.deps.admin.gatewaySql.dialect === "postgres" ? " FOR UPDATE" : "";
+      const matchedRows = this.deps.admin.gatewaySql
+        .prepare(
+          `
+          SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+                 created_at, updated_at, forgotten_at, workspace_id
+          FROM memory_items
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY item_id${lockClause}
+        `,
+        )
+        .all(params) as MemoryForgetSelectionRow[];
+
+      if (criteria.hasItemIds && matchedRows.length !== normalizedItemIds.length) {
+        throw new ValidationError({
+          code: "FIELD_INVALID",
+          field: "itemIds",
+          message: "Every explicit memory item must exist and satisfy the requested workspace and filters.",
+        });
+      }
+
+      const activeItemIds = matchedRows
+        .filter((row) => row.status === "active")
+        .map((row) => row.item_id)
+        .sort(compareMemoryItemIds);
+      const alreadyForgottenCount = matchedRows.filter((row) => row.status === "forgotten").length;
+      const forgottenAt = new Date().toISOString();
+      const changedRows: MemoryForgetSelectionRow[] = [];
+      for (const itemIdChunk of chunkMemoryItemIds(activeItemIds)) {
+        const updateParams: Record<string, string | number | null> = {
+          forgottenAt,
+          updatedAt: forgottenAt,
+        };
+        const placeholders = itemIdChunk.map((itemId, index) => {
+          const key = `itemId${index}`;
+          updateParams[key] = itemId;
+          return `@${key}`;
+        });
+        changedRows.push(
+          ...(this.deps.admin.gatewaySql
+            .prepare(
+              `
+              UPDATE memory_items
+              SET status = 'forgotten',
+                  forgotten_at = @forgottenAt,
+                  updated_at = @updatedAt
+              WHERE status = 'active'
+                AND item_id IN (${placeholders.join(", ")})
+              RETURNING item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at,
+                        status, created_at, updated_at, forgotten_at, workspace_id
+            `,
+            )
+            .all(updateParams) as MemoryForgetSelectionRow[]),
+        );
+      }
+      changedRows.sort((left, right) => compareMemoryItemIds(left.item_id, right.item_id));
+      if (
+        changedRows.length !== activeItemIds.length ||
+        changedRows.some((row, index) => row.item_id !== activeItemIds[index])
+      ) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Memory forget targets changed during the atomic mutation.",
+        });
+      }
+
+      for (const row of changedRows) {
+        recordMemoryChange(this.deps.admin, row.item_id, "forgotten", action.ownerId, {
+          previousStatus: "active",
+          actionId: action.actionId,
+          ownerId: action.ownerId,
+          source: action.source,
+          timestamp: action.timestamp,
+          operationKind: "forget_item",
+          operationCount: changedRows.length,
+          criteriaDigest,
+          requestedWorkspaceId: workspaceId ?? null,
+          effectiveWorkspaceId: resolveMemoryForgetEffectiveWorkspaceId(this.deps.admin, row) ?? null,
+          includeGlobal: effectiveIncludeGlobal,
+          storesRawContent: false,
+        });
+      }
+      hooks.onCommit?.();
+
+      return {
+        matchedCount: matchedRows.length,
+        alreadyForgottenCount,
+        changedRows,
+      };
+    });
+
+    hooks.afterCommit?.();
+    const forgottenItems = transactionResult.changedRows.map((row) => mapMemoryItemRow(this.deps.admin, row));
+    let realtimeError: unknown;
+    for (const [index, item] of forgottenItems.entries()) {
+      const sourceRow = transactionResult.changedRows[index];
+      try {
+        this.deps.admin.publishRealtime("system", "memory", {
+          type: "memory_item_forgotten",
+          itemId: item.itemId,
+          namespace: item.namespace,
+          lifecycleState: item.lifecycleState,
+          actionId: action.actionId,
+          requestedWorkspaceId: workspaceId,
+          effectiveWorkspaceId: sourceRow
+            ? resolveMemoryForgetEffectiveWorkspaceId(this.deps.admin, sourceRow)
+            : undefined,
+          includeGlobal: effectiveIncludeGlobal,
+          source: action.source,
+        });
+      } catch (error) {
+        realtimeError ??= error;
+      }
+    }
+    if (realtimeError) {
+      throw realtimeError;
+    }
+
     return {
+      actionId: action.actionId,
+      matchedCount: transactionResult.matchedCount,
+      alreadyForgottenCount: transactionResult.alreadyForgottenCount,
       forgottenCount: forgottenItems.length,
       itemIds: forgottenItems.map((item) => item.itemId),
       items: forgottenItems,
@@ -2947,6 +3179,39 @@ function requireMemoryBatchTransaction(
     });
   }
   return runImmediateTransaction.bind(gatewaySql) as <T>(callback: () => T) => T;
+}
+
+const MEMORY_FORGET_UPDATE_CHUNK_SIZE = 500;
+
+function chunkMemoryItemIds(itemIds: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < itemIds.length; index += MEMORY_FORGET_UPDATE_CHUNK_SIZE) {
+    chunks.push(itemIds.slice(index, index + MEMORY_FORGET_UPDATE_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+function compareMemoryItemIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function escapeMemoryLikePattern(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
+function resolveMemoryForgetEffectiveWorkspaceId(
+  host: MemoryItemHost,
+  row: Pick<MemoryForgetSelectionRow, "metadata_json" | "workspace_id">,
+): string | undefined {
+  if (row.workspace_id !== null) {
+    return row.workspace_id;
+  }
+  const metadata = host.tryParseJson<unknown>(row.metadata_json, {});
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const legacyWorkspaceId = (metadata as Record<string, unknown>).workspaceId;
+  return typeof legacyWorkspaceId === "string" && legacyWorkspaceId.trim() ? legacyWorkspaceId.trim() : undefined;
 }
 
 function getBatchPatchChangedFields(patch: MemoryLifecyclePatch): string[] {

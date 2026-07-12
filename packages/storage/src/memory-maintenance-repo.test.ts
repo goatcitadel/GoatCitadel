@@ -709,6 +709,44 @@ describe("MemoryMaintenanceRepository workspace scoping", () => {
     assert.equal(unscoped.length, 3);
   });
 
+  it("can fail closed for destructive workspace scope without changing read-scope defaults", () => {
+    const { repo, db } = createRepoWithDb();
+    seedMemoryItem(db, "mem-canonical-a", "workspace-a");
+    seedMemoryItem(db, "mem-legacy-a", null, { workspaceId: "workspace-a" });
+    seedMemoryItem(db, "mem-foreign", "workspace-b");
+    seedMemoryItem(db, "mem-global", null);
+    seedMemoryItem(db, "mem-malformed", null, { workspaceId: 123 });
+
+    const destructiveScope = (
+      buildMemoryWorkspaceScopeSql as unknown as (
+        dialect: "sqlite" | "postgres",
+        options: { includeGlobal: boolean },
+      ) => string
+    )("sqlite", { includeGlobal: false });
+    const destructiveIds = db
+      .prepare(
+        `
+        SELECT item_id
+        FROM memory_items
+        WHERE ${destructiveScope}
+        ORDER BY item_id
+      `,
+      )
+      .all({ workspaceId: "workspace-a" }) as Array<{ item_id: string }>;
+
+    assert.deepEqual(
+      destructiveIds.map((row) => row.item_id),
+      ["mem-canonical-a", "mem-legacy-a"],
+    );
+    assert.deepEqual(
+      repo
+        .listActiveMemoryItems(999, "workspace-a")
+        .map((item) => item.itemId)
+        .sort(),
+      ["mem-canonical-a", "mem-global", "mem-legacy-a", "mem-malformed"],
+    );
+  });
+
   it("applies canonical and legacy workspace scope before the result limit", () => {
     const { repo, db } = createRepoWithDb();
     for (let index = 0; index < 200; index += 1) {

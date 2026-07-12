@@ -380,7 +380,30 @@ describe("shared API wrappers", () => {
       "/api/v1/memory/maintenance/recommendations/rec%2F1/reject",
       { method: "POST" },
     );
-    await expectCall(memory.forgetMemory({ namespace: "n" }), "/api/v1/memory/forget", { method: "POST" });
+    await expectCall(
+      memory.forgetMemory({
+        itemIds: ["memory-1"],
+        namespace: "n",
+        query: "stale",
+        workspaceId: "workspace-1",
+        includeGlobal: false,
+        actionId: "forget-action-1",
+        source: "mission-control",
+      }),
+      "/api/v1/memory/forget",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          itemIds: ["memory-1"],
+          namespace: "n",
+          query: "stale",
+          workspaceId: "workspace-1",
+          includeGlobal: false,
+          actionId: "forget-action-1",
+          source: "mission-control",
+        }),
+      },
+    );
 
     await expectCall(promptPacks.importPromptPack({ content: "pack" }), "/api/v1/prompt-packs/import", {
       method: "POST",
@@ -827,5 +850,17 @@ describe("shared API wrappers", () => {
         method: "POST",
       },
     );
+  });
+
+  it("rejects oversized explicit memory-forget target sets before making a request", async () => {
+    const itemIds = Array.from({ length: 2_001 }, (_, index) => `memory-${index}`);
+
+    await expect(memory.forgetMemory({ itemIds })).rejects.toThrow(
+      "Memory forget is limited to 2000 explicit item IDs per request.",
+    );
+    await expect(memory.forgetMemory({ namespace: "ops", includeGlobal: false })).rejects.toThrow(
+      "Memory forget includeGlobal requires workspaceId.",
+    );
+    expect(apiMocks.request).not.toHaveBeenCalled();
   });
 });

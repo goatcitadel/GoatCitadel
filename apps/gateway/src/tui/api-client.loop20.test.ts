@@ -250,6 +250,59 @@ describe("TuiApiClient loop20 tails", () => {
       }),
     ).resolves.toEqual({ items: [] });
   });
+
+  it("threads scoped bulk-forget governance fields and rejects oversized explicit target sets", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        actionId: "forget-action-1",
+        matchedCount: 1,
+        alreadyForgottenCount: 0,
+        forgottenCount: 1,
+        itemIds: ["memory-1"],
+        items: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const client = new TuiApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      auth: { mode: "none" },
+      readOnly: false,
+    });
+
+    await expect(
+      client.forgetMemory({
+        itemIds: ["memory-1"],
+        namespace: "ops",
+        query: "stale",
+        workspaceId: "workspace-1",
+        includeGlobal: false,
+        actionId: "forget-action-1",
+        source: "tui",
+      }),
+    ).resolves.toMatchObject({ actionId: "forget-action-1", forgottenCount: 1 });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(init?.body).toBe(
+      JSON.stringify({
+        itemIds: ["memory-1"],
+        namespace: "ops",
+        query: "stale",
+        workspaceId: "workspace-1",
+        includeGlobal: false,
+        actionId: "forget-action-1",
+        source: "tui",
+      }),
+    );
+
+    const oversized = Array.from({ length: 2_001 }, (_, index) => `memory-${index}`);
+    await expect(client.forgetMemory({ itemIds: oversized })).rejects.toThrow(
+      "Memory forget is limited to 2000 explicit item IDs per request.",
+    );
+    await expect(client.forgetMemory({ namespace: "ops", includeGlobal: false })).rejects.toThrow(
+      "Memory forget includeGlobal requires workspaceId.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 async function collectStream(stream: AsyncIterable<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {

@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { MEMORY_FORGET_MAX_ITEM_IDS } from "@goatcitadel/contracts";
+import { commitMutationIdempotencyAlongsideCanonicalWrite, markMutationCommitted } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 import { normalizeMemoryForgetCriteria } from "../services/security-utils.js";
@@ -368,9 +370,13 @@ const forgetItemSchema = z.object({});
 
 const forgetManySchema = z
   .object({
-    itemIds: z.array(z.string().min(1)).optional(),
+    itemIds: z.array(z.string().trim().min(1)).max(MEMORY_FORGET_MAX_ITEM_IDS).optional(),
     namespace: z.string().optional(),
     query: z.string().optional(),
+    workspaceId: z.string().trim().min(1).optional(),
+    includeGlobal: z.boolean().optional(),
+    actionId: z.string().trim().min(1).max(120).optional(),
+    source: z.string().trim().min(1).max(160).optional(),
   })
   .superRefine((value, ctx) => {
     const criteria = normalizeMemoryForgetCriteria(value);
@@ -379,6 +385,13 @@ const forgetManySchema = z
         code: z.ZodIssueCode.custom,
         message: "Provide at least one criterion: itemIds, namespace, or query.",
         path: ["itemIds"],
+      });
+    }
+    if (value.includeGlobal !== undefined && !value.workspaceId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "includeGlobal requires an explicit workspaceId.",
+        path: ["workspaceId"],
       });
     }
   });
@@ -784,7 +797,11 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(memory.forgetItem(params.data.itemId, resolveActorId(request)));
+      const result = memory.forgetItem(params.data.itemId, resolveActorId(request), {
+        onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
+        afterCommit: () => markMutationCommitted(request),
+      });
+      return reply.send(result);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -816,14 +833,23 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.send(
-        memory.forget({
+      const result = memory.forget(
+        {
           itemIds: body.data.itemIds,
           namespace: body.data.namespace,
           query: body.data.query,
+          workspaceId: body.data.workspaceId,
+          includeGlobal: body.data.includeGlobal,
+          actionId: body.data.actionId,
+          source: body.data.source,
           actorId: resolveActorId(request),
-        }),
+        },
+        {
+          onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
+          afterCommit: () => markMutationCommitted(request),
+        },
       );
+      return reply.send(result);
     } catch (error) {
       const message = (error as Error).message;
       if (message.toLowerCase().includes("at least one criterion")) {

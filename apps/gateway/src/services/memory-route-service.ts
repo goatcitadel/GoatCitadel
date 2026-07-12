@@ -168,16 +168,19 @@ export class MemoryRouteService {
     return this.memory.patchMemoryItem(itemId, patch, actorId);
   }
 
-  public forgetItem(itemId: string, actorId: string) {
-    return this.memory.forgetMemoryItem(itemId, actorId);
+  public forgetItem(itemId: string, actorId: string, hooks?: Parameters<MemoryRoutePort["forgetMemoryItem"]>[2]) {
+    return this.memory.forgetMemoryItem(itemId, actorId, hooks);
   }
 
   public listItemHistory(itemId: string, limit: number) {
     return this.memory.listMemoryItemHistory(itemId, limit);
   }
 
-  public forget(input: Parameters<MemoryRoutePort["forgetMemory"]>[0]) {
-    return this.memory.forgetMemory(input);
+  public forget(
+    input: Parameters<MemoryRoutePort["forgetMemory"]>[0],
+    hooks?: Parameters<MemoryRoutePort["forgetMemory"]>[1],
+  ) {
+    return this.memory.forgetMemory(input, hooks);
   }
 
   public listLearnings(input: Parameters<MemoryRoutePort["listMemoryLearnings"]>[0]) {
@@ -215,7 +218,6 @@ export class MemoryRouteService {
   public createEntity(input: Parameters<MemoryRoutePort["createMemoryEntity"]>[0], actorId: string) {
     return this.memory.createMemoryEntity(input, actorId);
   }
-
 
   public forgetEntity(entityId: string, actorId: string) {
     return this.memory.forgetMemoryEntity(entityId, actorId);

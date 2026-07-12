@@ -1,6 +1,6 @@
 /* eslint-disable no-console, max-lines -- TUI CLI entrypoint intentionally writes operator output to stdout. */
 import process from "node:process";
-import type { ChatCapabilityUpgradeSuggestion } from "@goatcitadel/contracts";
+import { MEMORY_FORGET_MAX_ITEM_IDS, type ChatCapabilityUpgradeSuggestion } from "@goatcitadel/contracts";
 import { confirm, input, password, select } from "@inquirer/prompts";
 import chalk from "chalk";
 import ora from "ora";
@@ -1019,25 +1019,47 @@ async function viewMemoryLifecycle(client: TuiApiClient): Promise<void> {
   }
 
   if (action === "forget-many") {
-    const ids = (await input({ message: "Item IDs CSV (optional)" })).trim();
+    const ids = (await input({ message: `Item IDs CSV (optional, max ${MEMORY_FORGET_MAX_ITEM_IDS})` })).trim();
+    const itemIds = ids
+      ? ids
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined;
+    if ((itemIds?.length ?? 0) > MEMORY_FORGET_MAX_ITEM_IDS) {
+      console.log(chalk.yellow(`Memory forget accepts at most ${MEMORY_FORGET_MAX_ITEM_IDS} explicit item IDs.`));
+      await pause();
+      return;
+    }
+    const workspaceId = (await input({ message: "Workspace ID scope (blank = all workspaces)" })).trim();
+    const includeGlobal = workspaceId
+      ? await confirm({
+          message: `Include global memories with workspace ${workspaceId}? Default excludes global memories.`,
+          default: false,
+        })
+      : undefined;
     const forgetNamespace = (await input({ message: "Namespace criterion (optional)" })).trim();
     const forgetQuery = (await input({ message: "Query criterion (optional)" })).trim();
+    const actionId = (await input({ message: "Action ID for history linkage (optional)" })).trim();
     const confirmed = await confirm({
-      message: "Forget all matching criteria? This cannot be undone.",
+      message: workspaceId
+        ? `Forget all matching criteria in workspace ${workspaceId}${
+            includeGlobal ? " plus global memories" : " (global memories excluded)"
+          }? This cannot be undone.`
+        : "Forget all matching criteria across all workspaces? This cannot be undone.",
       default: false,
     });
     if (!confirmed) {
       return;
     }
     const result = await client.forgetMemory({
-      itemIds: ids
-        ? ids
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean)
-        : undefined,
+      itemIds,
       namespace: forgetNamespace || undefined,
       query: forgetQuery || undefined,
+      workspaceId: workspaceId || undefined,
+      includeGlobal,
+      actionId: actionId || undefined,
+      source: "tui",
     });
     console.log(JSON.stringify(result, null, 2));
     await pause();

@@ -9,6 +9,8 @@ import type {
   LlmRuntimeConfig,
   ApprovalReplayEvent,
   MemoryContextPack,
+  MemoryForgetRequest,
+  MemoryForgetResponse,
   McpServerPolicy,
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
@@ -34,6 +36,7 @@ import type {
   ToolGrantRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { MEMORY_FORGET_MAX_ITEM_IDS } from "@goatcitadel/contracts";
 
 type TuiThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
 type TuiSpeedMode = "standard" | "fast";
@@ -857,11 +860,13 @@ export class TuiApiClient {
     });
   }
 
-  public async forgetMemory(input: {
-    itemIds?: string[];
-    namespace?: string;
-    query?: string;
-  }): Promise<Record<string, unknown>> {
+  public async forgetMemory(input: MemoryForgetRequest): Promise<MemoryForgetResponse> {
+    if ((input.itemIds?.length ?? 0) > MEMORY_FORGET_MAX_ITEM_IDS) {
+      throw new Error(`Memory forget is limited to ${MEMORY_FORGET_MAX_ITEM_IDS} explicit item IDs per request.`);
+    }
+    if (input.includeGlobal !== undefined && !input.workspaceId?.trim()) {
+      throw new Error("Memory forget includeGlobal requires workspaceId.");
+    }
     return this.request(
       "/api/v1/memory/forget",
       {

@@ -646,6 +646,35 @@ export interface MemoryLifecyclePatch {
 }
 
 /**
+ * Upper bound on explicit item IDs in one bulk-forget request. Criteria-based
+ * forgets are selected atomically by storage and are not subject to this
+ * transport-size guard.
+ */
+export const MEMORY_FORGET_MAX_ITEM_IDS = 2_000;
+
+export interface MemoryForgetRequest {
+  itemIds?: string[];
+  namespace?: string;
+  query?: string;
+  workspaceId?: string;
+  /** Only valid with workspaceId; scoped requests omit it to exclude global memory. */
+  includeGlobal?: boolean;
+  actionId?: string;
+  source?: string;
+}
+
+export interface MemoryForgetResponse {
+  actionId: string;
+  matchedCount: number;
+  alreadyForgottenCount: number;
+  forgottenCount: number;
+  /** IDs that transitioned from active to forgotten in this action. */
+  itemIds: string[];
+  /** Items that transitioned from active to forgotten in this action. */
+  items: MemoryItemRecord[];
+}
+
+/**
  * Upper bound on operations in one atomic batch mutation request. Mirrors the
  * gateway's request schema (routes/memory.ts) and MemoryLifecycleService guard
  * so clients can fail fast — or disable batch verbs — before submitting.
