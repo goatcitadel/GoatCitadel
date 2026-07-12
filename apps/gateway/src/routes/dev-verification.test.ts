@@ -306,6 +306,7 @@ describe("dev verification routes", () => {
 
   it("seeds deterministic memory items for verification lanes", async () => {
     const run = vi.fn();
+    const prepare = vi.fn(() => ({ run }));
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
@@ -313,9 +314,7 @@ describe("dev verification routes", () => {
       isDevDiagnosticsEnabled: () => true,
       storage: {
         db: {
-          prepare: vi.fn(() => ({
-            run,
-          })),
+          prepare,
         },
       },
     });
@@ -324,6 +323,18 @@ describe("dev verification routes", () => {
     } as never);
     await app.register(devVerificationRoutes);
 
+    const missingWorkspaceResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/memory-item-seed",
+      payload: {
+        namespace: "memory-truth",
+        title: "Missing workspace",
+        content: "This seed must be rejected.",
+      },
+    });
+    expect(missingWorkspaceResponse.statusCode).toBe(400);
+    expect(run).not.toHaveBeenCalled();
+
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/dev/verification/memory-item-seed",
@@ -331,6 +342,7 @@ describe("dev verification routes", () => {
         "Content-Type": "application/json",
       },
       payload: JSON.stringify({
+        workspaceId: "workspace-1",
         namespace: "memory-truth",
         title: "Verification memory item",
         content: "This item is used by verification lanes.",
@@ -345,6 +357,7 @@ describe("dev verification routes", () => {
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         itemId: expect.stringMatching(/^mem_/),
+        workspaceId: "workspace-1",
         namespace: "memory-truth",
         title: "Verification memory item",
         content: "This item is used by verification lanes.",
@@ -352,6 +365,7 @@ describe("dev verification routes", () => {
         pinned: 1,
       }),
     );
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("workspace_id"));
     // W1: the seeded item carries an embedding (in the extractMemoryEmbedding shape)
     // merged alongside the caller-supplied metadata.
     const seededMetadata = JSON.parse(run.mock.calls[0][0].metadataJson as string);
@@ -362,6 +376,7 @@ describe("dev verification routes", () => {
     expect(seededMetadata.embeddingMetadata).toMatchObject({ provider: "pseudo" });
     expect(response.json()).toMatchObject({
       itemId: expect.stringMatching(/^mem_/),
+      workspaceId: "workspace-1",
       namespace: "memory-truth",
       title: "Verification memory item",
       pinned: true,

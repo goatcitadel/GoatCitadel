@@ -16,6 +16,7 @@ import {
   readMemoryWriteDecision,
   readMetadataString,
   readMetadataStringList,
+  resolveMemoryItemWorkspaceLabel,
 } from "./MemoryRoutePage";
 
 const memorySnapshot = vi.hoisted(() => ({
@@ -33,6 +34,8 @@ const memorySnapshot = vi.hoisted(() => ({
     namespace: "workspace.alpha",
     title: "Deployment note",
     content: "Ship after verification.",
+    workspaceId: "default",
+    metadata: { workspaceId: "workspace-b" },
     pinned: true,
     status: "active",
     lifecycleState: "active",
@@ -462,6 +465,17 @@ describe("MemoryRoutePage", () => {
     expect(readMetadataStringList({ assumptions: "single" }, "assumptions")).toEqual(["single"]);
     expect(readMetadataStringList({ assumptions: [] }, "assumptions")).toEqual([]);
     expect(
+      resolveMemoryItemWorkspaceLabel({ workspaceId: "workspace-a", metadata: { workspaceId: "workspace-b" } }),
+    ).toBe("workspace-a");
+    expect(resolveMemoryItemWorkspaceLabel({ metadata: { workspaceId: " workspace-a " } })).toBe("workspace-a");
+    expect(resolveMemoryItemWorkspaceLabel({ metadata: {} })).toBe("global");
+    expect(resolveMemoryItemWorkspaceLabel({ workspaceId: " ", metadata: { workspaceId: "workspace-b" } })).toBe(
+      "invalid canonical scope",
+    );
+    expect(
+      resolveMemoryItemWorkspaceLabel({ workspaceId: " workspace-a ", metadata: { workspaceId: "workspace-b" } }),
+    ).toBe("invalid canonical scope");
+    expect(
       readMemoryWriteDecision({ metadata: { decision: { decision: "approved" } }, signatureStatus: "signed" } as any),
     ).toBe("approved");
     expect(readMemoryWriteDecision({ metadata: { decision: ["bad"] }, signatureStatus: "signed" } as any)).toBe(
@@ -573,6 +587,9 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Retrieval hybrid rank");
     expect(markup).toContain("Fallback available");
     expect(markup).toContain("Retrieval hints");
+    expect(markup).toContain("Workspace");
+    expect(markup).toContain("default");
+    expect(markup).not.toContain("workspace-b");
     expect(markup).toContain("release checklist, verification cadence");
     expect(markup).toContain("Lifecycle");
     expect(markup).toContain("Run maintenance now");

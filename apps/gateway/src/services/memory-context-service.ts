@@ -587,9 +587,7 @@ export class MemoryContextService {
   // Finding 1 hardening: the DB memory-item retrieval choke-point must ALWAYS be
   // workspace-scoped. Resolve from the explicit workspaceId, else the session's
   // owning workspace, else the default workspace — never undefined, which would
-  // trigger the unfiltered cross-workspace query in listActiveMemoryItems. (The
-  // maintenance scan at memory-maintenance-service.ts calls listActiveMemoryItems
-  // directly and is intentionally cross-workspace; it does not pass through here.)
+  // trigger the unfiltered cross-workspace query in listActiveMemoryItems.
   private resolveMemoryItemWorkspaceId(input: MemoryContextComposeRequest): string {
     const explicit = input.workspaceId?.trim();
     if (explicit) {

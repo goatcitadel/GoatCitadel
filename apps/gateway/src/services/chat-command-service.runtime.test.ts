@@ -325,6 +325,12 @@ describe("chat command runtime dispatch", () => {
       ok: true,
       message: expect.stringContaining("[mem_depl] project_context"),
     });
+    expect(deps.listMemoryItems).toHaveBeenCalledWith({
+      workspaceId: "default",
+      status: "active",
+      query: "installer",
+      limit: 5,
+    });
   });
 
   it("renders compact channel recall results from scoped session search", async () => {

@@ -8,10 +8,26 @@ import {
   FAST_LANE_COMMANDS,
   buildOrchestrationPerformanceScenarioResult,
   deriveProviderStatus,
+  requireCanonicalMemorySeed,
   runFastLane,
 } from "./scenarios.mjs";
 import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
+
+test("canonical memory seed validation fails closed on incomplete or foreign ownership", () => {
+  assert.equal(
+    requireCanonicalMemorySeed({ itemId: "memory-1", workspaceId: "workspace-a" }, "workspace-a", "test seed"),
+    "memory-1",
+  );
+  assert.throws(
+    () => requireCanonicalMemorySeed({ workspaceId: "workspace-a" }, "workspace-a", "test seed"),
+    /test seed did not return canonical ownership/,
+  );
+  assert.throws(
+    () => requireCanonicalMemorySeed({ itemId: "memory-1", workspaceId: "workspace-b" }, "workspace-a", "test seed"),
+    /test seed did not return canonical ownership/,
+  );
+});
 
 test("fast verification lane keeps required fast commands", () => {
   const commandArgs = new Set(FAST_LANE_COMMANDS.map((command) => command.args.join(" ")));

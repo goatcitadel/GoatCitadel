@@ -240,12 +240,14 @@ export async function promoteTraceMemoryCandidate(candidateId: string): Promise<
 
 export async function fetchMemoryItems(input?: {
   namespace?: string;
+  workspaceId?: string;
   status?: "active" | "forgotten" | "all";
   query?: string;
   limit?: number;
 }): Promise<{ items: MemoryItemRecord[] }> {
   const params = new URLSearchParams();
   if (input?.namespace) params.set("namespace", input.namespace);
+  if (input?.workspaceId) params.set("workspaceId", input.workspaceId);
   if (input?.status) params.set("status", input.status);
   if (input?.query) params.set("query", input.query);
   params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 200, 500))));

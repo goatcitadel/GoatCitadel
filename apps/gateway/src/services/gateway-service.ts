@@ -6498,6 +6498,7 @@ export class GatewayService {
   public listMemoryItems(
     input: {
       namespace?: string;
+      workspaceId?: string;
       status?: MemoryItemRecord["status"] | "all";
       query?: string;
       limit?: number;

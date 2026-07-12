@@ -140,7 +140,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     const [itemsRes, entitiesRes, relationsRes, decisionsRes, feedbackRes, qualityIssuesRes, traceCandidatesRes] =
       memoryAdminEnabled
         ? await Promise.all([
-            fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
+            fetchMemoryItems({ workspaceId, limit: 200, status: "all" }).catch((itemsError) => {
               sectionErrors.memoryItems = getErrorMessage(itemsError);
               return { items: [] };
             }),

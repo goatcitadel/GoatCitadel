@@ -38,6 +38,7 @@ const chatUserInputScenarioSchema = z.object({
 });
 
 const memoryItemSeedSchema = z.object({
+  workspaceId: z.string().trim().min(1),
   namespace: z.string().trim().min(1),
   title: z.string().trim().min(1),
   content: z.string().trim().min(1),
@@ -449,6 +450,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         `
         INSERT INTO memory_items (
           item_id,
+          workspace_id,
           namespace,
           title,
           content,
@@ -462,6 +464,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
           forgotten_at
         ) VALUES (
           @itemId,
+          @workspaceId,
           @namespace,
           @title,
           @content,
@@ -478,6 +481,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       )
       .run({
         itemId,
+        workspaceId: parsed.data.workspaceId,
         namespace: parsed.data.namespace,
         title: parsed.data.title,
         content: parsed.data.content,
@@ -489,6 +493,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
 
     return reply.code(201).send({
       itemId,
+      workspaceId: parsed.data.workspaceId,
       namespace: parsed.data.namespace,
       title: parsed.data.title,
       content: parsed.data.content,

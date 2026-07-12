@@ -233,6 +233,7 @@ describe("MemoryLifecycleService", () => {
       created_at: string;
       updated_at: string;
       forgotten_at: string | null;
+      workspace_id: string | null;
     } = {
       item_id: "item-1",
       namespace: "workspace.default",
@@ -246,6 +247,7 @@ describe("MemoryLifecycleService", () => {
       created_at: "2026-04-10T00:00:00.000Z",
       updated_at: "2026-04-10T00:00:00.000Z",
       forgotten_at: null,
+      workspace_id: "workspace-default",
     };
     const historyRows: Array<{
       change_id: string;
@@ -457,6 +459,204 @@ describe("MemoryLifecycleService", () => {
       "memory",
       expect.objectContaining({ type: "memory_item_forgotten", itemId: "item-1" }),
     );
+  });
+
+  it("scopes item listing and quality scans before the result limit", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE memory_items (
+          item_id TEXT PRIMARY KEY,
+          namespace TEXT NOT NULL,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          metadata_json TEXT,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          ttl_override_seconds INTEGER,
+          expires_at TEXT,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          forgotten_at TEXT,
+          workspace_id TEXT
+        );
+        CREATE TABLE memory_change_history (
+          change_id TEXT PRIMARY KEY,
+          item_id TEXT NOT NULL,
+          change_type TEXT NOT NULL,
+          actor_id TEXT,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )
+      `);
+      const insert = db.prepare(`
+        INSERT INTO memory_items (
+          item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds,
+          expires_at, status, created_at, updated_at, forgotten_at, workspace_id
+        ) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, 'active', ?, ?, NULL, ?)
+      `);
+      for (let index = 0; index < 200; index += 1) {
+        const timestamp = `2026-05-${String(31 - Math.floor(index / 10)).padStart(2, "0")}T${String(
+          23 - (index % 10),
+        ).padStart(2, "0")}:00:00.000Z`;
+        insert.run(
+          `foreign-${index}`,
+          "shared.preferences",
+          `Foreign ${index}`,
+          `foreign-workspace-b-${index}`,
+          JSON.stringify({ workspaceId: "workspace-b" }),
+          timestamp,
+          timestamp,
+          null,
+        );
+      }
+      insert.run(
+        "canonical-a",
+        "shared.preferences",
+        "Canonical A",
+        "canonical workspace A",
+        JSON.stringify({ workspaceId: "workspace-b" }),
+        "2026-04-03T00:00:00.000Z",
+        "2026-04-03T00:00:00.000Z",
+        "workspace-a",
+      );
+      insert.run(
+        "legacy-a",
+        "shared.preferences",
+        "Legacy A",
+        "legacy workspace A",
+        JSON.stringify({ workspaceId: " workspace-a " }),
+        "2026-04-02T00:00:00.000Z",
+        "2026-04-02T00:00:00.000Z",
+        null,
+      );
+      insert.run(
+        "global",
+        "shared.preferences",
+        "Global",
+        "global memory",
+        "{}",
+        "2026-04-01T00:00:00.000Z",
+        "2026-04-01T00:00:00.000Z",
+        null,
+      );
+
+      const gatewaySql = {
+        dialect: "sqlite" as const,
+        prepare: (sql: string) => db.prepare(sql),
+      };
+      const service = new MemoryLifecycleService({
+        context: {} as never,
+        learned: {} as never,
+        maintenance: {} as never,
+        admin: {
+          gatewaySql: gatewaySql as never,
+          tryParseJson: (raw, fallback) => {
+            try {
+              return raw ? JSON.parse(raw) : fallback;
+            } catch {
+              return fallback;
+            }
+          },
+          memoryQualityIssues: {
+            list: vi.fn(() => []),
+            upsertOpenIssue: vi.fn(),
+            patchStatus: vi.fn(),
+          } as never,
+          requireFeatureEnabled: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+        resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+        readTranscriptOrEmpty: vi.fn(async () => []),
+      });
+
+      expect(
+        service.listMemoryItems({ workspaceId: "workspace-a", status: "all", limit: 3 }).map((item) => ({
+          itemId: item.itemId,
+          workspaceId: item.workspaceId,
+        })),
+      ).toEqual([
+        { itemId: "canonical-a", workspaceId: "workspace-a" },
+        { itemId: "legacy-a", workspaceId: undefined },
+        { itemId: "global", workspaceId: undefined },
+      ]);
+
+      const scan = service.runMemoryQualityScan({ workspaceId: "workspace-a", limit: 3, dryRun: true });
+      expect(scan).toMatchObject({ workspaceId: "workspace-a", scannedCount: 3, issueCount: 0 });
+
+      const malformedMetadataValues = ["null", "[]", "42", "{invalid-json"];
+      malformedMetadataValues.forEach((metadataJson, index) => {
+        insert.run(
+          `malformed-${index}`,
+          "malformed-scope",
+          `Malformed ${index}`,
+          `malformed metadata ${index}`,
+          metadataJson,
+          `2026-03-0${index + 1}T00:00:00.000Z`,
+          `2026-03-0${index + 1}T00:00:00.000Z`,
+          null,
+        );
+      });
+      expect(
+        service
+          .listMemoryItems({ workspaceId: "workspace-a", query: "malformed metadata", status: "all", limit: 10 })
+          .map((item) => ({ itemId: item.itemId, metadata: item.metadata })),
+      ).toEqual(
+        expect.arrayContaining(
+          malformedMetadataValues.map((_value, index) => ({ itemId: `malformed-${index}`, metadata: {} })),
+        ),
+      );
+      expect(() => service.runMemoryQualityScan({ workspaceId: "workspace-a", limit: 20, dryRun: true })).not.toThrow();
+
+      const insertExpired = db.prepare(`
+        INSERT INTO memory_items (
+          item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds,
+          expires_at, status, created_at, updated_at, forgotten_at, workspace_id
+        ) VALUES (?, 'shared.preferences', ?, ?, '{}', ?, NULL, ?, 'active', ?, ?, NULL, ?)
+      `);
+      insertExpired.run(
+        "expired-pinned-a",
+        "Expired pinned A",
+        "retained canonical workspace memory",
+        1,
+        "2026-03-01T00:00:00.000Z",
+        "2026-02-01T00:00:00.000Z",
+        "2026-02-01T00:00:00.000Z",
+        "workspace-a",
+      );
+      insertExpired.run(
+        "expired-unpinned-a",
+        "Expired unpinned A",
+        "forgettable canonical workspace memory",
+        0,
+        "2026-03-01T00:00:00.000Z",
+        "2026-02-02T00:00:00.000Z",
+        "2026-02-02T00:00:00.000Z",
+        "workspace-a",
+      );
+
+      const expired = service.inspectExpiredActiveMemoryItems({ nowIso: "2026-04-01T00:00:00.000Z" });
+      expect(expired.items.map((item) => ({ itemId: item.itemId, workspaceId: item.workspaceId }))).toEqual(
+        expect.arrayContaining([
+          { itemId: "expired-pinned-a", workspaceId: "workspace-a" },
+          { itemId: "expired-unpinned-a", workspaceId: "workspace-a" },
+        ]),
+      );
+      expect(expired.items).toHaveLength(2);
+      const expiredLedger = service.inspectExpiredActiveMemoryLedger({ nowIso: "2026-04-01T00:00:00.000Z" });
+      expect(expiredLedger.retainedPinnedItems).toEqual([
+        expect.objectContaining({ itemId: "expired-pinned-a", workspaceId: "workspace-a" }),
+      ]);
+      const forgotten = service.forgetExpiredActiveMemoryItems({
+        nowIso: "2026-04-01T00:00:00.000Z",
+        actorId: "workspace-scope-test",
+      });
+      expect(forgotten.forgottenItems).toEqual([
+        expect.objectContaining({ itemId: "expired-unpinned-a", workspaceId: "workspace-a", status: "forgotten" }),
+      ]);
+    } finally {
+      db.close();
+    }
   });
 
   it("applies batch memory item mutations with sanitized reversible ledger evidence", () => {
@@ -1590,9 +1790,7 @@ type MemoryItemBatchHistoryRow = {
   created_at: string;
 };
 
-function createMemoryItemBatchHarness(
-  options: { throwOnUpdateNumber?: number; includeTransaction?: boolean } = {},
-) {
+function createMemoryItemBatchHarness(options: { throwOnUpdateNumber?: number; includeTransaction?: boolean } = {}) {
   const rows = new Map<string, MemoryItemBatchTestRow>(
     [
       {

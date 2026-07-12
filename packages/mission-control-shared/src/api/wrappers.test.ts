@@ -287,8 +287,8 @@ describe("shared API wrappers", () => {
       { method: "POST" },
     );
     await expectCall(
-      memory.fetchMemoryItems({ namespace: "n", status: "active", query: "q", limit: 999 }),
-      "/api/v1/memory/items?namespace=n&status=active&query=q&limit=500",
+      memory.fetchMemoryItems({ namespace: "n", workspaceId: "workspace-a", status: "active", query: "q", limit: 999 }),
+      "/api/v1/memory/items?namespace=n&workspaceId=workspace-a&status=active&query=q&limit=500",
     );
     await expectCall(
       memory.patchMemoryItem("item/1", { status: "forgotten" } as never),

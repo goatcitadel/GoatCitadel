@@ -396,7 +396,8 @@ export async function runAgenticWorkbenchLoopLane(context) {
 
 // Scope caveat (Phase 6 doc-truth): this lane proves the channel-AGNOSTIC durable
 // delivery runtime — idempotency dedup, retry backoff, overdue→stale, delivery-attempt
-// persistence, and the comms HTTP route — via channel-delivery-runtime-service.test.ts,
+// persistence, the comms HTTP route, and workspace-scoped channel memory lookup — via
+// channel-delivery-runtime-service.test.ts, chat-command-service.runtime.test.ts,
 // routes/comms.test.ts, and comms-delivery-repo.test.ts. It intentionally does NOT
 // exercise concrete channel adapters (Telegram/Discord/Slack) end-to-end; per-adapter
 // send/inbound/voice behavior is covered by each adapter's own service tests, not here.
@@ -2998,6 +2999,15 @@ async function assertHighRiskRouteFamiliesAreOperatorGated(gatewayUrl, manifestI
   }
 }
 
+export function requireCanonicalMemorySeed(body, expectedWorkspaceId, label) {
+  const itemId = typeof body?.itemId === "string" ? body.itemId.trim() : "";
+  const workspaceId = typeof body?.workspaceId === "string" ? body.workspaceId : "";
+  if (!itemId || workspaceId !== expectedWorkspaceId) {
+    throw new Error(`${label} did not return canonical ownership`);
+  }
+  return itemId;
+}
+
 export async function runUiParityLane(context, _options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: false,
@@ -3011,14 +3021,62 @@ export async function runUiParityLane(context, _options = {}) {
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-ui-parity");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
+    const foreignFixture = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
+      method: "POST",
+      body: {
+        workspaceName: "UI Parity Foreign Workspace",
+        sessionTitle: "UI Parity Foreign Session",
+        sessionCount: 1,
+        longThreadTurns: 2,
+      },
+    });
+    assertOk(foreignFixture, "seed ui-parity foreign workspace");
+    const foreignWorkspaceId = foreignFixture.body?.workspaceId;
+    if (!foreignWorkspaceId) {
+      throw new Error("ui-parity foreign seed did not return a workspaceId");
+    }
+    const foreignMemoryNeedle = `Foreign workspace memory ${randomUUID().slice(0, 8)}`;
+    const foreignMemory = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
+      method: "POST",
+      body: {
+        workspaceId: foreignWorkspaceId,
+        namespace: "mission-control-next",
+        title: foreignMemoryNeedle,
+        content: "This foreign-workspace item must not appear in the selected workspace Library.",
+        metadata: { source: "ui-parity-foreign" },
+      },
+    });
+    assertOk(foreignMemory, "seed ui-parity foreign memory item");
+    const foreignMemoryItemId = requireCanonicalMemorySeed(
+      foreignMemory.body,
+      foreignWorkspaceId,
+      "ui-parity foreign memory seed",
+    );
     const approvals = await requestJson(stack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20");
     assertOk(approvals, "read ui-parity approvals");
-    const memoryItems = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=all&limit=20");
+    const memoryItems = await requestJson(
+      stack.gatewayUrl,
+      `/api/v1/memory/items?workspaceId=${encodeURIComponent(fixture.workspaceId)}&status=all&limit=20`,
+    );
     assertOk(memoryItems, "read ui-parity memory items");
+    const memoryNeedle = "Mission Control Next shell posture";
+    if (
+      !memoryItems.body?.items?.some(
+        (item) => item.title === memoryNeedle && item.workspaceId === fixture.workspaceId,
+      )
+    ) {
+      throw new Error("ui-parity selected-workspace memory read omitted its canonical item");
+    }
+    if (
+      memoryItems.body?.items?.some(
+        (item) => item.itemId === foreignMemoryItemId || item.title === foreignMemoryNeedle,
+      )
+    ) {
+      throw new Error("ui-parity selected-workspace memory read exposed the foreign item");
+    }
     const events = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
     assertOk(events, "read ui-parity events");
     const approvalNeedle = approvals.body?.items?.[0]?.kind ?? approvals.body?.items?.[0]?.approvalId ?? "shell.exec";
-    const memoryNeedle = "Memory items";
     const activityNeedle = events.body?.items?.[0]?.eventType ?? "approval_created";
 
     await runScenario(
@@ -3093,6 +3151,7 @@ export async function runUiParityLane(context, _options = {}) {
               correlationId,
               sessionId: fixture.sessionId,
               needle: memoryNeedle,
+              absentNeedle: foreignMemoryNeedle,
             }),
             mcpSettings: await collectUiParitySurface({
               page: nextPage,
@@ -3121,6 +3180,9 @@ export async function runUiParityLane(context, _options = {}) {
             if (!nextResult.needleVisible) {
               throw new Error(`ui-parity next ${label} surface did not expose the seeded fact ${nextResult.needle}`);
             }
+          }
+          if (parity.memory.absentNeedleVisible) {
+            throw new Error(`ui-parity memory surface exposed foreign workspace item ${foreignMemoryNeedle}`);
           }
 
           const nextArtifacts = await captureBrowserArtifacts(context, {
@@ -3201,28 +3263,79 @@ export async function runMemoryTruthLane(context, _options = {}) {
           },
         });
         assertOk(seeded, "seed memory-truth workspace");
+        const memoryWorkspaceId = seeded.body?.workspaceId;
+        if (!memoryWorkspaceId) {
+          throw new Error("memory-truth seed did not return a workspaceId");
+        }
+        const foreignSeed = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
+          method: "POST",
+          body: {
+            workspaceName: "Memory Truth Foreign Workspace",
+            sessionTitle: "Memory Truth Foreign Session",
+            sessionCount: 1,
+            longThreadTurns: 2,
+          },
+        });
+        assertOk(foreignSeed, "seed memory-truth foreign workspace");
+        const foreignWorkspaceId = foreignSeed.body?.workspaceId;
+        if (!foreignWorkspaceId) {
+          throw new Error("memory-truth foreign seed did not return a workspaceId");
+        }
+        const foreignTitle = `Foreign memory truth item ${randomUUID().slice(0, 8)}`;
+        const foreignItem = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
+          method: "POST",
+          body: {
+            workspaceId: foreignWorkspaceId,
+            namespace: "memory-truth",
+            title: foreignTitle,
+            content: "FOREIGN_MEMORY_TRUTH_SENTINEL must stay outside the selected workspace.",
+            metadata: { lane: "memory-truth-foreign" },
+          },
+        });
+        assertOk(foreignItem, "seed memory-truth foreign item");
+        const foreignItemId = requireCanonicalMemorySeed(
+          foreignItem.body,
+          foreignWorkspaceId,
+          "memory-truth foreign memory seed",
+        );
 
         const memoryTitle = `Memory truth item ${randomUUID().slice(0, 8)}`;
         const created = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
           method: "POST",
           body: {
+            workspaceId: memoryWorkspaceId,
             namespace: "memory-truth",
             title: memoryTitle,
             content: "This item should expire without being silently deleted.",
             metadata: {
               lane: "memory-truth",
               sessionId: seeded.body?.sessionId,
-              workspaceId: seeded.body?.workspaceId,
             },
           },
         });
         assertOk(created, "seed memory-truth item");
+        if (created.body?.workspaceId !== memoryWorkspaceId) {
+          throw new Error("memory-truth seed did not return canonical workspace ownership");
+        }
 
-        const listedAll = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=all&limit=200");
+        const listedAll = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=all&limit=200`,
+        );
         assertOk(listedAll, "list memory items before ttl patch");
         const item = listedAll.body?.items?.find((entry) => entry.itemId === created.body?.itemId);
         if (!item?.itemId) {
           throw new Error(`memory-truth could not find seeded memory item ${memoryTitle}`);
+        }
+        if (item.workspaceId !== memoryWorkspaceId) {
+          throw new Error(`memory-truth listed ${item.itemId} without canonical workspace ownership`);
+        }
+        if (
+          listedAll.body?.items?.some(
+            (entry) => entry.itemId === foreignItemId || entry.title === foreignTitle,
+          )
+        ) {
+          throw new Error(`memory-truth exposed foreign workspace item ${foreignTitle}`);
         }
 
         const patched = await requestJson(stack.gatewayUrl, `/api/v1/memory/items/${encodeURIComponent(item.itemId)}`, {
@@ -3234,9 +3347,15 @@ export async function runMemoryTruthLane(context, _options = {}) {
         assertOk(patched, "patch memory item ttl");
         await delay(1500);
 
-        const activeItems = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=active&limit=200");
+        const activeItems = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=active&limit=200`,
+        );
         assertOk(activeItems, "list active memory items after expiry");
-        const allItems = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=all&limit=200");
+        const allItems = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=all&limit=200`,
+        );
         assertOk(allItems, "list all memory items after expiry");
         const history = await requestJson(
           stack.gatewayUrl,
@@ -3276,6 +3395,9 @@ export async function runMemoryTruthLane(context, _options = {}) {
           );
           await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
           await page.getByRole("heading", { name: memoryTitle, exact: false }).first().waitFor({ timeout: 15000 });
+          if ((await page.getByText(foreignTitle, { exact: false }).count()) > 0) {
+            throw new Error(`memory-truth Library exposed foreign workspace item ${foreignTitle}`);
+          }
           await page
             .getByText(/Lifecycle expired/i, { exact: false })
             .first()
@@ -4763,7 +4885,17 @@ function isAllowedStatus(status) {
   return Number.isFinite(status) && status >= 200 && status < 300;
 }
 
-async function collectUiParitySurface({ page, baseUrl, href, route, packageName, correlationId, sessionId, needle }) {
+async function collectUiParitySurface({
+  page,
+  baseUrl,
+  href,
+  route,
+  packageName,
+  correlationId,
+  sessionId,
+  needle,
+  absentNeedle,
+}) {
   let ready = false;
   let error = null;
   let preview = "";
@@ -4795,6 +4927,8 @@ async function collectUiParitySurface({ page, baseUrl, href, route, packageName,
     ready,
     needle,
     needleVisible: preview.includes(needle),
+    absentNeedle,
+    absentNeedleVisible: absentNeedle ? preview.includes(absentNeedle) : false,
     preview: clampString(preview.replace(/\s+/g, " ").trim(), 280),
     error,
   };

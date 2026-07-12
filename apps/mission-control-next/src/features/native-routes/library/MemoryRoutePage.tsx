@@ -50,6 +50,7 @@ import {
   readMemoryWriteDecision,
   readMetadataString,
   readMetadataStringList,
+  resolveMemoryItemWorkspaceLabel,
 } from "./MemoryRoutePage.helpers";
 import "../native-routes.css";
 
@@ -66,6 +67,7 @@ export {
   readMemoryWriteDecision,
   readMetadataString,
   readMetadataStringList,
+  resolveMemoryItemWorkspaceLabel,
 } from "./MemoryRoutePage.helpers";
 
 /**
@@ -1788,7 +1790,7 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
     { label: "Namespace", value: item.namespace },
     { label: "Confidence", value: readMetadataString(item.metadata, "confidence") ?? "not recorded" },
     { label: "Last used", value: readMetadataString(item.metadata, "lastUsedAt") ?? "not recorded" },
-    { label: "Workspace", value: readMetadataString(item.metadata, "workspaceId") ?? "not attached" },
+    { label: "Workspace", value: resolveMemoryItemWorkspaceLabel(item) },
     { label: "Session", value: readMetadataString(item.metadata, "sessionId") ?? "not attached" },
     { label: "Run", value: readMetadataString(item.metadata, "runId") ?? "not attached" },
     { label: "Task", value: readMetadataString(item.metadata, "taskId") ?? "not attached" },
