@@ -135,7 +135,7 @@ function mergeBranchCounters(left, right) {
 
       const armOccurrenceByIdentity = new Map();
       for (const [index, armLocation] of locations.entries()) {
-        const baseArmIdentity = locationKey(armLocation);
+        const baseArmIdentity = branchArmLocationKey(armLocation);
         const armOccurrence = armOccurrenceByIdentity.get(baseArmIdentity) ?? 0;
         armOccurrenceByIdentity.set(baseArmIdentity, armOccurrence + 1);
         const armIdentity = JSON.stringify([baseArmIdentity, armOccurrence]);
@@ -194,7 +194,7 @@ function collectAmbiguousIdentities(entries, options) {
 
 function branchIdentity(metadata) {
   const armLocations = (Array.isArray(metadata?.locations) ? metadata.locations : [])
-    .map((location) => locationKey(location))
+    .map((location) => branchArmLocationKey(location))
     .sort();
   return JSON.stringify([
     String(metadata?.type ?? ""),
@@ -206,14 +206,18 @@ function branchIdentity(metadata) {
 
 function hasRepeatedBranchArmLocations(metadata) {
   const locations = Array.isArray(metadata?.locations) ? metadata.locations : [];
-  const identities = locations.map((location) => locationKey(location));
+  const identities = locations.map((location) => branchArmLocationKey(location));
   return new Set(identities).size !== identities.length;
 }
 
 function hasIncompleteLocation(location) {
   return (
+    location?.start?.line === null ||
+    location?.start?.line === undefined ||
     location?.start?.column === null ||
     location?.start?.column === undefined ||
+    location?.end?.line === null ||
+    location?.end?.line === undefined ||
     location?.end?.column === null ||
     location?.end?.column === undefined
   );
@@ -273,6 +277,41 @@ function locationKey(location) {
     sourceLine(location?.end?.line),
     sourceColumnOrNull(location?.end?.column),
   ]);
+}
+
+function branchArmLocationKey(location) {
+  if (!location || typeof location !== "object" || Array.isArray(location)) {
+    throw new Error("Coverage branch map is missing a valid arm location.");
+  }
+  if (!isPlainLocationEndpoint(location.start) || !isPlainLocationEndpoint(location.end)) {
+    throw new Error("Coverage branch arm must contain valid start and end locations.");
+  }
+  const coordinates = [location.start.line, location.start.column, location.end.line, location.end.column];
+  if (coordinates.every((value) => value === null || value === undefined)) {
+    return JSON.stringify(["implicit-unlocated-arm"]);
+  }
+  if (
+    location.start.line === null ||
+    location.start.line === undefined ||
+    location.end.line === null ||
+    location.end.line === undefined
+  ) {
+    throw new Error("Coverage branch map contains a partially located branch arm.");
+  }
+  return JSON.stringify([
+    sourceLine(location.start.line),
+    sourceColumnOrNull(location.start.column),
+    sourceLine(location.end.line),
+    sourceColumnOrNull(location.end.column),
+  ]);
+}
+
+function isPlainLocationEndpoint(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function sourceLineOrNull(value) {

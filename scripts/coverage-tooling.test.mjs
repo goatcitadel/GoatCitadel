@@ -132,6 +132,91 @@ describe("coverage tooling", () => {
     );
   });
 
+  it("preserves locationless implicit branch arms conservatively across collectors", () => {
+    const implicitArm = { start: {}, end: {} };
+    const left = {
+      path: "/repo/src/implicit-branch.ts",
+      statementMap: {},
+      s: {},
+      l: {},
+      fnMap: {},
+      f: {},
+      branchMap: {
+        0: branchLocation("if", 7, [location(7), implicitArm]),
+      },
+      b: { 0: [1, 0] },
+    };
+    const right = {
+      path: "/repo/src/implicit-branch.ts",
+      statementMap: {},
+      s: {},
+      l: {},
+      fnMap: {},
+      f: {},
+      branchMap: {
+        9: branchLocation("if", 7, [location(7), implicitArm]),
+      },
+      b: { 9: [0, 1] },
+    };
+
+    const merged = mergeCoverageEntries(left, right);
+
+    assert.equal(Object.keys(merged.branchMap).length, 2);
+    assert.deepEqual(Object.values(merged.b), [
+      [1, 0],
+      [0, 1],
+    ]);
+    assert.deepEqual(
+      Object.values(merged.branchMap).map((branch) => branch.locations[1]),
+      [implicitArm, implicitArm],
+    );
+  });
+
+  it("rejects malformed non-null coordinates in implicit branch arms", () => {
+    const malformed = {
+      path: "/repo/src/malformed-implicit-branch.ts",
+      statementMap: {},
+      s: {},
+      l: {},
+      fnMap: {},
+      f: {},
+      branchMap: {
+        0: branchLocation("if", 7, [location(7), { start: { line: 0 }, end: { line: 7 } }]),
+      },
+      b: { 0: [1, 0] },
+    };
+
+    assert.throws(() => mergeCoverageEntries(malformed, malformed), /invalid source line 0/i);
+  });
+
+  it("rejects missing endpoints and partially located branch arms", () => {
+    for (const [label, arm] of [
+      ["missing endpoints", {}],
+      ["missing start endpoint", { end: {} }],
+      ["mixed partial lines", { start: { line: 7, column: 0 }, end: {} }],
+      ["column without line", { start: { column: 0 }, end: {} }],
+    ]) {
+      const malformed = {
+        path: `/repo/src/${label.replaceAll(" ", "-")}.ts`,
+        statementMap: {},
+        s: {},
+        l: {},
+        fnMap: {},
+        f: {},
+        branchMap: {
+          0: branchLocation("if", 7, [location(7), arm]),
+        },
+        b: { 0: [1, 0] },
+      };
+
+      assert.throws(
+        () => mergeCoverageEntries(malformed, malformed),
+        /valid start and end locations|partially located branch arm/i,
+        label,
+      );
+    }
+  });
+
   it("keeps permuted duplicate counters conservative and prevents a false production-gate pass", async () => {
     const sharedLocation = location(50);
     const sharedFunction = functionLocation("shared", 50);
