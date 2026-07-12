@@ -110,7 +110,7 @@ await writeSummary({
 });
 
 try {
-  execSync("pnpm --filter @goatcitadel/gateway... --if-present build", {
+  execSync("pnpm --filter @goatcitadel/gateway... --filter @goatcitadel/threaded-surface-core... --if-present build", {
     cwd: repoRoot,
     stdio: "inherit",
   });

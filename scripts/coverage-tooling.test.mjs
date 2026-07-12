@@ -437,6 +437,17 @@ describe("coverage tooling", () => {
     }
   });
 
+  it("builds the Gateway and Mission Control dependency cones before recursive coverage", () => {
+    const source = fs.readFileSync(path.join(scriptsDir, "coverage-collect.mjs"), "utf8");
+    const buildCommand =
+      "pnpm --filter @goatcitadel/gateway... --filter @goatcitadel/threaded-surface-core... --if-present build";
+    const buildIndex = source.indexOf(buildCommand);
+    const coverageIndex = source.indexOf("pnpm -r --workspace-concurrency=1 --if-present test:coverage");
+
+    assert.ok(buildIndex >= 0, "coverage collection must build the Mission Control dependency cone");
+    assert.ok(coverageIndex > buildIndex, "coverage tests must run after their workspace dependencies are built");
+  });
+
   it("rejects non-Linux artifacts as production coverage evidence", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-platform-"));
     try {
