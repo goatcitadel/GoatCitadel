@@ -745,6 +745,19 @@ describe("MemoryMaintenanceRepository workspace scoping", () => {
         .sort(),
       ["mem-canonical-a", "mem-global", "mem-legacy-a", "mem-malformed"],
     );
+
+    const postgresDestructiveScope = (
+      buildMemoryWorkspaceScopeSql as unknown as (
+        dialect: "sqlite" | "postgres",
+        options: { includeGlobal: boolean },
+      ) => string
+    )("postgres", { includeGlobal: false });
+    assert.match(postgresDestructiveScope, /workspace_id = @workspaceId/);
+    assert.match(postgresDestructiveScope, /workspace_id IS NULL/);
+    assert.match(postgresDestructiveScope, /jsonb_typeof\(metadata_doc -> 'workspaceId'\) = 'string'/);
+    assert.match(postgresDestructiveScope, /NULLIF\(BTRIM\(metadata_doc ->> 'workspaceId'\), ''\)/);
+    assert.equal(postgresDestructiveScope.match(/jsonb_typeof/g)?.length, 1);
+    assert.doesNotMatch(postgresDestructiveScope, /COALESCE/);
   });
 
   it("applies canonical and legacy workspace scope before the result limit", () => {

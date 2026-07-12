@@ -115,6 +115,11 @@ export interface MemoryForgetCommitHooks {
   afterCommit?: () => void;
 }
 
+export interface MemoryForgetItemOptions extends MemoryForgetCommitHooks {
+  actionId?: string;
+  source?: string;
+}
+
 interface MemoryForgetSelectionRow {
   item_id: string;
   namespace: string;
@@ -1135,16 +1140,24 @@ export class MemoryLifecycleService {
     return updated;
   }
 
-  public forgetMemoryItem(itemId: string, actorId = "operator", hooks: MemoryForgetCommitHooks = {}): MemoryItemRecord {
+  public forgetMemoryItem(
+    itemId: string,
+    actorId = "operator",
+    options: MemoryForgetItemOptions = {},
+  ): MemoryItemRecord {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = requireMemoryItem(this.deps.admin, itemId);
     const result = this.forgetMemory(
       {
         itemIds: [itemId],
         actorId,
-        source: "gateway.memory.forget_item",
+        actionId: options.actionId,
+        source: options.source?.trim() || "gateway.memory.forget_item",
       },
-      hooks,
+      {
+        onCommit: options.onCommit,
+        afterCommit: options.afterCommit,
+      },
     );
     return result.items[0] ?? (current.status === "forgotten" ? current : requireMemoryItem(this.deps.admin, itemId));
   }
@@ -1244,9 +1257,15 @@ export class MemoryLifecycleService {
         }),
       )
       .digest("hex");
-    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+    const gatewaySql = this.deps.admin.gatewaySql;
+    const runTransaction = requireMemoryBatchTransaction(gatewaySql);
 
     const transactionResult = runTransaction(() => {
+      if (gatewaySql.dialect === "postgres") {
+        gatewaySql
+          .prepare("SELECT set_config('lock_timeout', @lockTimeout, true)")
+          .run({ lockTimeout: `${MEMORY_FORGET_POSTGRES_LOCK_TIMEOUT_MS}ms` });
+      }
       const clauses = ["1 = 1"];
       const params: Record<string, string | number | null> = {};
       if (normalizedItemIds.length > 0) {
@@ -1263,7 +1282,7 @@ export class MemoryLifecycleService {
       }
       if (workspaceId) {
         clauses.push(
-          buildMemoryWorkspaceScopeSql(this.deps.admin.gatewaySql.dialect, {
+          buildMemoryWorkspaceScopeSql(gatewaySql.dialect, {
             includeGlobal,
           }),
         );
@@ -1284,8 +1303,8 @@ export class MemoryLifecycleService {
         params.now = new Date().toISOString();
       }
 
-      const lockClause = this.deps.admin.gatewaySql.dialect === "postgres" ? " FOR UPDATE" : "";
-      const matchedRows = this.deps.admin.gatewaySql
+      const lockClause = gatewaySql.dialect === "postgres" ? " FOR UPDATE" : "";
+      const matchedRows = gatewaySql
         .prepare(
           `
           SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
@@ -1323,7 +1342,7 @@ export class MemoryLifecycleService {
           return `@${key}`;
         });
         changedRows.push(
-          ...(this.deps.admin.gatewaySql
+          ...(gatewaySql
             .prepare(
               `
               UPDATE memory_items
@@ -3182,6 +3201,7 @@ function requireMemoryBatchTransaction(
 }
 
 const MEMORY_FORGET_UPDATE_CHUNK_SIZE = 500;
+const MEMORY_FORGET_POSTGRES_LOCK_TIMEOUT_MS = 5_000;
 
 function chunkMemoryItemIds(itemIds: string[]): string[][] {
   const chunks: string[][] = [];

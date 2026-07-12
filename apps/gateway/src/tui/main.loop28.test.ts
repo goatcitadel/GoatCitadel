@@ -1060,19 +1060,19 @@ describe("tui main loop28 entry coverage", () => {
       "exit",
     ];
     state.inputQueue = [
-      "",
-      "ops",
-      "runtime",
-      "memory-1, memory-2",
-      "workspace-1",
-      "ops",
-      "old",
-      "forget-action-1",
-      "",
-      "",
-      "",
-      "memory-1",
-      "",
+      "", // startup pause
+      "ops", // first memory-list namespace filter
+      "runtime", // first memory-list text query
+      "memory-1, memory-2", // forget-many item IDs
+      "workspace-1", // forget-many workspace scope
+      "ops", // forget-many namespace criterion
+      "old", // forget-many query criterion
+      "forget-action-1", // forget-many history action ID
+      "", // forget-many result pause
+      "", // second memory-list namespace filter
+      "", // second memory-list text query
+      "memory-1", // history item ID
+      "", // history result pause
       "job-1",
       "",
       "job-1",
@@ -1145,7 +1145,17 @@ describe("tui main loop28 entry coverage", () => {
     vi.spyOn(console, "table").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     state.selectQueue = ["memory", "active", "forget-many", "exit"];
-    state.inputQueue = ["", "", "", "memory-1", "", "ops", "stale", "all-scope-action", ""];
+    state.inputQueue = [
+      "", // startup pause
+      "", // memory-list namespace filter
+      "", // memory-list text query
+      "memory-1", // forget-many item IDs
+      "", // forget-many workspace scope (all workspaces)
+      "ops", // forget-many namespace criterion
+      "stale", // forget-many query criterion
+      "all-scope-action", // forget-many history action ID
+      "", // forget-many result pause
+    ];
     state.loadResolvedProfile.mockResolvedValue({
       profileName: "ops",
       filePath: "profile.json",

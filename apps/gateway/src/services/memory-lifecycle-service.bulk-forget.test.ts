@@ -1,27 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MemoryItemRecord } from "@goatcitadel/contracts";
+import type { MemoryForgetRequest, MemoryForgetResponse, MemoryItemRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 
-interface BulkForgetInput {
-  itemIds?: string[];
-  namespace?: string;
-  query?: string;
-  workspaceId?: string;
-  includeGlobal?: boolean;
-  actionId?: string;
-  source?: string;
-  actorId?: string;
-}
+type BulkForgetInput = MemoryForgetRequest & { actorId?: string };
 
-interface BulkForgetResult {
-  actionId: string;
-  matchedCount: number;
-  alreadyForgottenCount: number;
-  forgottenCount: number;
-  itemIds: string[];
-  items: MemoryItemRecord[];
-}
+type BulkForgetResult = MemoryForgetResponse;
 
 interface BulkForgetHooks {
   onCommit?: () => void;
@@ -353,6 +337,30 @@ describe("MemoryLifecycleService atomic bulk forget", () => {
     expect(onCommit).not.toHaveBeenCalled();
     expect(afterCommit).not.toHaveBeenCalled();
     expect(harness.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("preserves caller-supplied provenance for single-item forget history", () => {
+    const harness = createHarness();
+    seedMemoryItem(harness, { itemId: "single-provenance" });
+
+    (
+      harness.service as unknown as {
+        forgetMemoryItem(
+          itemId: string,
+          actorId: string,
+          options: BulkForgetHooks & { actionId?: string; source?: string },
+        ): MemoryItemRecord;
+      }
+    ).forgetMemoryItem("single-provenance", "operator-single", {
+      actionId: "single-forget-action",
+      source: "route-proof",
+    });
+
+    expect(historyRows(harness)).toHaveLength(1);
+    expect(JSON.parse(historyRows(harness)[0]?.payload_json ?? "{}")).toMatchObject({
+      actionId: "single-forget-action",
+      source: "route-proof",
+    });
   });
 
   it("rejects global inclusion without a workspace boundary before mutating", () => {

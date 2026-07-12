@@ -46,7 +46,7 @@ describe("memory routes", () => {
     expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", status: "active" }));
   });
 
-  it("forwards canonical commit callbacks and authenticated actor for single-item forget", async () => {
+  it("forwards canonical commit callbacks, provenance, and authenticated actor for single-item forget", async () => {
     const forgetItem = vi.fn(() => ({ itemId: "memory-1", status: "forgotten" }));
     const built = buildApp({ forgetItem });
     app = built.app;
@@ -56,11 +56,16 @@ describe("memory routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/memory/items/memory-1/forget",
-      payload: {},
+      payload: {
+        actionId: "single-forget-action",
+        source: "route-proof",
+      },
     });
 
     expect(response.statusCode).toBe(200);
     expect(forgetItem).toHaveBeenCalledWith("memory-1", "operator:single-forget", {
+      actionId: "single-forget-action",
+      source: "route-proof",
       onCommit: expect.any(Function),
       afterCommit: expect.any(Function),
     });

@@ -366,7 +366,10 @@ const batchMutationSchema = z.object({
     .max(100),
 });
 
-const forgetItemSchema = z.object({});
+const forgetItemSchema = z.object({
+  actionId: z.string().trim().min(1).max(120).optional(),
+  source: z.string().trim().min(1).max(160).optional(),
+});
 
 const forgetManySchema = z
   .object({
@@ -798,6 +801,8 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const result = memory.forgetItem(params.data.itemId, resolveActorId(request), {
+        actionId: body.data.actionId,
+        source: body.data.source,
         onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
         afterCommit: () => markMutationCommitted(request),
       });

@@ -148,22 +148,35 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
         actionId: "fr108-concurrent-first",
         source: "verification.concurrent-owner",
       });
+      await blocker.query(
+        `
+          SELECT
+            set_config('goatcitadel.test_memory_item_id', $1, true),
+            set_config('goatcitadel.test_memory_now', $2, true),
+            set_config('goatcitadel.test_memory_change_id', $3, true),
+            set_config('goatcitadel.test_memory_history_payload', $4, true)
+        `,
+        [itemId, now, randomUUID(), firstHistoryPayload],
+      );
+      // forgetMemory blocks this thread with Atomics.wait. Send one static
+      // server-side batch so PostgreSQL receives COMMIT before that wait begins;
+      // the dynamic fixture values were bound above through transaction-local settings.
       const releaseConcurrentOwner = blocker.query(`
         UPDATE memory_items
         SET status = 'forgotten',
-            forgotten_at = '${escapePostgresLiteral(now)}',
-            updated_at = '${escapePostgresLiteral(now)}'
-        WHERE item_id = '${escapePostgresLiteral(itemId)}'
+            forgotten_at = current_setting('goatcitadel.test_memory_now'),
+            updated_at = current_setting('goatcitadel.test_memory_now')
+        WHERE item_id = current_setting('goatcitadel.test_memory_item_id')
           AND status = 'active';
         INSERT INTO memory_change_history (
           change_id, item_id, change_type, actor_id, payload_json, created_at
         ) VALUES (
-          '${randomUUID()}',
-          '${escapePostgresLiteral(itemId)}',
+          current_setting('goatcitadel.test_memory_change_id'),
+          current_setting('goatcitadel.test_memory_item_id'),
           'forgotten',
           'operator:concurrent-owner',
-          '${escapePostgresLiteral(firstHistoryPayload)}',
-          '${escapePostgresLiteral(now)}'
+          current_setting('goatcitadel.test_memory_history_payload'),
+          current_setting('goatcitadel.test_memory_now')
         );
         SELECT pg_sleep(0.8);
         COMMIT;
@@ -206,6 +219,62 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       }
     }
   });
+
+  it("fails a stalled row lock within the production timeout without partial writes", async () => {
+    const harness = await createHarness();
+    const itemId = "fr108-lock-timeout-item";
+    await seedMemoryItem(harness.scopedPool, { itemId, workspaceId: "workspace-a" });
+
+    let blocker: PoolClient | undefined;
+    try {
+      blocker = await harness.scopedPool.connect();
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT item_id FROM memory_items WHERE item_id = $1 FOR UPDATE", [itemId]);
+      const releaseBlocker = blocker.query("SELECT pg_sleep(7); COMMIT;");
+
+      const startedAt = Date.now();
+      let failure: unknown;
+      try {
+        harness.forgetMemory({
+          workspaceId: "workspace-a",
+          itemIds: [itemId],
+          actionId: "fr108-lock-timeout",
+          source: "verification.lock-timeout",
+        });
+      } catch (error) {
+        failure = error;
+      }
+      const waitedMs = Date.now() - startedAt;
+      await releaseBlocker;
+      blocker.release();
+      blocker = undefined;
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toMatch(/lock timeout/i);
+      expect(waitedMs).toBeGreaterThanOrEqual(4_000);
+      expect(waitedMs).toBeLessThan(10_000);
+      await expect(countRows(harness.scopedPool, "memory_items", "status = 'active'")).resolves.toBe(1);
+      await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
+        0,
+      );
+
+      const retry = harness.forgetMemory({
+        workspaceId: "workspace-a",
+        itemIds: [itemId],
+        actionId: "fr108-lock-timeout-retry",
+        source: "verification.lock-timeout-retry",
+      });
+      expect(retry).toMatchObject({ matchedCount: 1, alreadyForgottenCount: 0, forgottenCount: 1 });
+      await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
+        1,
+      );
+    } finally {
+      if (blocker) {
+        await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+      }
+    }
+  });
 });
 
 async function createHarness(): Promise<Harness> {
@@ -214,6 +283,7 @@ async function createHarness(): Promise<Harness> {
   }
   const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
   const schemaName = `memory_forget_${suffix}`;
+  const quotedSchemaName = quotePostgresTestIdentifier(schemaName);
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-memory-forget-pg-"));
   const adminPool = new Pool({ connectionString: realPostgresUrl });
   const scopedUrl = new URL(realPostgresUrl);
@@ -224,7 +294,7 @@ async function createHarness(): Promise<Harness> {
     { pool: migrationPool },
   );
 
-  await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+  await adminPool.query(`CREATE SCHEMA ${quotedSchemaName}`);
   let scopedPool: Pool | undefined;
   let syncClient: PostgresSyncDatabaseClient | undefined;
   let storage: Storage | undefined;
@@ -286,7 +356,7 @@ async function createHarness(): Promise<Harness> {
         closed = true;
         storage.close();
         await scopedPool.end();
-        await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+        await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchemaName} CASCADE`);
         await adminPool.end();
         await fs.rm(rootDir, { recursive: true, force: true });
       },
@@ -304,7 +374,7 @@ async function createHarness(): Promise<Harness> {
       // Preserve the original setup failure while still cleaning the schema.
     }
     await scopedPool?.end().catch(() => undefined);
-    await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`).catch(() => undefined);
+    await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchemaName} CASCADE`).catch(() => undefined);
     await adminPool.end().catch(() => undefined);
     await fs.rm(rootDir, { recursive: true, force: true });
     throw error;
@@ -389,6 +459,9 @@ async function countRows(
   return Number(result.rows[0]?.count ?? 0);
 }
 
-function escapePostgresLiteral(value: string): string {
-  return value.replaceAll("'", "''");
+function quotePostgresTestIdentifier(value: string): string {
+  if (!/^[a-z][a-z0-9_]*$/u.test(value)) {
+    throw new Error(`Unsafe PostgreSQL test identifier: ${value}`);
+  }
+  return `"${value}"`;
 }
