@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-12T00:44:53.783Z",
-  "gatewayLineCount": 8441,
+  "generatedAt": "2026-07-12T07:54:30.757Z",
+  "gatewayLineCount": 8442,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-turn-agent-runner.ts",
@@ -10,8 +10,8 @@
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
-      "lineCount": 8441,
-      "bytes": 346852
+      "lineCount": 8442,
+      "bytes": 346880
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
@@ -35,8 +35,8 @@
     },
     {
       "path": "apps/gateway/src/services/memory-lifecycle-service.ts",
-      "lineCount": 3521,
-      "bytes": 125317
+      "lineCount": 3783,
+      "bytes": 135086
     },
     {
       "path": "apps/gateway/src/services/approval-resolution-effects-service.ts",
@@ -109,7 +109,7 @@
   "gatewayRouteCompositionPortMemberCount": 164,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 913,
+  "totalHostCallbacks": 919,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/activepieces-run-status-action.ts": 3,
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 6,
@@ -135,13 +135,14 @@
     "apps/gateway/src/services/external-side-effect-replay-job-service.ts": 4,
     "apps/gateway/src/services/gif-search-action.ts": 4,
     "apps/gateway/src/services/guidance-document-helpers.ts": 4,
-    "apps/gateway/src/services/integration-action-service.ts": 29,
+    "apps/gateway/src/services/integration-action-service.ts": 34,
     "apps/gateway/src/services/integration-dry-run-gate.ts": 5,
     "apps/gateway/src/services/llm-completion-memory-context.ts": 6,
     "apps/gateway/src/services/llm-completion-service.ts": 51,
     "apps/gateway/src/services/mcp-diagnostics-service.ts": 6,
     "apps/gateway/src/services/mcp-server-admin-service.ts": 29,
     "apps/gateway/src/services/memory-item-helpers.ts": 3,
+    "apps/gateway/src/services/memory-lifecycle-service.ts": 1,
     "apps/gateway/src/services/onboarding-marker-helpers.ts": 7,
     "apps/gateway/src/services/orchestration-lifecycle-service.ts": 79,
     "apps/gateway/src/services/runtime-decision-recorder.ts": 2,
@@ -154,7 +155,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4,
     "apps/gateway/src/services/gateway/chat-stream-runtime.ts": 21
   },
-  "totalDependencyMemberAccesses": 6738,
+  "totalDependencyMemberAccesses": 6763,
   "dependencyMemberAccessesByFile": {
     "apps/gateway/src/services/a2a-grpc-client.ts": 2,
     "apps/gateway/src/services/a2a-grpc-outbound-service.ts": 10,
@@ -277,7 +278,7 @@
     "apps/gateway/src/services/extension-starter-pack.ts": 1,
     "apps/gateway/src/services/external-connector-catalog-service.ts": 4,
     "apps/gateway/src/services/external-side-effect-replay-job-service.ts": 4,
-    "apps/gateway/src/services/external-side-effect-runner-service.ts": 88,
+    "apps/gateway/src/services/external-side-effect-runner-service.ts": 93,
     "apps/gateway/src/services/files-route-service.ts": 15,
     "apps/gateway/src/services/follow-on-parity-report.ts": 135,
     "apps/gateway/src/services/gateway-kanban-wiring.ts": 1,
@@ -300,7 +301,7 @@
     "apps/gateway/src/services/improvement-route-service.ts": 35,
     "apps/gateway/src/services/improvement-service.ts": 170,
     "apps/gateway/src/services/improvement-snapshot-service.ts": 10,
-    "apps/gateway/src/services/integration-action-service.ts": 29,
+    "apps/gateway/src/services/integration-action-service.ts": 34,
     "apps/gateway/src/services/integration-channel-activity.ts": 10,
     "apps/gateway/src/services/integration-channel-service.ts": 59,
     "apps/gateway/src/services/integration-diagnostics-service.ts": 150,
@@ -328,7 +329,7 @@
     "apps/gateway/src/services/memory-context-service.ts": 24,
     "apps/gateway/src/services/memory-facade-service.ts": 5,
     "apps/gateway/src/services/memory-item-helpers.ts": 3,
-    "apps/gateway/src/services/memory-lifecycle-service.ts": 170,
+    "apps/gateway/src/services/memory-lifecycle-service.ts": 185,
     "apps/gateway/src/services/memory-maintenance-service.ts": 64,
     "apps/gateway/src/services/mesh-route-service.ts": 20,
     "apps/gateway/src/services/mobile-route-service.ts": 10,
@@ -465,8 +466,8 @@
     "apps/gateway/src/services/voice-route-service.ts",
     "apps/gateway/src/services/workspaces-route-service.ts"
   ],
-  "hostCallbackCollectorCorrectedAt": "2026-07-12T00:44:53.783Z",
-  "hostCallbackSourceRevision": "f9d3e238fb646ca36b93021194fb6f7cfc9eb3bc",
-  "dependencyMemberCollectorCapturedAt": "2026-07-12T00:44:53.783Z",
-  "dependencyMemberSourceRevision": "f9d3e238fb646ca36b93021194fb6f7cfc9eb3bc"
+  "hostCallbackCollectorCorrectedAt": "2026-07-12T07:54:30.757Z",
+  "hostCallbackSourceRevision": "5875c6db55c304e5bb7cdf4f81978cb9012d686a",
+  "dependencyMemberCollectorCapturedAt": "2026-07-12T07:54:30.757Z",
+  "dependencyMemberSourceRevision": "5875c6db55c304e5bb7cdf4f81978cb9012d686a"
 }
