@@ -39,6 +39,37 @@ describe("MCP public projection", () => {
     expect(raw.result.authorization).toBe("Bearer short");
   });
 
+  it("redacts the credential following a split or inline Authorization scheme token", () => {
+    const raw = {
+      args: [
+        "server.mjs",
+        "--authorization",
+        "Bearer",
+        "xyz-abc-123-def-456",
+        "--proxy-authorization=Basic",
+        "cHJveHktc2VjcmV0",
+        "--port",
+        "3000",
+      ],
+    };
+
+    expect(projectMcpPublicValue(raw)).toEqual({
+      args: [
+        "server.mjs",
+        "--authorization",
+        "[REDACTED]",
+        "[REDACTED]",
+        "--proxy-authorization=[REDACTED]",
+        "[REDACTED]",
+        "--port",
+        "3000",
+      ],
+    });
+    // The raw service-owned value is never mutated.
+    expect(raw.args[3]).toBe("xyz-abc-123-def-456");
+    expect(raw.args[5]).toBe("cHJveHktc2VjcmV0");
+  });
+
   it("preserves MCP auth/count semantics and JSON Schema shape while removing schema defaults", () => {
     const raw = {
       authReadiness: "ready",

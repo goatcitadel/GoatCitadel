@@ -2106,6 +2106,55 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
+  it("enforces a redact Citadel Ward on plugin-override output the plugin cannot know about", async () => {
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed" as const,
+        // The plugin handler knows nothing about wards; it returns a live secret.
+        result: { source: "plugin", note: "Authorization: Bearer plugin-token-supersecret" },
+        auditEventId: "evt-plugin-redact",
+        policyReason: "plugin override",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+
+    // The pre-execution policy check carries the redact ward decision.
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed; external runtime; redact ward",
+        auditEventId: "evt-policy-external",
+        wardEffect: "redact",
+        result: { externalRuntime: true, toolName: "web_search" },
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: { q: "foo" } }));
+
+    expect(result.outcome).toBe("executed");
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
+    // The ward scrubs the plugin's output before it leaves the coordinator.
+    expect(JSON.stringify(result.result)).not.toContain("plugin-token-supersecret");
+    expect((result.result as { note: string }).note).toContain("[REDACTED]");
+  });
+
   it("keeps protected approval action delivery on the native policy executor despite an active channel override", async () => {
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_native_only";
     const pluginHandler = vi.fn(
@@ -2415,6 +2464,55 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(policyInvoke).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "web_search", args: { q: "approved" }, externalRuntime: true }),
     );
+  });
+
+  it("enforces a redact Citadel Ward on approved plugin-override replay output", async () => {
+    const markExternalCallStarted = vi.fn();
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { source: "plugin", note: "Authorization: Bearer replay-token-supersecret" },
+        auditEventId: "evt-approved-plugin-redact",
+        policyReason: "plugin override",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const policyInvoke = vi.fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { policy: { requiresApproval: false } },
+        auditEventId: "evt-policy-pass",
+        wardEffect: "redact",
+        policyReason: "allowed by runtime policy; redact ward",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+
+    const result = await coordinator.invokeApprovedExternalRuntimeTool(
+      createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
+      markExternalCallStarted,
+    );
+
+    expect(result.outcome).toBe("executed");
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result.result)).not.toContain("replay-token-supersecret");
+    expect((result.result as { note: string }).note).toContain("[REDACTED]");
   });
 
   it("fails closed instead of replaying protected approval action delivery through an external runtime", async () => {

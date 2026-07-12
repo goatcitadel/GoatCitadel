@@ -67,9 +67,9 @@ export interface ChannelVoiceReplyInput {
   connectionConfig: Record<string, unknown>;
   connectionId?: string;
   /**
-   * Whether the inbound message that triggered this reply was a voice
-   * message. Not yet threaded on this branch — see the PR #175 note in
-   * `shouldSynthesizeVoiceReply`.
+   * Whether the inbound message that triggered this reply was a voice message.
+   * Threaded from the gateway reply path, which derives it from the persisted
+   * voice-transcript content prefix — see `shouldSynthesizeVoiceReply`.
    */
   wasVoiceInbound?: boolean;
 }

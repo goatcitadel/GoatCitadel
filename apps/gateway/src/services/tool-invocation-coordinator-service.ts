@@ -624,7 +624,11 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     // the seam where BOTH the produced output (result.result) and the ward decision
     // (result.wardEffect, surfaced by the policy engine in slice 3.1a) are in scope.
     // Non-redact invocations are untouched, so behavior is byte-identical to before.
-    result = applyRedactWardEffect(result);
+    // Plugin-override results carry no wardEffect of their own, so thread it from the
+    // pre-execution policy check (finalPolicyCheck) so the ward is not silently dropped
+    // on that path; for the engine path finalPolicyCheck is undefined and the result's
+    // own wardEffect is used, preserving prior behavior exactly.
+    result = withRedactWardApplied(result, finalPolicyCheck);
 
     const approvalForResult =
       result.outcome === "approval_required" && result.approvalId
@@ -821,9 +825,15 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       },
     });
     markExternalCallStarted?.();
-    const result = await overrideHandler(
-      normalizedRequest.args ?? {},
-      buildPluginToolExecutionContext(normalizedRequest, finalPolicyCheck, undefined),
+    // Apply the redact ward before the result flows into realtime projection and the
+    // evidence envelope below; the plugin result carries no wardEffect, so thread the
+    // decision from finalPolicyCheck (mirrors the primary invocation seam).
+    const result = withRedactWardApplied(
+      await overrideHandler(
+        normalizedRequest.args ?? {},
+        buildPluginToolExecutionContext(normalizedRequest, finalPolicyCheck, undefined),
+      ),
+      finalPolicyCheck,
     );
     const permissionProfileId =
       normalizedRequest.policyContext?.permissionProfileId ?? normalizedRequest.permissionProfileId;
@@ -1387,6 +1397,24 @@ function applyRedactWardEffect(result: ToolInvokeResult): ToolInvokeResult {
     ...result,
     result: redactSecretsDeep(result.result) as Record<string, unknown>,
   };
+}
+
+/**
+ * Applies the redact Citadel Ward to a result, threading the ward decision from the
+ * pre-execution policy check when the produced result does not already carry one.
+ *
+ * Plugin-override handlers return a plain result with no `wardEffect` (they know
+ * nothing about wards), so on those paths the ward decision lives only on the
+ * pre-execution `policyCheck`. Without this, a `redact` ward matched for a
+ * plugin-overridden tool would be silently dropped — enforced on the engine and MCP
+ * seams but not on the plugin-override sibling path.
+ */
+function withRedactWardApplied(result: ToolInvokeResult, policyCheck: ToolInvokeResult | undefined): ToolInvokeResult {
+  const withWard =
+    result.wardEffect === undefined && policyCheck?.wardEffect !== undefined
+      ? { ...result, wardEffect: policyCheck.wardEffect }
+      : result;
+  return applyRedactWardEffect(withWard);
 }
 
 /** Recursively rewrite string leaves through `redactSecretText`, preserving structure. */

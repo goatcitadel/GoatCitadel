@@ -5,6 +5,8 @@ import { projectCredentialUrlsInText, projectPublicSecretValue } from "./public-
 const ARGV_LIKE_KEY_PATTERN = /^(?:argv|args|execArgv|commandArgs|command_argv)$/i;
 const SECRET_ARG_FLAG_PATTERN =
   /^--?(?:api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|secret|password|authorization|proxy-authorization)(?:=|$)/i;
+const AUTHORIZATION_ARG_FLAG_PATTERN = /^--?(?:authorization|proxy[-_]?authorization)$/i;
+const AUTHORIZATION_SCHEME_PATTERN = /^(?:Bearer|Basic)$/i;
 const SENSITIVE_SCHEMA_PROPERTY_PATTERN =
   /(?:^|[-_])(?:api[-_]?key|apikey|access[-_]?key|private[-_]?key|authorization|auth|bearer|cookie|credential|credentials|password|passwd|secret|signature|token)(?:[-_]|$)/i;
 const SCHEMA_VALUE_KEYS = new Set(["const", "default", "enum", "example", "examples"]);
@@ -67,7 +69,7 @@ function toMcpServerUpdateShape(server: McpServerRecord): McpServerUpdateInput {
 function projectMcpSpecificShapes(original: unknown, projected: unknown, key?: string): unknown {
   if (Array.isArray(projected)) {
     if (key && ARGV_LIKE_KEY_PATTERN.test(key)) {
-      return projectArgv(projected);
+      return projectArgv(Array.isArray(original) ? original : [], projected);
     }
     const originalItems = Array.isArray(original) ? original : [];
     return projected.map((item, index) => projectMcpSpecificShapes(originalItems[index], item));
@@ -93,26 +95,76 @@ function projectMcpSpecificShapes(original: unknown, projected: unknown, key?: s
   return output;
 }
 
-function projectArgv(argv: unknown[]): unknown[] {
+// Secret-flag decisions are keyed on the RAW argv (`original`), not the
+// structured-projected copy: the generic projector already rewrites the value in a
+// `--authorization=Bearer` token to `[REDACTED]`, which would otherwise hide the
+// scheme word and defeat the trailing-credential lookahead below.
+function projectArgv(original: unknown[], projected: unknown[]): unknown[] {
   let redactNext = false;
-  return argv.map((entry) => {
-    if (redactNext) {
-      redactNext = false;
+  let authorizationFlagPending = false;
+  let redactFollowingAuthorizationCredential = false;
+  return projected.map((entry, index) => {
+    const originalEntry = original[index];
+    if (redactFollowingAuthorizationCredential) {
+      // A `--authorization Bearer <credential>` sequence: the scheme word was
+      // consumed as the flag's value on the previous step, so the credential
+      // that follows it must also be scrubbed instead of leaking in the clear.
+      redactFollowingAuthorizationCredential = false;
       return MARKER;
     }
-    if (typeof entry !== "string") {
+    if (redactNext) {
+      redactNext = false;
+      if (
+        authorizationFlagPending &&
+        typeof originalEntry === "string" &&
+        isAuthorizationScheme(originalEntry) &&
+        hasFollowingArgvCredential(original, index)
+      ) {
+        redactFollowingAuthorizationCredential = true;
+      }
+      authorizationFlagPending = false;
+      return MARKER;
+    }
+    if (typeof originalEntry !== "string") {
       return entry;
     }
-    if (!SECRET_ARG_FLAG_PATTERN.test(entry)) {
-      return projectCredentialUrlsInText(entry);
+    if (!SECRET_ARG_FLAG_PATTERN.test(originalEntry)) {
+      return typeof entry === "string" ? projectCredentialUrlsInText(entry) : entry;
     }
-    const equalsIndex = entry.indexOf("=");
+    const equalsIndex = originalEntry.indexOf("=");
     if (equalsIndex >= 0) {
-      return `${entry.slice(0, equalsIndex + 1)}${MARKER}`;
+      if (
+        isAuthorizationArgFlag(originalEntry.slice(0, equalsIndex)) &&
+        isAuthorizationScheme(originalEntry.slice(equalsIndex + 1)) &&
+        hasFollowingArgvCredential(original, index)
+      ) {
+        // `--authorization=Bearer <credential>`: the credential rides in the
+        // next argv element, so redact it too.
+        redactFollowingAuthorizationCredential = true;
+      }
+      return `${originalEntry.slice(0, equalsIndex + 1)}${MARKER}`;
     }
     redactNext = true;
+    authorizationFlagPending = isAuthorizationArgFlag(originalEntry);
     return entry;
   });
+}
+
+function isAuthorizationArgFlag(value: string): boolean {
+  return AUTHORIZATION_ARG_FLAG_PATTERN.test(value.trim());
+}
+
+function isAuthorizationScheme(value: string): boolean {
+  return AUTHORIZATION_SCHEME_PATTERN.test(value.trim());
+}
+
+function hasFollowingArgvCredential(values: unknown[], schemeIndex: number): boolean {
+  const following = values[schemeIndex + 1];
+  return typeof following === "string" && !looksLikeArgvFlag(following);
+}
+
+function looksLikeArgvFlag(value: string): boolean {
+  return /^--?[A-Za-z][A-Za-z0-9_-]*(?:=|$)/.test(value.trim());
 }
 
 function reconcileMcpArgvForPublicUpdate(raw: string[], projected: string[], incoming: string[]): string[] {
