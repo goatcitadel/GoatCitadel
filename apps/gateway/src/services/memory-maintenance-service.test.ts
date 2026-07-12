@@ -102,6 +102,10 @@ class FakeMemoryMaintenanceRepo {
     return this.requireState(record.workspaceId);
   }
 
+  public lockStateForUpdate(fallback: MemoryMaintenanceStateRecord): MemoryMaintenanceStateRecord {
+    return this.findState(fallback.workspaceId) ?? this.upsertState(fallback);
+  }
+
   public requireState(workspaceId: string): MemoryMaintenanceStateRecord {
     const record = this.findState(workspaceId);
     if (!record) {
@@ -296,7 +300,7 @@ function createHarness() {
   };
 
   const callbacks = {
-    createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
+    createDurableRun(input: DurableRunCreateRequest, _options?: { deferRealtime?: boolean }): DurableRunRecord {
       durableRunCounter += 1;
       const now = new Date().toISOString();
       const run = {
@@ -517,7 +521,7 @@ describe("MemoryMaintenanceService due evaluation", () => {
     expect(harness.memoryMaintenance.listRuns("default")).toHaveLength(1);
   });
 
-  it("queues a hybrid_due Dream run after a successful root turn when the session is eligible", async () => {
+  it("queues a hybrid_due Dream run without live publication inside a fenced post-turn transaction", () => {
     const harness = createHarness();
     harness.changedSessionCounts.set("default", 4);
     harness.sessionMeta.set("sess-root", {
@@ -549,11 +553,19 @@ describe("MemoryMaintenanceService due evaluation", () => {
       updatedAt: "2026-04-01T00:00:00.000Z",
     });
 
-    await harness.service.noteSuccessfulRootTurn("sess-root");
+    const createDurableRun = vi.spyOn(harness.callbacks, "createDurableRun");
+    const result = harness.service.noteSuccessfulRootTurnSync("sess-root");
 
     const runs = harness.memoryMaintenance.listRuns("default");
     expect(runs).toHaveLength(1);
     expect(runs[0]?.triggerSource).toBe("hybrid_due");
+    expect(result).toMatchObject({
+      status: "enqueued",
+      memoryMaintenanceRunId: runs[0]?.runId,
+      durableRunId: runs[0]?.durableRunId,
+    });
+    expect(createDurableRun).toHaveBeenCalledWith(expect.any(Object), { deferRealtime: true });
+    expect(harness.publishRealtime).not.toHaveBeenCalled();
   });
 
   it("does not queue a scheduled-only Dream run from post-turn evaluation", async () => {

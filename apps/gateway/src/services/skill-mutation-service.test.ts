@@ -1,7 +1,8 @@
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Storage } from "@goatcitadel/storage";
 import type { SkillLifecycleRecord } from "@goatcitadel/contracts";
 import { SkillMutationService, type SkillMutationLifecycleStore } from "./skill-mutation-service.js";
@@ -229,5 +230,193 @@ describe("SkillMutationService", () => {
     const restored = harness.storage.skillLifecycle.find(first.skillId);
     // The prior lifecycle (approved, from the first promote) is restored verbatim.
     expect(restored?.lifecycleState).toBe("approved");
+  });
+
+  it("returns an already-committed durable draft by execution identity without rewriting or demoting it", async () => {
+    const harness = createHarness();
+    const identity = "chat-post-commit-child-replay";
+    const skillId = "background-review-replay-safe";
+    const first = await harness.service.draftSkillMutation({
+      skillId,
+      evaluationRunId: identity,
+      sourceTurnId: "turn-replay",
+      skillMarkdown: buildSkillMarkdown("Original durable candidate."),
+    });
+    harness.service.promoteSelfAuthoredSkill(first.skillId);
+
+    const replay = await harness.service.draftSkillMutation({
+      skillId,
+      evaluationRunId: identity,
+      sourceTurnId: "turn-replay",
+      skillMarkdown: buildSkillMarkdown("Different provider replay output that must not overwrite."),
+    });
+
+    expect(replay.replayed).toBe(true);
+    expect(fsSync.readFileSync(first.skillFilePath, "utf8")).toContain("Original durable candidate.");
+    expect(fsSync.readFileSync(first.skillFilePath, "utf8")).not.toContain("Different provider replay output");
+    expect(harness.storage.skillLifecycle.find(skillId)?.lifecycleState).toBe("approved");
+  });
+
+  it("rolls back the first artifact when the companion provenance write fails", async () => {
+    const harness = createHarness();
+    const writeFile = fs.writeFile.bind(fs);
+    let writeCount = 0;
+    const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      writeCount += 1;
+      if (writeCount === 2) {
+        throw new Error("simulated source.json write failure");
+      }
+      return writeFile(...args);
+    });
+
+    await expect(
+      harness.service.draftSkillMutation({ skillMarkdown: buildSkillMarkdown("Atomic file pair.") }),
+    ).rejects.toThrow("simulated source.json write failure");
+
+    writeSpy.mockRestore();
+    const skillDir = path.join(harness.service.selfSkillsRoot, "self-authored-helper");
+    expect(fsSync.existsSync(path.join(skillDir, "SKILL.md"))).toBe(false);
+    expect(fsSync.existsSync(path.join(skillDir, "source.json"))).toBe(false);
+  });
+
+  it("rolls back both artifacts when lifecycle persistence fails", async () => {
+    const harness = createHarness();
+    const upsertSpy = vi.spyOn(harness.storage.skillLifecycle, "upsert").mockImplementation(() => {
+      throw new Error("simulated lifecycle failure");
+    });
+
+    await expect(
+      harness.service.draftSkillMutation({ skillMarkdown: buildSkillMarkdown("Rollback lifecycle failure.") }),
+    ).rejects.toThrow("simulated lifecycle failure");
+
+    upsertSpy.mockRestore();
+    const skillDir = path.join(harness.service.selfSkillsRoot, "self-authored-helper");
+    expect(fsSync.existsSync(path.join(skillDir, "SKILL.md"))).toBe(false);
+    expect(fsSync.existsSync(path.join(skillDir, "source.json"))).toBe(false);
+  });
+
+  it("rolls back the synchronous public path when its companion write fails", () => {
+    const harness = createHarness();
+    const writeFileSync = fsSync.writeFileSync.bind(fsSync);
+    let writeCount = 0;
+    const writeSpy = vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, data, options) => {
+      writeCount += 1;
+      if (writeCount === 2) {
+        throw new Error("simulated sync source.json failure");
+      }
+      return writeFileSync(file, data, options);
+    });
+
+    expect(() =>
+      harness.service.applySkillMutationSync({ skillMarkdown: buildSkillMarkdown("Sync rollback.") }),
+    ).toThrow("simulated sync source.json failure");
+
+    writeSpy.mockRestore();
+    const skillDir = path.join(harness.service.selfSkillsRoot, "self-authored-helper");
+    expect(fsSync.existsSync(path.join(skillDir, "SKILL.md"))).toBe(false);
+    expect(fsSync.existsSync(path.join(skillDir, "source.json"))).toBe(false);
+  });
+
+  it("reports both the mutation and rollback failures for manual reconciliation", async () => {
+    const harness = createHarness();
+    const writeFile = fs.writeFile.bind(fs);
+    let writeCount = 0;
+    const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      writeCount += 1;
+      if (writeCount === 2) {
+        throw new Error("simulated mutation failure");
+      }
+      return writeFile(...args);
+    });
+    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValue(new Error("simulated rollback failure"));
+
+    const failure = await harness.service
+      .draftSkillMutation({ skillMarkdown: buildSkillMarkdown("Rollback failure evidence.") })
+      .catch((error: unknown) => error);
+
+    writeSpy.mockRestore();
+    rmSpy.mockRestore();
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).message).toMatch(/manual reconciliation is required/i);
+    expect((failure as AggregateError).errors).toHaveLength(2);
+  });
+
+  it("creates or verifies a persisted durable plan without overwriting conflicting files", () => {
+    const harness = createHarness();
+    const prepared = harness.service.prepareDurableSkillMutation({
+      skillId: "background-review-plan",
+      evaluationRunId: "effect-plan-1",
+      sourceTurnId: "turn-plan-1",
+      skillMarkdown: buildSkillMarkdown("Persisted exact plan.", "Background Review Plan"),
+    });
+
+    harness.service.applyPreparedSkillMutationFilesSync(prepared);
+    expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
+    harness.service.applyPreparedSkillMutationFilesSync(prepared);
+
+    const skillFilePath = path.join(harness.service.selfSkillsRoot, prepared.skillId, "SKILL.md");
+    const sourceJsonPath = path.join(harness.service.selfSkillsRoot, prepared.skillId, "source.json");
+    fsSync.rmSync(sourceJsonPath);
+    harness.service.applyPreparedSkillMutationFilesSync(prepared);
+    expect(JSON.parse(fsSync.readFileSync(sourceJsonPath, "utf8"))).toMatchObject({
+      evaluationRunId: "effect-plan-1",
+    });
+
+    fsSync.writeFileSync(skillFilePath, buildSkillMarkdown("Operator edit.", "Background Review Plan"), "utf8");
+    expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow(/conflict/i);
+    expect(fsSync.readFileSync(skillFilePath, "utf8")).toContain("Operator edit.");
+    expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
+  });
+
+  it("does not publish a partial durable artifact when the exclusive write creates then throws", () => {
+    const harness = createHarness();
+    const prepared = harness.service.prepareDurableSkillMutation({
+      skillId: "background-review-partial",
+      evaluationRunId: "effect-plan-partial",
+      skillMarkdown: buildSkillMarkdown("Complete planned bytes.", "Background Review Partial"),
+    });
+    const writeFileSync = fsSync.writeFileSync.bind(fsSync);
+    let injected = false;
+    const writeSpy = vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, data, options) => {
+      if (!injected) {
+        injected = true;
+        writeFileSync(file, String(data).slice(0, 12), options);
+        throw new Error("simulated create-then-throw");
+      }
+      return writeFileSync(file, data, options);
+    });
+
+    expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow("simulated create-then-throw");
+
+    writeSpy.mockRestore();
+    const skillDir = path.join(harness.service.selfSkillsRoot, prepared.skillId);
+    expect(fsSync.existsSync(path.join(skillDir, "SKILL.md"))).toBe(false);
+    expect(fsSync.existsSync(path.join(skillDir, "source.json"))).toBe(false);
+    expect(fsSync.existsSync(skillDir) ? fsSync.readdirSync(skillDir) : []).toEqual([]);
+  });
+
+  it("keeps the exact published target valid when post-link temp cleanup fails", () => {
+    const harness = createHarness();
+    const prepared = harness.service.prepareDurableSkillMutation({
+      skillId: "background-review-temp-cleanup",
+      evaluationRunId: "effect-temp-cleanup",
+      skillMarkdown: buildSkillMarkdown("Published before cleanup.", "Background Review Temp Cleanup"),
+    });
+    const rmSync = fsSync.rmSync.bind(fsSync);
+    let injected = false;
+    const rmSpy = vi.spyOn(fsSync, "rmSync").mockImplementation((target, options) => {
+      if (!injected && String(target).endsWith(".tmp")) {
+        injected = true;
+        throw new Error("simulated post-link temp cleanup failure");
+      }
+      return rmSync(target, options);
+    });
+
+    expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).not.toThrow();
+
+    rmSpy.mockRestore();
+    const skillFilePath = path.join(harness.service.selfSkillsRoot, prepared.skillId, "SKILL.md");
+    expect(fsSync.readFileSync(skillFilePath, "utf8")).toBe(prepared.skillMarkdown);
+    expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
   });
 });

@@ -3,8 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Storage } from "@goatcitadel/storage";
-import type { ApprovalCreateInput, ApprovalRequest, ApprovalResolveInput } from "@goatcitadel/contracts";
+import { Pool } from "pg";
+import {
+  POSTGRES_MIGRATIONS,
+  PostgresDatabaseClient,
+  PostgresSyncDatabaseClient,
+  Storage,
+  runPostgresMigrations,
+} from "@goatcitadel/storage";
+import {
+  APPROVAL_EXPIRY_ACTOR_ID,
+  type ApprovalCreateInput,
+  type ApprovalRequest,
+  type ApprovalResolveInput,
+} from "@goatcitadel/contracts";
 import {
   createDeviceAccessRequest,
   expireDeviceAccessRequestIfNeeded,
@@ -32,6 +44,13 @@ import {
   type SettingsRuntimeDependencies,
 } from "./settings-auth-service.js";
 import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
+import {
+  COMPANION_ACCESS_TOKEN_TTL_MS,
+  COMPANION_REFRESH_TOKEN_TTL_MS,
+  COMPANION_REQUEST_CLOCK_SKEW_MS,
+  DEVICE_ACCESS_REQUEST_TTL_MS,
+  DEVICE_ACCESS_TOKEN_TTL_MS,
+} from "./device-access-helpers.js";
 import { DeviceTokenVault } from "./device-token-vault.js";
 import {
   preserveSettingsSecretsForPublicUpdate,
@@ -225,14 +244,17 @@ function buildHost(): SettingsRuntimeDependencies {
   };
 }
 
-function buildAuthHarness(): AuthHarness {
-  const rootDir = join(tmpdir(), `goatcitadel-settings-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {}): AuthHarness {
+  const rootDir =
+    options.rootDir ?? join(tmpdir(), `goatcitadel-settings-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(rootDir, { recursive: true });
-  const storage = new Storage({
-    dbPath: ":memory:",
-    transcriptsDir: join(rootDir, "transcripts"),
-    auditDir: join(rootDir, "audit"),
-  });
+  const storage =
+    options.storage ??
+    new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: join(rootDir, "transcripts"),
+      auditDir: join(rootDir, "audit"),
+    });
   const auditRecords: Record<string, unknown>[] = [];
   const realtimeEvents: AuthHarness["realtimeEvents"] = [];
   const deviceTokenVault = new DeviceTokenVault();
@@ -1431,6 +1453,122 @@ describe("settings-auth-service device access lifecycle", () => {
     );
   });
 
+  it.each(["2099-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"])(
+    "issues device-request TTLs from database time under a %s host clock",
+    async (hostClock) => {
+      const databaseNowBefore = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(hostClock));
+      try {
+        const harness = buildAuthHarness();
+        const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+        const stored = getAuthDeviceRequestById(harness.deps, request.requestId);
+
+        expect(stored).toBeDefined();
+        expect(Math.abs(Date.parse(stored!.createdAt) - databaseNowBefore)).toBeLessThan(5_000);
+        expect(Date.parse(stored!.expiresAt) - Date.parse(stored!.createdAt)).toBe(DEVICE_ACCESS_REQUEST_TTL_MS);
+        expect(request.expiresAt).toBe(stored!.expiresAt);
+
+        vi.setSystemTime(new Date(databaseNowBefore));
+        await expect(
+          getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret),
+        ).resolves.toMatchObject({ status: "pending" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["2099-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"])(
+    "issues device grants and secure handoff TTLs from database time under a %s host clock",
+    async (hostClock) => {
+      const databaseNowBefore = Date.now();
+      const harness = buildAuthHarness();
+      const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(hostClock));
+      try {
+        await approveDeviceRequest(harness, request.approvalId);
+        const grant = listDeviceAccessGrants(harness.deps)[0]!;
+        expect(Math.abs(Date.parse(grant.createdAt) - databaseNowBefore)).toBeLessThan(5_000);
+        expect(Date.parse(grant.expiresAt!) - Date.parse(grant.createdAt)).toBe(DEVICE_ACCESS_TOKEN_TTL_MS);
+
+        const delivered = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
+        expect(delivered.deviceToken).toBeDefined();
+        expect(delivered.deviceTokenExpiresAt).toBe(grant.expiresAt);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("validates device grants against database time and fails closed for malformed expiry", async () => {
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
+    try {
+      expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
+      expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET expires_at = NULL, revoked_at = NULL WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId });
+    expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
+    expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeDefined();
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET expires_at = 'not-a-timestamp' WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId });
+    expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
+    expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeUndefined();
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET expires_at = NULL, revoked_at = '' WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId });
+    expect(getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
+    expect(validateDeviceAccessToken(harness.deps, grant.deviceToken)).toBeUndefined();
+  });
+
+  it("terminalizes malformed and boundary-expired device requests using database timestamp parsing", async () => {
+    const malformedHarness = buildAuthHarness();
+    const malformed = await createDeviceAccessRequest(malformedHarness.deps, { deviceType: "desktop" }, {});
+    malformedHarness.storage.gatewaySql
+      .prepare("UPDATE auth_device_requests SET expires_at = 'not-a-timestamp' WHERE request_id = @requestId")
+      .run({ requestId: malformed.requestId });
+
+    await expect(expirePendingDeviceAccessRequests(malformedHarness.deps, 10)).resolves.toBe(1);
+    expect(getAuthDeviceRequestById(malformedHarness.deps, malformed.requestId)?.status).toBe("expired");
+    expect(malformedHarness.storage.approvals.get(malformed.approvalId).status).toBe("rejected");
+
+    const boundaryHarness = buildAuthHarness();
+    const boundary = await createDeviceAccessRequest(boundaryHarness.deps, { deviceType: "desktop" }, {});
+    const databaseNow = boundaryHarness.storage.gatewaySql.readDatabaseNow();
+    boundaryHarness.storage.gatewaySql
+      .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt WHERE request_id = @requestId")
+      .run({ requestId: boundary.requestId, expiresAt: databaseNow.replace("Z", "+00:00") });
+
+    await expect(expirePendingDeviceAccessRequests(boundaryHarness.deps, 10)).resolves.toBe(1);
+    expect(getAuthDeviceRequestById(boundaryHarness.deps, boundary.requestId)?.status).toBe("expired");
+
+    const futureHarness = buildAuthHarness();
+    const future = await createDeviceAccessRequest(futureHarness.deps, { deviceType: "desktop" }, {});
+    futureHarness.storage.gatewaySql
+      .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt WHERE request_id = @requestId")
+      .run({
+        requestId: future.requestId,
+        expiresAt: new Date(Date.parse(futureHarness.storage.gatewaySql.readDatabaseNow()) + 60_000)
+          .toISOString()
+          .replace("Z", "+00:00"),
+      });
+    await expect(expirePendingDeviceAccessRequests(futureHarness.deps, 10)).resolves.toBe(0);
+    expect(getAuthDeviceRequestById(futureHarness.deps, future.requestId)?.status).toBe("pending");
+  });
+
   it("rolls back the device grant, request, approval, and plaintext handoff when effect enqueue fails", async () => {
     const harness = buildAuthHarness();
     const request = await createDeviceAccessRequest(
@@ -1523,12 +1661,9 @@ describe("settings-auth-service device access lifecycle", () => {
   });
 
   it("rolls back when a device request expires while its approval transaction is in flight", async () => {
-    vi.useFakeTimers();
-    try {
-      const startedAt = new Date("2026-07-10T12:00:00.000Z");
-      vi.setSystemTime(startedAt);
-      const harness = buildAuthHarness();
-      const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    vi.mocked(harness.deps.enqueueApprovalObservabilityEffects).mockImplementationOnce(() => {
       harness.storage.gatewaySql
         .prepare(
           `
@@ -1539,27 +1674,22 @@ describe("settings-auth-service device access lifecycle", () => {
         )
         .run({
           requestId: request.requestId,
-          expiresAt: new Date(startedAt.getTime() + 1_000).toISOString(),
+          expiresAt: new Date(Date.parse(harness.storage.gatewaySql.readDatabaseNow()) - 1_000).toISOString(),
         });
-      vi.mocked(harness.deps.enqueueApprovalObservabilityEffects).mockImplementationOnce(() => {
-        vi.setSystemTime(new Date(startedAt.getTime() + 2_000));
-        return [];
-      });
+      return [];
+    });
 
-      await expect(
-        resolveDeviceAccessApproval(harness.deps, harness.storage.approvals.get(request.approvalId), {
-          decision: "approve",
-          resolvedBy: "operator:test",
-        }),
-      ).rejects.toThrow(/expired before the approval transaction committed/i);
+    await expect(
+      resolveDeviceAccessApproval(harness.deps, harness.storage.approvals.get(request.approvalId), {
+        decision: "approve",
+        resolvedBy: "operator:test",
+      }),
+    ).rejects.toThrow(/expired before the approval transaction committed/i);
 
-      expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
-      expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
-      expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
-      expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(harness.storage.approvals.get(request.approvalId).status).toBe("pending");
+    expect(getAuthDeviceRequestById(harness.deps, request.requestId)?.status).toBe("pending");
+    expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
+    expect(harness.deviceTokenVault.has(request.requestId)).toBe(false);
   });
 
   it("expires stale pending device requests through status polling", async () => {
@@ -1599,7 +1729,8 @@ describe("settings-auth-service device access lifecycle", () => {
     expect(listDeviceAccessGrants(harness.deps)).toEqual([]);
     expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
-      expect.objectContaining({ decision: "reject", resolvedBy: "system:auth-device-expiry" }),
+      expect.objectContaining({ decision: "reject", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID }),
+      { allowExpired: true },
     );
     expect(harness.auditRecords.map((record) => record.event)).toEqual(
       expect.arrayContaining(["auth.device_request.expire", "approval.resolve"]),
@@ -1623,7 +1754,26 @@ describe("settings-auth-service device access lifecycle", () => {
     expect(harness.storage.approvals.get(request.approvalId).status).toBe("rejected");
     expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
-      expect.objectContaining({ resolvedBy: "system:auth-device-expiry" }),
+      expect.objectContaining({ resolvedBy: APPROVAL_EXPIRY_ACTOR_ID }),
+      { allowExpired: true },
+    );
+  });
+
+  it("preserves wait-wake effect authority when a hook-shortened device approval has elapsed", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    harness.storage.gatewaySql
+      .prepare("UPDATE approvals SET expires_at = @expiresAt WHERE approval_id = @approvalId")
+      .run({ approvalId: request.approvalId, expiresAt: new Date(Date.now() - 2_000).toISOString() });
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt WHERE request_id = @requestId")
+      .run({ requestId: request.requestId, expiresAt: new Date(Date.now() - 1_000).toISOString() });
+
+    await expect(expirePendingDeviceAccessRequests(harness.deps, 10)).resolves.toBe(1);
+    expect(harness.deps.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: request.approvalId, status: "rejected" }),
+      expect.objectContaining({ decision: "reject", resolvedBy: APPROVAL_EXPIRY_ACTOR_ID }),
+      { allowExpired: true },
     );
   });
 
@@ -1906,6 +2056,22 @@ describe("settings-auth-service device token is never at rest", () => {
     expect(second.message).toContain("secure handoff");
   });
 
+  it("uses database time for secure delivery when the polling node clock is fast", async () => {
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    await approveDeviceRequest(harness, request.approvalId);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
+    try {
+      const first = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
+      expect(first.deviceToken).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(first.deviceTokenExpiresAt).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not burn the handoff when a different gateway node lacks the plaintext", async () => {
     const harness = buildAuthHarness();
     const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
@@ -2063,6 +2229,76 @@ describe("settings-auth-service companion session lifecycle", () => {
     expect(harness.realtimeEvents.map((event) => event.eventType)).toContain("auth_companion_session_revoked");
   });
 
+  it("issues and validates companion credentials from database time under host-clock skew", async () => {
+    const databaseNowBefore = Date.now();
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+    const keys = createCompanionSigningKeys();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
+    try {
+      const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+        signingPublicKeyPem: keys.publicKeyPem,
+      });
+      expect(Math.abs(Date.parse(session.issuedAt) - databaseNowBefore)).toBeLessThan(5_000);
+      expect(Date.parse(session.accessTokenExpiresAt) - Date.parse(session.issuedAt)).toBe(
+        COMPANION_ACCESS_TOKEN_TTL_MS,
+      );
+      expect(Date.parse(session.refreshTokenExpiresAt) - Date.parse(session.issuedAt)).toBe(
+        COMPANION_REFRESH_TOKEN_TTL_MS,
+      );
+      expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
+      expect(listCompanionSessions(harness.deps).items).toEqual([
+        expect.objectContaining({ sessionId: session.sessionId }),
+      ]);
+
+      const timestamp = new Date(databaseNowBefore).toISOString();
+      const body = { action: "clock-safe-sync" };
+      const signature = signCompanionRequest({
+        privateKeyPem: keys.privateKeyPem,
+        method: "post",
+        path: "/api/v1/companion/sync",
+        timestamp,
+        nonce: "nonce-db-clock-1",
+        body,
+      });
+      const signedRequest = {
+        sessionId: session.sessionId,
+        method: "post",
+        path: "/api/v1/companion/sync",
+        timestamp,
+        nonce: "nonce-db-clock-1",
+        signature,
+        body,
+      };
+      expect(() => verifyCompanionRequestSignature(harness.deps, signedRequest)).not.toThrow();
+      harness.storage.gatewaySql
+        .prepare(
+          `
+            UPDATE companion_request_replays
+            SET expires_at = 'not-a-timestamp'
+            WHERE session_id = @sessionId AND nonce = @nonce
+          `,
+        )
+        .run({ sessionId: session.sessionId, nonce: "nonce-db-clock-1" });
+      expect(() => verifyCompanionRequestSignature(harness.deps, signedRequest)).toThrow(
+        "Companion request replay detected.",
+      );
+      const replay = harness.storage.gatewaySql
+        .prepare(
+          "SELECT created_at, expires_at FROM companion_request_replays WHERE session_id = @sessionId AND nonce = @nonce",
+        )
+        .get({ sessionId: session.sessionId, nonce: "nonce-db-clock-1" }) as
+        | { created_at: string; expires_at: string }
+        | undefined;
+      expect(replay).toBeDefined();
+      expect(Math.abs(Date.parse(replay!.created_at) - databaseNowBefore)).toBeLessThan(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records accepted, replayed, invalid-signature, stale-timestamp, and inactive signature checks", async () => {
     const harness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(harness);
@@ -2150,6 +2386,143 @@ describe("settings-auth-service companion session lifecycle", () => {
         "auth.companion_request.session_inactive",
       ]),
     );
+  });
+
+  it("preserves nullable legacy grant expiry across companion exchange, access, refresh, and listing", async () => {
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET expires_at = NULL WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId });
+    const keys = createCompanionSigningKeys();
+    const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+      signingPublicKeyPem: keys.publicKeyPem,
+    });
+
+    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
+    expect(listCompanionSessions(harness.deps).items).toEqual([
+      expect.objectContaining({ sessionId: session.sessionId, grantExpiresAt: undefined }),
+    ]);
+    const rotated = await rotateCompanionSession(harness.deps, { refreshToken: session.refreshToken });
+    expect(validateCompanionAccessToken(harness.deps, rotated.accessToken)).toBeDefined();
+  });
+
+  it("fails closed for malformed companion expiries and empty revocation markers", async () => {
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+    const keys = createCompanionSigningKeys();
+    const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+      signingPublicKeyPem: keys.publicKeyPem,
+    });
+    const grantExpiresAt = listDeviceAccessGrants(harness.deps).find(
+      (candidate) => candidate.grantId === grant.grantId,
+    )!.expiresAt!;
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE companion_sessions SET access_token_expires_at = '' WHERE session_id = @sessionId")
+      .run({ sessionId: session.sessionId });
+    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    harness.storage.gatewaySql
+      .prepare(
+        "UPDATE companion_sessions SET access_token_expires_at = @expiresAt, revoked_at = NULL WHERE session_id = @sessionId",
+      )
+      .run({ sessionId: session.sessionId, expiresAt: session.accessTokenExpiresAt });
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET expires_at = '' WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId });
+    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    expect(listCompanionSessions(harness.deps).items).toEqual([]);
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET expires_at = @expiresAt WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId, expiresAt: grantExpiresAt });
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE companion_sessions SET revoked_at = '' WHERE session_id = @sessionId")
+      .run({ sessionId: session.sessionId });
+    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+    harness.storage.gatewaySql
+      .prepare("UPDATE companion_sessions SET revoked_at = NULL WHERE session_id = @sessionId")
+      .run({ sessionId: session.sessionId });
+
+    harness.storage.gatewaySql
+      .prepare("UPDATE auth_device_grants SET revoked_at = '' WHERE grant_id = @grantId")
+      .run({ grantId: grant.grantId });
+    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeUndefined();
+  });
+
+  it("rechecks companion refresh and grant authority in the winning update", async () => {
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+    const keys = createCompanionSigningKeys();
+    const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+      signingPublicKeyPem: keys.publicKeyPem,
+    });
+    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    let intercepted = false;
+    const preparedSql: string[] = [];
+    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      preparedSql.push(sql);
+      const statement = originalPrepare(sql);
+      if (!intercepted && sql.includes("SET access_token_hash = @accessTokenHash")) {
+        intercepted = true;
+        return new Proxy(statement, {
+          get(target, prop, receiver) {
+            if (prop === "run") {
+              return (params: { sessionId: string }) => {
+                originalPrepare("UPDATE auth_device_grants SET revoked_at = '' WHERE grant_id = @grantId").run({
+                  grantId: grant.grantId,
+                });
+                return target.run(params);
+              };
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }) as never;
+      }
+      return statement;
+    });
+
+    await expect(rotateCompanionSession(harness.deps, { refreshToken: session.refreshToken })).rejects.toThrow(
+      "Companion session refresh token has already been rotated.",
+    );
+    const grantLockIndex = preparedSql.findIndex(
+      (sql) =>
+        sql.includes("SELECT *") && sql.includes("FROM auth_device_grants") && sql.includes("grant_id = @grantId"),
+    );
+    const sessionLockIndex = preparedSql.findIndex(
+      (sql) =>
+        sql.includes("SELECT *") && sql.includes("FROM companion_sessions") && sql.includes("session_id = @sessionId"),
+    );
+    expect(grantLockIndex).toBeGreaterThanOrEqual(0);
+    expect(sessionLockIndex).toBeGreaterThan(grantLockIndex);
+  });
+
+  it("locks companion access authority in grant then session order", async () => {
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+    const keys = createCompanionSigningKeys();
+    const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+      signingPublicKeyPem: keys.publicKeyPem,
+    });
+    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    const preparedSql: string[] = [];
+    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      preparedSql.push(sql);
+      return originalPrepare(sql);
+    });
+
+    expect(validateCompanionAccessToken(harness.deps, session.accessToken)).toBeDefined();
+    const grantLockIndex = preparedSql.findIndex(
+      (sql) =>
+        sql.includes("SELECT *") && sql.includes("FROM auth_device_grants") && sql.includes("grant_id = @grantId"),
+    );
+    const sessionLockIndex = preparedSql.findIndex(
+      (sql) =>
+        sql.includes("SELECT *") && sql.includes("FROM companion_sessions") && sql.includes("session_id = @sessionId"),
+    );
+    expect(grantLockIndex).toBeGreaterThanOrEqual(0);
+    expect(sessionLockIndex).toBeGreaterThan(grantLockIndex);
   });
 
   it("rejects missing, revoked, expired, and already-rotated companion credentials", async () => {
@@ -2320,3 +2693,326 @@ describe("settings-auth-service companion session lifecycle", () => {
     ]);
   });
 });
+
+const realPostgresUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
+
+describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authority", { timeout: 120_000 }, () => {
+  it("preserves device, rotation, and replay expiry fences across row-lock waits", async () => {
+    expect(realPostgresUrl).toBeTruthy();
+    const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `settings_auth_${suffix}`;
+    const rootDir = join(tmpdir(), `goatcitadel-settings-auth-pg-${suffix}`);
+    const adminPool = new Pool({ connectionString: realPostgresUrl });
+    const scopedUrl = new URL(realPostgresUrl!);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString() });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    let storage: Storage | undefined;
+    let harness: AuthHarness | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      const syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-settings-auth-real-postgres-test",
+        pool: { max: 2, connectionTimeoutMs: 10_000 },
+      });
+      syncClient.prepare("SELECT 1 AS ready").get();
+      storage = new Storage({
+        db: syncClient,
+        transcriptsDir: join(rootDir, "transcripts"),
+        auditDir: join(rootDir, "audit"),
+      });
+      harness = buildAuthHarness({ storage, rootDir });
+
+      const databaseWindow = harness.storage.gatewaySql.createDatabaseTtlWindow(60_000);
+      expect(harness.storage.gatewaySql.isDatabaseInstantFuture(databaseWindow.expiresAt.replace("Z", "+00:00"))).toBe(
+        true,
+      );
+      for (const malformed of [
+        "",
+        "infinity",
+        "-infinity",
+        "tomorrow",
+        "now",
+        "epoch",
+        "not-a-timestamp",
+        "2026-07-11T12:00:00.1234567890Z",
+      ]) {
+        expect(harness.storage.gatewaySql.isDatabaseInstantFuture(malformed), malformed).toBe(false);
+        expect(harness.storage.gatewaySql.isDatabaseInstantExpired(malformed), malformed).toBe(true);
+        expect(harness.storage.gatewaySql.isDatabaseInstantWithinSkew(malformed, 1_000), malformed).toBe(false);
+      }
+
+      const strictGrant = await createApprovedDeviceGrant(harness);
+      for (const malformed of [
+        "",
+        "infinity",
+        "-infinity",
+        "tomorrow",
+        "now",
+        "epoch",
+        "not-a-timestamp",
+        "2026-07-11T12:00:00.1234567890Z",
+      ]) {
+        harness.storage.gatewaySql
+          .prepare("UPDATE auth_device_grants SET expires_at = @expiresAt WHERE grant_id = @grantId")
+          .run({ grantId: strictGrant.grantId, expiresAt: malformed });
+        expect(getActiveAuthDeviceGrantById(harness.deps, strictGrant.grantId), malformed).toBeUndefined();
+        expect(validateDeviceAccessToken(harness.deps, strictGrant.deviceToken), malformed).toBeUndefined();
+      }
+      harness.storage.gatewaySql
+        .prepare("UPDATE auth_device_grants SET expires_at = @expiresAt WHERE grant_id = @grantId")
+        .run({ grantId: strictGrant.grantId, expiresAt: databaseWindow.expiresAt.replace("Z", "+00:00") });
+      expect(validateDeviceAccessToken(harness.deps, strictGrant.deviceToken)).toBeDefined();
+
+      const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+      const requestLock = await scopedPool.connect();
+      try {
+        await requestLock.query("BEGIN");
+        await requestLock.query("SELECT request_id FROM auth_device_requests WHERE request_id = $1 FOR UPDATE", [
+          request.requestId,
+        ]);
+        const releaseRequestLock = requestLock.query(`
+          SELECT pg_sleep(0.35);
+          UPDATE auth_device_requests
+          SET expires_at = to_char(
+            (clock_timestamp() - interval '1 second') AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          )
+          WHERE request_id = '${escapePostgresTestLiteral(request.requestId)}';
+          COMMIT;
+        `);
+
+        await expect(
+          resolveDeviceAccessApproval(harness.deps, storage.approvals.get(request.approvalId), {
+            decision: "approve",
+            resolvedBy: "operator:postgres-test",
+          }),
+        ).rejects.toThrow(/no longer pending or has expired/i);
+        await releaseRequestLock;
+      } finally {
+        requestLock.release();
+      }
+      expect(storage.approvals.get(request.approvalId).status).toBe("pending");
+      expect(listDeviceAccessGrants(harness.deps).filter((item) => item.requestId === request.requestId)).toEqual([]);
+
+      const grant = await createApprovedDeviceGrant(harness);
+      const keys = createCompanionSigningKeys();
+      const firstSession = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+        signingPublicKeyPem: keys.publicKeyPem,
+      });
+      expect(Math.abs(Date.parse(firstSession.issuedAt) - Date.now())).toBeLessThan(5_000);
+      expect(validateCompanionAccessToken(harness.deps, firstSession.accessToken)).toBeDefined();
+
+      const rotationLock = await scopedPool.connect();
+      try {
+        await rotationLock.query("BEGIN");
+        await rotationLock.query("SELECT session_id FROM companion_sessions WHERE session_id = $1 FOR UPDATE", [
+          firstSession.sessionId,
+        ]);
+        const releaseRotationLock = rotationLock.query(`
+          SELECT pg_sleep(0.35);
+          UPDATE companion_sessions
+          SET refresh_token_expires_at = to_char(
+            (clock_timestamp() - interval '1 second') AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          )
+          WHERE session_id = '${escapePostgresTestLiteral(firstSession.sessionId)}';
+          COMMIT;
+        `);
+
+        await expect(rotateCompanionSession(harness.deps, { refreshToken: firstSession.refreshToken })).rejects.toThrow(
+          "Companion session not found.",
+        );
+        await releaseRotationLock;
+      } finally {
+        rotationLock.release();
+      }
+
+      const replayKeys = createCompanionSigningKeys();
+      const replaySession = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+        signingPublicKeyPem: replayKeys.publicKeyPem,
+      });
+      const malformedReplayTimestamp = harness.storage.gatewaySql.readDatabaseNow();
+      for (const [index, malformed] of [
+        "",
+        "infinity",
+        "-infinity",
+        "tomorrow",
+        "now",
+        "epoch",
+        "not-a-timestamp",
+        "2026-07-11T12:00:00.1234567890Z",
+      ].entries()) {
+        const malformedNonce = `nonce-pg-malformed-${index}`;
+        const malformedBody = { action: "postgres-malformed-replay", malformed };
+        await scopedPool.query(
+          `
+            INSERT INTO companion_request_replays (
+              session_id, nonce, method, path, request_hash, created_at, expires_at
+            ) VALUES (
+              $1, $2, 'POST', '/api/v1/companion/sync', 'malformed-replay',
+              to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              $3
+            )
+          `,
+          [replaySession.sessionId, malformedNonce, malformed],
+        );
+        const malformedSignature = signCompanionRequest({
+          privateKeyPem: replayKeys.privateKeyPem,
+          method: "POST",
+          path: "/api/v1/companion/sync",
+          timestamp: malformedReplayTimestamp,
+          nonce: malformedNonce,
+          body: malformedBody,
+        });
+        expect(
+          () =>
+            verifyCompanionRequestSignature(harness!.deps, {
+              sessionId: replaySession.sessionId,
+              method: "POST",
+              path: "/api/v1/companion/sync",
+              timestamp: malformedReplayTimestamp,
+              nonce: malformedNonce,
+              signature: malformedSignature,
+              body: malformedBody,
+            }),
+          malformed,
+        ).toThrow("Companion request replay detected.");
+      }
+
+      const cleanupNonce = "nonce-pg-cleanup-lock";
+      await scopedPool.query(
+        `
+          INSERT INTO companion_request_replays (
+            session_id, nonce, method, path, request_hash, created_at, expires_at
+          ) VALUES (
+            $1, $2, 'POST', '/cleanup-lock', 'cleanup-lock',
+            to_char(
+              (clock_timestamp() - interval '2 minutes') AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            ),
+            to_char(
+              (clock_timestamp() - interval '1 minute') AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            )
+          )
+        `,
+        [replaySession.sessionId, cleanupNonce],
+      );
+      const cleanupLock = await scopedPool.connect();
+      try {
+        await cleanupLock.query("BEGIN");
+        await cleanupLock.query(
+          "SELECT nonce FROM companion_request_replays WHERE session_id = $1 AND nonce = $2 FOR UPDATE",
+          [replaySession.sessionId, cleanupNonce],
+        );
+        const boundaryTimestamp = new Date(
+          Date.parse(harness.storage.gatewaySql.readDatabaseNow()) - COMPANION_REQUEST_CLOCK_SKEW_MS + 2_000,
+        ).toISOString();
+        const boundaryNonce = "nonce-pg-boundary-1";
+        const boundaryBody = { action: "postgres-cleanup-boundary" };
+        const boundarySignature = signCompanionRequest({
+          privateKeyPem: replayKeys.privateKeyPem,
+          method: "POST",
+          path: "/api/v1/companion/sync",
+          timestamp: boundaryTimestamp,
+          nonce: boundaryNonce,
+          body: boundaryBody,
+        });
+        const releaseCleanupLock = cleanupLock.query("SELECT pg_sleep(3); COMMIT;");
+
+        expect(() =>
+          verifyCompanionRequestSignature(harness!.deps, {
+            sessionId: replaySession.sessionId,
+            method: "POST",
+            path: "/api/v1/companion/sync",
+            timestamp: boundaryTimestamp,
+            nonce: boundaryNonce,
+            signature: boundarySignature,
+            body: boundaryBody,
+          }),
+        ).toThrow("Companion request timestamp is outside the accepted skew window.");
+        await releaseCleanupLock;
+        expect(
+          harness.storage.gatewaySql
+            .prepare("SELECT nonce FROM companion_request_replays WHERE session_id = @sessionId AND nonce = @nonce")
+            .get({ sessionId: replaySession.sessionId, nonce: boundaryNonce }),
+        ).toBeUndefined();
+      } finally {
+        cleanupLock.release();
+      }
+
+      const timestamp = harness.storage.gatewaySql.readDatabaseNow();
+      const nonce = "nonce-pg-concurrent-1";
+      const method = "POST";
+      const path = "/api/v1/companion/sync";
+      const body = { action: "postgres-replay-fence" };
+      const signature = signCompanionRequest({
+        privateKeyPem: replayKeys.privateKeyPem,
+        method,
+        path,
+        timestamp,
+        nonce,
+        body,
+      });
+      const replayLock = await scopedPool.connect();
+      try {
+        await replayLock.query("BEGIN");
+        await replayLock.query(
+          `
+            INSERT INTO companion_request_replays (
+              session_id, nonce, method, path, request_hash, created_at, expires_at
+            ) VALUES (
+              $1, $2, $3, $4, 'held-by-concurrent-request',
+              to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              to_char(
+                (clock_timestamp() + interval '5 minutes') AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              )
+            )
+          `,
+          [replaySession.sessionId, nonce, method, path],
+        );
+        const releaseReplayLock = replayLock.query("SELECT pg_sleep(0.35); COMMIT;");
+
+        expect(() =>
+          verifyCompanionRequestSignature(harness!.deps, {
+            sessionId: replaySession.sessionId,
+            method,
+            path,
+            timestamp,
+            nonce,
+            signature,
+            body,
+          }),
+        ).toThrow("Companion request replay detected.");
+        await releaseReplayLock;
+      } finally {
+        replayLock.release();
+      }
+    } finally {
+      if (harness) {
+        const harnessIndex = authHarnesses.indexOf(harness);
+        if (harnessIndex >= 0) {
+          authHarnesses.splice(harnessIndex, 1);
+        }
+      }
+      storage?.close();
+      rmSync(rootDir, { recursive: true, force: true });
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  });
+});
+
+function escapePostgresTestLiteral(value: string): string {
+  return value.replaceAll("'", "''");
+}

@@ -16,7 +16,12 @@ export type ApprovalCreateCommitResult =
 export type ApprovalCreatePort = (
   input: ApprovalCreateInput,
   onCreated?: ApprovalCreateCommitPort,
+  authority?: ApprovalCreateAuthority,
 ) => Promise<ApprovalRequest>;
+
+export interface ApprovalCreateAuthority {
+  ttlMs?: number;
+}
 
 function isApprovalCreateCommitFinalizer(value: ApprovalCreateCommitResult): value is ApprovalCreateCommitFinalizer {
   return Boolean(value && typeof value === "object" && "finalize" in value);
@@ -43,7 +48,11 @@ export class ApprovalGate {
     private readonly createApproval?: ApprovalCreatePort,
   ) {}
 
-  public async create(input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort): Promise<ApprovalRequest> {
+  public async create(
+    input: ApprovalCreateInput,
+    onCreated?: ApprovalCreateCommitPort,
+    authority?: ApprovalCreateAuthority,
+  ): Promise<ApprovalRequest> {
     // Validate riskLevel against its enum at the gate (fail closed): never
     // persist an approval whose risk level is outside the known set.
     if (!isApprovalRiskLevel(input.riskLevel)) {
@@ -54,7 +63,7 @@ export class ApprovalGate {
     }
 
     if (this.createApproval) {
-      return this.createApproval(input, onCreated);
+      return authority ? this.createApproval(input, onCreated, authority) : this.createApproval(input, onCreated);
     }
 
     // Compatibility fallback for direct policy-engine consumers. The shipped
@@ -65,7 +74,10 @@ export class ApprovalGate {
     const runTransaction =
       this.storage.runImmediateTransaction?.bind(this.storage) ?? (<T>(callback: () => T): T => callback());
     runTransaction(() => {
-      approval = this.storage.approvals.create(input);
+      approval =
+        authority?.ttlMs !== undefined
+          ? this.storage.approvals.createWithTtlDuration(input, authority.ttlMs)
+          : this.storage.approvals.create(input);
       const extension = onCreated?.(approval);
       if (isApprovalCreateCommitFinalizer(extension)) {
         extension.finalize(approval);

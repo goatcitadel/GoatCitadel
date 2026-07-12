@@ -122,24 +122,6 @@ function consumeResolvedRemoteActionToken(
     });
   }
 
-  const expiresAt = Date.parse(current.expiresAt);
-  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    const latest = expirePendingTokenAfterSecretCleanup(host, current.tokenId, new Date().toISOString());
-    if (latest.state === "expired") {
-      throwExpiredTokenConflict();
-    }
-    // A claimant may have won after the expiry read but before the CAS. Never
-    // overwrite that winner; identical request retries can resume it.
-    if (claimFingerprint) {
-      return resolveClaimResult(host, current.tokenId, {
-        consumedAt: new Date().toISOString(),
-        consumedBy: `connector:${current.connectorId}`,
-        claimFingerprint,
-      });
-    }
-    throwConsumedTokenConflict();
-  }
-
   const consumedAt = new Date().toISOString();
   const consumedBy = `connector:${current.connectorId}`;
   if (claimFingerprint) {
@@ -155,7 +137,7 @@ function consumeResolvedRemoteActionToken(
     consumedBy,
   });
   if (!consumed) {
-    expireTokenAfterLostBoundaryRace(host, current.tokenId, consumedAt);
+    expireTokenAfterLostBoundaryRace(host, current.tokenId);
     throwConsumedTokenConflict();
   }
   return consumed;
@@ -183,25 +165,21 @@ function resolveClaimResult(
     throwExpiredTokenConflict();
   }
   if (result.record?.state === "pending") {
-    expireTokenAfterLostBoundaryRace(host, tokenId, input.consumedAt);
+    expireTokenAfterLostBoundaryRace(host, tokenId);
   }
   throwConsumedTokenConflict();
 }
 
-function expireTokenAfterLostBoundaryRace(host: ApprovalRemoteTokenHost, tokenId: string, claimedAt: string): void {
-  const latest = expirePendingTokenAfterSecretCleanup(host, tokenId, claimedAt);
+function expireTokenAfterLostBoundaryRace(host: ApprovalRemoteTokenHost, tokenId: string): void {
+  const latest = expirePendingTokenAfterSecretCleanup(host, tokenId);
   if (latest.state === "expired") {
     throwExpiredTokenConflict();
   }
 }
 
-function expirePendingTokenAfterSecretCleanup(
-  host: ApprovalRemoteTokenHost,
-  tokenId: string,
-  boundaryAt: string,
-): RemoteActionTokenRecord {
+function expirePendingTokenAfterSecretCleanup(host: ApprovalRemoteTokenHost, tokenId: string): RemoteActionTokenRecord {
   host.approvalRemoteTokenSecrets?.deleteById(tokenId);
-  return host.storage.remoteActionTokens.expirePendingAtOrBefore(tokenId, boundaryAt);
+  return host.storage.remoteActionTokens.expirePendingIfExpired(tokenId);
 }
 
 function normalizeClaimFingerprint(value: string | undefined): string | undefined {

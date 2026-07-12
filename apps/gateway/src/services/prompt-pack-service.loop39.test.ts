@@ -190,7 +190,13 @@ function createHarness(test: PromptPackTestRecord): Harness {
         },
         toolGrants: {
           list: () => [],
+          listActive: (scope?: string, scopeRef?: string) =>
+            createdGrants.filter((grant) => grant.scope === scope && grant.scopeRef === scopeRef),
           create: (grant: Record<string, unknown>) => {
+            createdGrants.push(grant);
+            return grant;
+          },
+          createTtlForDuration: (grant: Record<string, unknown>) => {
             createdGrants.push(grant);
             return grant;
           },

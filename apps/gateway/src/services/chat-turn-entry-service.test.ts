@@ -298,6 +298,209 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
 describe("agentSendChatMessage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dispatchMocks.shouldUseDurableExecution.mockImplementation((_host, _prepared, _input, requireDurableExecution) =>
+      Boolean(requireDurableExecution),
+    );
+  });
+
+  it("returns the canonical deterministic turn without preparing or redispatching it", async () => {
+    const host = createHost({});
+    const trace = createTrace({
+      turnId: "turn-deterministic",
+      sessionId: "session-1",
+      userMessageId: "user-deterministic",
+      assistantMessageId: "assistant-deterministic",
+      status: "completed",
+      model: "primary-model",
+      citations: [{ citationId: "canonical-citation", title: "Canonical" }],
+    });
+    const userMessage: ChatMessageRecord = {
+      messageId: "user-deterministic",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "deterministic child work",
+      timestamp: "2026-07-11T00:00:00.000Z",
+    };
+    const assistantMessage: ChatMessageRecord = {
+      messageId: "assistant-deterministic",
+      sessionId: "session-1",
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: "canonical child result",
+      timestamp: "2026-07-11T00:00:01.000Z",
+    };
+    host.requireChatTurnContext = vi.fn(async () => ({ trace, userMessage, assistantMessage }));
+    host.storage.chatTurnTraces.get = vi.fn(() => trace);
+
+    const response = await agentSendChatMessage(
+      host,
+      "session-1",
+      { content: "deterministic child work", mode: "chat" },
+      {
+        turnIdentity: {
+          turnId: "turn-deterministic",
+          userMessageId: "user-deterministic",
+          assistantMessageId: "assistant-deterministic",
+        },
+      },
+    );
+
+    expect(response).toEqual(
+      expect.objectContaining({
+        turnId: "turn-deterministic",
+        userMessage,
+        assistantMessage,
+        citations: trace.citations,
+      }),
+    );
+    expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
+    expect(host.turnRuntime.run).not.toHaveBeenCalled();
+    expect(dispatchMocks.consumePreparedAgentChatTurn).not.toHaveBeenCalled();
+    expect(dispatchMocks.sendPreparedIntegrationChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("forces a policy-linked deterministic child through durable dispatch with its execution fence", async () => {
+    const host = createHost({});
+    host.requireChatTurnContext = vi.fn(async () => {
+      throw new NotFoundError({ entity: "Chat turn", id: "turn-deterministic" });
+    });
+    host.prepareAgentChatTurn = vi.fn(async (_sessionId, _input, options) =>
+      createPreparedTurn({
+        turnId: options?.turnId,
+        userEventId: options?.userMessageId,
+        assistantMessageId: options?.assistantMessageId,
+      }),
+    );
+    dispatchMocks.shouldUseDurableExecution.mockReturnValue(false);
+    const assertDispatchOwnership = vi.fn();
+
+    await agentSendChatMessage(
+      host,
+      "session-1",
+      { content: "deterministic child work", mode: "chat", policyRunId: "delegation-run-1" },
+      {
+        assertDispatchOwnership,
+        turnIdentity: {
+          turnId: "turn-deterministic",
+          userMessageId: "user-deterministic",
+          assistantMessageId: "assistant-deterministic",
+        },
+      },
+    );
+
+    expect(assertDispatchOwnership).toHaveBeenCalledTimes(1);
+    expect(dispatchMocks.shouldUseDurableExecution).toHaveBeenCalledWith(
+      host,
+      expect.objectContaining({ turnId: "turn-deterministic" }),
+      expect.objectContaining({ policyRunId: "delegation-run-1" }),
+      true,
+    );
+    expect(dispatchMocks.consumePreparedAgentChatTurn).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.objectContaining({ content: "deterministic child work" }),
+      expect.objectContaining({ turnId: "turn-deterministic" }),
+      "chat_thread_turn_appended",
+      undefined,
+      expect.objectContaining({
+        assertDispatchOwnership,
+        durableRunId: expect.stringMatching(/^durable-chat-[a-f0-9]{32}$/),
+        requireDurableExecution: true,
+      }),
+    );
+    expect(host.turnRuntime.run).not.toHaveBeenCalled();
+    expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
+  });
+
+  it("fails a policy-linked deterministic child closed when its session binding is no longer LLM", async () => {
+    const host = createHost({});
+    host.requireChatTurnContext = vi.fn(async () => {
+      throw new NotFoundError({ entity: "Chat turn", id: "turn-deterministic" });
+    });
+    host.storage.chatSessionBindings.get = vi.fn(() => ({
+      sessionId: "session-1",
+      workspaceId: "default",
+      transport: "discord",
+      writable: true,
+    })) as never;
+
+    await expect(
+      agentSendChatMessage(
+        host,
+        "session-1",
+        { content: "deterministic child work", mode: "chat", policyRunId: "delegation-run-1" },
+        {
+          turnIdentity: {
+            turnId: "turn-deterministic",
+            userMessageId: "user-deterministic",
+            assistantMessageId: "assistant-deterministic",
+          },
+        },
+      ),
+    ).rejects.toThrow(/requires an LLM session binding/i);
+
+    expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
+    expect(dispatchMocks.shouldUseDurableExecution).not.toHaveBeenCalled();
+    expect(dispatchMocks.sendPreparedIntegrationChatTurn).not.toHaveBeenCalled();
+    expect(dispatchMocks.consumePreparedAgentChatTurn).not.toHaveBeenCalled();
+    expect(host.turnRuntime.run).not.toHaveBeenCalled();
+    expect(host.storage.durableRuns.createRun).not.toHaveBeenCalled();
+    expect(host.ingestEvent).not.toHaveBeenCalled();
+  });
+
+  it("threads deterministic identities through preparation when the canonical trace is not created yet", async () => {
+    const host = createHost({
+      assistantContent: "Recovered result",
+      assistantModel: "primary-model",
+      turnTrace: createTrace({ turnId: "turn-deterministic", status: "completed" }),
+    });
+    const userMessage: ChatMessageRecord = {
+      messageId: "user-deterministic",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "deterministic child work",
+      timestamp: "2026-07-11T00:00:00.000Z",
+    };
+    host.requireChatTurnContext = vi.fn(async () => {
+      throw new NotFoundError({ entity: "Chat turn", id: "turn-deterministic" });
+    });
+    host.prepareAgentChatTurn = vi.fn(async (_sessionId, _input, options) =>
+      createPreparedTurn({
+        turnId: options?.turnId,
+        userEventId: options?.userMessageId,
+        assistantMessageId: options?.assistantMessageId,
+        userMessage,
+      }),
+    );
+
+    await agentSendChatMessage(
+      host,
+      "session-1",
+      { content: "deterministic child work", mode: "chat" },
+      {
+        turnIdentity: {
+          turnId: "turn-deterministic",
+          userMessageId: "user-deterministic",
+          assistantMessageId: "assistant-deterministic",
+        },
+      },
+    );
+
+    expect(host.prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "deterministic child work" }),
+      expect.objectContaining({
+        turnId: "turn-deterministic",
+        userMessageId: "user-deterministic",
+        assistantMessageId: "assistant-deterministic",
+      }),
+    );
+    expect(host.turnRuntime.run).toHaveBeenCalledTimes(1);
   });
 
   it("does not resurrect a buffered turn cancelled after the runtime returns", async () => {
@@ -1026,6 +1229,62 @@ describe("agentSendChatMessage", () => {
     expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", { liveTail: true });
     expect(retryChunks.map((chunk) => chunk.type)).toEqual(["trace_update", "done"]);
     expect(editChunks.map((chunk) => chunk.type)).toEqual(["trace_update", "done"]);
+  });
+
+  it("propagates streamed mutation lifecycle ownership through preparation and dispatch", async () => {
+    const host = createHost({});
+    const mutationLifecycle = { markCommitted: vi.fn() };
+
+    await collectChunks(agentSendChatMessageStream(host, "session-1", { content: "hello" }, { mutationLifecycle }));
+    await collectChunks(
+      retryChatTurnStream(host, "session-1", "turn-original", { mode: "chat" }, { mutationLifecycle }),
+    );
+    await collectChunks(
+      editChatTurnStream(host, "session-1", "turn-original", { content: "edit" }, { mutationLifecycle }),
+    );
+
+    expect(host.prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "hello" }),
+      expect.objectContaining({ branchKind: "append", mutationLifecycle }),
+    );
+    expect(host.prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "original prompt" }),
+      expect.objectContaining({ branchKind: "retry", ingestUserMessage: false, mutationLifecycle }),
+    );
+    expect(host.prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "edit" }),
+      expect.objectContaining({ branchKind: "edit", mutationLifecycle }),
+    );
+    expect(dispatchMocks.launchPreparedAgentChatTurnStream).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.any(Object),
+      expect.any(Object),
+      "chat_thread_turn_appended",
+      undefined,
+      { mutationLifecycle },
+    );
+    expect(dispatchMocks.launchPreparedAgentChatTurnStream).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.any(Object),
+      expect.any(Object),
+      "chat_thread_turn_retried",
+      undefined,
+      { mutationLifecycle },
+    );
+    expect(dispatchMocks.launchPreparedAgentChatTurnStream).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.any(Object),
+      expect.any(Object),
+      "chat_thread_turn_edited",
+      undefined,
+      { mutationLifecycle },
+    );
   });
 
   it("cancels active turns, rejects cross-session cancellation, and resumes persisted streams", async () => {

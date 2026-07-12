@@ -10,6 +10,7 @@ import {
   deriveProviderStatus,
   runFastLane,
 } from "./scenarios.mjs";
+import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
 
 test("fast verification lane keeps required fast commands", () => {
@@ -74,12 +75,60 @@ test("fast verification split tests preserve recursive package coverage", () => 
   }
   assert.ok(libraryArgs.includes("--workspace-concurrency=2"));
 
-  assert.equal(
-    commandById.get("fast.test.gateway")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD,
-    "1",
-  );
+  assert.equal(commandById.get("fast.test.gateway")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
   assert.deepEqual(commandById.get("fast.smoke")?.args, ["smoke", "--", "--profile", "fast"]);
   assert.equal(commandById.get("fast.smoke")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
+});
+
+test("fast verification stage plan isolates policy and schedules every command exactly once", () => {
+  assert.deepEqual(FAST_LANE_STAGES, [
+    {
+      id: "fast.prerequisites",
+      mode: "serial",
+      commands: [
+        "fast.skills-catalog",
+        "fast.repo-hygiene",
+        "fast.storage-migration-parity",
+        "fast.extensions-sdk-build",
+        "fast.extensions-sdk-package",
+        "fast.typecheck",
+      ],
+    },
+    {
+      id: "fast.test.gateway",
+      mode: "serial",
+      commands: ["fast.test.gateway"],
+    },
+    {
+      id: "fast.test.storage",
+      mode: "serial",
+      commands: ["fast.test.storage"],
+    },
+    {
+      id: "fast.test.policy-engine",
+      mode: "serial",
+      commands: ["fast.test.policy-engine"],
+    },
+    {
+      id: "fast.test.safe-parallel",
+      mode: "parallel",
+      concurrency: 2,
+      commands: ["fast.test.mission-control-next", "fast.test.libraries"],
+    },
+    {
+      id: "fast.post-tests",
+      mode: "serial",
+      commands: ["fast.smoke", "fast.build", "fast.docs"],
+    },
+  ]);
+
+  const plannedCommandIds = FAST_LANE_STAGES.flatMap((stage) => stage.commands);
+  assert.equal(new Set(plannedCommandIds).size, plannedCommandIds.length, "stage commands must be unique");
+  assert.deepEqual(
+    new Set(plannedCommandIds),
+    new Set(FAST_LANE_COMMANDS.map((command) => command.id)),
+    "stage plan must neither drop nor invent fast-lane commands",
+  );
 });
 
 test("fast lane perf budget reports passed, warn, and failed status", () => {
@@ -272,10 +321,7 @@ test("A2A full lane keeps governed gateway and contract proof commands", () => {
 test("provider truth status fails configured auth, route, and protocol errors", () => {
   assert.equal(deriveProviderStatus({ ok: true }), "passed");
   assert.equal(deriveProviderStatus({ error: "missing OpenAI API key" }), "not_configured");
-  assert.equal(
-    deriveProviderStatus({ error: "missing OpenAI API key" }, { providerConfigured: true }),
-    "failed",
-  );
+  assert.equal(deriveProviderStatus({ error: "missing OpenAI API key" }, { providerConfigured: true }), "failed");
 
   for (const error of [
     "invalid API key",

@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PermissionProfileRecord, ToolPolicyConfig } from "@goatcitadel/contracts";
-import {
-  HEARTBEAT_RESTRICTED_PROFILE,
-  SCHEDULED_RESTRICTED_PROFILE,
-} from "@goatcitadel/contracts";
+import { HEARTBEAT_RESTRICTED_PROFILE, SCHEDULED_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 
@@ -28,6 +25,7 @@ function createStorageStub(): Storage {
     },
     toolGrants: {
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
       consumeOne: vi.fn(() => true),
     },
     pendingApprovalActions: {

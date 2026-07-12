@@ -319,6 +319,31 @@ describe("BackgroundReviewService — skill authoring", () => {
     expect(result.skillMutation).toBeUndefined();
   });
 
+  it("pins durable candidate authoring to the effect execution identity", async () => {
+    const { service, draftedSkills } = createHarness({
+      responses: [
+        modelResponse(factsPayload([])),
+        modelResponse(
+          JSON.stringify({
+            shouldAuthor: true,
+            skillId: "model-selected-id",
+            skillMarkdown:
+              "---\nname: Durable helper\ndescription: Replay-safe durable helper.\n---\n# Durable helper\n",
+          }),
+        ),
+      ],
+    });
+
+    await service.runBackgroundReview({ ...ELIGIBLE, effectExecutionId: "chat-post-commit-child-1" });
+
+    expect(draftedSkills[0]).toMatchObject({
+      skillId: expect.stringMatching(/^background-review-[a-f0-9]{24}$/),
+      evaluationRunId: "chat-post-commit-child-1",
+      sourceTurnId: "turn-current",
+    });
+    expect(draftedSkills[0]?.skillId).not.toBe("model-selected-id");
+  });
+
   it("authors nothing when shouldAuthor=true but no markdown is provided", async () => {
     const { service, draftSkillMutation } = createHarness({
       responses: [
@@ -376,6 +401,22 @@ describe("BackgroundReviewService — autonomy-off propose-only + best-effort sa
     const result = await service.runBackgroundReview(ELIGIBLE);
     expect(result.ran).toBe(true);
     expect(result.skillMutation).toBeUndefined();
+  });
+
+  it("fails durable effect truth when candidate persistence is uncertain", async () => {
+    const { service } = createHarness({
+      draftThrows: true,
+      responses: [
+        modelResponse(factsPayload([])),
+        modelResponse(
+          JSON.stringify({ shouldAuthor: true, skillMarkdown: "---\nname: x\ndescription: y\n---\n# x\n" }),
+        ),
+      ],
+    });
+
+    await expect(
+      service.runBackgroundReview({ ...ELIGIBLE, effectExecutionId: "chat-post-commit-child-failed" }),
+    ).rejects.toThrow("skill rejected");
   });
 
   it("tolerates prose around the JSON object", async () => {

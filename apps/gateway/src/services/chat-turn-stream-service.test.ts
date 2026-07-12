@@ -32,20 +32,37 @@ vi.mock("./chat-turn-helpers.js", () => ({
     turnId: string,
     expected: ChatTurnTraceRecord["status"][],
     input: Partial<ChatTurnTraceRecord>,
-  ) => repository.patchIfStatus?.(turnId, expected, input) ?? repository.patch(turnId, input),
+  ) => {
+    const patched = repository.patchIfStatus
+      ? repository.patchIfStatus(turnId, expected, input)
+      : repository.patch(turnId, input);
+    if (!patched) {
+      throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership.`);
+    }
+    return patched;
+  },
   tryPatchChatTurnTraceIfStatus: (
     repository: {
       get(turnId: string): ChatTurnTraceRecord;
       patch(turnId: string, input: Partial<ChatTurnTraceRecord>): ChatTurnTraceRecord;
+      patchIfStatus?: (
+        turnId: string,
+        expected: ChatTurnTraceRecord["status"][],
+        input: Partial<ChatTurnTraceRecord>,
+      ) => ChatTurnTraceRecord | undefined;
     },
     turnId: string,
     expected: ChatTurnTraceRecord["status"][],
     input: Partial<ChatTurnTraceRecord>,
   ) => {
     const current = repository.get(turnId);
-    return expected.includes(current.status)
-      ? { patched: true, trace: repository.patch(turnId, input) }
-      : { patched: false, trace: current };
+    if (!expected.includes(current.status)) {
+      return { patched: false, trace: current };
+    }
+    const patched = repository.patchIfStatus
+      ? repository.patchIfStatus(turnId, expected, input)
+      : repository.patch(turnId, input);
+    return patched ? { patched: true, trace: patched } : { patched: false, trace: repository.get(turnId) };
   },
   renderExecutionPlanAsMarkdown: () => "execution plan",
   splitIntoChunks: (value: string) => [value],
@@ -244,6 +261,24 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it("rethrows durable workflow timeouts from delegated steps before fallback or synthesis", async () => {
+    const host = createHost();
+    const timeout = Object.assign(new Error("durable workflow timed out"), {
+      name: "DurableWorkflowTimeoutError",
+    });
+    host.agentSendChatMessage = vi.fn(async () => {
+      throw timeout;
+    }) as never;
+
+    await expect(
+      executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), createDelegatedStepInput() as never),
+    ).rejects.toBe(timeout);
+
+    expect(host.recordDevDiagnostic).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "orchestration.step.timeout_without_provider_result" }),
+    );
+  });
+
   it("converts delegated child failure responses into failed step results with guidance", async () => {
     const host = createHost();
     host.agentSendChatMessage = vi.fn(async () => ({
@@ -361,6 +396,31 @@ describe("streamPreparedAgentChatTurn", () => {
       }),
     );
   });
+
+  it.each(["DurableWorkerInterruptionError", "DurableRunPausedError", "DurableRunCancelledError"])(
+    "rethrows %s from the delegated canonical write fence",
+    async (errorName) => {
+      const host = createHost();
+      const controlError = new Error(`delegated control signal: ${errorName}`);
+      controlError.name = errorName;
+      let fenceCalls = 0;
+      const canonicalWriteFence = <T>(work: () => T): T => {
+        fenceCalls += 1;
+        if (fenceCalls === 2) {
+          throw controlError;
+        }
+        return work();
+      };
+
+      await expect(
+        executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+          ...createDelegatedStepInput(),
+          canonicalWriteFence,
+        } as never),
+      ).rejects.toBe(controlError);
+      expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("marks empty-output stream recovery as repaired in both the trace and message_done", async () => {
     const host = createHost();
@@ -821,6 +881,13 @@ describe("streamPreparedAgentChatTurn", () => {
         content: "## Dinner Party Plan\n\nFinal host-ready checklist.",
       }),
     );
+    const persistedPlanSteps = (host.storage.chatDelegationSteps.create as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([step]) => step,
+    );
+    const planner = persistedPlanSteps.find((step) => step.role === "planner");
+    const synthesizer = persistedPlanSteps.find((step) => step.role === "synthesizer");
+    expect(planner).toEqual(expect.objectContaining({ parallelizable: false, dependsOnStepIds: [] }));
+    expect(synthesizer).toEqual(expect.objectContaining({ parallelizable: false, dependsOnStepIds: [planner.stepId] }));
   });
 
   it("fences orchestration assistant truth when the durable lease changes immediately before ingest", async () => {
@@ -1783,6 +1850,7 @@ function createHost(): ChatTurnStreamHost & {
     chatTurnTraces: {
       get: (turnId: string) => ChatTurnTraceRecord;
       patch: ReturnType<typeof vi.fn>;
+      patchIfStatus: ReturnType<typeof vi.fn>;
     };
   };
   hooksService: {
@@ -1811,6 +1879,10 @@ function createHost(): ChatTurnStreamHost & {
     trace = { ...trace, ...patch };
     return trace;
   });
+  const patchTraceIfStatus = vi.fn(
+    (_turnId: string, expected: ChatTurnTraceRecord["status"][], patch: Partial<ChatTurnTraceRecord>) =>
+      expected.includes(trace.status) ? patchTrace(_turnId, patch) : undefined,
+  );
 
   return {
     storage: {
@@ -1853,6 +1925,7 @@ function createHost(): ChatTurnStreamHost & {
       chatTurnTraces: {
         create: vi.fn(() => trace),
         patch: patchTrace,
+        patchIfStatus: patchTraceIfStatus,
         get: vi.fn((_turnId: string) => trace),
       },
     },
@@ -1943,6 +2016,7 @@ function createHost(): ChatTurnStreamHost & {
       chatTurnTraces: {
         get: (turnId: string) => ChatTurnTraceRecord;
         patch: ReturnType<typeof vi.fn>;
+        patchIfStatus: ReturnType<typeof vi.fn>;
       };
     };
     hooksService: {

@@ -125,6 +125,52 @@ describe("GatewayService low-hanging facade delegation", () => {
     });
   });
 
+  it.each(["channel.send", "telegram.send", "gmail.send", "calendar.create_event", "http.post", "webhook.send"])(
+    "routes approved built-in external mutation %s through the canonical side-effect executor",
+    async (toolName) => {
+      const gateway = createGatewayHarness();
+      const pending = {
+        approvalId: `approval-${toolName}`,
+        actionType: "tool.invoke",
+        resolutionStatus: "pending",
+        createdAt: "2026-05-18T00:00:00.000Z",
+        request: {
+          toolName,
+          args: { connectionId: "connection-1", target: "operator", message: "hello" },
+          agentId: "operator",
+          sessionId: "session-1",
+        },
+      };
+      gateway.refreshApprovedPendingToolPolicyContext = vi.fn();
+      gateway.storage = {
+        pendingApprovalActions: {
+          find: vi.fn(() => pending),
+        },
+      };
+      gateway.executeApprovedExternalRuntimePendingAction = vi.fn(async () => ({
+        outcome: "executed",
+        policyReason: `allowed_via_approval:${pending.approvalId}`,
+        auditEventId: "audit-1",
+        result: { status: "sent", providerMessageId: "provider-message-1" },
+      }));
+
+      const result = await (GatewayService.prototype as any).executeApprovedPendingAction.call(
+        gateway,
+        pending.approvalId,
+      );
+
+      expect(gateway.executeApprovedExternalRuntimePendingAction).toHaveBeenCalledWith(
+        pending.approvalId,
+        pending,
+        undefined,
+      );
+      expect(result).toMatchObject({
+        outcome: "executed",
+        result: { status: "sent", providerMessageId: "provider-message-1" },
+      });
+    },
+  );
+
   it("uses one deterministic durable child for autonomous delivery retries and create races", () => {
     const gateway = createGatewayHarness();
     const runs = new Map<string, any>();

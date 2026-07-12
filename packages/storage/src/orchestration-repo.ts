@@ -96,6 +96,8 @@ export class OrchestrationRepository {
   private readonly listEventsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const optionalExpectedExecutionState =
+      db.dialect === "postgres" ? "CAST(@expectedExecutionState AS TEXT)" : "@expectedExecutionState";
     this.upsertPlanStmt = db.prepare(`
       INSERT INTO orchestration_plans (
         plan_id, workspace_id, plan_json, created_at, updated_at
@@ -190,8 +192,8 @@ export class OrchestrationRepository {
       WHERE run_id = @runId
         AND status = @expectedStatus
         AND (
-          (@expectedExecutionState IS NULL AND execution_state IS NULL)
-          OR execution_state = @expectedExecutionState
+          (${optionalExpectedExecutionState} IS NULL AND execution_state IS NULL)
+          OR execution_state = ${optionalExpectedExecutionState}
         )
     `);
 

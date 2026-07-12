@@ -26,6 +26,7 @@ export class TaskSubagentRepository {
   private readonly listByTaskStmt;
   private readonly listAllStmt;
   private readonly getByAgentSessionStmt;
+  private readonly getByAgentSessionForUpdateStmt;
   private readonly updateByAgentSessionStmt;
   private readonly countActiveStmt;
 
@@ -54,6 +55,11 @@ export class TaskSubagentRepository {
     `);
 
     this.getByAgentSessionStmt = db.prepare("SELECT * FROM task_subagent_sessions WHERE agent_session_id = ?");
+    this.getByAgentSessionForUpdateStmt = db.prepare(`
+      SELECT * FROM task_subagent_sessions
+      WHERE agent_session_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
 
     this.updateByAgentSessionStmt = db.prepare(`
       UPDATE task_subagent_sessions
@@ -101,6 +107,14 @@ export class TaskSubagentRepository {
     return mapSubagentRow(row);
   }
 
+  public getByAgentSessionIdForUpdate(agentSessionId: string): TaskSubagentSession {
+    const row = toTaskSubagentRow(this.getByAgentSessionForUpdateStmt.get(agentSessionId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
+    }
+    return mapSubagentRow(row);
+  }
+
   public listByTask(taskId: string, limit = 200): TaskSubagentSession[] {
     const rows = toTaskSubagentRows(this.listByTaskStmt.all(taskId, limit));
     return rows.map(mapSubagentRow);
@@ -116,7 +130,43 @@ export class TaskSubagentRepository {
     input: TaskSubagentUpdateInput,
     now = new Date().toISOString(),
   ): TaskSubagentSession {
-    const current = this.getByAgentSessionId(agentSessionId);
+    return this.db.transaction("immediate", () => {
+      const current = this.getByAgentSessionIdForUpdate(agentSessionId);
+      return this.writeLockedUpdate(agentSessionId, current, input, now);
+    });
+  }
+
+  public updateByAgentSessionIdWithMetadataPatch(
+    agentSessionId: string,
+    input: Omit<TaskSubagentUpdateInput, "metadata"> & { metadataPatch: Partial<AgenticSubagentMetadata> },
+    now = new Date().toISOString(),
+  ): TaskSubagentSession {
+    return this.db.transaction("immediate", () => {
+      const current = this.getByAgentSessionIdForUpdate(agentSessionId);
+      return this.writeLockedUpdate(
+        agentSessionId,
+        current,
+        {
+          status: input.status,
+          endedAt: input.endedAt,
+          metadata: { ...(current.metadata ?? {}), ...input.metadataPatch },
+        },
+        now,
+      );
+    });
+  }
+
+  public activeCount(): number {
+    const row = this.countActiveStmt.get() as { count: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  private writeLockedUpdate(
+    agentSessionId: string,
+    current: TaskSubagentSession,
+    input: TaskSubagentUpdateInput,
+    now: string,
+  ): TaskSubagentSession {
     this.updateByAgentSessionStmt.run({
       agentSessionId,
       status: input.status ?? current.status,
@@ -128,11 +178,6 @@ export class TaskSubagentRepository {
       updatedAt: now,
     });
     return this.getByAgentSessionId(agentSessionId);
-  }
-
-  public activeCount(): number {
-    const row = this.countActiveStmt.get() as { count: number } | undefined;
-    return Number(row?.count ?? 0);
   }
 }
 

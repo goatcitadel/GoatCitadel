@@ -13,6 +13,7 @@ import type {
 import { isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 
 export const AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY = "autonomousChatPostCommitPending";
 export const GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY = "generalChatPostCommitPending";
@@ -27,6 +28,11 @@ export const GENERAL_CHAT_POST_COMMIT_EFFECTS = [
   "realtime",
   "agent_end",
 ] as const;
+export const GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS = [
+  "commitments",
+  "background_review",
+  "memory_maintenance",
+] as const;
 const GENERAL_CHAT_POST_COMMIT_TRACE_STATUSES = [
   "waiting_for_tool",
   "waiting_for_approval",
@@ -37,28 +43,90 @@ const GENERAL_CHAT_POST_COMMIT_TRACE_STATUSES = [
   "cancelled",
 ] as const satisfies readonly ChatTurnTraceRecord["status"][];
 export type GeneralChatPostCommitEffect = (typeof GENERAL_CHAT_POST_COMMIT_EFFECTS)[number];
+export type GeneralChatPostCommitDurableEffect = (typeof GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS)[number];
+export type GeneralChatPostCommitDurableEffectInput =
+  | {
+      effect: "commitments";
+      sessionId: string;
+      workspaceId: string;
+      turnId: string;
+      autonomous: boolean;
+    }
+  | {
+      effect: "background_review";
+      sessionId: string;
+      workspaceId: string;
+      turnId: string;
+      delegatedChild: boolean;
+      autonomous: boolean;
+    }
+  | {
+      effect: "memory_maintenance";
+      sessionId: string;
+      workspaceId: string;
+      turnId: string;
+      delegatedChild: boolean;
+    };
+export type GeneralChatPostCommitDurableEffectExecutionInput =
+  | (Extract<GeneralChatPostCommitDurableEffectInput, { effect: "commitments" }> & {
+      userText: string;
+      assistantText: string;
+    })
+  | (Extract<GeneralChatPostCommitDurableEffectInput, { effect: "background_review" }> & {
+      userText: string;
+      assistantText: string;
+    })
+  | Extract<GeneralChatPostCommitDurableEffectInput, { effect: "memory_maintenance" }>;
+export interface GeneralChatPostCommitEffectWorkflowPayload {
+  version: "chat.post_commit.effect.v1";
+  parentRunId: string;
+  generationId: string;
+  traceStatus: ChatTurnTraceRecord["status"];
+  input: GeneralChatPostCommitDurableEffectInput;
+}
+export interface AutonomousChatPostCommitPendingMarker {
+  version: 1;
+  requestedAt: string;
+  claimId?: string;
+  claimExpiresAt?: string;
+}
 export interface GeneralChatPostCommitPendingMarker {
   version: 1;
   generationId: string;
   traceStatus: ChatTurnTraceRecord["status"];
   requestedAt: string;
   completedEffects: GeneralChatPostCommitEffect[];
+  durableEffectRunIds: Partial<Record<GeneralChatPostCommitDurableEffect, string>>;
 }
 export interface GeneralChatPostCommitProgress {
   generationId: string;
+  requestedAt: string;
   targetTraceStatus: ChatTurnTraceRecord["status"];
   completedEffects: readonly GeneralChatPostCommitEffect[];
   /**
-   * Runs one synchronous consumer in the same storage transaction that records
-   * its durable completion receipt. This closes the otherwise unavoidable
-   * crash gap between a canonical mutation (learned memory, counters, retained
-   * realtime, hook enqueue) and marking that mutation complete.
+   * Runs one synchronous, same-database consumer under the parent row lock and
+   * records its durable completion receipt in that transaction. This closes
+   * the local commit gap for learned memory, capability facts, retained
+   * realtime, and the existing idempotent hook enqueue.
    *
-   * Consumers that merely schedule best-effort async work retain their prior
-   * at-least-once scheduling semantics. Exactly-once async execution requires
-   * a durable outbox and is intentionally not claimed by this receipt.
+   * A callback that only starts process-local async work is not durable. The
+   * memory prewarm remains explicitly best-effort cache warming; meaningful
+   * async effects must use `enqueueDurableEffect` below.
    */
   runEffect(effect: GeneralChatPostCommitEffect, callback: () => void): boolean;
+  /**
+   * Commits the parent receipt first, then invokes an idempotent notification
+   * publisher outside the transaction. Reconciliation republishes an existing
+   * receipt so a crash between receipt commit and delivery cannot lose it.
+   */
+  publishEffect(effect: GeneralChatPostCommitEffect, callback: () => void): boolean;
+  /**
+   * Atomically creates a deterministic durable child run and records the
+   * parent's enqueue receipt. Child execution is lease-governed and may be
+   * retried after a crash, so provider-backed work is at-least-once rather
+   * than exactly-once.
+   */
+  enqueueDurableEffect(input: GeneralChatPostCommitDurableEffectInput): string | undefined;
 }
 
 export type ChatDurableThreadEventType =
@@ -118,6 +186,7 @@ function resolveChatDurableWaitForEvent(trace: ChatTurnTraceRecord): ChatDurable
 
 interface DurableRunStore {
   getRun?(runId: string): DurableRunRecord;
+  lockFreshActiveLeaseForUpdate?(runId: string, expectedLeaseOwnerId: string): DurableRunRecord | undefined;
   updateRun(input: {
     runId: string;
     status?: DurableRunStatus;
@@ -204,12 +273,14 @@ export function beginDurableChatRun(
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   threadEventType: ChatDurableThreadEventType,
+  options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
 ): DurableRunRecord | undefined {
   if (!deps.shouldUseDurableExecution) {
     return undefined;
   }
   const mode = resolvePreparedTurnMode(prepared);
   const run = deps.createDurableRun({
+    runId: options?.runId,
     workflowKey: "chat.turn.execute",
     payload: deps.buildDurablePayloadRecord(prepared, input, threadEventType),
     metadata: {
@@ -218,6 +289,7 @@ export function beginDurableChatRun(
       objective: prepared.content,
     },
   });
+  options?.mutationLifecycle?.markCommitted();
   if (deps.chatTurnTraces) {
     persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
   }
@@ -247,6 +319,19 @@ export function persistInitialDurableChatTurnTrace(
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   run: DurableRunRecord,
+): void {
+  persistInitialChatTurnTrace(deps, prepared, input, run);
+}
+
+/**
+ * Persist the initial running trace that makes a streamed turn durable enough
+ * for cancellation/idempotency ownership before its first SSE payload.
+ */
+export function persistInitialChatTurnTrace(
+  deps: { chatTurnTraces: Pick<Storage["chatTurnTraces"], "get" | "create"> },
+  prepared: PreparedAgentChatTurn,
+  input: ChatSendMessageRequest,
+  run?: DurableRunRecord,
 ): void {
   try {
     deps.chatTurnTraces.get(prepared.turnId);
@@ -279,10 +364,14 @@ export function persistInitialDurableChatTurnTrace(
       effectiveModel: input.model ?? prepared.prefs.model,
       modelRouter: prepared.modelRouterDecision,
     },
-    durable: {
-      runId: run.runId,
-      status: run.status,
-    },
+    ...(run
+      ? {
+          durable: {
+            runId: run.runId,
+            status: run.status,
+          },
+        }
+      : {}),
   });
 }
 
@@ -330,24 +419,13 @@ export function finalizeDurableChatRun(
     });
     return;
   }
-  if (
-    currentRun &&
-    expectedLeaseOwnerId &&
-    (currentRun.leaseOwnerId !== expectedLeaseOwnerId ||
-      !currentRun.leaseExpiresAt ||
-      Date.parse(currentRun.leaseExpiresAt) <= Date.now())
-  ) {
-    return;
-  }
-  const canCommitForExpectedLease = (run: DurableRunRecord | undefined): run is DurableRunRecord =>
-    Boolean(
-      run &&
-      run.status === "running" &&
-      (!expectedLeaseOwnerId ||
-        (run.leaseOwnerId === expectedLeaseOwnerId &&
-          Boolean(run.leaseExpiresAt) &&
-          Date.parse(run.leaseExpiresAt!) > Date.now())),
-    );
+  const lockCommittableRun = (): DurableRunRecord | undefined => {
+    if (expectedLeaseOwnerId) {
+      return deps.durableRuns.lockFreshActiveLeaseForUpdate?.(runId, expectedLeaseOwnerId);
+    }
+    const latest = deps.durableRuns.getRun?.(runId) ?? currentRun;
+    return latest?.status === "running" ? latest : undefined;
+  };
   const checkpointState = buildDurableCheckpointState(deps, prepared, trace);
   if (
     trace.status === "waiting_for_approval" ||
@@ -356,8 +434,8 @@ export function finalizeDurableChatRun(
   ) {
     const waitForEvent = resolveChatDurableWaitForEvent(trace);
     runChatFinalizeTransaction(deps, () => {
-      const latest = deps.durableRuns.getRun?.(runId) ?? currentRun;
-      if (!canCommitForExpectedLease(latest)) return;
+      const latest = lockCommittableRun();
+      if (!latest) return;
       deps.durableRuns.updateRun({
         runId,
         status: "waiting",
@@ -394,8 +472,8 @@ export function finalizeDurableChatRun(
   if (trace.status === "cancelled") {
     const checkpointKind: DurableCheckpointRecord["checkpointKind"] = "run_cancelled";
     runChatFinalizeTransaction(deps, () => {
-      const latest = deps.durableRuns.getRun?.(runId) ?? currentRun;
-      if (!canCommitForExpectedLease(latest)) return;
+      const latest = lockCommittableRun();
+      if (!latest) return;
       deps.durableRuns.updateRun({
         runId,
         status: "cancelled",
@@ -428,8 +506,8 @@ export function finalizeDurableChatRun(
   const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
   const terminalOutput = getTerminalAssistantOutput(deps, prepared, trace);
   runChatFinalizeTransaction(deps, () => {
-    const latest = deps.durableRuns.getRun?.(runId) ?? currentRun;
-    if (!canCommitForExpectedLease(latest)) return;
+    const latest = lockCommittableRun();
+    if (!latest) return;
     const terminalMetadata = markGeneralChatPostCommitPending(
       mergeTerminalOutputMetadata(latest.metadata, terminalOutput),
       now,
@@ -591,13 +669,47 @@ export function markGeneralChatPostCommitPending(
       traceStatus,
       requestedAt,
       completedEffects: [],
+      durableEffectRunIds: {},
     },
   };
 }
 
+export function markTerminalChatPostCommitPending(
+  metadata: Record<string, unknown> | undefined,
+  requestedAt: string,
+  traceStatus: ChatTurnTraceRecord["status"],
+  generationId = randomUUID(),
+): Record<string, unknown> {
+  const generalPending = markGeneralChatPostCommitPending(metadata, requestedAt, traceStatus, generationId);
+  if (traceStatus !== "completed") {
+    return generalPending;
+  }
+  return markAutonomousChatPostCommitPending(generalPending, requestedAt) ?? generalPending;
+}
+
 export function hasAutonomousChatPostCommitPending(run: DurableRunRecord): boolean {
+  return readAutonomousChatPostCommitPendingMarker(run) !== undefined;
+}
+
+export function readAutonomousChatPostCommitPendingMarker(
+  run: DurableRunRecord,
+): AutonomousChatPostCommitPendingMarker | undefined {
   const pending = run.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
-  return Boolean(pending && typeof pending === "object" && !Array.isArray(pending));
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return undefined;
+  }
+  const value = pending as Partial<AutonomousChatPostCommitPendingMarker>;
+  if (value.version !== 1 || typeof value.requestedAt !== "string" || !value.requestedAt) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    requestedAt: value.requestedAt,
+    ...(typeof value.claimId === "string" && value.claimId ? { claimId: value.claimId } : {}),
+    ...(typeof value.claimExpiresAt === "string" && value.claimExpiresAt
+      ? { claimExpiresAt: value.claimExpiresAt }
+      : {}),
+  };
 }
 
 export function hasGeneralChatPostCommitPending(run: DurableRunRecord): boolean {
@@ -626,12 +738,16 @@ export function readGeneralChatPostCommitPendingMarker(
   const completedEffects = Array.isArray(value.completedEffects)
     ? value.completedEffects.filter(isGeneralChatPostCommitEffect)
     : [];
+  const durableEffectRunIds = readGeneralChatPostCommitDurableEffectRunIds(
+    (value as { durableEffectRunIds?: unknown }).durableEffectRunIds,
+  );
   return {
     version: 1,
     generationId: value.generationId,
     traceStatus: value.traceStatus,
     requestedAt: value.requestedAt,
     completedEffects: [...new Set(completedEffects)],
+    durableEffectRunIds,
   };
 }
 
@@ -641,4 +757,21 @@ export function readGeneralChatPostCommitCompletedEffects(run: DurableRunRecord)
 
 function isGeneralChatPostCommitEffect(value: unknown): value is GeneralChatPostCommitEffect {
   return typeof value === "string" && (GENERAL_CHAT_POST_COMMIT_EFFECTS as readonly string[]).includes(value);
+}
+
+function readGeneralChatPostCommitDurableEffectRunIds(
+  value: unknown,
+): Partial<Record<GeneralChatPostCommitDurableEffect, string>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  const result: Partial<Record<GeneralChatPostCommitDurableEffect, string>> = {};
+  for (const effect of GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS) {
+    const runId = record[effect];
+    if (typeof runId === "string" && runId.trim()) {
+      result[effect] = runId;
+    }
+  }
+  return result;
 }

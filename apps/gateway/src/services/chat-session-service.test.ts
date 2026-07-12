@@ -9,6 +9,7 @@ import {
   assignChatSessionProject,
   createChatSideChat,
   createChatSession,
+  ensureChatSessionWithStableKey,
   deleteChatSession,
   getChatSideChat,
   getChatSessionBinding,
@@ -79,6 +80,36 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("upserts one deterministic internal session for a stable orchestration key", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const first = ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
+        workspaceId: "default",
+        title: "Delegate - Coder",
+        mode: "chat",
+      });
+      const second = ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
+        workspaceId: "default",
+        title: "Delegate - Coder",
+        mode: "chat",
+      });
+      const other = ensureChatSessionWithStableKey(deps, "delegation-run-a:step-b", {
+        workspaceId: "default",
+        title: "Delegate - QA",
+        mode: "chat",
+      });
+
+      expect(second.sessionId).toBe(first.sessionId);
+      expect(other.sessionId).not.toBe(first.sessionId);
+      expect(first.sessionKey).toMatch(/^mission:operator:chat_[0-9a-f]{24}$/u);
+      expect(listChatSessions(deps, { workspaceId: "default", includeHidden: true })).toHaveLength(2);
+      expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(3);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("does not persist public projection markers during editable session round trips", () => {
     const { storage, cleanup } = createStorage();
     try {

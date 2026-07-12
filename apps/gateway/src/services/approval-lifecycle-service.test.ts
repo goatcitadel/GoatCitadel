@@ -27,6 +27,7 @@ import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
+import { ConflictError } from "@goatcitadel/contracts";
 
 describe("approval lifecycle service", () => {
   it("keeps a created tool grant committed when realtime projection fails", () => {
@@ -108,12 +109,10 @@ describe("approval lifecycle service", () => {
       state: "pending",
     }));
     host.enqueueApprovalObservabilityEffects = vi.fn(() => {
-      host.storage.approvals.get = vi.fn(() => ({
-        ...pending,
-        status: "approved",
-        resolvedAt: "2026-04-11T00:00:01.000Z",
+      host.storage.approvals.resolve(pending.approvalId, {
+        decision: "approve",
         resolvedBy: "operator",
-      }));
+      });
       return [];
     });
 
@@ -147,7 +146,7 @@ describe("approval lifecycle service", () => {
       host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
       host.storage.remoteActionTokens.create = vi.fn(() => createRemoteActionTokenRecord("token-boundary"));
       host.enqueueApprovalObservabilityEffects = vi.fn(() => {
-        vi.setSystemTime(new Date("2026-04-11T00:00:02.000Z"));
+        host.storage.approvals.isExpiredPendingAtDatabaseNow.mockReturnValue(true);
         return [];
       });
 
@@ -168,12 +167,12 @@ describe("approval lifecycle service", () => {
         expiresAt: "2026-04-11T01:00:00.000Z",
       });
       host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
-      host.storage.remoteActionTokens.create = vi.fn((input: { expiresAt: string }) => ({
+      host.storage.remoteActionTokens.createWithTtl = vi.fn(() => ({
         ...createRemoteActionTokenRecord("token-ttl-boundary"),
-        expiresAt: input.expiresAt,
+        expiresAt: "2026-04-11T00:01:00.000Z",
       }));
       host.enqueueApprovalObservabilityEffects = vi.fn(() => {
-        vi.setSystemTime(new Date("2026-04-11T00:01:01.000Z"));
+        host.storage.remoteActionTokens.findPendingFresh.mockReturnValue(undefined);
         return [];
       });
 
@@ -184,6 +183,48 @@ describe("approval lifecycle service", () => {
         }),
       ).toThrow(/expired before issuance committed/i);
       expect(host.enqueueApprovalRemoteTokenDelivery).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("issues relative remote-token TTLs from the database clock under fast and slow host skew", () => {
+    vi.useFakeTimers();
+    try {
+      for (const hostClock of ["2100-04-11T00:00:00.000Z", "2000-04-11T00:00:00.000Z"]) {
+        vi.setSystemTime(new Date(hostClock));
+        const host = createApprovalHarness();
+        host.requireConnectorRecord = vi.fn(() => ({ connectorId: "connector-1" }) as never);
+        const created = {
+          ...createRemoteActionTokenRecord(`token-db-clock-${hostClock.slice(0, 4)}`),
+          createdAt: "2026-04-11T00:00:00.000Z",
+          expiresAt: "2026-04-11T00:01:00.000Z",
+        };
+        const createWithTtl = vi.fn(() => created);
+        Object.assign(host.storage.remoteActionTokens, {
+          createWithTtl,
+          findPendingFresh: vi.fn(() => created),
+        });
+
+        const issued = createApprovalRemoteActionToken(host, "approval-1", {
+          connectorId: "connector-1",
+          expiresInMs: 60_000,
+        });
+
+        expect(issued).toMatchObject({ tokenId: created.tokenId, expiresAt: created.expiresAt });
+        expect(createWithTtl).toHaveBeenCalledWith(
+          expect.objectContaining({
+            approvalId: "approval-1",
+            connectorId: "connector-1",
+            expiresInMs: 60_000,
+          }),
+        );
+        expect(host.storage.approvals.lockPendingForUpdate).toHaveBeenCalledTimes(2);
+        expect(host.storage.approvals.lockPendingForUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+          createWithTtl.mock.invocationCallOrder[0]!,
+        );
+        expect(host.storage.remoteActionTokens.create).not.toHaveBeenCalled();
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -245,7 +286,7 @@ describe("approval lifecycle service", () => {
     );
   });
 
-  it("keeps pending-list reads side-effect free while omitting not-yet-swept expirations", () => {
+  it("keeps pending-list reads side-effect free and preserves repository-owned expiry filtering", () => {
     const host = createApprovalHarness();
     const activeApproval: ApprovalRequest = {
       approvalId: "approval-active",
@@ -258,28 +299,18 @@ describe("approval lifecycle service", () => {
       expiresAt: "2099-04-11T00:00:00.000Z",
       explanationStatus: "not_requested",
     };
-    const expiredApproval: ApprovalRequest = {
-      ...activeApproval,
-      approvalId: "approval-expired",
-      expiresAt: "2020-04-11T00:00:00.000Z",
-    };
-    host.storage.approvals.list = vi.fn(() => [expiredApproval, activeApproval]);
+    host.storage.approvals.list = vi.fn(() => [activeApproval]);
 
     expect(listApprovals(host, "pending").map((approval) => approval.approvalId)).toEqual(["approval-active"]);
     expect(host.storage.approvals.list).toHaveBeenCalledWith("pending", 100, undefined);
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
-  it("preserves page cursor truth while filtering an expiry awaiting the background sweep", () => {
+  it("preserves repository-owned pending-page expiry and cursor truth", () => {
     const host = createApprovalHarness();
     const activeApproval = host.storage.approvals.get("approval-1");
-    const expiredApproval = {
-      ...activeApproval,
-      approvalId: "approval-expired",
-      expiresAt: "2020-04-11T00:00:00.000Z",
-    };
     host.storage.approvals.listPage = vi.fn(() => ({
-      items: [expiredApproval, activeApproval],
+      items: [activeApproval],
       nextCursor: "opaque-next-cursor",
     }));
 
@@ -418,6 +449,30 @@ describe("approval lifecycle service", () => {
       "approval-1",
       expect.arrayContaining([expect.objectContaining({ operationId: "tool.invoke.approval_required.audit:audit-1" })]),
     );
+  });
+
+  it.each([0, Number.NaN])("fails closed for invalid Gateway approval TTL authority %s", async (ttlMs) => {
+    const host = createApprovalHarness();
+    host.storage.approvals.createWithTtlDuration = vi.fn(() => {
+      throw new Error("ttlMs must be a positive duration");
+    });
+
+    await expect(
+      createApproval(
+        host,
+        {
+          kind: "shell.exec",
+          riskLevel: "danger",
+          payload: { sessionId: "session-1" },
+          preview: { label: "Run shell command" },
+          linkage: { sessionId: "session-1", workspaceId: "workspace-1" },
+        },
+        undefined,
+        { ttlMs },
+      ),
+    ).rejects.toThrow(/positive duration/i);
+
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
   });
 
   it("blocks createApproval when approval.request.before vetoes before approval.create.before fires", async () => {
@@ -629,7 +684,7 @@ describe("approval lifecycle service", () => {
         decision: "approve",
         resolvedBy: "operator",
       },
-      { resolvedAt: expect.any(String) },
+      undefined,
     );
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -780,7 +835,7 @@ describe("approval lifecycle service", () => {
       }),
     ).rejects.toThrow(/already resolved/i);
 
-    expect(host.storage.approvals.resolve).toHaveBeenCalledTimes(1);
+    expect(host.storage.approvals.resolve).toHaveBeenCalledTimes(2);
     expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledTimes(1);
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledTimes(1);
     expect(host.enqueueApprovalObservabilityEffects).toHaveBeenCalledTimes(1);
@@ -973,10 +1028,13 @@ describe("approval lifecycle service", () => {
     const host = createApprovalHarness({
       expiresAt: "2099-04-11T00:00:00.000Z",
     });
-    const current = host.storage.approvals.get("approval-1");
-    vi.mocked(host.storage.approvals.get)
-      .mockReturnValueOnce(current)
-      .mockReturnValue({ ...current, expiresAt: "2020-04-11T00:00:00.000Z" });
+    host.storage.approvals.isExpiredPendingAtDatabaseNow.mockReturnValue(true);
+    host.storage.approvals.resolve.mockImplementationOnce(() => {
+      throw new ConflictError({
+        message: "Approval approval-1 has expired and can no longer be resolved",
+        details: { reason: "approval_expired", approvalId: "approval-1" },
+      });
+    });
 
     await expect(
       resolveApproval(host, "approval-1", {
@@ -985,7 +1043,7 @@ describe("approval lifecycle service", () => {
       }),
     ).rejects.toThrow(/has expired and can no longer be resolved/i);
 
-    expect(host.storage.runImmediateTransaction).toHaveBeenCalledTimes(1);
+    expect(host.storage.runImmediateTransaction).toHaveBeenCalledTimes(2);
     expect(host.storage.approvals.resolve).toHaveBeenCalledWith(
       "approval-1",
       expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
@@ -998,37 +1056,42 @@ describe("approval lifecycle service", () => {
     );
   });
 
-  it("rolls back a late approval decision and commits system expiry instead", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-04-11T00:00:00.000Z"));
-      const host = createApprovalHarness({
-        expiresAt: "2026-04-11T00:00:01.000Z",
+  it("commits system expiry when the database CAS reaches the boundary during resolution", async () => {
+    const host = createApprovalHarness({ expiresAt: "2099-04-11T00:00:01.000Z" });
+    host.storage.approvals.isExpiredPendingAtDatabaseNow.mockReturnValue(true);
+    host.storage.approvals.resolve.mockImplementationOnce(() => {
+      throw new ConflictError({
+        message: "Approval approval-1 has expired and can no longer be resolved",
+        details: { reason: "approval_expired", approvalId: "approval-1" },
       });
-      const resolveImplementation = host.storage.approvals.resolve.getMockImplementation();
-      host.storage.approvals.resolve.mockImplementationOnce((...args) => {
-        const resolved = resolveImplementation!(...args);
-        vi.setSystemTime(new Date("2026-04-11T00:00:02.000Z"));
-        return resolved;
-      });
+    });
 
-      await expect(
-        resolveApproval(host, "approval-1", {
-          decision: "approve",
-          resolvedBy: "operator",
-        }),
-      ).rejects.toMatchObject({
-        mutationCommitted: true,
-        message: expect.stringMatching(/has expired and can no longer be resolved/i),
-      });
-      expect(host.storage.approvals.resolve).toHaveBeenLastCalledWith(
-        "approval-1",
-        expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
-        expect.objectContaining({ allowExpired: true }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator",
+      }),
+    ).rejects.toMatchObject({
+      mutationCommitted: true,
+      message: expect.stringMatching(/has expired and can no longer be resolved/i),
+    });
+    expect(host.storage.approvals.resolve).toHaveBeenLastCalledWith(
+      "approval-1",
+      expect.objectContaining({ decision: "reject", resolvedBy: "system:approval-expiry" }),
+      expect.objectContaining({ allowExpired: true }),
+    );
+  });
+
+  it("does not mask unrelated resolution conflicts as expiry reconciliation", async () => {
+    const host = createApprovalHarness({ expiresAt: "2020-04-11T00:00:00.000Z" });
+    host.storage.approvals.resolve.mockImplementationOnce(() => {
+      throw new ConflictError({ message: "downstream resolution effect conflict" });
+    });
+
+    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" })).rejects.toThrow(
+      "downstream resolution effect conflict",
+    );
+    expect(host.storage.approvals.resolve).toHaveBeenCalledTimes(1);
   });
 
   it("marks linked Code Mode runs rejected when approval is rejected", async () => {
@@ -1913,6 +1976,7 @@ describe("approval lifecycle service", () => {
       },
       policyEngine: {
         listGrants: vi.fn(() => []),
+        listActiveGrants: vi.fn(() => []),
         createGrant: vi.fn(),
       },
       resolveApproval: vi.fn(async () => ({
@@ -2008,6 +2072,7 @@ describe("approval lifecycle service", () => {
       },
       policyEngine: {
         listGrants: vi.fn(() => []),
+        listActiveGrants: vi.fn(() => []),
         createGrant,
       },
       publishRealtime: vi.fn(),
@@ -2113,6 +2178,7 @@ describe("approval lifecycle service", () => {
       },
       policyEngine: {
         listGrants: vi.fn(() => []),
+        listActiveGrants: vi.fn(() => []),
         createGrant,
       },
       publishRealtime: vi.fn(),
@@ -2204,6 +2270,7 @@ describe("approval lifecycle service", () => {
       },
       policyEngine: {
         listGrants: vi.fn(() => []),
+        listActiveGrants: vi.fn(() => []),
         createGrant,
       },
       resolveApproval: vi.fn(async () => {
@@ -2604,6 +2671,11 @@ function createApprovalHarness(input?: {
     expiresAt: input?.expiresAt,
     explanationStatus: "not_requested" as const,
   };
+  const databaseNowMs = Date.now();
+  const isExpiredPendingAtDatabaseNow = () => {
+    const expiresAt = approval.expiresAt ? Date.parse(approval.expiresAt) : Number.NaN;
+    return approval.status === "pending" && Number.isFinite(expiresAt) && expiresAt <= databaseNowMs;
+  };
 
   const approvals = {
     create: vi.fn((request: Record<string, unknown>) => {
@@ -2618,6 +2690,12 @@ function createApprovalHarness(input?: {
       return approval;
     }),
     get: vi.fn(() => approval),
+    lockPendingForUpdate: vi.fn(() => {
+      if (approval.status !== "pending") {
+        throw new ConflictError({ message: `Approval ${approval.approvalId} is already resolved` });
+      }
+      return approval;
+    }),
     resolve: vi.fn(
       (
         _approvalId: string,
@@ -2628,6 +2706,12 @@ function createApprovalHarness(input?: {
         },
         options?: { resolvedAt?: string; allowExpired?: boolean },
       ) => {
+        if (!options?.allowExpired && isExpiredPendingAtDatabaseNow()) {
+          throw new ConflictError({
+            message: `Approval ${approval.approvalId} has expired and can no longer be resolved`,
+            details: { reason: "approval_expired", approvalId: approval.approvalId },
+          });
+        }
         approval = {
           ...approval,
           status: request.decision === "approve" ? "approved" : request.decision === "reject" ? "rejected" : "edited",
@@ -2658,6 +2742,24 @@ function createApprovalHarness(input?: {
     list: vi.fn(() => []),
     listPage: vi.fn(() => ({ items: [], nextCursor: undefined })),
     listExpiredPending: vi.fn(() => []),
+    isExpiredPendingAtDatabaseNow: vi.fn(isExpiredPendingAtDatabaseNow),
+  };
+  const createRemoteActionToken = vi.fn();
+  let lastCreatedRemoteActionToken: ReturnType<typeof createRemoteActionToken>;
+  const remoteActionTokens = {
+    create: createRemoteActionToken,
+    createWithTtl: vi.fn((request: Record<string, unknown> & { expiresInMs: number }) => {
+      lastCreatedRemoteActionToken = remoteActionTokens.create({
+        ...request,
+        expiresAt: new Date(Date.now() + request.expiresInMs).toISOString(),
+      });
+      return lastCreatedRemoteActionToken;
+    }),
+    findPendingFresh: vi.fn((tokenId: string) =>
+      lastCreatedRemoteActionToken?.tokenId === tokenId ? lastCreatedRemoteActionToken : undefined,
+    ),
+    listByApprovalId: vi.fn(() => []),
+    expirePendingByApprovalId: vi.fn(() => 0),
   };
 
   const host = {
@@ -2671,11 +2773,7 @@ function createApprovalHarness(input?: {
         find: vi.fn(() => pendingAction),
         markResolved: vi.fn(),
       },
-      remoteActionTokens: {
-        create: vi.fn(),
-        listByApprovalId: vi.fn(() => []),
-        expirePendingByApprovalId: vi.fn(() => 0),
-      },
+      remoteActionTokens,
       audit: {
         append: vi.fn(async () => undefined),
       },
@@ -2722,6 +2820,7 @@ function createApprovalHarness(input?: {
     },
     policyEngine: {
       listGrants: vi.fn(() => []),
+      listActiveGrants: vi.fn(() => []),
       createGrant: vi.fn(),
       revokeGrant: vi.fn(),
       executeApprovedAction: vi.fn(),

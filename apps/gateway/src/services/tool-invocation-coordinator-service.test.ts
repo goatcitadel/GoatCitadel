@@ -1,12 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalRequest,
   McpServerRecord,
   McpToolRecord,
   ToolInvokeRequest,
   ToolInvokeResult,
+  ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { PolicyViolationError } from "@goatcitadel/contracts";
+import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import { Storage } from "@goatcitadel/storage";
 import {
   ToolInvocationCoordinatorService,
   type ToolInvocationCoordinatorHost,
@@ -15,6 +21,13 @@ import { applyMcpRedaction } from "./mcp-server-policy.js";
 import { MCP_APPROVAL_INBOX_LIST_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
+
+const integrationTempRoots: string[] = [];
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await Promise.all(integrationTempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
 
 function createToolRequest(overrides: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
   return {
@@ -141,6 +154,138 @@ function createHost(overrides: Partial<ToolInvocationCoordinatorHost> = {}): Too
 }
 
 describe("ToolInvocationCoordinatorService", () => {
+  it("reports a disconnected channel failure before the concrete external boundary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-boundary-"));
+    integrationTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const config: ToolPolicyConfig = {
+      profiles: { danger: ["*"] },
+      tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: [root],
+        readOnlyRoots: [root],
+        networkAllowlist: ["example.com"],
+        riskyShellPatterns: [],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    const connection = storage.integrationConnections.create({
+      catalogId: "webhook",
+      kind: "webhook",
+      key: "webhook",
+      label: "Disconnected webhook",
+      status: "disconnected",
+      config: { webhookUrl: "https://example.com/hooks/proactive" },
+    });
+    const policyEngine = new ToolPolicyEngine(config, storage);
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        approvalInbox: storage.approvalInbox,
+        policyEngine,
+      }),
+    );
+    const markStarted = vi.fn();
+    const markNotRequired = vi.fn();
+
+    try {
+      const result = await coordinator.invokeTool(
+        createToolRequest({
+          toolName: "channel.send",
+          args: { connectionId: connection.connectionId, message: "hello" },
+          agentId: "proactive",
+          sessionId: "session-proactive-boundary",
+          workspaceId: "workspace-1",
+        }),
+        {
+          externalSideEffect: { markStarted, markNotRequired },
+        },
+      );
+
+      expect(result).toMatchObject({
+        outcome: "executed",
+        result: {
+          status: "failed",
+          deliveryStatus: "blocked",
+        },
+      });
+      expect(markStarted).not.toHaveBeenCalled();
+      expect(markNotRequired).toHaveBeenCalledTimes(1);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("reports the concrete boundary immediately before a connected channel provider request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-boundary-"));
+    integrationTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const config: ToolPolicyConfig = {
+      profiles: { danger: ["*"] },
+      tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: [root],
+        readOnlyRoots: [root],
+        networkAllowlist: ["example.com"],
+        riskyShellPatterns: [],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    const connection = storage.integrationConnections.create({
+      catalogId: "webhook",
+      kind: "webhook",
+      key: "webhook",
+      label: "Connected webhook",
+      status: "connected",
+      config: { webhookUrl: "https://example.com/hooks/proactive" },
+    });
+    const markStarted = vi.fn();
+    const markNotRequired = vi.fn();
+    const fetchMock = vi.fn(async () => {
+      expect(markStarted).toHaveBeenCalledTimes(1);
+      return new Response("ok", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const policyEngine = new ToolPolicyEngine(config, storage);
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        approvalInbox: storage.approvalInbox,
+        policyEngine,
+      }),
+    );
+
+    try {
+      const result = await coordinator.invokeTool(
+        createToolRequest({
+          toolName: "channel.send",
+          args: { connectionId: connection.connectionId, message: "hello" },
+          agentId: "proactive",
+          sessionId: "session-proactive-boundary",
+          workspaceId: "workspace-1",
+        }),
+        {
+          externalSideEffect: { markStarted, markNotRequired },
+        },
+      );
+
+      expect(result).toMatchObject({ outcome: "executed", result: { status: "sent", deliveryStatus: "sent" } });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(markStarted).toHaveBeenCalledTimes(1);
+      expect(markNotRequired).not.toHaveBeenCalled();
+    } finally {
+      storage.close();
+    }
+  });
+
   it("forwards a durable execution fence to the policy executor boundary", async () => {
     let sideEffectStarted = false;
     const leaseError = new Error("durable lease lost");

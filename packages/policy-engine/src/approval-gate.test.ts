@@ -27,8 +27,17 @@ function createStorage(): { storage: Storage; create: ReturnType<typeof vi.fn>; 
     }),
   );
   const append = vi.fn(async () => undefined);
+  const createWithTtlDuration = vi.fn((input: ApprovalCreateInput, ttlMs: number) => {
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+      throw new Error("ttlMs must be a positive duration");
+    }
+    return {
+      ...create(input),
+      expiresAt: new Date(Date.parse("2026-06-13T00:00:00.000Z") + ttlMs).toISOString(),
+    };
+  });
   const storage = {
-    approvals: { create },
+    approvals: { create, createWithTtlDuration },
     audit: { append },
   } as unknown as Storage;
   return { storage, create, append };
@@ -53,6 +62,16 @@ describe("ApprovalGate", () => {
     await expect(
       gate.create(buildInput({ riskLevel: "catastrophic" as unknown as ApprovalRequest["riskLevel"] })),
     ).rejects.toThrow(/riskLevel/i);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it.each([0, Number.NaN])("fails closed for invalid compatibility TTL authority %s", async (ttlMs) => {
+    const { storage, create, append } = createStorage();
+    const gate = new ApprovalGate(storage);
+
+    await expect(gate.create(buildInput(), undefined, { ttlMs })).rejects.toThrow(/positive duration/i);
 
     expect(create).not.toHaveBeenCalled();
     expect(append).not.toHaveBeenCalled();

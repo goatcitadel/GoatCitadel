@@ -60,6 +60,15 @@ describe("SystemSettingsRepository", () => {
 
     assert.throws(() => repo.set("provider.default", "openai", "2026-05-12T00:00:00.000Z"), /Failed to persist/);
   });
+
+  it("atomically advances and resets a cyclic counter", () => {
+    const { repo } = createRepo();
+
+    assert.deepEqual(repo.advanceCyclicCounter("background", 3), { previous: 0, value: 1, due: false });
+    assert.deepEqual(repo.advanceCyclicCounter("background", 3), { previous: 1, value: 2, due: false });
+    assert.deepEqual(repo.advanceCyclicCounter("background", 3), { previous: 2, value: 0, due: true });
+    assert.equal(repo.get<number>("background")?.value, 0);
+  });
 });
 
 class MissingReadbackDatabase implements DatabaseClient {

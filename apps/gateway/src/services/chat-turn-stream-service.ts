@@ -60,7 +60,7 @@ import {
   toTitleCase,
   truncateSummaryLine,
 } from "./chat-turn-helpers.js";
-import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
+import type { ChatStreamMutationLifecycle, PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
@@ -74,6 +74,7 @@ import type {
   ChatTurnTranscriptIngress,
 } from "./chat-turn-runtime-collaborators.js";
 import { PROMPT_LAB_LOCAL_FILE_TOOL_NAMES } from "./chat-tool-families.js";
+import { isDurableControlError } from "./durable-control-error.js";
 
 type ChatTurnStreamStorage = Pick<
   Storage,
@@ -489,7 +490,9 @@ export async function executePreparedModeOrchestration(
       orchestration.orchestrationPlan.steps.at(-1)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
     effectiveModel: orchestration.orchestrationPlan.steps.at(-1)?.model ?? input.model ?? prepared.prefs.model,
   } satisfies ChatTurnTraceRecord["routing"];
-  const persistedStepIds = new Map<string, string>();
+  const persistedStepIds = new Map(
+    orchestration.orchestrationPlan.steps.map((step) => [step.stepId, `${runId}:${step.stepId}`] as const),
+  );
   canonicalWriteFence(() => {
     host.storage.chatDelegationRuns.create({
       runId,
@@ -509,8 +512,7 @@ export async function executePreparedModeOrchestration(
       trace: runTrace,
     });
     for (const [index, step] of orchestration.orchestrationPlan.steps.entries()) {
-      const persistedStepId = `${runId}:${step.stepId}`;
-      persistedStepIds.set(step.stepId, persistedStepId);
+      const persistedStepId = persistedStepIds.get(step.stepId)!;
       host.storage.chatDelegationSteps.create({
         stepId: persistedStepId,
         runId,
@@ -518,6 +520,10 @@ export async function executePreparedModeOrchestration(
         label: step.label,
         index,
         status: "pending",
+        parallelizable: step.parallelizable,
+        dependsOnStepIds: (step.dependsOnStepIds ?? []).map(
+          (dependencyStepId) => persistedStepIds.get(dependencyStepId) ?? dependencyStepId,
+        ),
         providerId: step.providerId,
         model: step.model,
       });
@@ -1178,6 +1184,9 @@ export async function executeDelegatedPlanStep(
       childTurnId: response.turnId,
     };
   } catch (error) {
+    if (isDurableControlError(error)) {
+      throw error;
+    }
     const finishedAt = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = Boolean(input.signal?.aborted) || isChatTurnCancelledError(error);
@@ -1615,6 +1624,7 @@ export async function* streamPreparedAgentChatTurn(
     skipMessageStart?: boolean;
     abortSignal?: AbortSignal;
     canonicalWriteFence?: ChatTurnCanonicalWriteFence;
+    mutationLifecycle?: ChatStreamMutationLifecycle;
     /** Durable runs reconcile general post-commit effects after terminal run finalization. */
     deferGeneralPostCommit?: boolean;
   },
@@ -1624,7 +1634,14 @@ export async function* streamPreparedAgentChatTurn(
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
   const chatTurnTraces = host.storage.chatTurnTraces;
-  const canonicalWriteFence = options?.canonicalWriteFence ?? executeUnfencedChatTurnWrite;
+  const baseCanonicalWriteFence = options?.canonicalWriteFence ?? executeUnfencedChatTurnWrite;
+  const canonicalWriteFence: ChatTurnCanonicalWriteFence = options?.mutationLifecycle
+    ? <T>(work: () => T): T => {
+        const result = baseCanonicalWriteFence(work);
+        options.mutationLifecycle?.markCommitted();
+        return result;
+      }
+    : baseCanonicalWriteFence;
   const deferGeneralPostCommit = options?.deferGeneralPostCommit === true;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
@@ -2732,15 +2749,6 @@ export async function* streamPreparedAgentChatTurn(
 function readDurableControlReason(signal: AbortSignal, error: unknown): Error | undefined {
   const candidate = signal.aborted ? signal.reason : error;
   return isDurableControlError(candidate) ? candidate : undefined;
-}
-
-function isDurableControlError(candidate: unknown): candidate is Error {
-  return (
-    candidate instanceof Error &&
-    (candidate.name === "DurableWorkerInterruptionError" ||
-      candidate.name === "DurableRunPausedError" ||
-      candidate.name === "DurableRunCancelledError")
-  );
 }
 
 function assertChatStreamCompletionWritable(

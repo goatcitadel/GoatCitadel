@@ -55,6 +55,17 @@ function createStorageStub(): Storage {
         expiresAt: input.expiresAt,
         explanationStatus: "not_requested",
       })),
+      createWithTtlDuration: vi.fn((input, ttlMs) => ({
+        approvalId: "approval-loop13",
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        status: "pending",
+        payload: input.payload,
+        preview: input.preview,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+        explanationStatus: "not_requested",
+      })),
     },
     approvalEvents: { append: vi.fn() },
     audit: { append: vi.fn(async () => undefined) },
@@ -72,6 +83,7 @@ function createStorageStub(): Storage {
     toolGrants: {
       consumeOne: vi.fn(),
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
     },
   } as unknown as Storage;
 }
@@ -116,23 +128,25 @@ describe("policy engine loop13 branch tails", () => {
     await expect(engine.invoke(request("shell.exec", { command: "Remove-Item old.txt" }))).resolves.toMatchObject({
       outcome: "approval_required",
     });
-    expect(storage.approvals.create).toHaveBeenCalledWith(
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
       expect.objectContaining({
         preview: expect.objectContaining({
           command: "Remove-Item old.txt",
         }),
       }),
+      expect.any(Number),
     );
 
     await expect(engine.invoke(request("http.post", { host: "example.com" }))).resolves.toMatchObject({
       outcome: "approval_required",
     });
-    expect(storage.approvals.create).toHaveBeenLastCalledWith(
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenLastCalledWith(
       expect.objectContaining({
         preview: expect.objectContaining({
           target: "example.com",
         }),
       }),
+      expect.any(Number),
     );
   });
 

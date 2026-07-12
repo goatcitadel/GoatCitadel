@@ -19,6 +19,7 @@ const durableRunLogger: DurableRunServiceLogger = {
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
+  type ApprovalCreateAuthority,
   ToolPolicyEngine,
   assertWritePathInJail,
   describeBrowserSessionState,
@@ -418,8 +419,9 @@ import {
   restoreRoutingPolicySnapshot,
   restoreSkillRevisionSnapshot,
 } from "./improvement-snapshot-service.js";
-import { BackgroundReviewService } from "./background-review-service.js";
-import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import type { BackgroundReviewService } from "./background-review-service.js";
+import type { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import { createChatPostCommitRuntime } from "./gateway/chat-post-commit-runtime.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -486,7 +488,6 @@ import {
   ToolInvocationCoordinatorService,
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
-import { executeApprovedExternalRuntimeSideEffect } from "./approved-external-runtime-side-effect-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -522,19 +523,15 @@ import {
 } from "./gateway/runtime-settings-guards.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 import {
+  executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
   isApprovedExternalRuntimePendingAction,
   readAuthActorSource,
   readPermissionSurfaceValue,
-  toApprovedMcpInvokeRequest,
-  toolInvokeResultFromMcpApproval,
   toolInvokeResultRecord,
-  toToolInvokeRequest,
-  withExternalRuntimePolicyContext,
 } from "./gateway/external-runtime-approval-adapter.js";
 import {
   canMutatePermissionProfile,
   grantPatternMatches,
-  isActiveToolGrant,
   isSystemOwnedRestrictedPermissionProfileRequest,
 } from "./gateway/tool-grant-policy.js";
 import { durableChatTurnPayloadToRecord } from "./gateway/chat-stream-codecs.js";
@@ -927,7 +924,7 @@ export class GatewayService {
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
       // retryable approval observability envelope.
-      createApproval: (input, onCreated) => this.createApproval(input, onCreated),
+      createApproval: (input, onCreated, authority) => this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
@@ -1073,12 +1070,6 @@ export class GatewayService {
         this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
-    this.commitmentClassifier = new CommitmentClassifierService({
-      storage: this.storage,
-      createChatCompletion: (request) => this.createChatCompletion(request),
-      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
-      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-    });
     this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
@@ -1107,32 +1098,6 @@ export class GatewayService {
     this.skillMutationService = new SkillMutationService({
       rootDir: config.rootDir,
       skillLifecycle: this.storage.skillLifecycle,
-    });
-    // P2-S1 self-improvement learning loop. Structured-extraction post-turn
-    // service: two cheap read-only model calls (memory + skill) → persist via the
-    // governed operator-profile + skill-mutation services. Auto-apply/secret/
-    // candidate governance lives entirely in those services. Never promotes a
-    // skill to callable (governed activation owns promotion).
-    this.backgroundReviewService = new BackgroundReviewService({
-      createChatCompletion: (request) => this.createChatCompletion(request),
-      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
-      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-      recordOperatorProfileFacts: (workspaceId, facts) => {
-        const result = this.operatorProfileService.recordOperatorProfileFacts(workspaceId, { facts });
-        // Unified audit: only an applied write (full autonomy) yields a
-        // priorSnapshot — that snapshot is value-carrying (storage keeps only the
-        // current revision) so it doubles as the restoreRef. Proposed/blocked
-        // writes persist nothing, so there is nothing to audit. Best-effort.
-        if (result.outcome === "applied" && result.priorSnapshot) {
-          this.autonomyControlService.recordAutonomousMutation({
-            kind: "memory",
-            targetKey: result.record.operatorProfileId,
-            restoreRef: { kind: "memory", priorSnapshot: result.priorSnapshot },
-          });
-        }
-        return result;
-      },
-      draftSkillMutation: (input) => this.skillMutationService.draftSkillMutation(input),
     });
     this.addonSlotService = new AddonSlotService();
     this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
@@ -1271,19 +1236,17 @@ export class GatewayService {
     this.chatProjectService = new ChatProjectService(serviceCtx);
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
-      workflowRegistry: {
-        executeWorkflow: (run, context) => this.durableWorkflowRegistry.executeWorkflow(run, context),
-        isWorkflowRecoverable: (run) => this.durableWorkflowRegistry.isWorkflowRecoverable(run),
-        markWorkflowUnrecoverable: (run, reason) => this.durableWorkflowRegistry.markWorkflowUnrecoverable(run, reason),
-      },
+      workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
+        () => this.durableWorkflowRegistry,
+      ),
       onRunFailed: async (run, message) => {
         this.improvementService.recordDurableRunFailureSignal({
           run,
           message,
         });
       },
-      onAutonomousChatPostCommit: (run) =>
-        durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run),
+      onAutonomousChatPostCommit: (run, context) =>
+        durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, context),
       onGeneralChatPostCommit: (run, progress) =>
         durableExecutionService.executeGeneralChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, progress),
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
@@ -1291,7 +1254,7 @@ export class GatewayService {
       taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
     });
     this.hooksService = new HooksService(serviceCtx, {
-      createDurableRun: (input) => this.durableRunService.createDurableRun(input),
+      createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
     });
     this.approvalWaitRunService = new ApprovalWaitRunService(serviceCtx, {
@@ -1320,7 +1283,7 @@ export class GatewayService {
       hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
       getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
       listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
-      invokeTool: (request) => this.invokeTool(request),
+      invokeTool: (request, options) => this.invokeTool(request, options),
       resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
       detectDelegationRoles: (text) => detectDelegationRoles(text),
       createDurableRun: (input) => this.createDurableRun(input),
@@ -1429,7 +1392,14 @@ export class GatewayService {
       listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
-      createChatSession: (input) => this.createChatSession(input),
+      createChatSession: (input) =>
+        input.stableKey
+          ? chatSessionService.ensureChatSessionWithStableKey(
+              this.buildChatSessionDependencies(),
+              input.stableKey,
+              input,
+            )
+          : this.createChatSession(input),
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
@@ -1665,9 +1635,31 @@ export class GatewayService {
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
-      createDurableRun: (input) => this.createDurableRun(input),
+      createDurableRun: (input, options) =>
+        options?.deferRealtime
+          ? this.durableRunService.createDurableRun(input, { publishRealtime: false })
+          : this.createDurableRun(input),
       getDurableRun: (runId) => this.getDurableRun(runId),
     });
+    const chatPostCommitRuntime = createChatPostCommitRuntime({
+      storage: this.storage,
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      operatorProfileService: this.operatorProfileService,
+      autonomyControlService: this.autonomyControlService,
+      skillMutationService: this.skillMutationService,
+      memoryMaintenanceService: this.memoryMaintenanceService,
+      isAutonomyDisabled: () => this.isFeatureEnabled("autonomyV1Disabled"),
+      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
+      publishRealtime,
+      requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      recordDurableTimelineEvent: (runId, eventType, payload) =>
+        this.recordDurableTimelineEvent(runId, eventType, payload),
+      recordImprovementDurableRunCompletion: (run, state) => this.recordImprovementDurableRunCompletion(run, state),
+    });
+    this.commitmentClassifier = chatPostCommitRuntime.commitmentClassifier;
+    this.backgroundReviewService = chatPostCommitRuntime.backgroundReviewService;
     this.memoryLifecycleService = new MemoryLifecycleService({
       context: this.memoryContextService,
       learned: this.chatLearnedMemoryService,
@@ -1761,6 +1753,7 @@ export class GatewayService {
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
         chatTurn: this.buildDurableChatTurnWorkflowHost(),
+        chatPostCommitEffect: chatPostCommitRuntime.effectExecutor,
         proactiveTick: {
           chatProactiveService: this.chatProactiveService,
           gatewaySql: this.gatewaySql,
@@ -1942,8 +1935,8 @@ export class GatewayService {
         this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options),
       beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
-      beginDurableChatRun: (prepared, input, threadEventType) =>
-        this.beginDurableChatRun(prepared, input, threadEventType),
+      beginDurableChatRun: (prepared, input, threadEventType, options) =>
+        this.beginDurableChatRun(prepared, input, threadEventType, options),
       cancelDurableChatRun: (runId, actorId) => {
         return this.cancelDurableRun(runId, actorId);
       },
@@ -2124,8 +2117,8 @@ export class GatewayService {
         this.completeActiveChatTurnStream(turnId, registrationId),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       getActiveChatTurnStream: (turnId) => this.getActiveChatTurnStream(turnId),
-      beginDurableChatRun: (prepared, input, threadEventType) =>
-        this.beginDurableChatRun(prepared, input, threadEventType),
+      beginDurableChatRun: (prepared, input, threadEventType, options) =>
+        this.beginDurableChatRun(prepared, input, threadEventType, options),
       registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
         this.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
       ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
@@ -2386,13 +2379,14 @@ export class GatewayService {
   public async ingestEvent(
     idempotencyKey: string,
     payload: GatewayEventInput,
-    options?: { onCommit?: () => void },
+    options?: { onCommit?: () => void; afterCommit?: () => void },
   ): Promise<GatewayEventResult> {
     const result = await this.eventIngestService.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey,
       payload,
       ...(options?.onCommit ? { onCommit: options.onCommit } : {}),
+      ...(options?.afterCommit ? { afterCommit: options.afterCommit } : {}),
     });
 
     this.publishRealtime(
@@ -2505,8 +2499,10 @@ export class GatewayService {
     return chatSessionService.searchChatSessions(this.buildChatSessionDependencies(), query);
   }
 
-  public createChatSession(input: ChatSessionCreateInput = {}): ChatSessionRecord {
-    return chatSessionService.createChatSession(this.buildChatSessionDependencies(), input);
+  public createChatSession(input: ChatSessionCreateInput & { stableKey?: string } = {}): ChatSessionRecord {
+    return input.stableKey
+      ? chatSessionService.ensureChatSessionWithStableKey(this.buildChatSessionDependencies(), input.stableKey, input)
+      : chatSessionService.createChatSession(this.buildChatSessionDependencies(), input);
   }
 
   public updateChatSession(
@@ -4103,7 +4099,7 @@ export class GatewayService {
     const sessionState = state ?? (await this.loadChatTurnSessionState(sessionId));
     const trace = sessionState.traces.find((item) => item.turnId === turnId);
     if (!trace) {
-      throw new Error(`Chat turn ${turnId} not found in session ${sessionId}`);
+      throw new NotFoundError({ entity: "Chat turn", id: turnId });
     }
     const userMessage = sessionState.messagesById.get(trace.userMessageId);
     if (!userMessage) {
@@ -4187,8 +4183,10 @@ export class GatewayService {
       existingUserMessage?: ChatMessageRecord;
       ingestUserMessage?: boolean;
       extraSystemInstruction?: string;
+      userMessageId?: string;
       turnId?: string;
       assistantMessageId?: string;
+      mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
     },
   ): Promise<chatTurnPrepService.PreparedAgentChatTurn> {
     return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
@@ -4313,7 +4311,10 @@ export class GatewayService {
   public agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: {
+      abortSignal?: AbortSignal;
+      mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
+    },
   ): AsyncGenerator<ChatStreamChunk> {
     return this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options);
   }
@@ -4934,6 +4935,7 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    options?: { mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle; runId?: string },
   ): DurableRunRecord | undefined {
     return chatDurableRunService.beginDurableChatRun(
       {
@@ -4948,6 +4950,7 @@ export class GatewayService {
       prepared,
       input,
       threadEventType,
+      options,
     );
   }
 
@@ -5242,30 +5245,21 @@ export class GatewayService {
     pending: PendingApprovalAction,
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
-    const policyResult = await this.policyEngine.executeApprovedAction(approvalId, signal, {
-      deferResolution: true,
-      externalRuntimeReplay: true,
-    });
-    if (!policyResult || policyResult.outcome !== "executed") {
-      return policyResult;
-    }
-
-    const request = withExternalRuntimePolicyContext(toToolInvokeRequest(pending.request, signal), policyResult);
-    return executeApprovedExternalRuntimeSideEffect({
-      storage: this.storage,
-      approvalId,
-      request,
-      execute: async (markExternalCallStarted) => {
-        if (request.toolName === "mcp.invoke") {
-          const mcpResult = await this.toolInvocationCoordinator.invokeApprovedMcpRuntime(
-            this.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
-            markExternalCallStarted,
-          );
-          return toolInvokeResultFromMcpApproval(policyResult, mcpResult);
-        }
-        return this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted);
+    return executeApprovedExternalRuntimePendingActionWithPort(
+      {
+        storage: this.storage,
+        executeApprovedAction: (id, abortSignal, options) =>
+          this.policyEngine.executeApprovedAction(id, abortSignal, options),
+        enrichMcpInvokePolicyContext: (input) => this.enrichMcpInvokePolicyContext(input),
+        invokeApprovedMcpRuntime: (input, markStarted) =>
+          this.toolInvocationCoordinator.invokeApprovedMcpRuntime(input, markStarted),
+        invokeApprovedExternalRuntimeTool: (request, markStarted) =>
+          this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request, markStarted),
       },
-    });
+      approvalId,
+      pending,
+      signal,
+    );
   }
 
   private refreshApprovedPendingToolPolicyContext(approvalId: string): void {
@@ -5791,16 +5785,7 @@ export class GatewayService {
   }
 
   private listActiveToolGrants(scope?: ToolGrantScope, scopeRef?: string): ToolGrantRecord[] {
-    const grantRepo = this.storage.toolGrants as
-      | {
-          listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
-        }
-      | undefined;
-    if (grantRepo?.listActive) {
-      return grantRepo.listActive(scope, scopeRef);
-    }
-    const grants = this.listToolGrants(scope, scopeRef, Number.MAX_SAFE_INTEGER);
-    return Array.isArray(grants) ? grants.filter(isActiveToolGrant) : [];
+    return this.storage.toolGrants.listActive(scope, scopeRef);
   }
 
   public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
@@ -5817,8 +5802,11 @@ export class GatewayService {
   public async createApproval(
     input: ApprovalCreateInput,
     onCreated?: ApprovalCreateCommitHook,
+    authority?: ApprovalCreateAuthority,
   ): Promise<ApprovalRequest> {
-    const approval = await this.approvalRuntime.createApproval(input, onCreated);
+    const approval = authority
+      ? await this.approvalRuntime.createApproval(input, onCreated, authority)
+      : await this.approvalRuntime.createApproval(input, onCreated);
     this.recordRuntimeDecision({
       kind: "approval_requested",
       scope: this.buildApprovalDecisionScope(approval),
@@ -7665,22 +7653,22 @@ export class GatewayService {
     if (hasActiveAllow) {
       return;
     }
-    const expiresAt = new Date(Date.now() + INTERNAL_TOOL_GRANT_TTL_MS).toISOString();
-    this.policyEngine.createGrant({
-      toolPattern: toolName,
-      decision: "allow",
-      scope: "session",
-      scopeRef: sessionId,
-      grantType: "ttl",
-      createdBy,
-      expiresAt,
-    });
+    const grant = this.storage.toolGrants.createTtlForDuration(
+      {
+        toolPattern: toolName,
+        decision: "allow",
+        scope: "session",
+        scopeRef: sessionId,
+        createdBy,
+      },
+      INTERNAL_TOOL_GRANT_TTL_MS,
+    );
     this.publishRealtime("system", "tools", {
       type: "internal_tool_grant_created",
       sessionId,
       toolName,
       createdBy,
-      expiresAt,
+      expiresAt: grant.expiresAt,
     });
   }
 

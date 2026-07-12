@@ -44,6 +44,7 @@ function createStorage(): Storage {
     },
     toolGrants: {
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
     },
     knowledge: {
       listDocuments: vi.fn(() => []),

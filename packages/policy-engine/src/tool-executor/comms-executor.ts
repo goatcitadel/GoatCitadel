@@ -7,6 +7,7 @@ import type { Storage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
 import { sanitizeForAudit } from "../tool-security.js";
+import { assertNoRawRemoteApprovalBearer } from "../approval-action-secrets.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -16,12 +17,15 @@ const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const commsRequestBoundaryContext = new AsyncLocalStorage<{
   mutationRequestStarted: boolean;
   mutationResponseReceived: boolean;
+  externalBoundaryReported: boolean;
+  beforeExternalSideEffect?: () => void;
 }>();
 
 interface ApprovalActionSecretRuntime {
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
   isApprovalActionConnectorReady?: (connectionId: string) => boolean;
+  beforeExternalSideEffect?: () => void;
 }
 
 export async function executeCommsTool(
@@ -31,8 +35,14 @@ export async function executeCommsTool(
   grantAllowlist?: string[],
   approvalActionSecrets: ApprovalActionSecretRuntime = {},
 ): Promise<Record<string, unknown>> {
-  return commsRequestBoundaryContext.run({ mutationRequestStarted: false, mutationResponseReceived: false }, () =>
-    executeCommsToolWithBoundaryTracking(request, config, storage, grantAllowlist, approvalActionSecrets),
+  return commsRequestBoundaryContext.run(
+    {
+      mutationRequestStarted: false,
+      mutationResponseReceived: false,
+      externalBoundaryReported: false,
+      beforeExternalSideEffect: approvalActionSecrets.beforeExternalSideEffect,
+    },
+    () => executeCommsToolWithBoundaryTracking(request, config, storage, grantAllowlist, approvalActionSecrets),
   );
 }
 
@@ -45,7 +55,7 @@ async function executeCommsToolWithBoundaryTracking(
 ): Promise<Record<string, unknown>> {
   const toolName = request.toolName;
   const args = request.args;
-  assertNoRawApprovalBearerInToolArgs(args);
+  assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = storage.integrationConnections.get(connectionId);
   const connectionConfig = record(connection.config);
@@ -165,7 +175,7 @@ function hydrateProtectedApprovalActionAtProviderBoundary(
 ): { args: Record<string, unknown>; secretRef?: string } {
   const templateValue = request.args.interactiveActionTemplate;
   if (templateValue === undefined) {
-    assertNoRawApprovalBearerInToolArgs(request.args);
+    assertNoRawRemoteApprovalBearer(request.args);
     return { args: request.args };
   }
   if (request.args.interactiveActions !== undefined) {
@@ -259,12 +269,6 @@ function hasCanonicalApprovalButtons(value: unknown): boolean {
 function assertIntegrationConnectionAvailable(connection: { enabled?: boolean; status?: string }): void {
   if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
     throw new Error("blocked: Integration connection is disabled or disconnected.");
-  }
-}
-
-function assertNoRawApprovalBearerInToolArgs(value: unknown): void {
-  if (/grat_[A-Za-z0-9_-]{43}/i.test(JSON.stringify(value ?? null))) {
-    throw new Error("Raw remote approval bearers are not accepted in tool arguments; use a protected template.");
   }
 }
 
@@ -3109,6 +3113,7 @@ async function queryBlueBubblesChats(
     allowlist,
     undefined,
     grantAllowlist,
+    { crossesExternalSideEffect: false },
   );
   if (!res.response.ok) {
     return [];
@@ -4282,7 +4287,9 @@ async function fetchAllowlisted(
   allowlist: string[],
   signal?: AbortSignal,
   grantAllowlist?: string[],
+  boundaryOptions: { crossesExternalSideEffect?: boolean } = {},
 ): Promise<{ response: Response; finalUrl: string }> {
+  const crossesExternalSideEffect = boundaryOptions.crossesExternalSideEffect ?? !isHttpRequestSafeToRetry(init);
   let current = url;
   for (let hop = 0; hop <= MAX_HTTP_REDIRECTS; hop += 1) {
     assertHostAllowed(current, allowlist);
@@ -4292,7 +4299,11 @@ async function fetchAllowlisted(
     let response: Response;
     for (let attempt = 0; ; attempt += 1) {
       const boundaryState = commsRequestBoundaryContext.getStore();
-      if (boundaryState && !isHttpRequestSafeToRetry(init)) {
+      if (boundaryState && crossesExternalSideEffect) {
+        if (!boundaryState.externalBoundaryReported) {
+          boundaryState.beforeExternalSideEffect?.();
+          boundaryState.externalBoundaryReported = true;
+        }
         boundaryState.mutationRequestStarted = true;
       }
       response = await fetchAllowlistedOnce(current, {
@@ -4303,7 +4314,7 @@ async function fetchAllowlisted(
           signal: composeAbortSignal(20000, signal),
         },
       });
-      if (boundaryState && !isHttpRequestSafeToRetry(init)) {
+      if (boundaryState && crossesExternalSideEffect) {
         boundaryState.mutationResponseReceived = true;
       }
       if (

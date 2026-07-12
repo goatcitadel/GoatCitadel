@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { isGoatError, redactStructuredSecrets } from "@goatcitadel/contracts";
 import { env } from "../env.js";
 import { sendRouteError } from "./_error-handler.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
+import {
+  commitMutationIdempotencyAlongsideCanonicalWrite,
+  markMutationCommitted,
+  markMutationFailedBeforeCommit,
+} from "../plugins/idempotency.js";
+import type { ChatStreamMutationLifecycle } from "../services/chat-turn-types.js";
 
 export const CHAT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+
+export interface ChatSseReplyOptions {
+  trackMutation?: boolean;
+}
 
 export const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
@@ -88,11 +98,10 @@ function readNonEmptyString(value: unknown, maxLength = 512): string | undefined
 
 export async function streamSseReply(
   reply: FastifyReply,
-  request: {
-    raw: { on: (event: string, listener: () => void) => void; off?: (event: string, listener: () => void) => void };
-  },
+  request: FastifyRequest,
   sessionId: string,
-  source: (signal: AbortSignal) => AsyncGenerator<unknown>,
+  source: (signal: AbortSignal, lifecycle: ChatStreamMutationLifecycle) => AsyncGenerator<unknown>,
+  options: ChatSseReplyOptions = {},
 ): Promise<void> {
   const raw = reply.raw;
   const controller = new AbortController();
@@ -119,80 +128,93 @@ export async function streamSseReply(
     raw.off?.("close", cleanup);
     request.raw.off?.("aborted", cleanup);
   };
-
-  reply.hijack();
-  const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
-  const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
-  const corsVary = reply.getHeader("Vary");
-  raw.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-    ...(typeof corsOrigin === "string" ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
-    ...(typeof corsCredentials === "string" ? { "Access-Control-Allow-Credentials": corsCredentials } : {}),
-    ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
-  });
-  raw.flushHeaders?.();
-  await writeSseChunk(raw, ": connected\n\n", controller.signal);
-  raw.on("close", cleanup);
-  request.raw.on("aborted", cleanup);
-  heartbeatTimer = setInterval(() => {
-    if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
-      stopHeartbeat();
-      return;
-    }
-    void writeSseChunk(raw, ": heartbeat\n\n", controller.signal)
-      .then((wrote) => {
-        if (!wrote) {
-          cleanup();
-        }
-      })
-      .catch(() => cleanup());
-  }, CHAT_SSE_HEARTBEAT_INTERVAL_MS);
-  heartbeatTimer.unref?.();
-
-  const send = async (payload: unknown): Promise<boolean> => {
-    if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
-      return false;
-    }
-    const eventId =
-      typeof payload === "object" &&
-      payload &&
-      "eventId" in payload &&
-      typeof (payload as { eventId?: unknown }).eventId === "string"
-        ? (payload as { eventId: string }).eventId
-        : undefined;
-    return writeSsePayload(raw, payload, { eventId, signal: controller.signal });
+  const mutationLifecycle: ChatStreamMutationLifecycle = {
+    commitAlongsideCanonicalWrite: () => {
+      commitMutationIdempotencyAlongsideCanonicalWrite(request);
+    },
+    markCommitted: () => {
+      markMutationCommitted(request);
+    },
   };
 
-  const coalesceEnabled = env.GOATCITADEL_STREAM_COALESCE_OFF !== "true";
-  const stream: AsyncIterable<unknown> = coalesceEnabled
-    ? coalesceStreamingDeltas(source(controller.signal))
-    : source(controller.signal);
   try {
-    for await (const chunk of stream) {
-      if (controller.signal.aborted) {
-        break;
+    reply.hijack();
+    const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
+    const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
+    const corsVary = reply.getHeader("Vary");
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+      ...(typeof corsOrigin === "string" ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
+      ...(typeof corsCredentials === "string" ? { "Access-Control-Allow-Credentials": corsCredentials } : {}),
+      ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
+    });
+    raw.flushHeaders?.();
+    await writeSseChunk(raw, ": connected\n\n", controller.signal);
+    raw.on("close", cleanup);
+    request.raw.on("aborted", cleanup);
+    heartbeatTimer = setInterval(() => {
+      if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
+        stopHeartbeat();
+        return;
       }
-      const wrote = await send(chunk);
-      if (!wrote) {
-        break;
+      void writeSseChunk(raw, ": heartbeat\n\n", controller.signal)
+        .then((wrote) => {
+          if (!wrote) {
+            cleanup();
+          }
+        })
+        .catch(() => cleanup());
+    }, CHAT_SSE_HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref?.();
+
+    const send = async (payload: unknown): Promise<boolean> => {
+      if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
+        return false;
       }
-    }
-    finished = !controller.signal.aborted;
-  } catch (error) {
-    if (!controller.signal.aborted) {
-      reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
-      await send({
-        type: "error",
-        sessionId,
-        eventId: randomUUID(),
-        sequence: 0,
-        error: getPublicChatSseErrorMessage(error),
-      });
+      const eventId =
+        typeof payload === "object" &&
+        payload &&
+        "eventId" in payload &&
+        typeof (payload as { eventId?: unknown }).eventId === "string"
+          ? (payload as { eventId: string }).eventId
+          : undefined;
+      return writeSsePayload(raw, payload, { eventId, signal: controller.signal });
+    };
+
+    const coalesceEnabled = env.GOATCITADEL_STREAM_COALESCE_OFF !== "true";
+    const stream: AsyncIterable<unknown> = coalesceEnabled
+      ? coalesceStreamingDeltas(source(controller.signal, mutationLifecycle))
+      : source(controller.signal, mutationLifecycle);
+    try {
+      for await (const chunk of stream) {
+        if (controller.signal.aborted) {
+          break;
+        }
+        const wrote = await send(chunk);
+        if (!wrote) {
+          break;
+        }
+      }
+      finished = !controller.signal.aborted;
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
+        await send({
+          type: "error",
+          sessionId,
+          eventId: randomUUID(),
+          sequence: 0,
+          error: getPublicChatSseErrorMessage(error),
+        });
+      }
     }
   } finally {
+    if (options.trackMutation && !request.mutationCommitted) {
+      markMutationFailedBeforeCommit(request);
+    }
     if (!finished) {
       cleanup();
     }

@@ -528,21 +528,20 @@ describe("tool executor edge coverage", () => {
     );
   });
 
-  it("honors only active read grants with usable allowed paths", async () => {
+  it("honors a repository-active read grant only when it has usable allowed paths", async () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-executor-grant-"));
     const outsideFile = path.join(outsideDir, "granted.txt");
     await fs.writeFile(outsideFile, "grant ok\n", "utf8");
-    const now = Date.now();
-    const grants = [
-      grantRecord("grant-revoked", { allowedPaths: [outsideDir], revokedAt: new Date(now).toISOString() }),
-      grantRecord("grant-expired", { allowedPaths: [outsideDir], expiresAt: new Date(now - 1000).toISOString() }),
-      grantRecord("grant-used", { allowedPaths: [outsideDir], usesRemaining: 0 }),
+    const activeGrants = [
       grantRecord("grant-no-paths", { allowedPaths: [] }),
-      grantRecord("grant-active", { allowedPaths: [outsideDir], usesRemaining: 1 }),
+      grantRecord("grant-active", { allowedPaths: [outsideDir] }),
     ];
+    const listActive = vi.fn((scope: string, scopeRef: string) =>
+      activeGrants.filter((grant) => grant.scope === scope && grant.scopeRef === scopeRef),
+    );
     const storage = {
       toolGrants: {
-        list: vi.fn(() => grants),
+        listActive,
       },
     } as unknown as Storage;
 
@@ -556,6 +555,7 @@ describe("tool executor edge coverage", () => {
         storage,
       );
       expect(result).toMatchObject({ content: "grant ok" });
+      expect(listActive).toHaveBeenCalledWith("task", "task-granted-read");
     } finally {
       await fs.rm(outsideDir, { recursive: true, force: true });
     }
@@ -1114,15 +1114,7 @@ function knowledgeStorage(): Storage {
   } as unknown as Storage;
 }
 
-function grantRecord(
-  grantId: string,
-  options: {
-    allowedPaths: string[];
-    expiresAt?: string;
-    revokedAt?: string;
-    usesRemaining?: number;
-  },
-) {
+function grantRecord(grantId: string, options: { allowedPaths: string[] }) {
   return {
     grantId,
     toolPattern: "file.read_range",
@@ -1133,8 +1125,5 @@ function grantRecord(
     constraints: { allowedPaths: options.allowedPaths },
     createdBy: "test",
     createdAt: "2026-03-22T00:00:00.000Z",
-    expiresAt: options.expiresAt,
-    revokedAt: options.revokedAt,
-    usesRemaining: options.usesRemaining,
   };
 }

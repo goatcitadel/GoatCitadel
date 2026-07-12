@@ -31,7 +31,7 @@ function createStorageStub(): Storage {
       countToolCallsInLastHourInScope: vi.fn(() => 0),
       countWritesInLastHourInScope: vi.fn(() => 0),
     },
-    toolGrants: { list: vi.fn(() => []), consumeOne: vi.fn(() => true) },
+    toolGrants: { list: vi.fn(() => []), listActive: vi.fn(() => []), consumeOne: vi.fn(() => true) },
     pendingApprovalActions: {
       upsertPending: vi.fn(),
       find: vi.fn(() => undefined),

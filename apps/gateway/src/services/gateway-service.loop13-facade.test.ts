@@ -278,6 +278,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
           ...patch,
         })),
         expirePendingAtOrBefore: vi.fn((tokenId: string) => ({ tokenId, state: "expired" })),
+        expirePendingIfExpired: vi.fn((tokenId: string) => ({ tokenId, state: "expired" })),
         updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
           tokenId,
           state,
@@ -635,34 +636,41 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
 
   it("creates internal grants only when deny-wins and existing allow checks pass", () => {
     const publishRealtime = vi.fn();
-    const createGrant = vi.fn();
+    const createGrant = vi.fn((input, ttlMs) => ({
+      ...input,
+      grantId: "grant-internal",
+      grantType: "ttl",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      expiresAt: "2026-07-11T00:05:00.000Z",
+      ttlMs,
+    }));
+    const listActive = vi.fn();
     const { gateway } = createGatewayHarness({
       listToolGrants: vi.fn(),
-      policyEngine: { createGrant },
       publishRealtime,
     });
+    gateway.storage = {
+      toolGrants: { listActive, createTtlForDuration: createGrant },
+      chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+    };
 
-    gateway.listToolGrants = vi
-      .fn()
-      .mockReturnValueOnce([])
-      .mockReturnValueOnce([{ decision: "deny", toolPattern: "browser.*", scope: "global", scopeRef: "global" }])
-      .mockReturnValueOnce([]);
+    listActive.mockImplementation((scope: string) =>
+      scope === "global" ? [{ decision: "deny", toolPattern: "browser.*", scope: "global", scopeRef: "global" }] : [],
+    );
     expect(() =>
       GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "test"),
     ).toThrow(/blocked by an active deny/i);
     expect(createGrant).not.toHaveBeenCalled();
 
-    gateway.listToolGrants = vi
-      .fn()
-      .mockReturnValueOnce([
-        { decision: "allow", toolPattern: "browser.search", scope: "session", scopeRef: "session-1" },
-      ])
-      .mockReturnValueOnce([])
-      .mockReturnValueOnce([]);
+    listActive.mockImplementation((scope: string) =>
+      scope === "session"
+        ? [{ decision: "allow", toolPattern: "browser.search", scope: "session", scopeRef: "session-1" }]
+        : [],
+    );
     GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "test");
     expect(createGrant).not.toHaveBeenCalled();
 
-    gateway.listToolGrants = vi.fn().mockReturnValueOnce([]).mockReturnValueOnce([]).mockReturnValueOnce([]);
+    listActive.mockReturnValue([]);
     GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "test");
     expect(createGrant).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -670,8 +678,8 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
         decision: "allow",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "ttl",
       }),
+      5 * 60 * 1000,
     );
     expect(publishRealtime).toHaveBeenLastCalledWith(
       "system",
@@ -794,15 +802,18 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
       }),
     ).toThrow(ConflictError);
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({ ...currentToken, expiresAt: expired }));
+    gateway.storage.remoteActionTokens.consumePending = vi.fn(() => undefined);
+    gateway.storage.remoteActionTokens.expirePendingIfExpired = vi.fn(() => ({
+      ...currentToken,
+      expiresAt: expired,
+      state: "expired",
+    }));
     expect(() =>
       GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve", {
         expectedConnectorId: "connector-1",
       }),
     ).toThrow(ConflictError);
-    expect(gateway.storage.remoteActionTokens.expirePendingAtOrBefore).toHaveBeenCalledWith(
-      "token-1",
-      expect.any(String),
-    );
+    expect(gateway.storage.remoteActionTokens.expirePendingIfExpired).toHaveBeenCalledWith("token-1");
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => undefined);
     expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
       NotFoundError,
@@ -1244,20 +1255,29 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       eventIngestService: { ingest },
       publishRealtime,
     });
+    const onCommit = vi.fn();
+    const afterCommit = vi.fn();
 
     await expect(
-      GatewayService.prototype.ingestEvent.call(gateway, "idem-1", {
-        eventId: "event-1",
-        route: { channel: "sms", account: "acct", peer: "peer" },
-        actor: { type: "user", id: "user-1" },
-        message: { role: "user", content: "hello" },
-        taskId: "task-1",
-      } as never),
+      GatewayService.prototype.ingestEvent.call(
+        gateway,
+        "idem-1",
+        {
+          eventId: "event-1",
+          route: { channel: "sms", account: "acct", peer: "peer" },
+          actor: { type: "user", id: "user-1" },
+          message: { role: "user", content: "hello" },
+          taskId: "task-1",
+        } as never,
+        { onCommit, afterCommit },
+      ),
     ).resolves.toMatchObject({ session: { sessionId: "session-1" } });
     expect(ingest).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "idem-1",
+        onCommit,
+        afterCommit,
       }),
     );
     expect(gateway.operatorSummaryCache.invalidate).toHaveBeenCalledTimes(1);

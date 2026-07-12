@@ -14,6 +14,14 @@ interface MutationIdempotencyState {
   routePath: string;
   idempotencyKey: string;
   actorScope: string;
+  claimToken?: string;
+}
+
+export class MutationIdempotencyClaimLostError extends Error {
+  public constructor() {
+    super("HTTP mutation idempotency claim ownership was lost before canonical commit.");
+    this.name = "MutationIdempotencyClaimLostError";
+  }
 }
 
 interface IdempotencyHeaderPluginOptions {
@@ -22,11 +30,19 @@ interface IdempotencyHeaderPluginOptions {
 
 const MUTATING_HTTP_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 const GATEWAY_EVENTS_PATH = "/api/v1/gateway/events";
+const HTTP_MUTATION_CLAIM_LEASE_MS = 5 * 60_000;
+const GENERATION_FENCED_CHAT_SSE_ROUTES = new Set([
+  "/api/v1/chat/sessions/:sessionId/agent-send/stream",
+  "/api/v1/chat/sessions/:sessionId/turns/:turnId/retry/stream",
+  "/api/v1/chat/sessions/:sessionId/turns/:turnId/edit/stream",
+]);
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
   fastify.decorateRequest("mutationIdempotencyState", null);
   fastify.decorateRequest("mutationCommitted", false);
+  fastify.decorateRequest("mutationIdempotencyOutcome", null);
+  fastify.decorateRequest("mutationIdempotencyCommit", null);
 
   fastify.addHook("preHandler", async (request, reply) => {
     if (!MUTATING_HTTP_METHODS.has(request.method)) {
@@ -57,13 +73,23 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       idempotencyKey: key,
       actorScope,
       payloadHash: hashCanonicalPayload((request as { body?: unknown }).body ?? null),
+      ...(usesGenerationFencedCanonicalCommit(routePath) ? { leaseDurationMs: HTTP_MUTATION_CLAIM_LEASE_MS } : {}),
     });
     if (claim.outcome === "claimed") {
-      (request as typeof request & { mutationIdempotencyState: MutationIdempotencyState }).mutationIdempotencyState = {
+      const state: MutationIdempotencyState = {
         method: request.method,
         routePath,
         idempotencyKey: key,
         actorScope,
+        claimToken: claim.record.claimToken,
+      };
+      (request as typeof request & { mutationIdempotencyState: MutationIdempotencyState }).mutationIdempotencyState =
+        state;
+      request.mutationIdempotencyOutcome = "pending";
+      request.mutationIdempotencyCommit = () => {
+        if (options.mutationStore?.markCompleted(state) === false) {
+          throw new MutationIdempotencyClaimLostError();
+        }
       };
       return;
     }
@@ -92,6 +118,10 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     // legitimate corrected retry with a 409. Treat every error status (>= 400)
     // as a failed claim so it is revivable; only a 2xx/3xx outcome finalises the
     // key as completed.
+    if (request.mutationIdempotencyOutcome === "failed_before_commit") {
+      await options.mutationStore.markFailed(state);
+      return;
+    }
     if (reply.statusCode >= 400 && !request.mutationCommitted) {
       await options.mutationStore.markFailed(state);
       return;
@@ -107,6 +137,30 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
  */
 export function markMutationCommitted(request: FastifyRequest): void {
   request.mutationCommitted = true;
+  request.mutationIdempotencyOutcome = "committed";
+  request.mutationIdempotencyCommit?.();
+}
+
+/**
+ * Completes the persistent HTTP mutation claim inside the canonical owner's
+ * transaction. This intentionally does not update request-local commit truth:
+ * if the surrounding transaction rolls back, `afterCommit` must remain the
+ * only signal that prevents the response boundary from releasing the claim.
+ */
+export function commitMutationIdempotencyAlongsideCanonicalWrite(request: FastifyRequest): void {
+  request.mutationIdempotencyCommit?.();
+}
+
+/**
+ * Releases a claimed mutation whose streamed handler terminated before its
+ * first canonical write. Once commit has been observed, later stream failures
+ * cannot downgrade the claim back to retryable.
+ */
+export function markMutationFailedBeforeCommit(request: FastifyRequest): void {
+  if (request.mutationCommitted || request.mutationIdempotencyOutcome === "committed") {
+    return;
+  }
+  request.mutationIdempotencyOutcome = "failed_before_commit";
 }
 
 /** Preserve committed idempotency truth for mutation-aware domain errors. */
@@ -124,6 +178,10 @@ export function markMutationCommittedFromError(request: FastifyRequest, error: u
 function shouldEnforceMutationIdempotency(request: FastifyRequest): boolean {
   const path = getNormalizedRoutePath(request);
   return path.startsWith("/api/v1/") && path !== GATEWAY_EVENTS_PATH && !isGenericChannelInboundPath(path);
+}
+
+function usesGenerationFencedCanonicalCommit(routePath: string): boolean {
+  return GENERATION_FENCED_CHAT_SSE_ROUTES.has(routePath);
 }
 
 function isWebhookOrInboundPath(url: string): boolean {

@@ -45,20 +45,23 @@ describe("approval remote token keychain references", () => {
   it("removes protected secrets before expiring canonical token rows", () => {
     const deleteSecret = vi.fn();
     const tokens = {
-      listPendingExpiredAtOrBefore: vi.fn(() => [{ tokenId: "rat_expired" }]),
-      expirePendingAtOrBefore: vi.fn(() => ({ state: "expired" })),
+      listPendingExpired: vi.fn(() => [{ tokenId: "rat_expired" }]),
+      expirePendingIfExpired: vi.fn(() => ({ state: "expired" })),
     };
+    const hostNow = vi.fn(() => new Date("2100-07-10T12:00:00.000Z"));
     const service = new ApprovalRemoteTokenSecretService(
       { setSecret: vi.fn(), getSecret: vi.fn(), deleteSecret } as never,
       tokens as never,
-      () => new Date("2026-07-10T12:00:00.000Z"),
+      hostNow,
     );
 
     expect(service.reconcileExpired(25)).toBe(1);
+    expect(tokens.listPendingExpired).toHaveBeenCalledWith(25);
     expect(deleteSecret).toHaveBeenCalledWith("approval-remote-action:rat_expired");
-    expect(tokens.expirePendingAtOrBefore).toHaveBeenCalledWith("rat_expired", "2026-07-10T12:00:00.000Z");
+    expect(tokens.expirePendingIfExpired).toHaveBeenCalledWith("rat_expired");
+    expect(hostNow).not.toHaveBeenCalled();
     expect(deleteSecret.mock.invocationCallOrder[0]).toBeLessThan(
-      tokens.expirePendingAtOrBefore.mock.invocationCallOrder[0]!,
+      tokens.expirePendingIfExpired.mock.invocationCallOrder[0]!,
     );
   });
 });

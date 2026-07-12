@@ -9,6 +9,7 @@ import type {
   ToolGrantRecord,
   ToolGrantScope,
 } from "@goatcitadel/contracts";
+import type { ApprovalCreateAuthority } from "@goatcitadel/policy-engine";
 import type {
   ApprovalReplayResult,
   ApprovalResolutionContext,
@@ -24,7 +25,11 @@ export interface ApprovalRuntime {
   listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit?: number): ToolGrantRecord[];
   createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord;
   revokeToolGrant(grantId: string, revokedBy: string): boolean;
-  createApproval(input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook): Promise<ApprovalRequest>;
+  createApproval(
+    input: ApprovalCreateInput,
+    onCreated?: ApprovalCreateCommitHook,
+    authority?: ApprovalCreateAuthority,
+  ): Promise<ApprovalRequest>;
   createApprovalRemoteActionToken(
     approvalId: string,
     input: {
@@ -100,8 +105,11 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
   public async createApproval(
     input: ApprovalCreateInput,
     onCreated?: ApprovalCreateCommitHook,
+    authority?: ApprovalCreateAuthority,
   ): Promise<ApprovalRequest> {
-    return approvalLifecycleService.createApproval(this.host, input, onCreated);
+    return authority
+      ? approvalLifecycleService.createApproval(this.host, input, onCreated, authority)
+      : approvalLifecycleService.createApproval(this.host, input, onCreated);
   }
 
   public createApprovalRemoteActionToken(

@@ -8,6 +8,39 @@ function getArchitectureBaselinePath(rootDir = repoRoot) {
 }
 
 const ARCHITECTURE_BASELINE_PATH = getArchitectureBaselinePath(repoRoot);
+const ARCHITECTURE_BASELINE_SCHEMA_VERSION = 1;
+const GUARDED_BASELINE_SCALAR_KEYS = [
+  "gatewayLineCount",
+  "gatewayPublicMethodCount",
+  "gatewayServiceImportConsumerCount",
+  "fastifyGatewayCallSites",
+  "gatewayInternalPublicCount",
+  "gatewayRuntimePortFullStorageCount",
+  "gatewayRuntimeFactoryRawServiceReturnCount",
+  "fastifyGatewayRuntimeStorageAccessCount",
+  "boundGatewayRoutePortMethodCount",
+  "chatTurnRuntimeConstructedWithGatewayCount",
+  "fastifyGatewayDecoratorReferenceCount",
+  "serviceContextConsumerCount",
+  "gatewayRouteCompositionUnsafeCastCount",
+  "gatewayRouteCompositionAnyAliasCount",
+  "gatewayRouteCompositionWideningCount",
+  "gatewayRouteCompositionVariadicAnyMethodCount",
+  "gatewayRouteCompositionFactoryExternalConsumerCount",
+  "gatewayRouteCompositionPortMemberCount",
+  "legacyRouteServiceFactoryVariadicAnyCount",
+  "legacyRoutePortAliasCount",
+  "settingsHostCallbackCount",
+  "chatHostCallbackCount",
+  "totalHostCallbacks",
+  "totalDependencyMemberAccesses",
+  "routeFacingServiceCount",
+];
+const GUARDED_BASELINE_MAP_KEYS = [
+  "fastifyGatewayCallSitesByRouteFile",
+  "hostCallbacksByFile",
+  "dependencyMemberAccessesByFile",
+];
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "addonsService",
   "approvalRuntime",
@@ -70,10 +103,46 @@ function createMetricsSourceFile(source) {
 
 /**
  * Counts member reads rooted at a symbol named `host` whose declaration has an
- * explicit host/port object type. This intentionally ignores text, comments,
- * URL.host, and untyped callback variables that the previous regex counted.
+ * explicit host/port object type. This narrow compatibility metric preserves
+ * the historical host-callback ratchet while ignoring URL.host and lexical
+ * lookalikes. The broader dependency-member metric below closes naming gaps.
  */
 export function countHostMemberAccesses(source, fileName = "architecture-metrics-source.ts") {
+  const { checker, sourceFile } = createSingleFileTypeContext(source, fileName);
+  return countResolvedMemberAccesses(
+    sourceFile,
+    (expression) => resolvesToNarrowTypedHost(expression, checker, sourceFile),
+    (declaration) => isTypedHostDestructuredParameter(declaration, sourceFile),
+  );
+}
+
+/**
+ * Counts direct member reads rooted at an explicitly typed dependency
+ * container, including host, deps, ports, service/storage roots and bags,
+ * composition inputs, object destructuring, and aliases. Classification
+ * requires an explicit dependency-container name/type or a dependency-shaped
+ * member; callback count alone is not evidence of a dependency boundary. This
+ * intentionally ignores text, comments, URL.host, primitive/domain inputs,
+ * shadowed inferred objects, unconventional callback bags, and untyped
+ * callback variables. Dynamic element reads and mutable aliases count once a
+ * root is classified.
+ */
+export function countDependencyMemberAccesses(source, fileName = "architecture-metrics-source.ts") {
+  const { checker, sourceFile } = createSingleFileTypeContext(source, fileName);
+  const assignmentAliases = collectAssignmentAliases(sourceFile, checker);
+  const dependencySymbolCache = new Map();
+  const resolutionContext = {
+    assignmentAliases,
+    dependencySymbolCache,
+  };
+  return countResolvedMemberAccesses(
+    sourceFile,
+    (expression) => resolvesToDependencyContainer(expression, checker, sourceFile, resolutionContext),
+    (declaration) => isDependencyContainerDeclaration(declaration, checker, sourceFile),
+  );
+}
+
+function createSingleFileTypeContext(source, fileName) {
   const normalizedFileName = path.resolve(fileName);
   const compilerOptions = {
     noLib: true,
@@ -90,33 +159,230 @@ export function countHostMemberAccesses(source, fileName = "architecture-metrics
   const program = ts.createProgram([normalizedFileName], compilerOptions, compilerHost);
   const checker = program.getTypeChecker();
   const boundSourceFile = program.getSourceFile(normalizedFileName) ?? sourceFile;
+  return { checker, sourceFile: boundSourceFile };
+}
+
+function countResolvedMemberAccesses(sourceFile, resolves, resolvesTypedBinding = () => false) {
   let count = 0;
 
   const visit = (node) => {
     if (ts.isPropertyAccessExpression(node)) {
-      const rootHost = resolveHostIdentifier(node.expression);
-      if (rootHost && isTypedHostSymbol(checker.getSymbolAtLocation(rootHost), boundSourceFile)) {
+      if (resolves(node.expression)) {
         count += 1;
+      }
+    } else if (ts.isElementAccessExpression(node) && resolves(node.expression)) {
+      count += 1;
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer &&
+      resolves(node.initializer)
+    ) {
+      count += countBindingPatternMemberAccesses(node.name);
+    } else if (ts.isParameter(node) && ts.isObjectBindingPattern(node.name) && resolvesTypedBinding(node)) {
+      count += countBindingPatternMemberAccesses(node.name);
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      isAssignmentPattern(node.left) &&
+      resolves(node.right)
+    ) {
+      count += countAssignmentPatternMemberAccesses(node.left);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return count;
+}
+
+function isAssignmentPattern(expression) {
+  const candidate = unwrapAliasExpression(expression);
+  return ts.isObjectLiteralExpression(candidate) || ts.isArrayLiteralExpression(candidate);
+}
+
+function countAssignmentPatternMemberAccesses(expression) {
+  const candidate = unwrapAliasExpression(expression);
+  if (ts.isObjectLiteralExpression(candidate)) {
+    let count = 0;
+    for (const property of candidate.properties) {
+      count += 1;
+      if (
+        ts.isPropertyAssignment(property) &&
+        (ts.isObjectLiteralExpression(property.initializer) || ts.isArrayLiteralExpression(property.initializer))
+      ) {
+        count += countAssignmentPatternMemberAccesses(property.initializer);
+      }
+    }
+    return count;
+  }
+  if (ts.isArrayLiteralExpression(candidate)) {
+    let count = 0;
+    for (const element of candidate.elements) {
+      if (ts.isOmittedExpression(element)) {
+        continue;
+      }
+      count += 1;
+      if (ts.isObjectLiteralExpression(element) || ts.isArrayLiteralExpression(element)) {
+        count += countAssignmentPatternMemberAccesses(element);
+      }
+    }
+    return count;
+  }
+  return 0;
+}
+
+function countBindingPatternMemberAccesses(pattern) {
+  let count = 0;
+  for (const element of pattern.elements) {
+    if (!ts.isBindingElement(element)) {
+      continue;
+    }
+    count += 1;
+    if (ts.isObjectBindingPattern(element.name) || ts.isArrayBindingPattern(element.name)) {
+      count += countBindingPatternMemberAccesses(element.name);
+    }
+  }
+  return count;
+}
+
+function resolvesToNarrowTypedHost(expression, checker, sourceFile, seenSymbols = new Set()) {
+  const candidate = unwrapAliasExpression(expression);
+  if (ts.isIdentifier(candidate)) {
+    const symbol = checker.getSymbolAtLocation(candidate);
+    if (candidate.text === "host" && isTypedHostSymbol(symbol, sourceFile)) {
+      return true;
+    }
+    if (!symbol || seenSymbols.has(symbol)) {
+      return false;
+    }
+
+    const nextSeenSymbols = new Set(seenSymbols);
+    nextSeenSymbols.add(symbol);
+    for (const declaration of symbol.declarations ?? []) {
+      if (
+        isInitializedAliasDeclaration(declaration) &&
+        resolvesToNarrowTypedHost(declaration.initializer, checker, sourceFile, nextSeenSymbols)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (
+    ts.isPropertyAccessExpression(candidate) &&
+    candidate.name.text === "host" &&
+    candidate.expression.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    return isTypedHostSymbol(checker.getSymbolAtLocation(candidate.name), sourceFile);
+  }
+  const thisElementProperty = getStaticThisElementProperty(candidate, checker);
+  if (thisElementProperty?.name === "host") {
+    return isTypedHostSymbol(thisElementProperty.symbol, sourceFile);
+  }
+  return false;
+}
+
+function resolvesToDependencyContainer(expression, checker, sourceFile, context, seenSymbols = new Set()) {
+  const candidate = unwrapAliasExpression(expression);
+  if (ts.isIdentifier(candidate)) {
+    const symbol = checker.getSymbolAtLocation(candidate);
+    if (isDependencyContainerSymbol(symbol, checker, sourceFile, context.dependencySymbolCache)) {
+      return true;
+    }
+    if (!symbol || seenSymbols.has(symbol)) {
+      return false;
+    }
+
+    const nextSeenSymbols = new Set(seenSymbols);
+    nextSeenSymbols.add(symbol);
+    for (const declaration of symbol.declarations ?? []) {
+      if (
+        isInitializedAliasDeclaration(declaration) &&
+        resolvesToDependencyContainer(declaration.initializer, checker, sourceFile, context, new Set(nextSeenSymbols))
+      ) {
+        return true;
+      }
+    }
+    for (const initializer of context.assignmentAliases.get(symbol) ?? []) {
+      if (resolvesToDependencyContainer(initializer, checker, sourceFile, context, new Set(nextSeenSymbols))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (ts.isPropertyAccessExpression(candidate) && candidate.expression.kind === ts.SyntaxKind.ThisKeyword) {
+    return isDependencyContainerSymbol(
+      checker.getSymbolAtLocation(candidate.name),
+      checker,
+      sourceFile,
+      context.dependencySymbolCache,
+    );
+  }
+  const thisElementProperty = getStaticThisElementProperty(candidate, checker);
+  if (thisElementProperty) {
+    return isDependencyContainerSymbol(thisElementProperty.symbol, checker, sourceFile, context.dependencySymbolCache);
+  }
+  return false;
+}
+
+function getStaticThisElementProperty(expression, checker) {
+  if (
+    !ts.isElementAccessExpression(expression) ||
+    expression.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+    !expression.argumentExpression ||
+    (!ts.isStringLiteralLike(expression.argumentExpression) && !ts.isPrivateIdentifier(expression.argumentExpression))
+  ) {
+    return undefined;
+  }
+  const symbol = checker.getSymbolAtLocation(expression.argumentExpression);
+  if (!symbol) {
+    return undefined;
+  }
+  return { name: symbol.name.replace(/^#/, ""), symbol };
+}
+
+function collectAssignmentAliases(sourceFile, checker) {
+  const aliases = new Map();
+  const visit = (node) => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left)
+    ) {
+      const symbol = checker.getSymbolAtLocation(node.left);
+      if (symbol) {
+        const existing = aliases.get(symbol) ?? [];
+        existing.push(node.right);
+        aliases.set(symbol, existing);
       }
     }
     ts.forEachChild(node, visit);
   };
-  visit(boundSourceFile);
-  return count;
+  visit(sourceFile);
+  return aliases;
 }
 
-function resolveHostIdentifier(expression) {
-  if (ts.isIdentifier(expression) && expression.text === "host") {
-    return expression;
-  }
-  if (
-    ts.isPropertyAccessExpression(expression) &&
-    expression.name.text === "host" &&
-    expression.expression.kind === ts.SyntaxKind.ThisKeyword
+function unwrapAliasExpression(expression) {
+  let candidate = expression;
+  while (
+    ts.isParenthesizedExpression(candidate) ||
+    ts.isAsExpression(candidate) ||
+    ts.isTypeAssertionExpression(candidate) ||
+    ts.isNonNullExpression(candidate) ||
+    ts.isSatisfiesExpression(candidate)
   ) {
-    return expression.name;
+    candidate = candidate.expression;
   }
-  return undefined;
+  return candidate;
+}
+
+function isInitializedAliasDeclaration(declaration) {
+  if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name) || !declaration.initializer) {
+    return false;
+  }
+  return true;
 }
 
 function isTypedHostSymbol(symbol, sourceFile) {
@@ -129,6 +395,259 @@ function isTypedHostSymbol(symbol, sourceFile) {
       return /\b[$A-Z_a-z][$\w]*Host[$\w]*\b/.test(typeText) || ts.isTypeLiteralNode(declaration.type);
     }),
   );
+}
+
+function isTypedHostDestructuredParameter(declaration, sourceFile) {
+  if (!declaration.type) {
+    return false;
+  }
+  return /\b[$A-Z_a-z][$\w]*Host[$\w]*\b/.test(declaration.type.getText(sourceFile));
+}
+
+function isDependencyContainerSymbol(symbol, checker, sourceFile, cache) {
+  if (!symbol) {
+    return false;
+  }
+  if (cache.has(symbol)) {
+    return cache.get(symbol);
+  }
+
+  // Break recursive aliases while their structure is being inspected.
+  cache.set(symbol, false);
+  const result = Boolean(
+    symbol.declarations?.some((declaration) => isDependencyContainerDeclaration(declaration, checker, sourceFile)),
+  );
+  cache.set(symbol, result);
+  return result;
+}
+
+function isDependencyContainerDeclaration(declaration, checker, sourceFile) {
+  if (!declaration.type) {
+    return false;
+  }
+  const declarationName = getDeclarationName(declaration);
+  const analysis = analyzeDependencyTypeNode(declaration.type, checker, sourceFile, new Set());
+  const semanticDeclarationName = isDependencyContainerName(declarationName);
+  const hasDependencyShape =
+    !analysis.resolvedDefinition || analysis.callableMemberCount > 0 || analysis.dependencyMemberCount > 0;
+  return (
+    analysis.dependencyMemberCount > 0 ||
+    (analysis.objectLike &&
+      hasDependencyShape &&
+      (semanticDeclarationName || analysis.semanticTypeName || analysis.callableSemanticTypeName))
+  );
+}
+
+function analyzeDependencyTypeNode(typeNode, checker, sourceFile, seenTypeSymbols) {
+  if (!typeNode) {
+    return emptyDependencyTypeAnalysis();
+  }
+  if (ts.isParenthesizedTypeNode(typeNode)) {
+    return analyzeDependencyTypeNode(typeNode.type, checker, sourceFile, seenTypeSymbols);
+  }
+  if (ts.isTypeOperatorNode(typeNode)) {
+    return analyzeDependencyTypeNode(typeNode.type, checker, sourceFile, seenTypeSymbols);
+  }
+  if (ts.isIndexedAccessTypeNode(typeNode)) {
+    return analyzeDependencyTypeNode(typeNode.objectType, checker, sourceFile, seenTypeSymbols);
+  }
+  if (ts.isIntersectionTypeNode(typeNode) || ts.isUnionTypeNode(typeNode)) {
+    return typeNode.types.reduce(
+      (analysis, item) =>
+        mergeDependencyTypeAnalysis(analysis, analyzeDependencyTypeNode(item, checker, sourceFile, seenTypeSymbols)),
+      emptyDependencyTypeAnalysis(),
+    );
+  }
+  if (ts.isTypeLiteralNode(typeNode)) {
+    return analyzeDependencyMembers(typeNode.members, checker, sourceFile, seenTypeSymbols);
+  }
+  if (!ts.isTypeReferenceNode(typeNode)) {
+    return emptyDependencyTypeAnalysis();
+  }
+
+  const typeName = typeNode.typeName.getText(sourceFile);
+  let analysis = {
+    ...emptyDependencyTypeAnalysis(),
+    objectLike: true,
+    semanticTypeName: isDependencyContainerTypeName(typeName),
+    callableSemanticTypeName: isCallableDependencyContainerTypeName(typeName),
+  };
+  if (isTransparentDependencyTypeWrapper(typeName) && typeNode.typeArguments?.[0]) {
+    analysis = mergeDependencyTypeAnalysis(
+      analysis,
+      analyzeDependencyTypeNode(typeNode.typeArguments[0], checker, sourceFile, seenTypeSymbols),
+    );
+  }
+  const symbol = resolveTypeSymbol(checker.getSymbolAtLocation(typeNode.typeName), checker);
+  if (!symbol || seenTypeSymbols.has(symbol)) {
+    return analysis;
+  }
+  const nextSeen = new Set(seenTypeSymbols);
+  nextSeen.add(symbol);
+  for (const declaration of symbol.declarations ?? []) {
+    if (ts.isInterfaceDeclaration(declaration) || ts.isClassDeclaration(declaration)) {
+      analysis.resolvedDefinition = true;
+      analysis = mergeDependencyTypeAnalysis(
+        analysis,
+        analyzeDependencyMembers(declaration.members, checker, sourceFile, nextSeen),
+      );
+      for (const clause of declaration.heritageClauses ?? []) {
+        for (const heritageType of clause.types) {
+          analysis = mergeDependencyTypeAnalysis(
+            analysis,
+            analyzeDependencyTypeNode(heritageType, checker, sourceFile, nextSeen),
+          );
+        }
+      }
+    } else if (ts.isTypeAliasDeclaration(declaration)) {
+      analysis.resolvedDefinition = true;
+      analysis = mergeDependencyTypeAnalysis(
+        analysis,
+        analyzeDependencyTypeNode(declaration.type, checker, sourceFile, nextSeen),
+      );
+    }
+  }
+  return analysis;
+}
+
+function analyzeDependencyMembers(members, checker, sourceFile, seenTypeSymbols) {
+  const analysis = {
+    ...emptyDependencyTypeAnalysis(),
+    objectLike: true,
+    resolvedDefinition: true,
+  };
+  for (const member of members) {
+    if (
+      ts.isMethodSignature(member) ||
+      ts.isMethodDeclaration(member) ||
+      ts.isCallSignatureDeclaration(member) ||
+      ts.isConstructSignatureDeclaration(member)
+    ) {
+      analysis.callableMemberCount += 1;
+      continue;
+    }
+    if (!ts.isPropertySignature(member) && !ts.isPropertyDeclaration(member)) {
+      continue;
+    }
+    if (member.type && ts.isFunctionTypeNode(member.type)) {
+      analysis.callableMemberCount += 1;
+      continue;
+    }
+    if (isDependencyMember(member, checker, sourceFile, seenTypeSymbols)) {
+      analysis.dependencyMemberCount += 1;
+    }
+  }
+  return analysis;
+}
+
+function isDependencyMember(member, checker, sourceFile, seenTypeSymbols) {
+  if (!member.type) {
+    return false;
+  }
+  const name = getPropertyNameText(member.name);
+  const typeText = member.type.getText(sourceFile);
+  const objectLike = isObjectLikeTypeNode(member.type, checker, sourceFile, seenTypeSymbols);
+  if (!objectLike) {
+    return false;
+  }
+  return (
+    /^(?:storage|store)$/i.test(name) ||
+    /(?:Service|Storage|Repository|Repo|Client|Runtime|Executor|Gateway|Provider|Queue|Store|Coordinator|Classifier|Maintenance|Control|Review|Port)$/i.test(
+      name,
+    ) ||
+    /(?:Service|Storage|Repository|Repo|Client|Runtime|Executor|Gateway|Provider|Queue|Store|Coordinator|Classifier|Maintenance|Control|Review|Port)\b/.test(
+      typeText,
+    )
+  );
+}
+
+function isObjectLikeTypeNode(typeNode, checker, sourceFile, seenTypeSymbols) {
+  if (!typeNode) {
+    return false;
+  }
+  if (ts.isParenthesizedTypeNode(typeNode)) {
+    return isObjectLikeTypeNode(typeNode.type, checker, sourceFile, seenTypeSymbols);
+  }
+  if (
+    ts.isTypeLiteralNode(typeNode) ||
+    ts.isTypeReferenceNode(typeNode) ||
+    ts.isFunctionTypeNode(typeNode) ||
+    ts.isArrayTypeNode(typeNode) ||
+    ts.isTupleTypeNode(typeNode)
+  ) {
+    return true;
+  }
+  if (ts.isIntersectionTypeNode(typeNode) || ts.isUnionTypeNode(typeNode)) {
+    return typeNode.types.some((item) => isObjectLikeTypeNode(item, checker, sourceFile, seenTypeSymbols));
+  }
+  return false;
+}
+
+function resolveTypeSymbol(symbol, checker) {
+  if (!symbol || (symbol.flags & ts.SymbolFlags.Alias) === 0) {
+    return symbol;
+  }
+  try {
+    return checker.getAliasedSymbol(symbol);
+  } catch {
+    return symbol;
+  }
+}
+
+function getDeclarationName(declaration) {
+  return "name" in declaration ? getPropertyNameText(declaration.name) : "";
+}
+
+function getPropertyNameText(name) {
+  if (!name) {
+    return "";
+  }
+  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name)) {
+    return name.text;
+  }
+  return "";
+}
+
+function isDependencyContainerName(name) {
+  return /(?:host|deps|dependencies|services?|storage|stores?|repositories|repository|repos?|ports?|clients?)$/i.test(
+    name,
+  );
+}
+
+function isDependencyContainerTypeName(name) {
+  return /(?:Host|Deps|Dependencies|CompositionInput|Port|Storage|Service|Repository|Repo|Client|Executor|Gateway|Queue|Store|Coordinator|Classifier|Maintenance|Control)$/i.test(
+    name,
+  );
+}
+
+function isCallableDependencyContainerTypeName(name) {
+  return /(?:Runtime|Provider)$/i.test(name);
+}
+
+function isTransparentDependencyTypeWrapper(name) {
+  return /^(?:Readonly|Required|Partial|Pick|Omit|NonNullable)$/.test(name.split(".").at(-1) ?? "");
+}
+
+function emptyDependencyTypeAnalysis() {
+  return {
+    objectLike: false,
+    semanticTypeName: false,
+    callableSemanticTypeName: false,
+    resolvedDefinition: false,
+    callableMemberCount: 0,
+    dependencyMemberCount: 0,
+  };
+}
+
+function mergeDependencyTypeAnalysis(left, right) {
+  return {
+    objectLike: left.objectLike || right.objectLike,
+    semanticTypeName: left.semanticTypeName || right.semanticTypeName,
+    callableSemanticTypeName: left.callableSemanticTypeName || right.callableSemanticTypeName,
+    resolvedDefinition: left.resolvedDefinition || right.resolvedDefinition,
+    callableMemberCount: left.callableMemberCount + right.callableMemberCount,
+    dependencyMemberCount: left.dependencyMemberCount + right.dependencyMemberCount,
+  };
 }
 
 function hasExportModifier(node) {
@@ -183,16 +702,24 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const gatewayRuntimeFactorySource = await fs.readFile(gatewayRuntimeFactoryPath, "utf8");
 
   const hostCallbacksByFile = {};
+  const dependencyMemberAccessesByFile = {};
   let totalHostCallbacks = 0;
+  let totalDependencyMemberAccesses = 0;
   for (const filePath of serviceFiles) {
     if (filePath === gatewayServicePath) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
-    const count = countHostMemberAccesses(content, filePath);
-    if (count > 0) {
-      hostCallbacksByFile[path.relative(rootDir, filePath).replaceAll("\\", "/")] = count;
-      totalHostCallbacks += count;
+    const relativePath = path.relative(rootDir, filePath).replaceAll("\\", "/");
+    const hostCallbackCount = countHostMemberAccesses(content, filePath);
+    if (hostCallbackCount > 0) {
+      hostCallbacksByFile[relativePath] = hostCallbackCount;
+      totalHostCallbacks += hostCallbackCount;
+    }
+    const dependencyMemberAccessCount = countDependencyMemberAccesses(content, filePath);
+    if (dependencyMemberAccessCount > 0) {
+      dependencyMemberAccessesByFile[relativePath] = dependencyMemberAccessCount;
+      totalDependencyMemberAccesses += dependencyMemberAccessCount;
     }
   }
 
@@ -322,6 +849,8 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
     legacyRoutePortAliasCount,
     totalHostCallbacks,
     hostCallbacksByFile,
+    totalDependencyMemberAccesses,
+    dependencyMemberAccessesByFile,
     settingsHostCallbackCount: hostCallbacksByFile[SETTINGS_AUTH_SERVICE_PATH_KEY] ?? 0,
     chatHostCallbackCount: sumMatchingValues(hostCallbacksByFile, /^apps\/gateway\/src\/services\/chat-/),
     routeFacingServiceCount: routeFacingServiceFiles.length,
@@ -335,7 +864,7 @@ export async function readArchitectureMetricsBaseline(rootDir = repoRoot) {
   const baselinePath = getArchitectureBaselinePath(rootDir);
   try {
     const raw = await fs.readFile(baselinePath, "utf8");
-    return JSON.parse(raw);
+    return validateArchitectureMetricsBaseline(JSON.parse(raw));
   } catch (error) {
     throw new Error(
       `Failed to load architecture metrics baseline at "${baselinePath}". Ensure the file exists and contains valid JSON.`,
@@ -344,7 +873,112 @@ export async function readArchitectureMetricsBaseline(rootDir = repoRoot) {
   }
 }
 
+export function assertArchitectureMetricsCaptureClean(statusOutput) {
+  const raw = Buffer.isBuffer(statusOutput) ? statusOutput.toString("utf8") : String(statusOutput ?? "");
+  if (raw.length === 0) {
+    return;
+  }
+  const dirtyEntries = raw
+    .split("\0")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const visibleEntries = dirtyEntries.slice(0, 12);
+  const hiddenCount = dirtyEntries.length - visibleEntries.length;
+  throw new Error(
+    `Architecture baseline capture refuses to snapshot dirty measured source: ${visibleEntries.join(", ")}` +
+      (hiddenCount > 0 ? `, and ${hiddenCount} more` : ""),
+  );
+}
+
+export function createArchitectureMetricsBaseline(metrics, sourceRevision) {
+  if (typeof sourceRevision !== "string" || !/^[0-9a-f]{40}$/.test(sourceRevision)) {
+    throw new Error("Architecture metrics baseline source revision must be a full lowercase Git revision.");
+  }
+  if (!isCanonicalIsoTimestamp(metrics?.generatedAt)) {
+    throw new Error("Architecture metrics collection generatedAt must be a canonical ISO timestamp.");
+  }
+  const {
+    schemaVersion: _ignoredSchemaVersion,
+    hostCallbackCollectorCorrectedAt: _ignoredHostCorrection,
+    hostCallbackSourceRevision: _ignoredHostRevision,
+    dependencyMemberCollectorCapturedAt: _ignoredDependencyCapture,
+    dependencyMemberSourceRevision: _ignoredDependencyRevision,
+    ...snapshot
+  } = metrics;
+  const baseline = {
+    schemaVersion: ARCHITECTURE_BASELINE_SCHEMA_VERSION,
+    ...snapshot,
+    hostCallbackCollectorCorrectedAt: metrics.generatedAt,
+    hostCallbackSourceRevision: sourceRevision,
+    dependencyMemberCollectorCapturedAt: metrics.generatedAt,
+    dependencyMemberSourceRevision: sourceRevision,
+  };
+  return validateArchitectureMetricsBaseline(baseline);
+}
+
+export function validateArchitectureMetricsBaseline(baseline) {
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline)) {
+    throw new Error("Architecture metrics baseline must be an object.");
+  }
+  if (baseline.schemaVersion !== ARCHITECTURE_BASELINE_SCHEMA_VERSION) {
+    throw new Error(
+      `Architecture metrics baseline schemaVersion must be ${ARCHITECTURE_BASELINE_SCHEMA_VERSION}; ` +
+        `received ${JSON.stringify(baseline.schemaVersion)}.`,
+    );
+  }
+  for (const key of ["generatedAt", "hostCallbackCollectorCorrectedAt", "dependencyMemberCollectorCapturedAt"]) {
+    if (!isCanonicalIsoTimestamp(baseline[key])) {
+      throw new Error(`Architecture metrics baseline ${key} must be a canonical ISO timestamp.`);
+    }
+  }
+  for (const key of ["hostCallbackSourceRevision", "dependencyMemberSourceRevision"]) {
+    if (typeof baseline[key] !== "string" || !/^[0-9a-f]{40}$/.test(baseline[key])) {
+      throw new Error(`Architecture metrics baseline ${key} must be a full lowercase Git revision.`);
+    }
+  }
+  for (const key of GUARDED_BASELINE_SCALAR_KEYS) {
+    if (!isNonNegativeSafeInteger(baseline[key])) {
+      throw new Error(`Architecture metrics baseline ${key} must be a non-negative safe integer.`);
+    }
+  }
+  for (const key of GUARDED_BASELINE_MAP_KEYS) {
+    validateBaselineCountMap(baseline[key], key);
+  }
+
+  assertBaselineTotal(
+    baseline,
+    "fastifyGatewayCallSites",
+    sumObjectValues(baseline.fastifyGatewayCallSitesByRouteFile),
+  );
+  assertBaselineTotal(baseline, "totalHostCallbacks", sumObjectValues(baseline.hostCallbacksByFile));
+  assertBaselineTotal(
+    baseline,
+    "totalDependencyMemberAccesses",
+    sumObjectValues(baseline.dependencyMemberAccessesByFile),
+  );
+  assertBaselineTotal(
+    baseline,
+    "settingsHostCallbackCount",
+    baseline.hostCallbacksByFile[SETTINGS_AUTH_SERVICE_PATH_KEY] ?? 0,
+  );
+  assertBaselineTotal(
+    baseline,
+    "chatHostCallbackCount",
+    sumMatchingValues(baseline.hostCallbacksByFile, /^apps\/gateway\/src\/services\/chat-/),
+  );
+  validateBaselineArrayCount(baseline, "gatewayServiceImportConsumers", "gatewayServiceImportConsumerCount");
+  validateBaselineArrayCount(baseline, "serviceContextConsumers", "serviceContextConsumerCount");
+  validateBaselineArrayCount(
+    baseline,
+    "gatewayRouteCompositionFactoryExternalConsumers",
+    "gatewayRouteCompositionFactoryExternalConsumerCount",
+  );
+  validateBaselineArrayCount(baseline, "routeFacingServiceFiles", "routeFacingServiceCount");
+  return baseline;
+}
+
 export function compareArchitectureMetrics(metrics, baseline) {
+  validateArchitectureMetricsBaseline(baseline);
   const regressions = [];
   const improvements = [];
   const largeServiceDebt = Array.isArray(metrics.largeServiceDebt) ? metrics.largeServiceDebt : [];
@@ -419,6 +1053,10 @@ export function compareArchitectureMetrics(metrics, baseline) {
       baseline.legacyRoutePortAliasCount,
     ),
     totalHostCallbacks: metrics.totalHostCallbacks - baseline.totalHostCallbacks,
+    totalDependencyMemberAccesses: deltaOrCurrentFallback(
+      metrics.totalDependencyMemberAccesses,
+      baseline.totalDependencyMemberAccesses,
+    ),
     settingsHostCallbackCount: deltaOrCurrentFallback(
       metrics.settingsHostCallbackCount,
       baseline.settingsHostCallbackCount,
@@ -618,6 +1256,28 @@ export function compareArchitectureMetrics(metrics, baseline) {
     regressions,
     improvements,
   });
+  comparePerFileNonIncreasingMetric({
+    metricsByFile: metrics.hostCallbacksByFile,
+    baselineByFile: baseline.hostCallbacksByFile,
+    label: "Extracted-service typed host callbacks",
+    regressions,
+    improvements,
+  });
+  compareNonIncreasingMetric({
+    metrics,
+    baseline,
+    key: "totalDependencyMemberAccesses",
+    label: "Extracted-service typed dependency member accesses",
+    regressions,
+    improvements,
+  });
+  comparePerFileNonIncreasingMetric({
+    metricsByFile: metrics.dependencyMemberAccessesByFile,
+    baselineByFile: baseline.dependencyMemberAccessesByFile,
+    label: "Extracted-service typed dependency member accesses",
+    regressions,
+    improvements,
+  });
 
   if (metrics.routeFacingServiceCount < baseline.routeFacingServiceCount) {
     regressions.push(
@@ -700,9 +1360,7 @@ async function collectLargeServiceDebt(filePaths, rootDir) {
   return entries
     .sort(
       (left, right) =>
-        right.lineCount - left.lineCount ||
-        right.bytes - left.bytes ||
-        left.path.localeCompare(right.path),
+        right.lineCount - left.lineCount || right.bytes - left.bytes || left.path.localeCompare(right.path),
     )
     .slice(0, 10);
 }
@@ -1116,6 +1774,66 @@ async function collectImportConsumers({ rootDir, filePaths, excludedPaths, impor
     }
   }
   return consumers;
+}
+
+function isCanonicalIsoTimestamp(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function isNonNegativeSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validateBaselineCountMap(value, key) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Architecture metrics baseline ${key} must be an object map.`);
+  }
+  for (const [filePath, count] of Object.entries(value)) {
+    if (
+      filePath.length === 0 ||
+      filePath.includes("\\") ||
+      path.isAbsolute(filePath) ||
+      filePath.split("/").includes("..")
+    ) {
+      throw new Error(`Architecture metrics baseline ${key} contains invalid path ${JSON.stringify(filePath)}.`);
+    }
+    if (!isNonNegativeSafeInteger(count)) {
+      throw new Error(
+        `Architecture metrics baseline ${key}[${JSON.stringify(filePath)}] must be a non-negative safe integer.`,
+      );
+    }
+  }
+}
+
+function sumObjectValues(value) {
+  return Object.values(value).reduce((total, count) => total + count, 0);
+}
+
+function assertBaselineTotal(baseline, key, expected) {
+  if (baseline[key] !== expected) {
+    throw new Error(
+      `Architecture metrics baseline ${key}=${baseline[key]} does not match its derived total ${expected}.`,
+    );
+  }
+}
+
+function validateBaselineArrayCount(baseline, arrayKey, countKey) {
+  const values = baseline[arrayKey];
+  if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || value.length === 0)) {
+    throw new Error(`Architecture metrics baseline ${arrayKey} must be an array of non-empty strings.`);
+  }
+  if (new Set(values).size !== values.length) {
+    throw new Error(`Architecture metrics baseline ${arrayKey} must not contain duplicate entries.`);
+  }
+  if (values.length !== baseline[countKey]) {
+    throw new Error(
+      `Architecture metrics baseline ${countKey}=${baseline[countKey]} does not match ${arrayKey}.length=${values.length}.`,
+    );
+  }
 }
 
 function compareNonIncreasingMetric({ metrics, baseline, key, label, regressions, improvements }) {

@@ -10,10 +10,16 @@ import {
 } from "./external-side-effect-replay-job-service.js";
 import type { IntegrationActionHost } from "./integration-action-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
-import { runReplaySafeExternalSideEffectWorker } from "./external-side-effect-runner-service.js";
+import {
+  claimIdempotentExternalSideEffect,
+  fingerprintExternalSideEffectDestination,
+  runReplaySafeExternalSideEffectWorker,
+} from "./external-side-effect-runner-service.js";
 
 const ACTIVEPIECES_ROUTE_PATH =
   "external_side_effect:integration_operator_action:automation.activepieces:conn-1:trigger_webhook";
+const ACTIVEPIECES_WEBHOOK_A = "https://activepieces.example.test/hooks/flow-1";
+const ACTIVEPIECES_WEBHOOK_A_PAYLOAD_HASH = "183a143763547eabd66a12ae7762fb872bb3105cbc4918d8014ec063b308b2c1";
 
 function createConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -22,10 +28,11 @@ function createConnection(overrides: Partial<IntegrationConnection> = {}): Integ
     kind: "automation",
     key: "activepieces",
     label: "Activepieces",
+    workspaceId: "ws-run",
     enabled: true,
     status: "connected",
     config: {
-      webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+      webhookUrl: ACTIVEPIECES_WEBHOOK_A,
       defaultFlowId: "flow-1",
     },
     createdAt: "2026-04-10T00:00:00.000Z",
@@ -48,6 +55,7 @@ function createHost(
           return connection;
         }),
       },
+      runImmediateTransaction: (work) => work(),
     },
     fetchWithDiagnosticsTimeout: vi.fn(),
     readConnectionConfigValue: vi.fn((config: Record<string, unknown>, key: string) => {
@@ -85,6 +93,7 @@ function createHost(
       markExternalCallStarted: vi.fn(),
       markCompleted: vi.fn(),
       markFailure: vi.fn(),
+      markFailureIfStatus: vi.fn(),
     },
     ...overrides,
   };
@@ -153,12 +162,16 @@ function createStatefulMutationIdempotencyStore(): {
   markCompleted: ReturnType<typeof vi.fn>;
   markFailed: ReturnType<typeof vi.fn>;
 } {
-  const rows = new Map<string, { payloadHash: string; status: "pending" | "completed" | "failed" }>();
+  let claimGeneration = 0;
+  const rows = new Map<
+    string,
+    { payloadHash: string; status: "pending" | "completed" | "failed"; claimToken: string }
+  >();
   const toKey = (input: { method: string; routePath: string; idempotencyKey: string; actorScope?: string }) =>
     [input.method, input.routePath, input.idempotencyKey, input.actorScope ?? ""].join("|");
   const toRecord = (
     input: { method: string; routePath: string; idempotencyKey: string; actorScope?: string; now?: string },
-    row: { payloadHash: string; status: "pending" | "completed" | "failed" },
+    row: { payloadHash: string; status: "pending" | "completed" | "failed"; claimToken: string },
   ) => ({
     method: input.method,
     routePath: input.routePath,
@@ -166,6 +179,7 @@ function createStatefulMutationIdempotencyStore(): {
     actorScope: input.actorScope ?? "",
     payloadHash: row.payloadHash,
     status: row.status,
+    claimToken: row.claimToken,
     createdAt: input.now ?? "",
     updatedAt: input.now ?? "",
   });
@@ -183,7 +197,11 @@ function createStatefulMutationIdempotencyStore(): {
         const key = toKey(input);
         const existing = rows.get(key);
         if (!existing) {
-          const row = { payloadHash: input.payloadHash, status: "pending" as const };
+          const row = {
+            payloadHash: input.payloadHash,
+            status: "pending" as const,
+            claimToken: `claim-${++claimGeneration}`,
+          };
           rows.set(key, row);
           return { outcome: "claimed" as const, claimKind: "new" as const, record: toRecord(input, row) };
         }
@@ -191,7 +209,11 @@ function createStatefulMutationIdempotencyStore(): {
           return { outcome: "payload_mismatch" as const, record: toRecord(input, existing) };
         }
         if (existing.status === "failed") {
-          const row = { payloadHash: input.payloadHash, status: "pending" as const };
+          const row = {
+            payloadHash: input.payloadHash,
+            status: "pending" as const,
+            claimToken: `claim-${++claimGeneration}`,
+          };
           rows.set(key, row);
           return {
             outcome: "claimed" as const,
@@ -206,21 +228,39 @@ function createStatefulMutationIdempotencyStore(): {
       },
     ),
     markCompleted: vi.fn(
-      (input: { method: string; routePath: string; idempotencyKey: string; actorScope?: string }) => {
+      (input: {
+        method: string;
+        routePath: string;
+        idempotencyKey: string;
+        actorScope?: string;
+        claimToken?: string;
+      }) => {
         const key = toKey(input);
         const existing = rows.get(key);
-        if (existing) {
+        if (existing && (!input.claimToken || input.claimToken === existing.claimToken)) {
           rows.set(key, { ...existing, status: "completed" });
+          return true;
         }
+        return false;
       },
     ),
-    markFailed: vi.fn((input: { method: string; routePath: string; idempotencyKey: string; actorScope?: string }) => {
-      const key = toKey(input);
-      const existing = rows.get(key);
-      if (existing) {
-        rows.set(key, { ...existing, status: "failed" });
-      }
-    }),
+    markFailed: vi.fn(
+      (input: {
+        method: string;
+        routePath: string;
+        idempotencyKey: string;
+        actorScope?: string;
+        claimToken?: string;
+      }) => {
+        const key = toKey(input);
+        const existing = rows.get(key);
+        if (existing && (!input.claimToken || input.claimToken === existing.claimToken)) {
+          rows.set(key, { ...existing, status: "failed" });
+          return true;
+        }
+        return false;
+      },
+    ),
   };
 }
 
@@ -249,13 +289,19 @@ function createTrackedSideEffectRunStore(seed: ExternalSideEffectRunRecord): Ext
       row = { ...row, status: input.status, errorText: input.errorText, updatedAt: now ?? row.updatedAt };
       return row;
     }),
+    markFailureIfStatus: vi.fn((runId, expectedStatus, input, now) => {
+      if (row.status === expectedStatus) {
+        row = { ...row, status: input.status, errorText: input.errorText, updatedAt: now ?? row.updatedAt };
+      }
+      return row;
+    }),
     getRow: () => row,
   };
 }
 
 describe("buildGatewayExternalSideEffectReplayJob", () => {
   it("builds an identity-preserving replay job for an allowlisted failed-before-boundary activepieces run", () => {
-    const connection = createConnection({ workspaceId: undefined });
+    const connection = createConnection();
     const host = createHost(connection);
     const run = buildRun();
     const payload = buildPayload();
@@ -275,10 +321,22 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
     expect(job?.payload).toMatchObject({ provider: "activepieces", flowId: "flow-1", payload: {} });
     expect(job?.mutationStore).toBe(host.mutationStore);
     expect(job?.sideEffectRunStore).toBe(host.sideEffectRunStore);
+    expect(job?.runClaimTransaction).toEqual(expect.any(Function));
+    expect(job?.requireDurableBoundaryRecord).toBe(true);
+  });
+
+  it("refuses to build an executable replay job without the canonical transaction owner", () => {
+    const base = createHost(createConnection());
+    const host: IntegrationActionHost = {
+      ...base,
+      storage: { integrationConnections: base.storage.integrationConnections },
+    };
+
+    expect(buildGatewayExternalSideEffectReplayJob(host, buildRun(), buildPayload())).toBeUndefined();
   });
 
   it("replays end-to-end through the replay-safe worker", async () => {
-    const connection = createConnection({ workspaceId: undefined });
+    const connection = createConnection();
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ id: "run-99", message: "flow accepted" }), {
@@ -287,7 +345,10 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
         }),
     );
     const mutationStore = createStatefulMutationIdempotencyStore();
-    const run = buildRun();
+    const run = buildRun({
+      // Hash of the replay builder's canonical empty Activepieces payload.
+      payloadHash: ACTIVEPIECES_WEBHOOK_A_PAYLOAD_HASH,
+    });
     const sideEffectRunStore = createTrackedSideEffectRunStore(run);
     const host = createHost(connection, {
       fetchWithDiagnosticsTimeout: fetchMock,
@@ -309,6 +370,97 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(requestBody).toMatchObject({ source: "goatcitadel", flowId: "flow-1", payload: {} });
+  });
+
+  it("refuses replay when the live external destination drifted from the recorded target", async () => {
+    const run = buildRun({ payloadHash: ACTIVEPIECES_WEBHOOK_A_PAYLOAD_HASH });
+    const fetchMock = vi.fn();
+    const mutationStore = createStatefulMutationIdempotencyStore();
+    const sideEffectRunStore = createTrackedSideEffectRunStore(run);
+    const host = createHost(
+      createConnection({
+        config: {
+          webhookUrl: "https://different-provider.example.test/hooks/flow-1",
+          defaultFlowId: "flow-1",
+        },
+      }),
+      { fetchWithDiagnosticsTimeout: fetchMock, mutationStore, sideEffectRunStore },
+    );
+
+    const results = await runReplaySafeExternalSideEffectWorker({
+      runs: [run],
+      checkedAt: "2026-06-01T00:00:00.000Z",
+      buildJob: (candidate) => buildGatewayExternalSideEffectReplayJob(host, candidate, buildPayload()),
+    });
+
+    expect(results).toMatchObject([
+      {
+        status: "blocked",
+        result: { blockedReason: "external_side_effect_payload_mismatch" },
+      },
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mutationStore.claim).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.getRow()).toMatchObject({ status: "failed_before_boundary" });
+  });
+
+  it("refuses replay when the connection moved to a different workspace", async () => {
+    const run = buildRun();
+    const fetchMock = vi.fn();
+    const mutationStore = createStatefulMutationIdempotencyStore();
+    const host = createHost(createConnection({ workspaceId: "ws-other" }), {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      mutationStore,
+    });
+
+    expect(buildGatewayExternalSideEffectReplayJob(host, run, buildPayload())).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mutationStore.claim).not.toHaveBeenCalled();
+  });
+
+  it("persists only a destination digest and never the raw target or embedded credential", () => {
+    const targetWithSecret = `${ACTIVEPIECES_WEBHOOK_A}?token=do-not-persist`;
+    let persistedRequest: Record<string, unknown> | undefined;
+    const sideEffectRunStore: ExternalSideEffectRunStore = {
+      createOrGet: vi.fn((input, now) => {
+        persistedRequest = input.requestPayload;
+        return {
+          ...buildRun(),
+          routePath: input.routePath,
+          actorScope: input.actorScope ?? "",
+          idempotencyKey: input.idempotencyKey,
+          payloadHash: input.payloadHash,
+          status: input.status ?? "claimed_not_sent",
+          requestPayload: input.requestPayload,
+          updatedAt: now ?? "2026-06-01T00:00:00.000Z",
+        };
+      }),
+      markExternalCallStarted: vi.fn(),
+      markCompleted: vi.fn(),
+      markFailure: vi.fn(),
+      markFailureIfStatus: vi.fn(),
+    };
+    const host = createHost(
+      createConnection({
+        config: { webhookUrl: targetWithSecret, defaultFlowId: "flow-1" },
+      }),
+      { sideEffectRunStore },
+    );
+    const run = buildRun();
+    const job = buildGatewayExternalSideEffectReplayJob(host, run, buildPayload());
+    expect(job).toBeDefined();
+
+    claimIdempotentExternalSideEffect(job!);
+
+    expect(job?.externalDestinationFingerprint).toBe(fingerprintExternalSideEffectDestination(targetWithSecret));
+    expect(job?.externalDestinationFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(persistedRequest).toMatchObject({
+      externalDestinationFingerprint: job?.externalDestinationFingerprint,
+    });
+    const persisted = JSON.stringify(persistedRequest);
+    expect(persisted).not.toContain("activepieces.example.test");
+    expect(persisted).not.toContain("do-not-persist");
+    expect(persisted).not.toContain("token=");
   });
 
   it("returns undefined for non-allowlisted runs", async () => {
@@ -358,7 +510,6 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
 
   it("refuses payload drift at claim time", async () => {
     const connection = createConnection({
-      workspaceId: undefined,
       config: { webhookUrl: "https://activepieces.example.test/hooks/flow-1", defaultFlowId: "flow-NEW" },
     });
     const mutationStore = createStatefulMutationIdempotencyStore();
@@ -379,6 +530,7 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
       markExternalCallStarted: vi.fn(),
       markCompleted: vi.fn(),
       markFailure: vi.fn(),
+      markFailureIfStatus: vi.fn(),
     };
     const host = createHost(connection, { fetchWithDiagnosticsTimeout: fetchMock, mutationStore, sideEffectRunStore });
     const run = buildRun();

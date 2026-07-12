@@ -365,12 +365,18 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return sendChatWriteError(reply, error);
     }
 
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.agentSendChatMessageStream(
-        params.data.sessionId,
-        stampChatOperatorContext(request, body.data),
-        signal,
-      ),
+    return streamSseReply(
+      reply,
+      request,
+      params.data.sessionId,
+      (signal, lifecycle) =>
+        fastify.services.chatMessages.agentSendChatMessageStream(
+          params.data.sessionId,
+          stampChatOperatorContext(request, body.data),
+          signal,
+          lifecycle,
+        ),
+      { trackMutation: true },
     );
   });
 
@@ -528,13 +534,19 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return sendChatWriteError(reply, error);
     }
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.retryChatTurnStream(
-        params.data.sessionId,
-        params.data.turnId,
-        stampChatOperatorContext(request, body.data),
-        signal,
-      ),
+    return streamSseReply(
+      reply,
+      request,
+      params.data.sessionId,
+      (signal, lifecycle) =>
+        fastify.services.chatMessages.retryChatTurnStream(
+          params.data.sessionId,
+          params.data.turnId,
+          stampChatOperatorContext(request, body.data),
+          signal,
+          lifecycle,
+        ),
+      { trackMutation: true },
     );
   });
 
@@ -596,13 +608,19 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return sendChatWriteError(reply, error);
     }
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.editChatTurnStream(
-        params.data.sessionId,
-        params.data.turnId,
-        stampChatOperatorContext(request, body.data),
-        signal,
-      ),
+    return streamSseReply(
+      reply,
+      request,
+      params.data.sessionId,
+      (signal, lifecycle) =>
+        fastify.services.chatMessages.editChatTurnStream(
+          params.data.sessionId,
+          params.data.turnId,
+          stampChatOperatorContext(request, body.data),
+          signal,
+          lifecycle,
+        ),
+      { trackMutation: true },
     );
   });
 

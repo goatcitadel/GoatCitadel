@@ -144,8 +144,8 @@ function composeDurableOwnership(source: ChatTurnRuntimeHost): ChatTurnDurableRu
     get backgroundTasks() {
       return source.backgroundTasks;
     },
-    beginDurableChatRun: (prepared, input, threadEventType) =>
-      source.beginDurableChatRun(prepared, input, threadEventType),
+    beginDurableChatRun: (prepared, input, threadEventType, options) =>
+      source.beginDurableChatRun(prepared, input, threadEventType, options),
     finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
       source.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
     isFeatureEnabled: (flag) => source.isFeatureEnabled(flag),

@@ -123,12 +123,6 @@ function isActiveToolGrant(grant: ToolGrantRecord): boolean {
   if (grant.revokedAt) {
     return false;
   }
-  if (grant.expiresAt) {
-    const expiry = Date.parse(grant.expiresAt);
-    if (Number.isFinite(expiry) && expiry <= Date.now()) {
-      return false;
-    }
-  }
   if (grant.grantType === "one_time") {
     return (grant.usesRemaining ?? 0) > 0;
   }

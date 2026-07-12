@@ -47,6 +47,14 @@ describe("sqlite schema migrations", () => {
     const chatMessagesColumns = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
     assert.ok(chatMessagesColumns.some((column) => column.name === "message_id"));
 
+    const delegationStepColumns = db.prepare("PRAGMA table_info(chat_delegation_steps)").all() as Array<{
+      name: string;
+    }>;
+    assert.ok(delegationStepColumns.some((column) => column.name === "parallelizable"));
+    assert.ok(delegationStepColumns.some((column) => column.name === "depends_on_step_ids_json"));
+    assert.ok(delegationStepColumns.some((column) => column.name === "dispatch_claim_token"));
+    assert.ok(delegationStepColumns.some((column) => column.name === "dispatch_claim_expires_at"));
+
     const approvalsIndexes = db.prepare("PRAGMA index_list(approvals)").all() as Array<{ name: string }>;
     assert.ok(approvalsIndexes.some((index) => index.name === "idx_approvals_status_created"));
     assert.ok(approvalsIndexes.some((index) => index.name === "idx_approvals_status_expires_at"));
@@ -77,6 +85,118 @@ describe("sqlite schema migrations", () => {
     assert.ok(authDeviceGrantColumns.some((column) => column.name === "token_hash"));
 
     db.close();
+  });
+
+  it("backfills pending mutation claim leases idempotently in the forward migration", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-mutation-lease-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const updatedAt = "2026-07-11T00:00:00.000Z";
+    db.prepare(
+      `
+        INSERT INTO mutation_idempotency (
+          method, route_path, idempotency_key, actor_scope, payload_hash, status,
+          claim_token, claim_expires_at, created_at, updated_at
+        ) VALUES ('POST', '/api/v1/chat/probe', 'legacy-pending', 'operator:probe',
+          'payload-hash', 'pending', NULL, NULL, @updatedAt, @updatedAt)
+      `,
+    ).run({ updatedAt });
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(140);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const first = migrated
+      .prepare(
+        `SELECT claim_token, claim_expires_at
+         FROM mutation_idempotency
+         WHERE idempotency_key = 'legacy-pending'`,
+      )
+      .get() as { claim_token: string; claim_expires_at: string };
+    assert.match(first.claim_token, /^legacy-[a-f0-9]{32}$/);
+    assert.equal(first.claim_expires_at, updatedAt);
+    migrated.prepare("DELETE FROM schema_migrations WHERE version = ?").run(140);
+    migrated.close();
+
+    const replayed = createDatabase({ dbPath });
+    const second = replayed
+      .prepare(
+        `SELECT claim_token, claim_expires_at
+         FROM mutation_idempotency
+         WHERE idempotency_key = 'legacy-pending'`,
+      )
+      .get() as { claim_token: string; claim_expires_at: string };
+    assert.deepEqual(second, first);
+    replayed.close();
+  });
+
+  it("moves legacy delegation dispatch markers out of canonical child linkage idempotently", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-delegation-lease-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const expiresAt = "2099-01-01T00:00:00.000Z";
+    const expiresAtMs = Date.parse(expiresAt);
+    const claimToken = `delegation-claim:v1:${expiresAtMs}:turn-claim:owner-a`;
+    const dispatchToken = `delegation-dispatch:v1:${expiresAtMs}:turn-dispatch:owner-b`;
+    db.prepare(
+      `
+        INSERT INTO chat_delegation_steps (
+          step_id, run_id, role, step_index, status, child_session_id, child_turn_id, started_at
+        ) VALUES (?, 'run-legacy', 'coder', ?, 'running', ?, ?, '2026-07-11T00:00:00.000Z')
+      `,
+    ).run("step-legacy-claim", 0, claimToken, null);
+    db.prepare(
+      `
+        INSERT INTO chat_delegation_steps (
+          step_id, run_id, role, step_index, status, child_session_id, child_turn_id, started_at
+        ) VALUES (?, 'run-legacy', 'qa', ?, 'running', ?, ?, '2026-07-11T00:00:00.000Z')
+      `,
+    ).run("step-legacy-dispatch", 1, "canonical-child-session", dispatchToken);
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(142);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const rows = migrated
+      .prepare(
+        `SELECT step_id, child_session_id, child_turn_id, dispatch_claim_token, dispatch_claim_expires_at
+         FROM chat_delegation_steps WHERE run_id = 'run-legacy' ORDER BY step_index`,
+      )
+      .all() as Array<{
+      step_id: string;
+      child_session_id: string | null;
+      child_turn_id: string | null;
+      dispatch_claim_token: string | null;
+      dispatch_claim_expires_at: string | null;
+    }>;
+    assert.deepEqual(
+      rows.map((row) => ({ ...row })),
+      [
+        {
+          step_id: "step-legacy-claim",
+          child_session_id: null,
+          child_turn_id: null,
+          dispatch_claim_token: claimToken,
+          dispatch_claim_expires_at: expiresAt,
+        },
+        {
+          step_id: "step-legacy-dispatch",
+          child_session_id: "canonical-child-session",
+          child_turn_id: null,
+          dispatch_claim_token: dispatchToken,
+          dispatch_claim_expires_at: expiresAt,
+        },
+      ],
+    );
+    migrated.prepare("DELETE FROM schema_migrations WHERE version = ?").run(142);
+    migrated.close();
+
+    const replayed = createDatabase({ dbPath });
+    assert.equal(
+      replayed
+        .prepare("SELECT COUNT(*) AS count FROM chat_delegation_steps WHERE child_session_id LIKE 'delegation-%'")
+        .get<{ count: number }>()?.count,
+      0,
+    );
+    replayed.close();
   });
 
   it("creates Citadel parent records and parent-scope columns", () => {
@@ -436,6 +556,67 @@ describe("sqlite schema migrations", () => {
     );
     assert.equal(benignInbox.token, "grateful-note");
     assert.equal(benignBatch.count, 250);
+    migrated.close();
+  });
+
+  it("forward-scrubs remote approval bearers from approval effect result and legacy detail truth", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-effect-result-bearer-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const rawToken = `grat_${"r".repeat(43)}`;
+    const benign = "grat_community_discount_code";
+    const now = "2026-07-11T00:00:00.000Z";
+    const db = createDatabase({ dbPath });
+    const insertApproval = db.prepare(
+      `INSERT INTO approvals (
+         approval_id, kind, risk_level, status, payload_json, preview_json, explanation_status, created_at
+       ) VALUES (?, 'tool.invoke', 'danger', 'approved', '{}', '{}', 'not_requested', ?)`,
+    );
+    const insertEffect = db.prepare(
+      `INSERT INTO approval_effects (
+         effect_id, approval_id, effect_kind, target_kind, target_id, idempotency_key, status,
+         outcome, detail, details_json, attempt_count, payload_json, result_json, created_at, updated_at
+       ) VALUES (?, ?, 'pending_action_execute', 'pending_action', ?, ?, 'completed', ?, ?, ?, 1, '{}', ?, ?, ?)`,
+    );
+    insertApproval.run("approval-effect-raw", now);
+    insertApproval.run("approval-effect-benign", now);
+    insertEffect.run(
+      "effect-raw",
+      "approval-effect-raw",
+      "approval-effect-raw",
+      "effect-key-raw",
+      `sent:${rawToken}`,
+      `detail:${rawToken}`,
+      JSON.stringify({ token: rawToken }),
+      JSON.stringify({ callbackData: `gca:${rawToken}:approve` }),
+      now,
+      now,
+    );
+    insertEffect.run(
+      "effect-benign",
+      "approval-effect-benign",
+      "approval-effect-benign",
+      "effect-key-benign",
+      benign,
+      benign,
+      JSON.stringify({ note: benign }),
+      JSON.stringify({ note: benign }),
+      now,
+      now,
+    );
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(143);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const raw = migrated
+      .prepare("SELECT outcome, detail, details_json, result_json FROM approval_effects WHERE effect_id = ?")
+      .get("effect-raw") as Record<string, string>;
+    const preserved = migrated
+      .prepare("SELECT outcome, detail, details_json, result_json FROM approval_effects WHERE effect_id = ?")
+      .get("effect-benign") as Record<string, string>;
+    assert.equal(JSON.stringify(raw).includes(rawToken), false);
+    assert.match(JSON.stringify(raw), /\[REDACTED\]/);
+    assert.equal(JSON.stringify(preserved).includes(benign), true);
+    assert.equal(JSON.stringify(preserved).includes("[REDACTED]"), false);
     migrated.close();
   });
 

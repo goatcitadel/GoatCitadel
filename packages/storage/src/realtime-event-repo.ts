@@ -32,6 +32,7 @@ export class RealtimeEventRepository {
   private appendCount = 0;
 
   public constructor(private readonly db: DatabaseClient) {
+    const optionalCursorCreatedAt = db.dialect === "postgres" ? "CAST(@cursorCreatedAt AS TEXT)" : "@cursorCreatedAt";
     this.allocateSequenceStmt = db.prepare(`
       UPDATE realtime_event_sequence_state
       SET last_sequence = last_sequence + 1
@@ -83,7 +84,7 @@ export class RealtimeEventRepository {
     this.listStmt = db.prepare(`
       SELECT * FROM realtime_events
       WHERE (
-        @cursorCreatedAt IS NULL
+        ${optionalCursorCreatedAt} IS NULL
         OR created_at < @cursorCreatedAt
         OR (created_at = @cursorCreatedAt AND event_id < @cursorEventId)
       )

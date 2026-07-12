@@ -46,6 +46,8 @@ import {
   planDeNovoActions,
 } from "./chat-proactive-denovo-planner.js";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
+import { readToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
+import type { ToolInvocationRuntimeOptions } from "./tool-invocation-coordinator-service.js";
 
 /** Origination mode for proactive planning (P1-F5). */
 export type ProactiveOriginationMode = "reactive" | "de_novo";
@@ -152,7 +154,7 @@ export interface ChatProactiveServiceCallbacks {
 
   listChatMessages(sessionId: string, limit: number): Promise<Array<{ role: string; content: string }>>;
 
-  invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
+  invokeTool(request: ToolInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<ToolInvokeResult>;
 
   resolveToolPolicyContext?(input: {
     operatorId?: string;
@@ -1153,43 +1155,55 @@ export class ChatProactiveService {
     patch: Partial<ProactiveDurableState>,
     status?: DurableRunRecord["status"],
   ): DurableRunRecord {
-    const current = this.requireCurrentProactiveExecutionLease(run);
-    const currentMetadata = isRecord(current.metadata) ? { ...current.metadata } : {};
-    const currentState = this.readProactiveDurableState(current);
-    const nextState = {
-      ...currentState,
-      ...patch,
-    };
-    const now = new Date().toISOString();
-    return this.ctx.storage.durableRuns.updateRun({
-      runId: run.runId,
-      status: status ?? current.status,
-      metadata: {
-        ...currentMetadata,
-        proactive: nextState,
-      },
-      startedAt: current.startedAt ?? now,
-      ...(status === "completed" || status === "failed" ? { finishedAt: now } : { clearFinishedAt: true }),
-      clearLease: status === "completed" || status === "failed",
-      ...(status === "failed" ? { lastError: current.lastError } : { clearLastError: true }),
-      updatedAt: now,
-      expectedVersion: current.version,
+    const expectedLeaseOwnerId = this.requireProactiveExecutionLeaseOwner(run);
+    let updated!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshProactiveExecutionLease(run.runId, expectedLeaseOwnerId);
+      const currentMetadata = isRecord(current.metadata) ? { ...current.metadata } : {};
+      const currentState = this.readProactiveDurableState(current);
+      const nextState = {
+        ...currentState,
+        ...patch,
+      };
+      const now = new Date().toISOString();
+      updated = this.ctx.storage.durableRuns.updateRun({
+        runId: run.runId,
+        status: status ?? current.status,
+        metadata: {
+          ...currentMetadata,
+          proactive: nextState,
+        },
+        startedAt: current.startedAt ?? now,
+        ...(status === "completed" || status === "failed" ? { finishedAt: now } : { clearFinishedAt: true }),
+        clearLease: status === "completed" || status === "failed",
+        ...(status === "failed" ? { lastError: current.lastError } : { clearLastError: true }),
+        updatedAt: now,
+        expectedVersion: current.version,
+      });
     });
+    return updated;
   }
 
-  private requireCurrentProactiveExecutionLease(claimed: DurableRunRecord): DurableRunRecord {
-    const current = this.ctx.storage.durableRuns.getRun(claimed.runId);
-    const expiresAt = current.leaseExpiresAt ? Date.parse(current.leaseExpiresAt) : Number.NaN;
-    if (
-      current.status !== "running" ||
-      !claimed.leaseOwnerId ||
-      current.leaseOwnerId !== claimed.leaseOwnerId ||
-      !Number.isFinite(expiresAt) ||
-      expiresAt <= Date.now()
-    ) {
-      throw new Error(`Proactive durable run ${claimed.runId} lost its execution lease`);
+  private requireProactiveExecutionLeaseOwner(run: DurableRunRecord): string {
+    const leaseOwnerId = run.leaseOwnerId?.trim();
+    if (!leaseOwnerId) {
+      throw this.buildProactiveLeaseLossError(run.runId);
     }
-    return current;
+    return leaseOwnerId;
+  }
+
+  private lockFreshProactiveExecutionLease(runId: string, expectedLeaseOwnerId: string): DurableRunRecord {
+    const locked = this.ctx.storage.durableRuns.lockFreshActiveLeaseForUpdate(runId, expectedLeaseOwnerId);
+    if (!locked) {
+      throw this.buildProactiveLeaseLossError(runId);
+    }
+    return locked;
+  }
+
+  private buildProactiveLeaseLossError(runId: string): Error {
+    const error = new Error(`Proactive durable run ${runId} lost its execution lease`);
+    error.name = "DurableWorkerInterruptionError";
+    return error;
   }
 
   private recordDurableTimelineEvent(
@@ -1218,47 +1232,47 @@ export class ChatProactiveService {
     waitForEvent: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
     statePatch: Partial<ProactiveDurableState>,
   ): DurableRunRecord {
-    const current = this.requireCurrentProactiveExecutionLease(run);
-    const currentMetadata = isRecord(current.metadata) ? { ...current.metadata } : {};
-    const currentState = this.readProactiveDurableState(current);
-    const nextMetadata = {
-      ...currentMetadata,
-      waitForEvent: {
-        eventKey: waitForEvent.eventKey,
-        correlationId: waitForEvent.correlationId ?? null,
-      },
-      proactive: {
-        ...currentState,
-        ...statePatch,
-      },
-    };
     const now = new Date().toISOString();
     let updated!: DurableRunRecord;
-    const checkpointState = {
-      waitForEvent: nextMetadata.waitForEvent,
-      proactive: nextMetadata.proactive,
-      ...(waitForEvent.payload ?? {}),
-    };
+    let checkpointState!: Record<string, unknown>;
     this.ctx.storage.runImmediateTransaction(() => {
-      const latest = this.requireCurrentProactiveExecutionLease(current);
+      const locked = this.lockFreshProactiveExecutionLease(run.runId, this.requireProactiveExecutionLeaseOwner(run));
+      const currentMetadata = isRecord(locked.metadata) ? { ...locked.metadata } : {};
+      const currentState = this.readProactiveDurableState(locked);
+      const nextMetadata = {
+        ...currentMetadata,
+        waitForEvent: {
+          eventKey: waitForEvent.eventKey,
+          correlationId: waitForEvent.correlationId ?? null,
+        },
+        proactive: {
+          ...currentState,
+          ...statePatch,
+        },
+      };
+      checkpointState = {
+        waitForEvent: nextMetadata.waitForEvent,
+        proactive: nextMetadata.proactive,
+        ...(waitForEvent.payload ?? {}),
+      };
       updated = this.ctx.storage.durableRuns.updateRun({
-        runId: run.runId,
+        runId: locked.runId,
         status: "waiting",
         metadata: nextMetadata,
-        startedAt: latest.startedAt ?? now,
+        startedAt: locked.startedAt ?? now,
         clearFinishedAt: true,
         clearLease: true,
         clearLastError: true,
         updatedAt: now,
-        expectedVersion: latest.version,
+        expectedVersion: locked.version,
       });
       this.ctx.storage.durableRuns.createCheckpoint({
-        runId: run.runId,
+        runId: locked.runId,
         checkpointKind: "run_waiting",
         state: checkpointState,
         createdAt: now,
       });
-      this.recordDurableTimelineEvent(run.runId, "run_waiting", checkpointState);
+      this.recordDurableTimelineEvent(locked.runId, "run_waiting", checkpointState);
     });
     const checkpointRecord = checkpointState as Record<string, unknown>;
     const proactiveState = toPlainRecord(checkpointRecord.proactive);
@@ -1293,7 +1307,7 @@ export class ChatProactiveService {
   private completeDurableRun(run: DurableRunRecord, checkpointState: Record<string, unknown>): void {
     const now = new Date().toISOString();
     this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.requireCurrentProactiveExecutionLease(run);
+      const current = this.lockFreshProactiveExecutionLease(run.runId, this.requireProactiveExecutionLeaseOwner(run));
       this.ctx.storage.durableRuns.updateRun({
         runId: run.runId,
         status: "completed",
@@ -1512,6 +1526,7 @@ export class ChatProactiveService {
     action: ProactiveActionRecord,
     durableRunId: string,
     signal?: AbortSignal,
+    expectedLeaseOwnerId?: string,
   ): Promise<ProactiveActionRecord> {
     throwIfProactiveDurableRunAborted(signal);
     if (!action.toolName) {
@@ -1557,6 +1572,7 @@ export class ChatProactiveService {
       const sideEffect = await runIdempotentExternalSideEffect({
         mutationStore: this.ctx.storage.mutationIdempotency,
         sideEffectRunStore: this.ctx.storage.externalSideEffectRuns,
+        runClaimTransaction: (work) => this.ctx.storage.runImmediateTransaction(work),
         workspaceId,
         boundary: "proactive_tool_action",
         catalogId: action.toolName,
@@ -1575,26 +1591,54 @@ export class ChatProactiveService {
         output: { actionId: action.actionId, proactiveRunId: action.runId, durableRunId },
         requireDurableBoundaryRecord: true,
         execute: async (claim) => {
-          claim.markExternalCallStarted();
-          const result = await this.callbacks.invokeTool({
-            toolName: action.toolName!,
-            args: action.args ?? {},
-            agentId: "proactive",
-            sessionId: action.sessionId,
-            workspaceId,
-            taskId: action.linkedTaskId,
-            runId: durableRunId,
-            surface,
-            permissionProfileId: policyContext?.permissionProfileId,
-            localOperatorOverrideId: policyContext?.localOperatorOverrideId,
-            policyContext,
-            signal,
-            consentContext: {
-              operatorId: actor.operatorId,
-              source: "agent",
-              reason: "proactive durable execution",
+          const executionFence = expectedLeaseOwnerId
+            ? () => {
+                this.ctx.storage.runImmediateTransaction(() => {
+                  this.lockFreshProactiveExecutionLease(durableRunId, expectedLeaseOwnerId);
+                });
+              }
+            : undefined;
+          const result = await this.callbacks.invokeTool(
+            {
+              toolName: action.toolName!,
+              args: action.args ?? {},
+              agentId: "proactive",
+              sessionId: action.sessionId,
+              workspaceId,
+              taskId: action.linkedTaskId,
+              runId: durableRunId,
+              surface,
+              permissionProfileId: policyContext?.permissionProfileId,
+              localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+              policyContext,
+              signal,
+              consentContext: {
+                operatorId: actor.operatorId,
+                source: "agent",
+                reason: "proactive durable execution",
+              },
             },
-          });
+            {
+              ...(executionFence ? { executionFence } : {}),
+              externalSideEffect: {
+                markStarted: () => claim.markExternalCallStarted(),
+                markNotRequired: () => claim.markExternalCallNotRequired(),
+              },
+            },
+          );
+          const executionFailure = readProactiveToolExecutionFailure(result);
+          if (executionFailure) {
+            if (!claim.externalCallStarted) {
+              claim.markExternalCallNotRequired();
+            }
+            throw new Error(executionFailure);
+          }
+          if (result.outcome !== "executed") {
+            if (claim.externalCallStarted) {
+              throw new Error(result.policyReason);
+            }
+            claim.markExternalCallNotRequired();
+          }
           const externalReferenceRoots = this.detectExternalReferenceRoots(action.args, result.result);
           if (result.outcome === "executed") {
             return this.updateProactiveAction(action.actionId, {
@@ -1776,7 +1820,11 @@ export class ChatProactiveService {
       const pendingAction = this.ctx.storage.pendingApprovalActions.find(approvalId);
       const executedOutcome =
         typeof pendingAction?.result?.outcome === "string" ? pendingAction.result.outcome : undefined;
-      if (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") {
+      const storedExecutionFailure = readStoredProactiveToolExecutionFailure(pendingAction?.result);
+      if (
+        (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") &&
+        !storedExecutionFailure
+      ) {
         const approvedResult = isRecord(pendingAction?.result?.result)
           ? (pendingAction?.result?.result as Record<string, unknown>)
           : undefined;
@@ -1810,9 +1858,11 @@ export class ChatProactiveService {
         return "continue";
       }
 
-      const failureMessage = pendingAction?.result?.policyReason
-        ? String(pendingAction.result.policyReason)
-        : "Approved action failed during post-approval execution.";
+      const failureMessage =
+        storedExecutionFailure ??
+        (pendingAction?.result?.policyReason
+          ? String(pendingAction.result.policyReason)
+          : "Approved action failed during post-approval execution.");
       this.updateProactiveAction(blockedAction.actionId, {
         status: "failed",
         linkedDurableRunId: run.runId,
@@ -2193,7 +2243,7 @@ export class ChatProactiveService {
         remainingHourBudget = Math.max(0, remainingHourBudget - 1);
         remainingTurnBudget = Math.max(0, remainingTurnBudget - 1);
         throwIfProactiveDurableRunAborted(context?.signal);
-        executed = await this.executeProactiveToolAction(action, run.runId, context?.signal);
+        executed = await this.executeProactiveToolAction(action, run.runId, context?.signal, run.leaseOwnerId);
       }
       if (executed.approvalId) {
         const waiting = this.refreshProactiveRunSummary(proactiveRunId, {
@@ -2623,6 +2673,31 @@ function mapProactiveActionRow(row: ProactiveActionRow, mode?: ChatProactiveMode
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readProactiveToolExecutionFailure(result: ToolInvokeResult): string | undefined {
+  if (
+    result.outcome === "blocked" &&
+    (result.internalResult?.errorKind === "execution_error" || result.policyReason.startsWith("execution error:"))
+  ) {
+    return result.policyReason;
+  }
+  if (result.outcome !== "executed" || !isRecord(result.result)) {
+    return undefined;
+  }
+  return readToolDomainExecutionFailure(result.result, result.policyReason)?.message;
+}
+
+function readStoredProactiveToolExecutionFailure(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) {
+    return undefined;
+  }
+  const outcome = typeof result.outcome === "string" ? result.outcome : undefined;
+  const policyReason = typeof result.policyReason === "string" ? result.policyReason : "allowed";
+  if (outcome && outcome !== "executed") {
+    return policyReason === "allowed" ? `Approved tool action reported ${outcome}.` : policyReason;
+  }
+  return isRecord(result.result) ? readToolDomainExecutionFailure(result.result, policyReason)?.message : undefined;
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {

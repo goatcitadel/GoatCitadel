@@ -573,7 +573,8 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         markMutationCommitted(request);
         return reply.code(201).send(created);
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
   );
@@ -589,13 +590,18 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: params.error.flatten() });
       }
 
-      const revoked = fastify.services.tools.revokeToolGrant(params.data.grantId, request.authActorId);
-      if (!revoked) {
-        return reply.code(404).send({ error: `Tool grant ${params.data.grantId} not found or already revoked` });
-      }
+      try {
+        const revoked = fastify.services.tools.revokeToolGrant(params.data.grantId, request.authActorId);
+        if (!revoked) {
+          return reply.code(404).send({ error: `Tool grant ${params.data.grantId} not found or already revoked` });
+        }
 
-      markMutationCommitted(request);
-      return reply.send({ revoked: true, grantId: params.data.grantId, revokedBy: request.authActorId });
+        markMutationCommitted(request);
+        return reply.send({ revoked: true, grantId: params.data.grantId, revokedBy: request.authActorId });
+      } catch (error) {
+        markMutationCommittedFromError(request, error);
+        return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
+      }
     },
   );
 };

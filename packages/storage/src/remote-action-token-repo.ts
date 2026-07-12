@@ -19,6 +19,7 @@ interface RemoteActionTokenRow {
 }
 
 export const REMOTE_ACTION_CLAIM_FINGERPRINT_MUTATION_KEY = "__remoteActionClaimFingerprint";
+const MAX_REMOTE_ACTION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type RemoteActionTokenClaimOutcome = "claimed" | "resumed" | "fingerprint_mismatch" | "unavailable";
 
@@ -29,14 +30,18 @@ export interface RemoteActionTokenClaimResult {
 
 export class RemoteActionTokenRepository {
   private readonly insertStmt;
+  private readonly insertWithTtlStmt;
   private readonly getStmt;
+  private readonly getPendingFreshStmt;
   private readonly getByHashStmt;
   private readonly listByApprovalStmt;
   private readonly listPendingExpiredStmt;
+  private readonly listPendingExpiredAtDatabaseClockStmt;
   private readonly setStateStmt;
   private readonly consumePendingStmt;
   private readonly claimPendingStmt;
   private readonly expirePendingStmt;
+  private readonly expirePendingIfExpiredStmt;
   private readonly expirePendingByApprovalStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -44,6 +49,14 @@ export class RemoteActionTokenRepository {
       db.dialect === "postgres"
         ? "gc_try_parse_timestamptz(expires_at) > clock_timestamp()"
         : "julianday(expires_at) > julianday('now')";
+    const expiredByDatabaseClockPredicate =
+      db.dialect === "postgres"
+        ? "COALESCE(gc_try_parse_timestamptz(expires_at) <= clock_timestamp(), TRUE)"
+        : "COALESCE(julianday(expires_at) <= julianday('now'), 1)";
+    const databaseNowText =
+      db.dialect === "postgres"
+        ? `to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
     const expiredAtBoundaryPredicate =
       db.dialect === "postgres"
         ? "gc_try_parse_timestamptz(expires_at) <= gc_try_parse_timestamptz(@boundaryAt)"
@@ -57,7 +70,50 @@ export class RemoteActionTokenRepository {
         @createdAt, @expiresAt, @state, NULL, NULL
       )
     `);
+    this.insertWithTtlStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS (
+            SELECT clock_timestamp() AS now_instant
+          )
+          INSERT INTO remote_action_tokens (
+            token_id, token_hash, action_type, approval_id, connector_id, mutation_json,
+            created_at, expires_at, state, consumed_at, consumed_by
+          )
+          SELECT
+            @tokenId, @tokenHash, @actionType, @approvalId, @connectorId, @mutationJson,
+            to_char(now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            to_char(
+              (now_instant + (CAST(@expiresInMs AS DOUBLE PRECISION) * interval '1 millisecond')) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            ),
+            'pending', NULL, NULL
+          FROM database_clock
+        `
+        : `
+          WITH database_clock AS (
+            SELECT julianday('now') AS now_instant
+          )
+          INSERT INTO remote_action_tokens (
+            token_id, token_hash, action_type, approval_id, connector_id, mutation_json,
+            created_at, expires_at, state, consumed_at, consumed_by
+          )
+          SELECT
+            @tokenId, @tokenHash, @actionType, @approvalId, @connectorId, @mutationJson,
+            strftime('%Y-%m-%dT%H:%M:%fZ', now_instant),
+            strftime('%Y-%m-%dT%H:%M:%fZ', now_instant + (CAST(@expiresInMs AS REAL) / 86400000.0)),
+            'pending', NULL, NULL
+          FROM database_clock
+        `,
+    );
     this.getStmt = db.prepare("SELECT * FROM remote_action_tokens WHERE token_id = ?");
+    this.getPendingFreshStmt = db.prepare(`
+      SELECT *
+      FROM remote_action_tokens
+      WHERE token_id = @tokenId
+        AND state = 'pending'
+        AND ${freshExpiryPredicate}
+    `);
     this.getByHashStmt = db.prepare("SELECT * FROM remote_action_tokens WHERE token_hash = ?");
     this.listByApprovalStmt = db.prepare(`
       SELECT *
@@ -73,6 +129,14 @@ export class RemoteActionTokenRepository {
       ORDER BY expires_at ASC, token_id ASC
       LIMIT @limit
     `);
+    this.listPendingExpiredAtDatabaseClockStmt = db.prepare(`
+      SELECT *
+      FROM remote_action_tokens
+      WHERE state = 'pending'
+        AND ${expiredByDatabaseClockPredicate}
+      ORDER BY expires_at ASC, token_id ASC
+      LIMIT @limit
+    `);
     this.setStateStmt = db.prepare(`
       UPDATE remote_action_tokens
       SET state = @state,
@@ -83,22 +147,20 @@ export class RemoteActionTokenRepository {
     this.consumePendingStmt = db.prepare(`
       UPDATE remote_action_tokens
       SET state = 'consumed',
-          consumed_at = @consumedAt,
+          consumed_at = ${databaseNowText},
           consumed_by = @consumedBy
       WHERE token_id = @tokenId
         AND state = 'pending'
-        AND expires_at > @consumedAt
         AND ${freshExpiryPredicate}
     `);
     this.claimPendingStmt = db.prepare(`
       UPDATE remote_action_tokens
       SET state = 'consumed',
-          consumed_at = @consumedAt,
+          consumed_at = ${databaseNowText},
           consumed_by = @consumedBy,
           mutation_json = @mutationJson
       WHERE token_id = @tokenId
         AND state = 'pending'
-        AND expires_at > @consumedAt
         AND ${freshExpiryPredicate}
     `);
     this.expirePendingStmt = db.prepare(`
@@ -106,6 +168,13 @@ export class RemoteActionTokenRepository {
       SET state = 'expired'
       WHERE token_id = @tokenId
         AND state = 'pending'
+    `);
+    this.expirePendingIfExpiredStmt = db.prepare(`
+      UPDATE remote_action_tokens
+      SET state = 'expired'
+      WHERE token_id = @tokenId
+        AND state = 'pending'
+        AND ${expiredByDatabaseClockPredicate}
     `);
     this.expirePendingByApprovalStmt = db.prepare(`
       UPDATE remote_action_tokens
@@ -157,12 +226,58 @@ export class RemoteActionTokenRepository {
     return this.get(record.tokenId);
   }
 
+  /** Creates a pending token whose issued-at instant and relative TTL are owned by the database clock. */
+  public createWithTtl(input: {
+    tokenId?: string;
+    tokenHash: string;
+    actionType: RemoteActionTokenRecord["actionType"];
+    approvalId?: string;
+    connectorId: string;
+    mutation?: Record<string, unknown>;
+    expiresInMs: number;
+  }): RemoteActionTokenRecord {
+    const tokenId = input.tokenId ?? randomUUID();
+    const tokenHash = input.tokenHash.trim();
+    const connectorId = input.connectorId.trim();
+    if (!tokenHash) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "tokenHash" });
+    }
+    if (!connectorId) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "connectorId" });
+    }
+    const expiresInMs = Math.floor(input.expiresInMs);
+    if (!Number.isFinite(input.expiresInMs) || expiresInMs < 1) {
+      throw new ValidationError({ message: "Remote action token TTL must be a positive duration." });
+    }
+    if (expiresInMs > MAX_REMOTE_ACTION_TOKEN_TTL_MS) {
+      throw new ValidationError({ message: "Remote action token TTL cannot exceed 24 hours." });
+    }
+    const mutation = normalizeObject(input.mutation);
+    delete mutation[REMOTE_ACTION_CLAIM_FINGERPRINT_MUTATION_KEY];
+    this.insertWithTtlStmt.run({
+      tokenId,
+      tokenHash,
+      actionType: input.actionType,
+      approvalId: input.approvalId?.trim() || null,
+      connectorId,
+      mutationJson: JSON.stringify(mutation),
+      expiresInMs,
+    });
+    return this.get(tokenId);
+  }
+
   public get(tokenId: string): RemoteActionTokenRecord {
     const row = this.getStmt.get(tokenId) as RemoteActionTokenRow | undefined;
     if (!row) {
       throw new NotFoundError({ entity: "Remote action token", id: tokenId });
     }
     return mapRow(row);
+  }
+
+  /** Returns a pending token only while the database clock says it is fresh. */
+  public findPendingFresh(tokenId: string): RemoteActionTokenRecord | undefined {
+    const row = this.getPendingFreshStmt.get({ tokenId }) as RemoteActionTokenRow | undefined;
+    return row ? mapRow(row) : undefined;
   }
 
   public findByTokenHash(tokenHash: string): RemoteActionTokenRecord | undefined {
@@ -184,6 +299,13 @@ export class RemoteActionTokenRepository {
     }
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(1000, limit)) : 100;
     return (this.listPendingExpiredStmt.all({ boundaryAt, limit: boundedLimit }) as RemoteActionTokenRow[]).map(mapRow);
+  }
+
+  public listPendingExpired(limit = 100): RemoteActionTokenRecord[] {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(1000, limit)) : 100;
+    return (this.listPendingExpiredAtDatabaseClockStmt.all({ limit: boundedLimit }) as RemoteActionTokenRow[]).map(
+      mapRow,
+    );
   }
 
   /** Expire every still-pending token for a terminal approval without overwriting a consumed winner. */
@@ -223,7 +345,6 @@ export class RemoteActionTokenRepository {
   ): RemoteActionTokenRecord | undefined {
     const result = this.consumePendingStmt.run({
       tokenId,
-      consumedAt: input.consumedAt,
       consumedBy: input.consumedBy,
     });
     return (result.changes ?? 0) > 0 ? this.get(tokenId) : undefined;
@@ -256,7 +377,6 @@ export class RemoteActionTokenRepository {
     };
     const result = this.claimPendingStmt.run({
       tokenId,
-      consumedAt: input.consumedAt,
       consumedBy: input.consumedBy,
       mutationJson: JSON.stringify(mutation),
     });
@@ -286,6 +406,12 @@ export class RemoteActionTokenRepository {
   public expirePending(tokenId: string): RemoteActionTokenRecord | undefined {
     const result = this.expirePendingStmt.run({ tokenId });
     return (result.changes ?? 0) > 0 ? this.get(tokenId) : undefined;
+  }
+
+  /** Expires a pending token only when the database clock owns that decision. */
+  public expirePendingIfExpired(tokenId: string): RemoteActionTokenRecord {
+    this.expirePendingIfExpiredStmt.run({ tokenId });
+    return this.get(tokenId);
   }
 
   /**

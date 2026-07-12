@@ -5,6 +5,7 @@ import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-s
 
 const APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS = 5 * 60 * 1000;
 const inFlightByStorage = new WeakMap<object, Map<string, Promise<ToolInvokeResult>>>();
+type ApprovedSideEffectBoundaryState = "crossed" | "local_mutation" | "not_required" | "not_crossed" | "unknown";
 
 export interface ApprovedExternalRuntimeSideEffectInput {
   storage: Pick<
@@ -101,19 +102,31 @@ async function executeApprovedExternalRuntimeSideEffectOnce(
     if (settled?.resolutionStatus && settled.resolutionStatus !== "pending") {
       return toolInvokeResultFromPendingAction(settled);
     }
-    throw new Error(`Approved external runtime action ${input.approvalId} is already executing on another worker.`);
+    throw new Error(`Approved side effect action ${input.approvalId} is already executing on another worker.`);
   }
 
   const replayState = reconciledResumeState ?? sideEffect.claim.resumeState;
+  const reconciledRun = sideEffect.claim.sideEffectRunId
+    ? input.storage.externalSideEffectRuns.get(sideEffect.claim.sideEffectRunId)
+    : undefined;
+  const externalBoundaryState: ApprovedSideEffectBoundaryState = reconciledRun?.externalCallStartedAt
+    ? usesApprovedExternalRuntimeAdapter(input.request)
+      ? "crossed"
+      : "local_mutation"
+    : reconciledRun?.status === "unknown_external_outcome"
+      ? "not_crossed"
+      : "unknown";
   const result: ToolInvokeResult = {
     outcome: "blocked",
     policyReason:
-      `Approved external runtime outcome requires manual reconciliation; automatic replay was blocked ` +
+      `Approved side effect outcome requires manual reconciliation; automatic replay was blocked ` +
       `(${replayState}).`,
     auditEventId: randomUUID(),
     result: {
       approvalId: input.approvalId,
-      externalRuntime: true,
+      sideEffectManaged: true,
+      externalBoundaryState,
+      externalRuntime: externalBoundaryState === "crossed",
       manualReconciliationRequired: true,
       replayOutcome: sideEffect.claim.replayOutcome,
       resumeState: replayState,
@@ -129,7 +142,10 @@ function commitApprovedResult(
     routePath: string;
     idempotencyKey: string;
     actorScope: string;
+    claimToken?: string;
     sideEffectRunId?: string;
+    externalCallStarted: boolean;
+    externalCallNotRequired: boolean;
   },
   result: ToolInvokeResult,
 ): void {
@@ -144,13 +160,17 @@ function commitApprovedResult(
         if (pending?.resolutionStatus !== "pending" && !terminalMatches) {
           throw new Error(`Approved action ${input.approvalId} already has conflicting terminal truth.`);
         }
-        input.storage.mutationIdempotency.markCompleted({
+        const mutationSettled = input.storage.mutationIdempotency.markCompleted({
           method: "POST",
           routePath: claim.routePath,
           idempotencyKey: claim.idempotencyKey,
           actorScope: claim.actorScope,
           updatedAt: new Date().toISOString(),
+          ...(claim.claimToken ? { claimToken: claim.claimToken } : {}),
         });
+        if (claim.claimToken && mutationSettled !== true) {
+          throw new Error(`Approved action ${input.approvalId} lost mutation ownership before completion.`);
+        }
         if (claim.sideEffectRunId) {
           input.storage.externalSideEffectRuns.markCompleted(
             claim.sideEffectRunId,
@@ -164,7 +184,7 @@ function commitApprovedResult(
             result.outcome === "executed" ? "executed" : "failed",
             toolInvokeResultRecord(result),
           );
-          appendApprovedActionEvent(input, result);
+          appendApprovedActionEvent(input, result, readApprovedSideEffectBoundaryState(input.request, claim));
         }
       });
       return;
@@ -172,7 +192,7 @@ function commitApprovedResult(
       lastError = error;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("Approved external runtime result commit failed.");
+  throw lastError instanceof Error ? lastError : new Error("Approved side effect result commit failed.");
 }
 
 function persistManualReconciliation(
@@ -187,12 +207,16 @@ function persistManualReconciliation(
       return;
     }
     input.storage.pendingApprovalActions.markResolved(input.approvalId, "failed", toolInvokeResultRecord(result));
-    appendApprovedActionEvent(input, result);
+    appendApprovedActionEvent(input, result, readResultExternalBoundaryState(result));
   });
   return resolved;
 }
 
-function appendApprovedActionEvent(input: ApprovedExternalRuntimeSideEffectInput, result: ToolInvokeResult): void {
+function appendApprovedActionEvent(
+  input: ApprovedExternalRuntimeSideEffectInput,
+  result: ToolInvokeResult,
+  externalBoundaryState: ApprovedSideEffectBoundaryState,
+): void {
   input.storage.approvalEvents.append({
     approvalId: input.approvalId,
     eventType: "approved_action_executed",
@@ -202,9 +226,35 @@ function appendApprovedActionEvent(input: ApprovedExternalRuntimeSideEffectInput
       outcome: result.outcome,
       policyReason: result.policyReason,
       auditEventId: result.auditEventId,
-      externalRuntime: true,
+      sideEffectManaged: true,
+      externalBoundaryState,
+      externalRuntime: externalBoundaryState === "crossed",
     },
   });
+}
+
+function readApprovedSideEffectBoundaryState(
+  request: ToolInvokeRequest,
+  claim: {
+    externalCallStarted: boolean;
+    externalCallNotRequired: boolean;
+  },
+): ApprovedSideEffectBoundaryState {
+  if (claim.externalCallStarted) {
+    return usesApprovedExternalRuntimeAdapter(request) ? "crossed" : "local_mutation";
+  }
+  return claim.externalCallNotRequired ? "not_required" : "unknown";
+}
+
+function readResultExternalBoundaryState(result: ToolInvokeResult): ApprovedSideEffectBoundaryState {
+  const value = isRecord(result.result) ? result.result.externalBoundaryState : undefined;
+  return value === "crossed" || value === "local_mutation" || value === "not_required" || value === "not_crossed"
+    ? value
+    : "unknown";
+}
+
+function usesApprovedExternalRuntimeAdapter(request: ToolInvokeRequest): boolean {
+  return request.externalRuntime === true || request.toolName === "mcp.invoke";
 }
 
 function pendingResultMatches(pending: PendingApprovalAction, result: ToolInvokeResult): boolean {
@@ -226,41 +276,34 @@ function resolveManualReconciliationState(
   if (run.status === "unknown_external_outcome") {
     return "manual_review_unknown_external_outcome";
   }
-  if (run.status === "claimed_not_sent" && isStaleSideEffectRun(run.updatedAt)) {
-    const reconciled = input.storage.externalSideEffectRuns.markFailureIfStatus(
+  if (run.status === "claimed_not_sent") {
+    const reconciled = input.storage.externalSideEffectRuns.markFailureIfStatusStale(
       run.runId,
       "claimed_not_sent",
+      APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS,
       {
         status: "unknown_external_outcome",
         errorText:
-          "Approved external runtime stale pre-boundary claim lost its execution owner; automatic replay is blocked.",
+          "Approved side effect stale pre-boundary claim lost its execution owner; automatic replay is blocked.",
       },
-      new Date().toISOString(),
     );
     return reconciled.status === "unknown_external_outcome" ? "manual_review_unknown_external_outcome" : undefined;
   }
   if (run.status !== "external_call_started") {
     return undefined;
   }
-  if (!isStaleSideEffectRun(run.updatedAt)) {
-    return undefined;
-  }
-  const reconciled = input.storage.externalSideEffectRuns.markFailureIfStatus(
+  const reconciled = input.storage.externalSideEffectRuns.markFailureIfStatusStale(
     run.runId,
     "external_call_started",
+    APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS,
     {
       status: "unknown_external_outcome",
-      errorText:
-        "Approved external runtime crossed the external boundary but lost its execution owner; automatic replay is blocked.",
+      errorText: usesApprovedExternalRuntimeAdapter(input.request)
+        ? "Approved external runtime crossed the external boundary but lost its execution owner; automatic replay is blocked."
+        : "Approved local mutation crossed its side-effect boundary but lost its execution owner; automatic replay is blocked.",
     },
-    new Date().toISOString(),
   );
   return reconciled.status === "unknown_external_outcome" ? "manual_review_unknown_external_outcome" : undefined;
-}
-
-function isStaleSideEffectRun(updatedAtValue: string): boolean {
-  const updatedAt = Date.parse(updatedAtValue);
-  return !Number.isFinite(updatedAt) || Date.now() - updatedAt >= APPROVED_EXTERNAL_RUNTIME_IN_PROGRESS_STALE_MS;
 }
 
 function toolInvokeResultFromPendingAction(pending: PendingApprovalAction): ToolInvokeResult {
@@ -271,7 +314,7 @@ function toolInvokeResultFromPendingAction(pending: PendingApprovalAction): Tool
     policyReason:
       typeof result.policyReason === "string"
         ? result.policyReason
-        : `Approved external runtime action is already ${pending.resolutionStatus ?? "resolved"}.`,
+        : `Approved side effect action is already ${pending.resolutionStatus ?? "resolved"}.`,
     auditEventId: typeof result.auditEventId === "string" ? result.auditEventId : randomUUID(),
     result: isRecord(result.result) ? result.result : undefined,
   };

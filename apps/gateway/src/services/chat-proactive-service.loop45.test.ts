@@ -372,7 +372,13 @@ function createHarness(
     hasRunningTurn: options.hasRunningTurn ?? (() => false),
     getSessionIdleSeconds: options.idleSeconds ?? (() => 600),
     listChatMessages: async () => state.messages,
-    invokeTool,
+    invokeTool: async (request, options) => {
+      const result = await invokeTool(request);
+      if (result?.outcome === "executed") {
+        options?.externalSideEffect?.markStarted();
+      }
+      return result;
+    },
     detectDelegationRoles: options.detectDelegationRoles ?? (() => []),
     createDurableRun: (input) => {
       const run = createDurableRun({
@@ -519,6 +525,15 @@ function createStorage(state: HarnessState) {
     },
     durableRuns: {
       getRun: (runId: string) => state.durableRuns.get(runId)!,
+      lockFreshActiveLeaseForUpdate: (runId: string, expectedLeaseOwnerId: string) => {
+        const run = state.durableRuns.get(runId);
+        return run?.status === "running" &&
+          run.leaseOwnerId === expectedLeaseOwnerId &&
+          run.leaseExpiresAt &&
+          Date.parse(run.leaseExpiresAt) > Date.now()
+          ? run
+          : undefined;
+      },
       updateRun: (input: {
         runId: string;
         status: DurableRunRecord["status"];
@@ -527,6 +542,7 @@ function createStorage(state: HarnessState) {
         startedAt?: string;
         updatedAt?: string;
         lastError?: string;
+        clearLease?: boolean;
       }) => {
         const current = state.durableRuns.get(input.runId)!;
         const next = {
@@ -537,6 +553,9 @@ function createStorage(state: HarnessState) {
           finishedAt: input.finishedAt ?? current.finishedAt,
           lastError: input.lastError ?? current.lastError,
           updatedAt: input.updatedAt ?? new Date().toISOString(),
+          ...(input.clearLease
+            ? { leaseOwnerId: undefined, leaseHeartbeatAt: undefined, leaseExpiresAt: undefined }
+            : {}),
         };
         state.durableRuns.set(next.runId, next);
         return next;

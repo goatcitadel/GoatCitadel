@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { Storage } from "@goatcitadel/storage";
-import { executePreparedAgentChatTurnBackground, type ChatTurnDispatchHost } from "./chat-turn-dispatch-service.js";
+import {
+  buildDurableChatCanonicalWriteFence,
+  executePreparedAgentChatTurnBackground,
+  type ChatTurnDispatchHost,
+} from "./chat-turn-dispatch-service.js";
 import { ChatSteerService } from "./chat-steer-service.js";
 import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
@@ -15,6 +19,60 @@ afterEach(() => {
 });
 
 describe("durable Chat canonical write lease fence", () => {
+  it("rolls back canonical writes when the database lease expires during the fenced work", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-chat-lease-expiry-"));
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    cleanups.push(() => {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const runId = "run-expire-during-write";
+    const leaseOwnerId = "worker-expiring";
+    const now = new Date();
+    storage.durableRuns.createRun({
+      runId,
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      startedAt: now.toISOString(),
+      leaseOwnerId,
+      leaseHeartbeatAt: now.toISOString(),
+      leaseExpiresAt: new Date(now.getTime() + 1_000).toISOString(),
+      now: now.toISOString(),
+    });
+    const lockFreshActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockFreshActiveLeaseForUpdate");
+    const fence = buildDurableChatCanonicalWriteFence(
+      { storage } as ChatTurnDispatchHost,
+      { turnId: "turn-expire-during-write" } as never,
+      runId,
+      {
+        streamRegistration: { requireActive: vi.fn() } as never,
+        durableLeaseOwnerId: leaseOwnerId,
+      },
+    );
+
+    expect(() =>
+      fence?.(() => {
+        storage.chatMessages.upsert({
+          messageId: "assistant-expired-write",
+          sessionId: "session-expired-write",
+          role: "assistant",
+          actorType: "agent",
+          actorId: "assistant",
+          content: "must roll back",
+          timestamp: now.toISOString(),
+        });
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, 1_200);
+      }),
+    ).toThrow(/lease.*no longer active/i);
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledTimes(2);
+    expect(storage.chatMessages.get("assistant-expired-write")).toBeUndefined();
+  });
+
   it("rolls back stale worker assistant, trace, and leaf writes after lease takeover", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-chat-lease-fence-"));
     const storage = new Storage({
@@ -64,6 +122,8 @@ describe("durable Chat canonical write lease fence", () => {
     storage.chatSessionBranchState.setActiveLeaf(sessionId, parentTurnId, heartbeatAt);
 
     const eventIngest = new EventIngestService(storage);
+    const lockFreshActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockFreshActiveLeaseForUpdate");
+    const lockActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockActiveLeaseForUpdate");
     const streamRegistry = new ChatTurnExecutionRegistry();
     const streamRegistration = streamRegistry.registerActiveStream(sessionId, turnId, 0, runId);
     const persistChatStreamChunk = vi.fn();
@@ -205,6 +265,8 @@ describe("durable Chat canonical write lease fence", () => {
     ).rejects.toMatchObject({ name: "DurableWorkerInterruptionError" });
 
     expect(storage.durableRuns.getRun(runId)).toMatchObject({ status: "running", leaseOwnerId: "worker-b" });
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(runId, "worker-a");
+    expect(lockActiveLeaseForUpdate).not.toHaveBeenCalled();
     expect(storage.chatMessages.get(assistantMessageId)).toBeUndefined();
     expect(storage.chatTurnTraces.get(turnId)).toMatchObject({ status: "running", assistantMessageId: undefined });
     expect(storage.chatSessionBranchState.get(sessionId)?.activeLeafTurnId).toBe(parentTurnId);

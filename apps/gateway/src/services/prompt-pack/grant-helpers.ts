@@ -15,14 +15,7 @@ export function listActivePromptPackToolGrants(
   scope: ToolGrantScope,
   scopeRef: string,
 ): ToolGrantRecord[] {
-  const grantRepo = storage.toolGrants as {
-    listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
-    list: (scope?: ToolGrantScope, scopeRef?: string, limit?: number) => ToolGrantRecord[];
-  };
-  if (grantRepo.listActive) {
-    return grantRepo.listActive(scope, scopeRef);
-  }
-  return grantRepo.list(scope, scopeRef, Number.MAX_SAFE_INTEGER).filter(isPromptPackToolGrantActive);
+  return storage.toolGrants.listActive(scope, scopeRef);
 }
 
 export function listActivePromptPackWorkspaceGrants(
@@ -58,22 +51,6 @@ export function promptPackReadGrantConstraintsCover(
 
 function isPromptPackWindowsAbsolutePath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value.trim());
-}
-
-function isPromptPackToolGrantActive(grant: ToolGrantRecord): boolean {
-  if (grant.revokedAt) {
-    return false;
-  }
-  if (grant.expiresAt) {
-    const expiry = Date.parse(grant.expiresAt);
-    if (Number.isFinite(expiry) && expiry <= Date.now()) {
-      return false;
-    }
-  }
-  if (grant.grantType === "one_time") {
-    return (grant.usesRemaining ?? 0) > 0;
-  }
-  return true;
 }
 
 function promptPackPathIsWithinRoot(root: string, target: string): boolean {

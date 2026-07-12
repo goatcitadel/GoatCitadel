@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ChatSendMessageRequest,
   ChatStreamChunkDraft,
@@ -41,11 +41,13 @@ describe("chat-durable-run-service", () => {
       prepared,
       input,
       "chat_thread_turn_appended",
+      { runId: "run-1" },
     );
 
     expect(created).toEqual(run);
     expect(createInputs).toEqual([
       expect.objectContaining({
+        runId: "run-1",
         workflowKey: "chat.turn.execute",
         payload: {
           requestContent: input.content,
@@ -98,6 +100,30 @@ describe("chat-durable-run-service", () => {
 
     expect(run).toBeUndefined();
     expect(created).toBe(false);
+  });
+
+  it("signals durable commit before a pre-yield stream persistence failure escapes", () => {
+    const markCommitted = vi.fn();
+
+    expect(() =>
+      beginDurableChatRun(
+        {
+          shouldUseDurableExecution: true,
+          createDurableRun: () => createRun("run-commit-signal", "queued"),
+          buildDurablePayloadRecord: () => ({}),
+          persistChatStreamChunk: () => {
+            throw new Error("stream chunk persistence unavailable");
+          },
+          requestDurableRunProcessing: vi.fn(),
+        },
+        createPreparedTurn(),
+        createSendRequest(),
+        "chat_thread_turn_retried",
+        { mutationLifecycle: { markCommitted } },
+      ),
+    ).toThrow("stream chunk persistence unavailable");
+
+    expect(markCommitted).toHaveBeenCalledTimes(1);
   });
 
   it("marks waiting traces as durable waiting checkpoints", () => {
@@ -518,6 +544,28 @@ describe("chat-durable-run-service", () => {
         },
       },
     ]);
+  });
+
+  it("does not finalize after the database reports that the expected lease expired", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    state.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-04-10T00:00:00.000Z",
+      leaseExpiresAt: "2999-04-10T00:05:00.000Z",
+    });
+    const lockFreshActiveLeaseForUpdate = vi.fn(() => undefined);
+    Object.assign(state.deps.durableRuns, { lockFreshActiveLeaseForUpdate });
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace, "worker-a");
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith("run-complete", "worker-a");
+    expect(state.runs.get("run-complete")?.status).toBe("running");
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([]);
   });
 
   it("records completed checkpoints with tool and artifact summaries", () => {

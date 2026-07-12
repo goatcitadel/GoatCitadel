@@ -85,6 +85,27 @@ describe("task repositories", () => {
     assert.equal(repos.subagents.activeCount(), 0);
   });
 
+  it("creates internally-owned tasks with a stable caller-supplied identity", () => {
+    const repos = createRepos();
+    const task = repos.tasks.create(
+      { title: "Recover durable delegation", workspaceId: "workspace-a" },
+      "2026-07-11T00:00:00.000Z",
+      { taskId: " delegation-task-stable " },
+    );
+
+    assert.equal(task.taskId, "delegation-task-stable");
+    assert.equal(task.workspaceId, "workspace-a");
+    assert.equal(repos.tasks.get("delegation-task-stable").title, "Recover durable delegation");
+    assert.throws(
+      () => repos.tasks.create({ title: "Missing identity" }, undefined, { taskId: "   " }),
+      /taskId is required/,
+    );
+    assert.throws(
+      () => repos.tasks.create({ title: "Duplicate identity" }, undefined, { taskId: "delegation-task-stable" }),
+      /UNIQUE|constraint/i,
+    );
+  });
+
   it("supports composite cursors and explicit assignment clearing", () => {
     const repos = createRepos();
     const timestamp = "2026-02-27T12:00:00.000Z";

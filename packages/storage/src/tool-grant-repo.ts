@@ -23,10 +23,32 @@ interface ToolGrantRow {
 export class ToolGrantRepository {
   private readonly createStmt;
   private readonly getStmt;
+  private readonly findActiveStmt;
   private readonly revokeStmt;
   private readonly consumeStmt;
+  private readonly databaseTtlWindowStmt;
+  private readonly isFutureExpiryStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const expiryIsActive =
+      db.dialect === "postgres"
+        ? "gc_try_parse_timestamptz(expires_at) > clock_timestamp()"
+        : "julianday(expires_at) > julianday('now')";
+    const databaseNow = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
+    const requestedExpiry =
+      db.dialect === "postgres" ? "gc_try_parse_timestamptz(@expiresAt)" : "julianday(@expiresAt)";
+    const databaseNowText =
+      db.dialect === "postgres"
+        ? `to_char(statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+    const databaseExpiryText =
+      db.dialect === "postgres"
+        ? `to_char(
+            (statement_timestamp() + (CAST(@ttlMs AS DOUBLE PRECISION) * INTERVAL '1 millisecond'))
+              AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          )`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', julianday('now') + (CAST(@ttlMs AS REAL) / 86400000.0))";
     this.createStmt = db.prepare(`
       INSERT INTO tool_grants (
         grant_id, tool_pattern, decision, scope, scope_ref, grant_type, constraints_json,
@@ -37,6 +59,15 @@ export class ToolGrantRepository {
       )
     `);
     this.getStmt = db.prepare("SELECT * FROM tool_grants WHERE grant_id = ?");
+    this.findActiveStmt = db.prepare(`
+      SELECT *
+      FROM tool_grants
+      WHERE grant_id = ?
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR ${expiryIsActive})
+        AND (uses_remaining IS NULL OR uses_remaining > 0)
+      LIMIT 1
+    `);
     this.revokeStmt = db.prepare(`
       UPDATE tool_grants
       SET revoked_at = @revokedAt,
@@ -45,10 +76,26 @@ export class ToolGrantRepository {
     `);
     this.consumeStmt = db.prepare(`
       UPDATE tool_grants
-      SET uses_remaining = uses_remaining - 1
+      SET uses_remaining = CASE
+        WHEN grant_type = 'one_time' THEN uses_remaining - 1
+        ELSE uses_remaining
+      END
       WHERE grant_id = @grantId
-        AND uses_remaining IS NOT NULL
-        AND uses_remaining > 0
+        AND decision = 'allow'
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR ${expiryIsActive})
+        AND (
+          grant_type <> 'one_time'
+          OR (uses_remaining IS NOT NULL AND uses_remaining > 0)
+        )
+    `);
+    this.databaseTtlWindowStmt = db.prepare(`
+      SELECT ${databaseNowText} AS created_at, ${databaseExpiryText} AS expires_at
+    `);
+    this.isFutureExpiryStmt = db.prepare(`
+      SELECT 1 AS valid
+      WHERE ${requestedExpiry} IS NOT NULL
+        AND ${requestedExpiry} > ${databaseNow}
     `);
   }
 
@@ -64,20 +111,59 @@ export class ToolGrantRepository {
       });
     }
     const lifetime = normalizeGrantLifetime(input, grantType, now);
-    this.createStmt.run({
-      grantId,
-      toolPattern: input.toolPattern.trim(),
-      decision: input.decision,
-      scope: input.scope,
-      scopeRef,
-      grantType,
-      constraintsJson: input.constraints ? JSON.stringify(input.constraints) : null,
-      createdBy: input.createdBy,
-      createdAt: now,
-      expiresAt: lifetime.expiresAt,
-      usesRemaining: lifetime.usesRemaining,
+    return this.db.transaction("immediate", () => {
+      if (grantType === "ttl" && !this.isFutureExpiryStmt.get({ expiresAt: lifetime.expiresAt })) {
+        throw new ValidationError({
+          code: "FIELD_INVALID",
+          field: "expiresAt",
+          message: "ttl grants require a future expiresAt according to the database clock.",
+        });
+      }
+      this.createStmt.run({
+        grantId,
+        toolPattern: input.toolPattern.trim(),
+        decision: input.decision,
+        scope: input.scope,
+        scopeRef,
+        grantType,
+        constraintsJson: input.constraints ? JSON.stringify(input.constraints) : null,
+        createdBy: input.createdBy,
+        createdAt: now,
+        expiresAt: lifetime.expiresAt,
+        usesRemaining: lifetime.usesRemaining,
+      });
+      return this.get(grantId);
     });
-    return this.get(grantId);
+  }
+
+  public createTtlForDuration(
+    input: Omit<ToolGrantCreateInput, "grantType" | "expiresAt" | "usesRemaining">,
+    ttlMs: number,
+  ): ToolGrantRecord {
+    const normalizedTtlMs = Math.floor(ttlMs);
+    if (!Number.isFinite(normalizedTtlMs) || normalizedTtlMs <= 0) {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "ttlMs",
+        message: "ttlMs must be a positive duration.",
+      });
+    }
+    return this.db.transaction("immediate", () => {
+      const window = this.databaseTtlWindowStmt.get({ ttlMs: normalizedTtlMs }) as
+        | { created_at: string; expires_at: string }
+        | undefined;
+      if (!window?.created_at || !window.expires_at) {
+        throw new Error("Database did not return a tool-grant TTL window.");
+      }
+      return this.create(
+        {
+          ...input,
+          grantType: "ttl",
+          expiresAt: window.expires_at,
+        },
+        window.created_at,
+      );
+    });
   }
 
   public get(grantId: string): ToolGrantRecord {
@@ -87,6 +173,12 @@ export class ToolGrantRepository {
       throw new NotFoundError({ entity: "Tool grant", id: grantId });
     }
     return mapRow(row);
+  }
+
+  public findActive(grantId: string): ToolGrantRecord | undefined {
+    const row = this.findActiveStmt.get(grantId);
+    assertToolGrantRow(row);
+    return row ? mapRow(row) : undefined;
   }
 
   public list(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
@@ -116,10 +208,15 @@ export class ToolGrantRepository {
   }
 
   public listActive(scope?: ToolGrantScope, scopeRef?: string, now = new Date().toISOString()): ToolGrantRecord[] {
-    const params: Record<string, unknown> = { now };
+    void now;
+    const expiryIsActive =
+      this.db.dialect === "postgres"
+        ? "gc_try_parse_timestamptz(expires_at) > statement_timestamp()"
+        : "julianday(expires_at) > julianday('now')";
+    const params: Record<string, unknown> = {};
     const clauses: string[] = [
       "revoked_at IS NULL",
-      "(expires_at IS NULL OR expires_at > @now)",
+      `(expires_at IS NULL OR ${expiryIsActive})`,
       "(uses_remaining IS NULL OR uses_remaining > 0)",
     ];
     if (scope) {
@@ -157,13 +254,11 @@ export class ToolGrantRepository {
   }
 
   public consumeOne(grantId: string): boolean {
-    const grant = this.get(grantId);
-    if (grant.grantType !== "one_time") {
-      return true;
-    }
-    if (grant.revokedAt || (grant.usesRemaining ?? 0) <= 0) {
-      return false;
-    }
+    // Preserve the repository's NotFound contract, then let one conditional
+    // UPDATE decide revocation, expiry, grant type, and one-time decrement at
+    // the database serialization point. A revoke committed after this read is
+    // therefore re-checked before consumption succeeds.
+    this.get(grantId);
     const result = this.consumeStmt.run({ grantId });
     return Number(result.changes ?? 0) > 0;
   }
@@ -174,6 +269,7 @@ function normalizeGrantLifetime(
   grantType: ToolGrantType,
   now: string,
 ): { expiresAt: string | null; usesRemaining: number | null } {
+  void now;
   if (grantType === "one_time") {
     if (input.expiresAt) {
       throw new ValidationError({
@@ -200,12 +296,11 @@ function normalizeGrantLifetime(
       });
     }
     const expiresAtMs = Date.parse(input.expiresAt);
-    const nowMs = Date.parse(now);
-    if (!Number.isFinite(expiresAtMs) || !Number.isFinite(nowMs) || expiresAtMs <= nowMs) {
+    if (!Number.isFinite(expiresAtMs)) {
       throw new ValidationError({
         code: "FIELD_INVALID",
         field: "expiresAt",
-        message: "ttl grants require a future expiresAt.",
+        message: "ttl grants require a valid expiresAt.",
       });
     }
     if (input.usesRemaining !== undefined) {

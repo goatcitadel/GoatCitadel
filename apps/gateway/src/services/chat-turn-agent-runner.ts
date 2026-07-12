@@ -169,6 +169,7 @@ import {
 } from "./chat-agent-budget.js";
 import { buildPromptContextBudgetReceipt } from "./chat-agent-prompt-budget-receipt.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
+import { isDurableControlError } from "./durable-control-error.js";
 import {
   classifyBrowserToolResult,
   extractBrowserToolUrl,
@@ -4538,10 +4539,7 @@ export class ChatTurnAgentRunner {
         },
       };
     } catch (error) {
-      if (
-        error instanceof Error &&
-        (error.name === "DurableWorkerInterruptionError" || error.name === "DurableRunPausedError")
-      ) {
+      if (isDurableControlError(error)) {
         throw error;
       }
       if (MCP_BROWSER_FALLBACK_TOOL_NAMES.has(preflight.toolName)) {

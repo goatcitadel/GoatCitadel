@@ -613,6 +613,52 @@ describe("composeChatRouteDependencies", () => {
     ).toThrow("Specialist candidate does not belong to this session.");
   });
 
+  it("forwards streamed Chat mutation lifecycle signals into the runtime options", () => {
+    const gateway = createGateway();
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+    const controller = new AbortController();
+    const mutationLifecycle = { markCommitted: vi.fn() };
+
+    deps.chatMessages.agentSendChatMessageStream(
+      "session-1",
+      { content: "send" },
+      controller.signal,
+      mutationLifecycle,
+    );
+    deps.chatMessages.retryChatTurnStream(
+      "session-1",
+      "turn-1",
+      { content: "retry" },
+      controller.signal,
+      mutationLifecycle,
+    );
+    deps.chatMessages.editChatTurnStream(
+      "session-1",
+      "turn-1",
+      { content: "edit" },
+      controller.signal,
+      mutationLifecycle,
+    );
+
+    expect(gateway.chatTurnRuntime.agentSendChatMessageStream).toHaveBeenCalledWith(
+      "session-1",
+      { content: "send" },
+      { abortSignal: controller.signal, mutationLifecycle },
+    );
+    expect(gateway.chatTurnRuntime.retryChatTurnStream).toHaveBeenCalledWith(
+      "session-1",
+      "turn-1",
+      { content: "retry" },
+      { abortSignal: controller.signal, mutationLifecycle },
+    );
+    expect(gateway.chatTurnRuntime.editChatTurnStream).toHaveBeenCalledWith(
+      "session-1",
+      "turn-1",
+      { content: "edit" },
+      { abortSignal: controller.signal, mutationLifecycle },
+    );
+  });
+
   it("rejects explicit Citadel and workspace mismatches before chat project services run", () => {
     const gateway = createGateway();
     const deps = composeChatRouteDependencies(gateway as never) as any;

@@ -1,5 +1,7 @@
 import type { McpElicitationRequest } from "./mcp.js";
 
+export const APPROVAL_EXPIRY_ACTOR_ID = "system:approval-expiry" as const;
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "edited";
 export type ApprovalExplanationStatus = "not_requested" | "pending" | "completed" | "failed";
 

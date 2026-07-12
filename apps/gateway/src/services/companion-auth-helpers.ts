@@ -45,9 +45,11 @@ export function mapCompanionSessionRow(row: Record<string, unknown>): CompanionS
     sessionId: String(row.session_id ?? ""),
     grantId: String(row.grant_id ?? ""),
     accessTokenHash: String(row.access_token_hash ?? ""),
-    accessTokenExpiresAt: String(row.access_token_expires_at ?? new Date().toISOString()),
+    // Required credential expiries have no permissive fallback. Missing or
+    // malformed persisted values are rejected by the activity predicates.
+    accessTokenExpiresAt: typeof row.access_token_expires_at === "string" ? row.access_token_expires_at : "",
     refreshTokenHash: String(row.refresh_token_hash ?? ""),
-    refreshTokenExpiresAt: String(row.refresh_token_expires_at ?? new Date().toISOString()),
+    refreshTokenExpiresAt: typeof row.refresh_token_expires_at === "string" ? row.refresh_token_expires_at : "",
     signingPublicKeyPem: String(row.signing_public_key_pem ?? ""),
     signatureAlgorithm: row.signature_algorithm === "ed25519" ? "ed25519" : "ed25519",
     createdAt: String(row.created_at ?? new Date().toISOString()),
@@ -95,17 +97,17 @@ export function toCompanionSessionAdminRecord(session: CompanionSessionRecord): 
 }
 
 export function isCompanionSessionCurrentlyActive(session: CompanionSessionRecord, nowIso: string): boolean {
-  if (session.revokedAt || session.grantRevokedAt) {
+  if (session.revokedAt !== undefined || session.grantRevokedAt !== undefined) {
     return false;
   }
   const now = Date.parse(nowIso);
   const accessExpiresAt = Date.parse(session.accessTokenExpiresAt);
-  if (!Number.isFinite(accessExpiresAt) || accessExpiresAt <= now) {
+  if (!Number.isFinite(now) || !Number.isFinite(accessExpiresAt) || accessExpiresAt <= now) {
     return false;
   }
-  if (session.grantExpiresAt) {
+  if (session.grantExpiresAt !== undefined) {
     const grantExpiresAt = Date.parse(session.grantExpiresAt);
-    if (Number.isFinite(grantExpiresAt) && grantExpiresAt <= now) {
+    if (!Number.isFinite(grantExpiresAt) || grantExpiresAt <= now) {
       return false;
     }
   }
@@ -113,17 +115,17 @@ export function isCompanionSessionCurrentlyActive(session: CompanionSessionRecor
 }
 
 export function isCompanionSessionRefreshable(session: CompanionSessionRecord, nowIso: string): boolean {
-  if (session.revokedAt || session.grantRevokedAt) {
+  if (session.revokedAt !== undefined || session.grantRevokedAt !== undefined) {
     return false;
   }
   const now = Date.parse(nowIso);
   const refreshExpiresAt = Date.parse(session.refreshTokenExpiresAt);
-  if (!Number.isFinite(refreshExpiresAt) || refreshExpiresAt <= now) {
+  if (!Number.isFinite(now) || !Number.isFinite(refreshExpiresAt) || refreshExpiresAt <= now) {
     return false;
   }
-  if (session.grantExpiresAt) {
+  if (session.grantExpiresAt !== undefined) {
     const grantExpiresAt = Date.parse(session.grantExpiresAt);
-    if (Number.isFinite(grantExpiresAt) && grantExpiresAt <= now) {
+    if (!Number.isFinite(grantExpiresAt) || grantExpiresAt <= now) {
       return false;
     }
   }
@@ -131,17 +133,17 @@ export function isCompanionSessionRefreshable(session: CompanionSessionRecord, n
 }
 
 export function isCompanionSessionOperatorActive(session: CompanionSessionRecord, nowIso: string): boolean {
-  if (session.revokedAt || session.grantRevokedAt) {
+  if (session.revokedAt !== undefined || session.grantRevokedAt !== undefined) {
     return false;
   }
   const now = Date.parse(nowIso);
   const refreshExpiresAt = Date.parse(session.refreshTokenExpiresAt);
-  if (!Number.isFinite(refreshExpiresAt) || refreshExpiresAt <= now) {
+  if (!Number.isFinite(now) || !Number.isFinite(refreshExpiresAt) || refreshExpiresAt <= now) {
     return false;
   }
-  if (session.grantExpiresAt) {
+  if (session.grantExpiresAt !== undefined) {
     const grantExpiresAt = Date.parse(session.grantExpiresAt);
-    if (Number.isFinite(grantExpiresAt) && grantExpiresAt <= now) {
+    if (!Number.isFinite(grantExpiresAt) || grantExpiresAt <= now) {
       return false;
     }
   }

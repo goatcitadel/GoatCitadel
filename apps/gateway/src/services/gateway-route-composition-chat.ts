@@ -19,6 +19,7 @@ import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import type { GatewayRouteServiceDependencies } from "./gateway-route-services.js";
+import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { createChatThreadKnowledgeDependenciesForGateway } from "./gateway-route-composition-shared.js";
 
@@ -253,8 +254,16 @@ export function composeChatRouteDependencies(
   };
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
     agentSendChatMessage: (sessionId, input) => gateway.chatTurnRuntime.agentSendChatMessage(sessionId, input),
-    agentSendChatMessageStream: (sessionId, input, signal?: AbortSignal) =>
-      gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, { abortSignal: signal }),
+    agentSendChatMessageStream: (
+      sessionId,
+      input,
+      signal?: AbortSignal,
+      mutationLifecycle?: ChatStreamMutationLifecycle,
+    ) =>
+      gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, {
+        abortSignal: signal,
+        ...(mutationLifecycle ? { mutationLifecycle } : {}),
+      }),
     answerChatUserInputPrompt: (sessionId, turnId, promptId, input) =>
       chatMessageRouteRuntime.answerChatUserInputPrompt(
         chatMessageRouteRuntimeHost,
@@ -266,8 +275,17 @@ export function composeChatRouteDependencies(
     cancelChatTurn: (sessionId, turnId, cancelledBy) =>
       gateway.chatTurnRuntime.cancelChatTurn(sessionId, turnId, cancelledBy),
     editChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.editChatTurn(sessionId, turnId, input),
-    editChatTurnStream: (sessionId, turnId, input, signal?: AbortSignal) =>
-      gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input, { abortSignal: signal }),
+    editChatTurnStream: (
+      sessionId,
+      turnId,
+      input,
+      signal?: AbortSignal,
+      mutationLifecycle?: ChatStreamMutationLifecycle,
+    ) =>
+      gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input, {
+        abortSignal: signal,
+        ...(mutationLifecycle ? { mutationLifecycle } : {}),
+      }),
     getChatThread: (sessionId, options) =>
       chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId, options),
     getTurnContextManifestForSession: (sessionId, turnId) =>
@@ -276,8 +294,17 @@ export function composeChatRouteDependencies(
     resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId, signal?: AbortSignal) =>
       gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId, { abortSignal: signal }),
     retryChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.retryChatTurn(sessionId, turnId, input),
-    retryChatTurnStream: (sessionId, turnId, input, signal?: AbortSignal) =>
-      gateway.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, input, { abortSignal: signal }),
+    retryChatTurnStream: (
+      sessionId,
+      turnId,
+      input,
+      signal?: AbortSignal,
+      mutationLifecycle?: ChatStreamMutationLifecycle,
+    ) =>
+      gateway.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, input, {
+        abortSignal: signal,
+        ...(mutationLifecycle ? { mutationLifecycle } : {}),
+      }),
     routePreflight: (sessionId, input) => gateway.chatTurnRuntime.routePreflight(sessionId, input),
     selectChatBranchTurn: (sessionId, turnId) =>
       chatMessageRouteRuntime.selectChatBranchTurn(chatMessageRouteRuntimeHost, sessionId, turnId),

@@ -69,7 +69,7 @@ function createHarness() {
       preview: input.preview,
       linkage: input.linkage,
       createdAt: "2026-07-10T00:00:00.000Z",
-      expiresAt: input.expiresAt ?? undefined,
+      expiresAt: input.expiresAt ?? "2026-07-10T00:15:00.000Z",
       explanationStatus: "not_requested",
     }),
   );
@@ -99,6 +99,7 @@ function createHarness() {
     },
     toolGrants: {
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
       consumeOne: vi.fn(() => true),
     },
     pendingApprovalActions: {
@@ -159,6 +160,7 @@ describe("ToolPolicyEngine canonical approval creation", () => {
         },
       }),
       expect.any(Function),
+      { ttlMs: 15 * 60_000 },
     );
     expect(harness.create).toHaveBeenCalledTimes(1);
     expect(harness.upsertPending).toHaveBeenCalledWith(

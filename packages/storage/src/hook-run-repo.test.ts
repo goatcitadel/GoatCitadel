@@ -33,7 +33,7 @@ function createRepoWithDb(): { repo: HookRunRepository; db: ReturnType<typeof cr
 
 describe("HookRunRepository", () => {
   it("creates, updates, links, and lists hook delivery runs", () => {
-    const { repo } = createRepoWithDb();
+    const { repo, db } = createRepoWithDb();
 
     assert.throws(() => repo.get("missing-run"), /Unknown hook run/);
     assert.equal(repo.findByIdempotency("hook-1", "missing-key"), undefined);
@@ -60,6 +60,10 @@ describe("HookRunRepository", () => {
     assert.equal(created.completedAt, undefined);
     assert.deepEqual(repo.get(created.runId), created);
     assert.equal(repo.findByIdempotency("hook-1", "key-1")?.runId, created.runId);
+    assert.equal(
+      db.transaction("immediate", () => repo.findByIdempotencyForUpdate("hook-1", "key-1"))?.runId,
+      created.runId,
+    );
 
     const attempted = repo.markAttempt(
       created.runId,
@@ -79,6 +83,11 @@ describe("HookRunRepository", () => {
     const attached = repo.attachDurableRun(created.runId, "durable-1", "2026-03-24T10:02:00.000Z");
     assert.equal(attached.durableRunId, "durable-1");
     assert.equal(attached.updatedAt, "2026-03-24T10:02:00.000Z");
+    assert.equal(repo.attachDurableRun(created.runId, "durable-1").durableRunId, "durable-1");
+    assert.throws(
+      () => repo.attachDurableRun(created.runId, "durable-foreign"),
+      /already linked to durable run durable-1/,
+    );
 
     const completed = repo.markOutcome(
       created.runId,

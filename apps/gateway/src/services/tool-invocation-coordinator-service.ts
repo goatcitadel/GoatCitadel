@@ -54,6 +54,13 @@ interface ToolPolicyAccessResult {
   reasonCodes: string[];
 }
 
+export interface ToolExternalSideEffectBoundary {
+  /** Record immediately before a concrete provider or irreversible mutation starts. */
+  markStarted(): void;
+  /** Record that execution finished or failed without crossing that boundary. */
+  markNotRequired(): void;
+}
+
 interface McpPolicyRequestShape {
   toolName: "mcp.invoke";
   args: {
@@ -175,7 +182,10 @@ export interface ToolInvocationCoordinatorHost {
    *  available in the active workspace/citadel scope. Missing wiring fails closed. */
   assertMcpServerInScope?: (request: McpInvokeRequest) => void;
   readonly policyEngine: {
-    invoke(request: ToolInvokeRequest, options?: { beforeExecute?: () => void }): Promise<ToolInvokeResult>;
+    invoke(
+      request: ToolInvokeRequest,
+      options?: { beforeExecute?: () => void; externalSideEffect?: ToolExternalSideEffectBoundary },
+    ): Promise<ToolInvokeResult>;
     evaluateAccess(request: {
       toolName: "mcp.invoke";
       args: {
@@ -252,6 +262,8 @@ export interface ToolInvocationCoordinatorHost {
 export interface ToolInvocationRuntimeOptions {
   /** Process-local durable authority check; never serialize this callback. */
   executionFence?: () => void;
+  /** Process-local concrete external-side-effect boundary; never serialize this object. */
+  externalSideEffect?: ToolExternalSideEffectBoundary;
 }
 
 export interface ToolInvocationCoordinator {
@@ -554,14 +566,22 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     try {
       if (overrideHandler) {
         options.executionFence?.();
+        // Plugin handlers do not expose a deeper provider adapter boundary, so
+        // conservatively record it immediately before the approved handler.
+        options.externalSideEffect?.markStarted();
         result = await overrideHandler(
           hookableRequest.args ?? {},
           buildPluginToolExecutionContext(hookableRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
         );
       } else {
-        result = options.executionFence
-          ? await this.host.policyEngine.invoke(hookableRequest, { beforeExecute: options.executionFence })
-          : await this.host.policyEngine.invoke(hookableRequest);
+        const policyOptions = {
+          ...(options.executionFence ? { beforeExecute: options.executionFence } : {}),
+          ...(options.externalSideEffect ? { externalSideEffect: options.externalSideEffect } : {}),
+        };
+        result =
+          options.executionFence || options.externalSideEffect
+            ? await this.host.policyEngine.invoke(hookableRequest, policyOptions)
+            : await this.host.policyEngine.invoke(hookableRequest);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

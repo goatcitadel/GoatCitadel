@@ -16,6 +16,7 @@ import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn
 // Type-only: erased at runtime, so the stream service's value import of this
 // module does not create an import cycle.
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
+import { isDurableControlError } from "./durable-control-error.js";
 
 export { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME };
 
@@ -349,12 +350,7 @@ export function createSubagentFanoutExecutor(
             canonicalWriteFence: options.canonicalWriteFence,
           });
         } catch (error) {
-          if (
-            error instanceof Error &&
-            (error.name === "DurableWorkerInterruptionError" ||
-              error.name === "DurableRunPausedError" ||
-              error.name === "DurableRunCancelledError")
-          ) {
+          if (isDurableControlError(error)) {
             throw error;
           }
           // executeDelegatedPlanStep shapes its own failures; this catch only

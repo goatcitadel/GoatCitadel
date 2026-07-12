@@ -66,7 +66,7 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     dialect: "postgres",
     prepare: (sql) => {
       let stmt: ReturnType<DatabaseClient["prepare"]> | undefined;
-      const resolve = () => (stmt ??= inner.prepare(sql));
+      const resolve = () => (stmt ??= inner.prepare(translateBootRecoveryPostgresSqlForSqlite(sql)));
       return {
         run: (...params: unknown[]) => resolve().run(...params),
         get: (...params: unknown[]) => resolve().get(...params),
@@ -91,6 +91,21 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     close: () => inner.close(),
     transaction: (mode, callback) => inner.transaction(mode, callback),
   };
+}
+
+/**
+ * This harness is intentionally a transaction-control probe, not a Postgres
+ * parser. Boot recovery now delegates expiry comparison and row locking to
+ * Postgres-specific repository statements, so translate only those statements
+ * exercised by this sqlite-backed facade. Real Postgres coverage owns their
+ * native SQL semantics; this test continues to prove the service never emits
+ * raw sqlite transaction control on the Postgres code path.
+ */
+function translateBootRecoveryPostgresSqlForSqlite(sql: string): string {
+  return sql
+    .replace(/\bFOR UPDATE\b/giu, "")
+    .replace(/gc_try_parse_timestamptz\(([^)]+)\)\s*<=\s*clock_timestamp\(\)/giu, "julianday($1) <= julianday('now')")
+    .replace(/OCTET_LENGTH\(state_json\)/giu, "LENGTH(CAST(state_json AS BLOB))");
 }
 
 function createHarness(): Harness {

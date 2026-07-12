@@ -12,13 +12,20 @@ const DEFAULT_LINE_THRESHOLD = 63;
 const DEFAULT_BRANCH_THRESHOLD = 45;
 const LINE_100_THRESHOLD = 100;
 const STRICT_100_THRESHOLD = 100;
+const REQUIRED_PRODUCTION_RISK_TIERS = new Map([
+  ["storage-policy-security-critical", { lineThreshold: 90, branchThreshold: 80 }],
+  ["gateway-shared-contracts", { lineThreshold: 58, branchThreshold: 70 }],
+  ["mission-control", { lineThreshold: 75, branchThreshold: 60 }],
+]);
 const profile = resolveGateProfile();
 
 let summaryRaw = "";
 try {
   summaryRaw = await fs.readFile(summaryPath, "utf8");
 } catch {
-  console.error(`[coverage:gate] summary not found at ${path.relative(repoRoot, summaryPath)}. Run pnpm coverage:collect first.`);
+  console.error(
+    `[coverage:gate] summary not found at ${path.relative(repoRoot, summaryPath)}. Run pnpm coverage:collect first.`,
+  );
   process.exit(1);
 }
 
@@ -32,8 +39,8 @@ try {
 
 if (summary.status !== "success") {
   console.error(
-    `[coverage:gate] coverage summary status is ${JSON.stringify(summary.status)}. `
-    + "Run pnpm coverage:collect and fix the failing collection before gating.",
+    `[coverage:gate] coverage summary status is ${JSON.stringify(summary.status)}. ` +
+      "Run pnpm coverage:collect and fix the failing collection before gating.",
   );
   process.exit(1);
 }
@@ -41,8 +48,8 @@ if (summary.status !== "success") {
 const currentSourceFingerprint = await buildCoverageSourceFingerprint(repoRoot);
 if (typeof summary.sourceFingerprint !== "string" || summary.sourceFingerprint !== currentSourceFingerprint) {
   console.error(
-    "[coverage:gate] coverage summary does not match current source content. "
-    + "Run pnpm coverage:collect before gating this revision.",
+    "[coverage:gate] coverage summary does not match current source content. " +
+      "Run pnpm coverage:collect before gating this revision.",
   );
   process.exit(1);
 }
@@ -53,8 +60,14 @@ const linePercent = Number(summary.linePercent ?? NaN);
 const branchPercent = Number(summary.branchPercent ?? NaN);
 const functionPercent = Number(summary.functionPercent ?? NaN);
 
-if (!Number.isFinite(linePercent) || !Number.isFinite(branchPercent)) {
-  console.error("[coverage:gate] invalid linePercent/branchPercent in summary artifact.");
+if (!isValidCoveragePercent(linePercent) || !isValidCoveragePercent(branchPercent)) {
+  console.error(
+    "[coverage:gate] invalid linePercent/branchPercent in summary artifact; expected values from 0 to 100.",
+  );
+  process.exit(1);
+}
+if (Number.isFinite(functionPercent) && !isValidCoveragePercent(functionPercent)) {
+  console.error("[coverage:gate] invalid functionPercent in summary artifact; expected a value from 0 to 100.");
   process.exit(1);
 }
 
@@ -66,40 +79,116 @@ let failed = false;
 
 if (linePercent < resolved.line.value || branchPercent < resolved.branch.value) {
   console.error(
-    `[coverage:gate] failed: line ${linePercent}% (required ${resolved.line.value}%), `
-    + `branch ${branchPercent}% (required ${resolved.branch.value}%).`,
+    `[coverage:gate] failed: line ${linePercent}% (required ${resolved.line.value}%), ` +
+      `branch ${branchPercent}% (required ${resolved.branch.value}%).`,
   );
   failed = true;
 }
 
 if (profile === "production") {
+  if (process.platform !== "linux") {
+    console.error(
+      `[coverage:gate] failed: production coverage gating requires an actual Linux runtime; current runtime is ${JSON.stringify(process.platform)}. ` +
+        "Run collection and gating together in Linux/WSL or rely on the hosted Linux verification lane.",
+    );
+    failed = true;
+  }
+  if (summary.collector?.platform !== process.platform) {
+    console.error(
+      `[coverage:gate] failed: collector platform ${JSON.stringify(summary.collector?.platform)} does not match ` +
+        `the gating runtime ${JSON.stringify(process.platform)}. Run collection and gating on the same Linux runtime.`,
+    );
+    failed = true;
+  }
+  failed =
+    validateCoverageMetric("overall line", summary.linePercent, summary.lineTotals, {
+      emptyPercent: 0,
+      requiredTotals: true,
+    }) || failed;
+  failed =
+    validateCoverageMetric("overall branch", summary.branchPercent, summary.branchTotals, {
+      emptyPercent: 100,
+      requiredTotals: true,
+    }) || failed;
+  failed =
+    validateCoverageMetric("overall function", summary.functionPercent, summary.functionTotals, {
+      emptyPercent: 100,
+      requiredTotals: false,
+    }) || failed;
+  failed = validateFileCoverage("overall file", summary) || failed;
   const riskTierCoverage = Array.isArray(summary.riskTierCoverage) ? summary.riskTierCoverage : [];
   if (riskTierCoverage.length === 0) {
-    console.error("[coverage:gate] failed: production profile requires riskTierCoverage. Run pnpm coverage:collect with current tooling.");
+    console.error(
+      "[coverage:gate] failed: production profile requires riskTierCoverage. Run pnpm coverage:collect with current tooling.",
+    );
     failed = true;
   }
 
+  const seenTierIds = new Set();
   for (const tier of riskTierCoverage) {
+    const id = tier && typeof tier === "object" && typeof tier.id === "string" ? tier.id : "";
+    if (seenTierIds.has(id)) {
+      console.error(`[coverage:gate] failed: duplicate production risk tier ${JSON.stringify(id)}.`);
+      failed = true;
+      continue;
+    }
+    seenTierIds.add(id);
+
+    const expected = REQUIRED_PRODUCTION_RISK_TIERS.get(id);
+    if (!expected) {
+      console.error(`[coverage:gate] failed: unknown production risk tier ${JSON.stringify(id)}.`);
+      failed = true;
+      continue;
+    }
+
     const line = Number(tier.linePercent ?? NaN);
     const branch = Number(tier.branchPercent ?? NaN);
     const lineThreshold = Number(tier.lineThreshold ?? NaN);
     const branchThreshold = Number(tier.branchThreshold ?? NaN);
-    if (
-      !Number.isFinite(line)
-      || !Number.isFinite(branch)
-      || !Number.isFinite(lineThreshold)
-      || !Number.isFinite(branchThreshold)
-    ) {
+    if (!Number.isFinite(lineThreshold) || !Number.isFinite(branchThreshold)) {
       console.error(`[coverage:gate] failed: invalid production tier coverage for ${JSON.stringify(tier.id)}.`);
       failed = true;
       continue;
     }
 
-    if (line < lineThreshold || branch < branchThreshold) {
+    failed =
+      validateCoverageMetric(`production tier ${id} line`, line, tier.lineTotals, {
+        emptyPercent: 0,
+        requiredTotals: true,
+      }) || failed;
+    failed =
+      validateCoverageMetric(`production tier ${id} branch`, branch, tier.branchTotals, {
+        emptyPercent: 100,
+        requiredTotals: true,
+      }) || failed;
+    failed =
+      validateCoverageMetric(`production tier ${id} function`, tier.functionPercent, tier.functionTotals, {
+        emptyPercent: 100,
+        requiredTotals: false,
+      }) || failed;
+    failed = validateFileCoverage(`production tier ${id} file`, tier) || failed;
+
+    if (lineThreshold !== expected.lineThreshold || branchThreshold !== expected.branchThreshold) {
       console.error(
-        `[coverage:gate] production tier ${tier.id} failed: line ${line}% (required ${lineThreshold}%), `
-        + `branch ${branch}% (required ${branchThreshold}%).`,
+        `[coverage:gate] failed: threshold mismatch for production risk tier ${JSON.stringify(id)}: ` +
+          `received line ${lineThreshold}% / branch ${branchThreshold}%, expected ` +
+          `line ${expected.lineThreshold}% / branch ${expected.branchThreshold}%.`,
       );
+      failed = true;
+    }
+
+    if (line < expected.lineThreshold || branch < expected.branchThreshold) {
+      console.error(
+        `[coverage:gate] production tier ${id} failed: line ${line}% (required ${expected.lineThreshold}%), ` +
+          `branch ${branch}% (required ${expected.branchThreshold}%).`,
+      );
+      failed = true;
+    }
+  }
+
+  for (const id of REQUIRED_PRODUCTION_RISK_TIERS.keys()) {
+    if (!seenTierIds.has(id)) {
+      console.error(`[coverage:gate] failed: missing required production risk tier ${JSON.stringify(id)}.`);
       failed = true;
     }
   }
@@ -113,7 +202,9 @@ if (profile === "line100") {
 
   const packageCoverage = Array.isArray(summary.packageCoverage) ? summary.packageCoverage : [];
   if (packageCoverage.length === 0) {
-    console.error("[coverage:gate] line100 failed: packageCoverage is missing. Run pnpm coverage:collect with current tooling.");
+    console.error(
+      "[coverage:gate] line100 failed: packageCoverage is missing. Run pnpm coverage:collect with current tooling.",
+    );
     failed = true;
   }
   for (const item of packageCoverage) {
@@ -126,8 +217,8 @@ if (profile === "line100") {
     if (line < LINE_100_THRESHOLD) {
       const totals = item.lineTotals ?? {};
       console.error(
-        `[coverage:gate] line100 package ${item.id} failed: line ${line}% `
-        + `(${totals.covered ?? "?"}/${totals.total ?? "?"}, required 100%).`,
+        `[coverage:gate] line100 package ${item.id} failed: line ${line}% ` +
+          `(${totals.covered ?? "?"}/${totals.total ?? "?"}, required 100%).`,
       );
       failed = true;
     }
@@ -144,8 +235,8 @@ if (profile === "line100") {
     if (line < LINE_100_THRESHOLD) {
       const totals = tier.lineTotals ?? {};
       console.error(
-        `[coverage:gate] line100 risk tier ${tier.id} failed: line ${line}% `
-        + `(${totals.covered ?? "?"}/${totals.total ?? "?"}, required 100%).`,
+        `[coverage:gate] line100 risk tier ${tier.id} failed: line ${line}% ` +
+          `(${totals.covered ?? "?"}/${totals.total ?? "?"}, required 100%).`,
       );
       failed = true;
     }
@@ -171,9 +262,9 @@ if (failed) {
 }
 
 console.log(
-  `[coverage:gate] passed: line ${linePercent}% (>= ${resolved.line.value}%), `
-  + `branch ${branchPercent}% (>= ${resolved.branch.value}%), `
-  + `function ${Number.isFinite(functionPercent) ? `${functionPercent}%` : "n/a"}, profile ${profile}.`,
+  `[coverage:gate] passed: line ${linePercent}% (>= ${resolved.line.value}%), ` +
+    `branch ${branchPercent}% (>= ${resolved.branch.value}%), ` +
+    `function ${Number.isFinite(functionPercent) ? `${functionPercent}%` : "n/a"}, profile ${profile}.`,
 );
 
 function resolveGateProfile() {
@@ -186,6 +277,112 @@ function resolveGateProfile() {
   return "default";
 }
 
+function validateCoverageMetric(label, rawPercent, totals, options) {
+  const totalsPresent = totals !== undefined && totals !== null;
+  if (rawPercent === undefined && !totalsPresent && !options.requiredTotals) {
+    return false;
+  }
+  const percentValue = Number(rawPercent ?? NaN);
+  if (!isValidCoveragePercent(percentValue)) {
+    console.error(`[coverage:gate] failed: ${label} percent must be between 0 and 100.`);
+    return true;
+  }
+  if (!totalsPresent) {
+    if (options.requiredTotals) {
+      console.error(`[coverage:gate] failed: ${label} totals are missing.`);
+      return true;
+    }
+    return false;
+  }
+
+  const covered = Number(totals?.covered ?? NaN);
+  const total = Number(totals?.total ?? NaN);
+  if (!isValidCoverageCount(covered) || !isValidCoverageCount(total) || covered > total) {
+    console.error(`[coverage:gate] failed: ${label} totals must be non-negative integers with covered <= total.`);
+    return true;
+  }
+  if (totals.uncovered !== undefined) {
+    const uncovered = Number(totals.uncovered);
+    if (!isValidCoverageCount(uncovered) || uncovered !== total - covered) {
+      console.error(`[coverage:gate] failed: ${label} uncovered total is inconsistent.`);
+      return true;
+    }
+  }
+
+  const expectedPercent = total === 0 ? options.emptyPercent : Number(((covered / total) * 100).toFixed(2));
+  if (percentValue !== expectedPercent) {
+    console.error(
+      `[coverage:gate] failed: ${label} percent ${percentValue}% does not match totals ` +
+        `${covered}/${total} (${expectedPercent}%).`,
+    );
+    return true;
+  }
+  return false;
+}
+
+function validateFileCoverage(label, item) {
+  const hasAnyFileMetric =
+    item.fileCoveragePercent !== undefined ||
+    item.executableSourceFiles !== undefined ||
+    item.coveredFiles !== undefined ||
+    item.uncoveredFiles !== undefined;
+  if (!hasAnyFileMetric) {
+    return false;
+  }
+  const percentValue = Number(item.fileCoveragePercent ?? NaN);
+  const executableSourceFiles = Number(item.executableSourceFiles ?? NaN);
+  const coveredFiles = Number(item.coveredFiles ?? NaN);
+  const uncoveredFiles = item.uncoveredFiles === undefined ? undefined : Number(item.uncoveredFiles);
+  if (
+    !isValidCoveragePercent(percentValue) ||
+    !isValidCoverageCount(executableSourceFiles) ||
+    !isValidCoverageCount(coveredFiles) ||
+    coveredFiles > executableSourceFiles
+  ) {
+    console.error(
+      `[coverage:gate] failed: ${label} coverage must contain sane percent, coveredFiles, and executableSourceFiles values.`,
+    );
+    return true;
+  }
+  if (
+    uncoveredFiles !== undefined &&
+    (!isValidCoverageCount(uncoveredFiles) || coveredFiles + uncoveredFiles !== executableSourceFiles)
+  ) {
+    console.error(`[coverage:gate] failed: ${label} covered/uncovered file totals are inconsistent.`);
+    return true;
+  }
+  if (item.sourceFiles !== undefined || item.nonExecutableSourceFiles !== undefined) {
+    const sourceFiles = Number(item.sourceFiles ?? NaN);
+    const nonExecutableSourceFiles = Number(item.nonExecutableSourceFiles ?? NaN);
+    if (
+      !isValidCoverageCount(sourceFiles) ||
+      !isValidCoverageCount(nonExecutableSourceFiles) ||
+      executableSourceFiles + nonExecutableSourceFiles !== sourceFiles
+    ) {
+      console.error(`[coverage:gate] failed: ${label} executable/non-executable source totals are inconsistent.`);
+      return true;
+    }
+  }
+  const expectedPercent =
+    executableSourceFiles === 0 ? 100 : Number(((coveredFiles / executableSourceFiles) * 100).toFixed(2));
+  if (percentValue !== expectedPercent) {
+    console.error(
+      `[coverage:gate] failed: ${label} percent ${percentValue}% does not match ` +
+        `${coveredFiles}/${executableSourceFiles} (${expectedPercent}%).`,
+    );
+    return true;
+  }
+  return false;
+}
+
+function isValidCoveragePercent(value) {
+  return Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+function isValidCoverageCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
 function checkStrict100Summary(coverageSummary) {
   let strictFailed = false;
 
@@ -193,7 +390,9 @@ function checkStrict100Summary(coverageSummary) {
 
   const packageCoverage = Array.isArray(coverageSummary.packageCoverage) ? coverageSummary.packageCoverage : [];
   if (packageCoverage.length === 0) {
-    console.error("[coverage:gate] strict100 failed: packageCoverage is missing. Run pnpm coverage:collect with current tooling.");
+    console.error(
+      "[coverage:gate] strict100 failed: packageCoverage is missing. Run pnpm coverage:collect with current tooling.",
+    );
     strictFailed = true;
   }
   for (const item of packageCoverage) {
@@ -202,7 +401,9 @@ function checkStrict100Summary(coverageSummary) {
 
   const riskTierCoverage = Array.isArray(coverageSummary.riskTierCoverage) ? coverageSummary.riskTierCoverage : [];
   if (riskTierCoverage.length === 0) {
-    console.error("[coverage:gate] strict100 failed: riskTierCoverage is missing. Run pnpm coverage:collect with current tooling.");
+    console.error(
+      "[coverage:gate] strict100 failed: riskTierCoverage is missing. Run pnpm coverage:collect with current tooling.",
+    );
     strictFailed = true;
   }
   for (const tier of riskTierCoverage) {
@@ -231,10 +432,13 @@ function checkStrict100Entity(label, item) {
   if (!Number.isFinite(executableSourceFiles) || !Number.isFinite(coveredFiles) || !Number.isFinite(filePercent)) {
     console.error(`[coverage:gate] strict100 ${label} failed: invalid executable file coverage.`);
     entityFailed = true;
-  } else if (executableSourceFiles > 0 && (filePercent < STRICT_100_THRESHOLD || coveredFiles !== executableSourceFiles)) {
+  } else if (
+    executableSourceFiles > 0 &&
+    (filePercent < STRICT_100_THRESHOLD || coveredFiles !== executableSourceFiles)
+  ) {
     console.error(
-      `[coverage:gate] strict100 ${label} failed: file ${filePercent}% `
-      + `(${coveredFiles}/${executableSourceFiles} executable files, required 100%).`,
+      `[coverage:gate] strict100 ${label} failed: file ${filePercent}% ` +
+        `(${coveredFiles}/${executableSourceFiles} executable files, required 100%).`,
     );
     entityFailed = true;
   }
@@ -261,8 +465,8 @@ function checkStrict100Metric(label, metric, rawPercent, totals) {
 
   if (percentValue < STRICT_100_THRESHOLD || covered !== total) {
     console.error(
-      `[coverage:gate] strict100 ${label} failed: ${metric} ${percentValue}% `
-      + `(${covered}/${total}, required 100%).`,
+      `[coverage:gate] strict100 ${label} failed: ${metric} ${percentValue}% ` +
+        `(${covered}/${total}, required 100%).`,
     );
     return true;
   }
@@ -302,12 +506,16 @@ function resolveThreshold(raw, fallback, envName, allowLower, warningsList) {
   }
 
   if (parsed < fallback && !allowLower) {
-    warningsList.push(`${envName}=${parsed} is below default ${fallback}. Set GOATCITADEL_ALLOW_LOWER_COVERAGE_GATE=1 to allow lower gates.`);
+    warningsList.push(
+      `${envName}=${parsed} is below default ${fallback}. Set GOATCITADEL_ALLOW_LOWER_COVERAGE_GATE=1 to allow lower gates.`,
+    );
     return { value: fallback, source: "default_clamped" };
   }
 
   if (parsed < fallback && allowLower) {
-    warningsList.push(`${envName}=${parsed} is below default ${fallback} (allowed by GOATCITADEL_ALLOW_LOWER_COVERAGE_GATE=1).`);
+    warningsList.push(
+      `${envName}=${parsed} is below default ${fallback} (allowed by GOATCITADEL_ALLOW_LOWER_COVERAGE_GATE=1).`,
+    );
   }
 
   return { value: parsed, source: "env" };

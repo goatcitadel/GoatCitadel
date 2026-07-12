@@ -9,6 +9,7 @@ export interface ConcurrentObservabilityWorkerInput {
 
 export async function runConcurrentObservabilityWorkers(input: ConcurrentObservabilityWorkerInput): Promise<void> {
   const startGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const runtimeModuleExtension = import.meta.url.endsWith(".js") ? ".js" : ".ts";
   const workers = ["left", "right"].map(
     (prefix) =>
       new Worker(CONCURRENT_OBSERVABILITY_WORKER_SOURCE, {
@@ -17,9 +18,9 @@ export async function runConcurrentObservabilityWorkers(input: ConcurrentObserva
           ...input,
           prefix,
           startGate,
-          repoModuleUrl: new URL("./approval-effect-repo.ts", import.meta.url).href,
-          sqliteModuleUrl: new URL("./sqlite.ts", import.meta.url).href,
-          postgresModuleUrl: new URL("./postgres/sync.ts", import.meta.url).href,
+          repoModuleUrl: new URL(`./approval-effect-repo${runtimeModuleExtension}`, import.meta.url).href,
+          sqliteModuleUrl: new URL(`./sqlite${runtimeModuleExtension}`, import.meta.url).href,
+          postgresModuleUrl: new URL(`./postgres/sync${runtimeModuleExtension}`, import.meta.url).href,
           tsxApiUrl: import.meta.resolve("tsx/esm/api"),
         },
       }),

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Durable run state and its dialect-specific transactional lease SQL stay co-located. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
@@ -36,9 +37,15 @@ export interface DurableRunRepositoryOptions {
 }
 
 export class DurableRunRepository {
+  private readonly databaseNowStmt;
   private readonly insertRunStmt;
   private readonly getRunStmt;
+  private readonly getRunForUpdateStmt;
   private readonly lockActiveLeaseForUpdateStmt;
+  private readonly lockFreshActiveLeaseForUpdateStmt;
+  private readonly lockExpiredLeaseForUpdateStmt;
+  private readonly claimQueuedRunWithDatabaseClockStmt;
+  private readonly renewLeaseWithDatabaseClockStmt;
   private readonly getRunsByIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly updateRunStmt;
   private readonly listRunsStmt;
@@ -52,6 +59,7 @@ export class DurableRunRepository {
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly upsertRetryStmt;
+  private readonly upsertRetryWithDatabaseClockStmt;
   private readonly listRetriesStmt;
   private readonly upsertDeadLetterStmt;
   private readonly listDeadLettersStmt;
@@ -63,6 +71,17 @@ export class DurableRunRepository {
     private readonly db: DatabaseClient,
     private readonly options: DurableRunRepositoryOptions = {},
   ) {
+    const optionalAfterRunId = db.dialect === "postgres" ? "CAST(@afterRunId AS TEXT)" : "@afterRunId";
+    this.databaseNowStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          SELECT to_char(
+            clock_timestamp() AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          ) AS now_iso
+        `
+        : `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now_iso`,
+    );
     this.insertRunStmt = db.prepare(`
       INSERT INTO durable_runs (
         run_id, workflow_key, status, attempt_count, max_attempts,
@@ -75,6 +94,12 @@ export class DurableRunRepository {
       )
     `);
     this.getRunStmt = db.prepare("SELECT * FROM durable_runs WHERE run_id = ?");
+    this.getRunForUpdateStmt = db.prepare(`
+      SELECT *
+      FROM durable_runs
+      WHERE run_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.lockActiveLeaseForUpdateStmt = db.prepare(`
       SELECT *
       FROM durable_runs
@@ -85,6 +110,172 @@ export class DurableRunRepository {
         AND lease_expires_at > @now
       ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
     `);
+    this.lockFreshActiveLeaseForUpdateStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH locked AS MATERIALIZED (
+            SELECT *
+            FROM durable_runs
+            WHERE run_id = @runId
+            FOR UPDATE
+          )
+          SELECT *
+          FROM locked
+          WHERE status = 'running'
+            AND lease_owner_id = @expectedLeaseOwnerId
+            AND lease_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(lease_expires_at) > clock_timestamp()
+        `
+        : `
+          SELECT *
+          FROM durable_runs
+          WHERE run_id = @runId
+            AND status = 'running'
+            AND lease_owner_id = @expectedLeaseOwnerId
+            AND lease_expires_at IS NOT NULL
+            AND julianday(lease_expires_at) > julianday('now')
+        `,
+    );
+    this.lockExpiredLeaseForUpdateStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH locked AS MATERIALIZED (
+            SELECT *
+            FROM durable_runs
+            WHERE run_id = @runId
+            FOR UPDATE
+          )
+          SELECT *
+          FROM locked
+          WHERE status = 'running'
+            AND (
+              lease_owner_id = CAST(@expectedLeaseOwnerId AS TEXT)
+              OR (lease_owner_id IS NULL AND CAST(@expectedLeaseOwnerId AS TEXT) IS NULL)
+            )
+            AND lease_expires_at = @expectedLeaseExpiresAt
+            AND gc_try_parse_timestamptz(lease_expires_at) <= clock_timestamp()
+        `
+        : `
+          SELECT *
+          FROM durable_runs
+          WHERE run_id = @runId
+            AND status = 'running'
+            AND (
+              lease_owner_id = @expectedLeaseOwnerId
+              OR (lease_owner_id IS NULL AND @expectedLeaseOwnerId IS NULL)
+            )
+            AND lease_expires_at = @expectedLeaseExpiresAt
+            AND julianday(lease_expires_at) <= julianday('now')
+        `,
+    );
+    this.claimQueuedRunWithDatabaseClockStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
+          )
+          UPDATE durable_runs AS target
+          SET status = 'running',
+              started_at = COALESCE(target.started_at, to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+              finished_at = NULL,
+              last_error = NULL,
+              lease_owner_id = @workerId,
+              lease_heartbeat_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              lease_expires_at = to_char(
+                (database_clock.now_instant + (CAST(@leaseDurationMs AS DOUBLE PRECISION) * interval '1 millisecond')) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              ),
+              version = target.version + 1,
+              updated_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          FROM database_clock
+          WHERE target.run_id = @runId
+            AND target.status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM durable_retries AS retry
+              WHERE retry.run_id = target.run_id
+                AND retry.attempt_no = (
+                  SELECT MAX(latest.attempt_no)
+                  FROM durable_retries AS latest
+                  WHERE latest.run_id = target.run_id
+                )
+                AND retry.next_retry_at IS NOT NULL
+                AND gc_try_parse_timestamptz(retry.next_retry_at) > database_clock.now_instant
+            )
+        `
+        : `
+          WITH database_clock AS (
+            SELECT julianday('now') AS now_instant
+          )
+          UPDATE durable_runs
+          SET status = 'running',
+              started_at = COALESCE(started_at, strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))),
+              finished_at = NULL,
+              last_error = NULL,
+              lease_owner_id = @workerId,
+              lease_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock)),
+              lease_expires_at = strftime(
+                '%Y-%m-%dT%H:%M:%fZ',
+                (SELECT now_instant FROM database_clock) + (CAST(@leaseDurationMs AS REAL) / 86400000.0)
+              ),
+              version = version + 1,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))
+          WHERE run_id = @runId
+            AND status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM durable_retries AS retry
+              WHERE retry.run_id = durable_runs.run_id
+                AND retry.attempt_no = (
+                  SELECT MAX(latest.attempt_no)
+                  FROM durable_retries AS latest
+                  WHERE latest.run_id = durable_runs.run_id
+                )
+                AND retry.next_retry_at IS NOT NULL
+                AND julianday(retry.next_retry_at) > (SELECT now_instant FROM database_clock)
+            )
+        `,
+    );
+    this.renewLeaseWithDatabaseClockStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
+          )
+          UPDATE durable_runs AS target
+          SET lease_heartbeat_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              lease_expires_at = to_char(
+                (database_clock.now_instant + (CAST(@leaseDurationMs AS DOUBLE PRECISION) * interval '1 millisecond')) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              ),
+              version = target.version + 1,
+              updated_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          FROM database_clock
+          WHERE target.run_id = @runId
+            AND target.status = 'running'
+            AND target.lease_owner_id = @workerId
+            AND target.lease_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(target.lease_expires_at) > database_clock.now_instant
+        `
+        : `
+          WITH database_clock AS (
+            SELECT julianday('now') AS now_instant
+          )
+          UPDATE durable_runs
+          SET lease_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock)),
+              lease_expires_at = strftime(
+                '%Y-%m-%dT%H:%M:%fZ',
+                (SELECT now_instant FROM database_clock) + (CAST(@leaseDurationMs AS REAL) / 86400000.0)
+              ),
+              version = version + 1,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))
+          WHERE run_id = @runId
+            AND status = 'running'
+            AND lease_owner_id = @workerId
+            AND lease_expires_at IS NOT NULL
+            AND julianday(lease_expires_at) > (SELECT now_instant FROM database_clock)
+        `,
+    );
     this.updateRunStmt = db.prepare(`
       UPDATE durable_runs
       SET
@@ -121,7 +312,7 @@ export class DurableRunRepository {
       FROM durable_runs
       WHERE status = 'failed'
         AND metadata_json LIKE '%"linkedFinalizationPending":%'
-        AND (@afterRunId IS NULL OR run_id > @afterRunId)
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
       ORDER BY run_id ASC
       LIMIT @limit
     `);
@@ -131,7 +322,7 @@ export class DurableRunRepository {
       WHERE status = 'completed'
         AND workflow_key = 'chat.turn.execute'
         AND metadata_json LIKE '%"autonomousChatPostCommitPending":%'
-        AND (@afterRunId IS NULL OR run_id > @afterRunId)
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
       ORDER BY run_id ASC
       LIMIT @limit
     `);
@@ -141,19 +332,31 @@ export class DurableRunRepository {
       WHERE status IN ('completed', 'failed', 'cancelled', 'waiting')
         AND workflow_key = 'chat.turn.execute'
         AND metadata_json LIKE '%"generalChatPostCommitPending":%'
-        AND (@afterRunId IS NULL OR run_id > @afterRunId)
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
       ORDER BY run_id ASC
       LIMIT @limit
     `);
-    this.listExpiredRunningRunIdsStmt = db.prepare(`
-      SELECT run_id
-      FROM durable_runs
-      WHERE status = 'running'
-        AND lease_expires_at IS NOT NULL
-        AND lease_expires_at <= ?
-      ORDER BY updated_at ASC, run_id ASC
-      LIMIT ?
-    `);
+    this.listExpiredRunningRunIdsStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          SELECT run_id
+          FROM durable_runs
+          WHERE status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(lease_expires_at) <= clock_timestamp()
+          ORDER BY updated_at ASC, run_id ASC
+          LIMIT @limit
+        `
+        : `
+          SELECT run_id
+          FROM durable_runs
+          WHERE status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND julianday(lease_expires_at) <= julianday('now')
+          ORDER BY updated_at ASC, run_id ASC
+          LIMIT @limit
+        `,
+    );
     this.countRunsStmt = db.prepare("SELECT COUNT(1) AS count FROM durable_runs");
     this.statusCountsStmt = db.prepare(`
       SELECT status, COUNT(1) AS count
@@ -183,6 +386,47 @@ export class DurableRunRepository {
         reason = excluded.reason,
         next_retry_at = excluded.next_retry_at
     `);
+    this.upsertRetryWithDatabaseClockStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
+          )
+          INSERT INTO durable_retries (
+            retry_id, run_id, attempt_no, reason, next_retry_at, created_at
+          )
+          SELECT
+            @retryId,
+            @runId,
+            @attemptNo,
+            @reason,
+            to_char(
+              (database_clock.now_instant + (CAST(@delayMs AS DOUBLE PRECISION) * interval '1 millisecond'))
+                AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            ),
+            to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          FROM database_clock
+          ON CONFLICT(run_id, attempt_no) DO UPDATE SET
+            reason = excluded.reason,
+            next_retry_at = excluded.next_retry_at
+        `
+        : `
+          INSERT INTO durable_retries (
+            retry_id, run_id, attempt_no, reason, next_retry_at, created_at
+          ) VALUES (
+            @retryId,
+            @runId,
+            @attemptNo,
+            @reason,
+            strftime('%Y-%m-%dT%H:%M:%fZ', julianday('now') + (CAST(@delayMs AS REAL) / 86400000.0)),
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          )
+          ON CONFLICT(run_id, attempt_no) DO UPDATE SET
+            reason = excluded.reason,
+            next_retry_at = excluded.next_retry_at
+        `,
+    );
     this.listRetriesStmt = db.prepare(`
       SELECT * FROM durable_retries
       WHERE run_id = ?
@@ -293,6 +537,26 @@ export class DurableRunRepository {
     return this.mapRunRow(row);
   }
 
+  public readDatabaseNow(): string {
+    const row = this.databaseNowStmt.get<{ now_iso?: unknown }>();
+    if (typeof row?.now_iso !== "string" || !Number.isFinite(Date.parse(row.now_iso))) {
+      throw new Error("Database did not return a valid durable-run clock.");
+    }
+    return row.now_iso;
+  }
+
+  /**
+   * Locks and returns a run for a multi-repository state transition. Callers
+   * must invoke this inside a storage transaction before locking linked rows.
+   */
+  public getRunForUpdate(runId: string): DurableRunRecord {
+    const row = toDurableRunRow(this.getRunForUpdateStmt.get(runId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Durable run", id: runId });
+    }
+    return this.mapRunRow(row);
+  }
+
   /**
    * Locks and returns a run only while the caller still owns its active lease.
    * Callers must invoke this method inside a storage transaction. PostgreSQL
@@ -309,6 +573,41 @@ export class DurableRunRepository {
         runId,
         expectedLeaseOwnerId,
         now,
+      }),
+    );
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
+  /**
+   * Locks a run only while the database clock says the expected lease is live.
+   * This is the commit fence: callers must invoke it inside the same storage
+   * transaction as the state transition protected by the lease.
+   */
+  public lockFreshActiveLeaseForUpdate(runId: string, expectedLeaseOwnerId: string): DurableRunRecord | undefined {
+    const row = toDurableRunRow(
+      this.lockFreshActiveLeaseForUpdateStmt.get({
+        runId,
+        expectedLeaseOwnerId,
+      }),
+    );
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
+  /**
+   * Locks an observed running lease only when the exact owner/expiry pair is
+   * unchanged and the database clock says it has expired. Callers must invoke
+   * this inside the same storage transaction as the recovery transition.
+   */
+  public lockExpiredLeaseForUpdate(input: {
+    runId: string;
+    expectedLeaseOwnerId?: string;
+    expectedLeaseExpiresAt: string;
+  }): DurableRunRecord | undefined {
+    const row = toDurableRunRow(
+      this.lockExpiredLeaseForUpdateStmt.get({
+        runId: input.runId,
+        expectedLeaseOwnerId: input.expectedLeaseOwnerId ?? null,
+        expectedLeaseExpiresAt: input.expectedLeaseExpiresAt,
       }),
     );
     return row ? this.mapRunRow(row) : undefined;
@@ -368,6 +667,7 @@ export class DurableRunRepository {
   }): DurableRunRecord {
     const current = this.getRun(input.runId);
     const next = this.buildNextRun(current, input);
+    const expectedVersion = input.expectedVersion ?? current.version;
     const result = this.updateRunStmt.run({
       runId: next.runId,
       status: next.status,
@@ -382,11 +682,18 @@ export class DurableRunRepository {
       leaseExpiresAt: next.leaseExpiresAt ?? null,
       leaseHeartbeatAt: next.leaseHeartbeatAt ?? null,
       nextVersion: next.version,
-      expectedVersion: input.expectedVersion ?? current.version,
+      expectedVersion,
       updatedAt: next.updatedAt,
     });
     if ((result.changes ?? 0) < 1) {
-      throw new Error(`Durable run ${input.runId} update conflict`);
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Durable run ${input.runId} update conflict`,
+        details: {
+          runId: input.runId,
+          expectedVersion,
+        },
+      });
     }
     return this.getRun(next.runId);
   }
@@ -433,6 +740,19 @@ export class DurableRunRepository {
     return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
   }
 
+  public tryClaimQueuedRunWithDatabaseClock(input: {
+    runId: string;
+    workerId: string;
+    leaseDurationMs: number;
+  }): DurableRunRecord | undefined {
+    const result = this.claimQueuedRunWithDatabaseClockStmt.run({
+      runId: input.runId,
+      workerId: input.workerId,
+      leaseDurationMs: normalizeLeaseDurationMs(input.leaseDurationMs),
+    });
+    return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
+  }
+
   public renewLease(input: {
     runId: string;
     workerId: string;
@@ -453,6 +773,19 @@ export class DurableRunRepository {
       updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
       expectedVersion: current.version,
     });
+  }
+
+  public renewLeaseWithDatabaseClock(input: {
+    runId: string;
+    workerId: string;
+    leaseDurationMs: number;
+  }): DurableRunRecord | undefined {
+    const result = this.renewLeaseWithDatabaseClockStmt.run({
+      runId: input.runId,
+      workerId: input.workerId,
+      leaseDurationMs: normalizeLeaseDurationMs(input.leaseDurationMs),
+    });
+    return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
   }
 
   public releaseLease(runId: string, workerId: string, updatedAt?: string): DurableRunRecord | undefined {
@@ -508,9 +841,9 @@ export class DurableRunRepository {
     return rows.map((row) => row.run_id);
   }
 
-  public listExpiredRunningRunIds(nowIso: string, limit = 500): string[] {
+  public listExpiredRunningRunIds(_nowIso: string, limit = 500): string[] {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
-    const rows = this.listExpiredRunningRunIdsStmt.all(nowIso, safeLimit) as Array<{ run_id: string }>;
+    const rows = this.listExpiredRunningRunIdsStmt.all({ limit: safeLimit }) as Array<{ run_id: string }>;
     return rows.map((row) => row.run_id);
   }
 
@@ -603,6 +936,33 @@ export class DurableRunRepository {
     });
     const rows = this.listRetries(record.runId);
     return rows[rows.length - 1] ?? record;
+  }
+
+  /** Creates retry readiness relative to the database clock. */
+  public upsertRetryWithDatabaseClock(input: {
+    retryId?: string;
+    runId: string;
+    attemptNo: number;
+    reason: string;
+    delayMs: number;
+  }): DurableRetryRecord {
+    const record = {
+      retryId: input.retryId ?? randomUUID(),
+      runId: input.runId,
+      attemptNo: Math.max(1, Math.floor(input.attemptNo)),
+      reason: input.reason.trim(),
+      delayMs: normalizeRetryDelayMs(input.delayMs),
+    };
+    if (!record.reason) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "reason" });
+    }
+    this.upsertRetryWithDatabaseClockStmt.run(record);
+    const rows = this.listRetries(record.runId);
+    const inserted = rows.find((item) => item.attemptNo === record.attemptNo);
+    if (!inserted) {
+      throw new Error(`Durable retry ${record.runId}/${record.attemptNo} was not persisted.`);
+    }
+    return inserted;
   }
 
   public listRetries(runId: string, limit = 100): DurableRetryRecord[] {
@@ -921,6 +1281,20 @@ function mapDeadLetterRow(row: DurableDeadLetterRow): DurableDeadLetterRecord {
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
+}
+
+function normalizeLeaseDurationMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new ValidationError({ message: "Durable lease duration must be a positive number of milliseconds." });
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeRetryDelayMs(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ValidationError({ message: "Durable retry delay must be a non-negative number of milliseconds." });
+  }
+  return Math.max(0, Math.floor(value));
 }
 
 function normalizeObject(value: Record<string, unknown> | undefined): Record<string, unknown> {

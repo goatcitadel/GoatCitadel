@@ -830,6 +830,7 @@ function buildAgenticChildProgressItems(agenticRunTree?: AgenticRunTreeResponse 
         readMetadataString(metadata, "childSessionId")
           ? `session ${readMetadataString(metadata, "childSessionId")}`
           : undefined,
+        readMetadataString(metadata, "childTurnId") ? `turn ${readMetadataString(metadata, "childTurnId")}` : undefined,
         readMetadataString(metadata, "durableRunId")
           ? `durable ${readMetadataString(metadata, "durableRunId")}`
           : undefined,

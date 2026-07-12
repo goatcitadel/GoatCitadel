@@ -129,6 +129,7 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       expect.objectContaining({ turnId: "turn-1" }),
       { content: "hello", mode: "chat" },
       "chat_thread_turn_appended",
+      { mutationLifecycle: undefined, runId: undefined },
     );
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1", {
       reservation: true,

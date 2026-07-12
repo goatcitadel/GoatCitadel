@@ -93,7 +93,9 @@ function notifyLateSettle<T>(
   if (!onLateSettle) {
     return;
   }
-  void Promise.resolve(onLateSettle(event)).catch(() => {
-    // Late-settle diagnostics are best-effort and must not change timeout truth.
-  });
+  void Promise.resolve()
+    .then(() => onLateSettle(event))
+    .catch(() => {
+      // Late-settle diagnostics are best-effort and must not change timeout truth.
+    });
 }

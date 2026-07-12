@@ -74,7 +74,7 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
 ]);
 
-const FAST_LANE_STAGES = Object.freeze([
+export const FAST_LANE_STAGES = Object.freeze([
   {
     id: "fast.prerequisites",
     mode: "serial",
@@ -98,10 +98,15 @@ const FAST_LANE_STAGES = Object.freeze([
     commands: ["fast.test.storage"],
   },
   {
+    id: "fast.test.policy-engine",
+    mode: "serial",
+    commands: ["fast.test.policy-engine"],
+  },
+  {
     id: "fast.test.safe-parallel",
     mode: "parallel",
     concurrency: FAST_LANE_SAFE_TEST_CONCURRENCY,
-    commands: ["fast.test.mission-control-next", "fast.test.policy-engine", "fast.test.libraries"],
+    commands: ["fast.test.mission-control-next", "fast.test.libraries"],
   },
   {
     id: "fast.post-tests",
@@ -154,14 +159,15 @@ export const A2A_FULL_LANE_COMMANDS = Object.freeze([
   },
 ]);
 
-
 export async function runFastLane(context, options = {}) {
   const failFast = maybeParseBool(options.failFast ?? process.env.GOATCITADEL_VERIFY_FAIL_FAST, false);
   const serial = failFast || maybeParseBool(options.serial ?? process.env.GOATCITADEL_VERIFY_SERIAL, false);
   const injectedFailureScenario =
     typeof options.injectFailureScenario === "string" ? options.injectFailureScenario : undefined;
   const executionOptions = { failFast, injectFailureScenario: injectedFailureScenario };
-  const stages = serial ? [{ id: "fast.serial", mode: "serial", commands: FAST_LANE_COMMANDS.map((item) => item.id) }] : FAST_LANE_STAGES;
+  const stages = serial
+    ? [{ id: "fast.serial", mode: "serial", commands: FAST_LANE_COMMANDS.map((item) => item.id) }]
+    : FAST_LANE_STAGES;
 
   for (const stage of stages) {
     if (stage.mode === "parallel") {
@@ -323,9 +329,7 @@ async function resolveFastLaneTempBaseRoot(context) {
     return path.join(configuredTempRoot, context.runId);
   }
   const systemTempRoot =
-    process.platform === "win32"
-      ? os.tmpdir()
-      : path.join("/tmp", `gcv-${process.pid}`, context.runId.slice(-8));
+    process.platform === "win32" ? os.tmpdir() : path.join("/tmp", `gcv-${process.pid}`, context.runId.slice(-8));
   if (await hasMinimumFreeSpace(systemTempRoot, FAST_LANE_TEMP_MIN_FREE_BYTES)) {
     return systemTempRoot;
   }

@@ -65,20 +65,31 @@ describe("createChatTurnRuntimeHost", () => {
     expect(host.streamPersistedChatTurnEvents("session-1", "turn-1")).toBe(stream);
     expect(host.withEphemeralStreamEnvelope(asyncGenerator("raw"), "run-1")).toBe(wrappedStream);
 
-    expect(host.beginDurableChatRun({} as never, { content: "hello" } as never, "chat_thread_turn_appended")).toBe(
-      "durable-run",
-    );
+    const mutationLifecycle = { markCommitted: vi.fn() };
+    expect(
+      host.beginDurableChatRun({} as never, { content: "hello" } as never, "chat_thread_turn_appended", {
+        mutationLifecycle,
+      }),
+    ).toBe("durable-run");
+    expect(source.fns.beginDurableChatRun).toHaveBeenCalledWith({}, { content: "hello" }, "chat_thread_turn_appended", {
+      mutationLifecycle,
+    });
     expect(host.finalizeDurableChatRun("run-1", {} as never, {} as never)).toBe("finalized");
     expect(host.isFeatureEnabled("durableKernelV1Enabled")).toBe("enabled");
 
     const onCommit = vi.fn();
+    const afterCommit = vi.fn();
     source.fns.ingestEvent.mockImplementationOnce(async (_idempotencyKey, _payload, options) => {
       options?.onCommit?.();
+      options?.afterCommit?.();
       return "ingested";
     });
-    await expect(host.ingestEvent("event-1", { type: "chat" } as never, { onCommit })).resolves.toBe("ingested");
-    expect(source.fns.ingestEvent).toHaveBeenCalledWith("event-1", { type: "chat" }, { onCommit });
+    await expect(host.ingestEvent("event-1", { type: "chat" } as never, { onCommit, afterCommit })).resolves.toBe(
+      "ingested",
+    );
+    expect(source.fns.ingestEvent).toHaveBeenCalledWith("event-1", { type: "chat" }, { onCommit, afterCommit });
     expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(afterCommit).toHaveBeenCalledTimes(1);
     expect(host.extractAndPersistLearnedMemory("session-1", "answer", { role: "assistant" } as never)).toBe("memory");
     expect(
       host.recordTurnCommitments({

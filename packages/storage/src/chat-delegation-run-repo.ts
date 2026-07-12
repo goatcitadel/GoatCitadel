@@ -36,6 +36,7 @@ interface ChatDelegationRunRow {
 
 export class ChatDelegationRunRepository {
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
@@ -44,6 +45,11 @@ export class ChatDelegationRunRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_runs WHERE run_id = ?");
+    this.getForUpdateStmt = db.prepare(`
+      SELECT * FROM chat_delegation_runs
+      WHERE run_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_runs (
         run_id, parent_run_id, session_id, task_id, objective, roles_json, mode, provider_id, model, status, visibility,
@@ -97,6 +103,19 @@ export class ChatDelegationRunRepository {
 
   public get(runId: string): ChatDelegationRunRecord {
     const raw = this.getStmt.get(runId);
+    if (!raw) {
+      throw new NotFoundError({ entity: "Delegation run", id: runId });
+    }
+    const row = toChatDelegationRunRow(raw);
+    if (!row) {
+      throw new Error(`Delegation run ${runId} is corrupt or uses unsupported persisted values`);
+    }
+    return mapRow(row);
+  }
+
+  /** Locks the parent run for an aggregate transition. Call inside a storage transaction. */
+  public getForUpdate(runId: string): ChatDelegationRunRecord {
+    const raw = this.getForUpdateStmt.get(runId);
     if (!raw) {
       throw new NotFoundError({ entity: "Delegation run", id: runId });
     }
@@ -167,6 +186,7 @@ export class ChatDelegationRunRepository {
       citations?: ChatCitationRecord[];
       trace?: ChatTurnTraceRecord["routing"];
       finishedAt?: string;
+      clearFinishedAt?: boolean;
     },
   ): ChatDelegationRunRecord {
     const current = this.get(runId);
@@ -184,7 +204,11 @@ export class ChatDelegationRunRepository {
       stitchedOutput: input.stitchedOutput !== undefined ? input.stitchedOutput : (current.stitchedOutput ?? null),
       citationsJson: JSON.stringify(input.citations ?? current.citations),
       traceJson: stringifyOptionalRecord(nextTrace),
-      finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
+      finishedAt: input.clearFinishedAt
+        ? null
+        : input.finishedAt !== undefined
+          ? input.finishedAt
+          : (current.finishedAt ?? null),
     });
     return this.get(runId);
   }

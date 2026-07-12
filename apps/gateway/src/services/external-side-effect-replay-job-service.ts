@@ -7,12 +7,19 @@ import { buildIntegrationWardAction, resolveWardEffectForExternalAction } from "
 import type { IdempotentExternalSideEffectRunInput } from "./external-side-effect-runner-service.js";
 import { buildActivepiecesTriggerWebhookRunInput, type IntegrationActionHost } from "./integration-action-service.js";
 
+export type GatewayExternalSideEffectReplayJob = IdempotentExternalSideEffectRunInput<Record<string, unknown>> & {
+  externalDestinationFingerprint: string;
+  runClaimTransaction<T>(work: () => T): T;
+  requireDurableBoundaryRecord: true;
+};
+
 /**
  * Production replay allowlist for the durable `external_side_effect.replay`
  * workflow. Each entry is an EXACT (boundary, catalogId, actionId) triple
  * that this gateway is willing to safely reconstruct — from LIVE connection
  * config only, never from persisted request payload (ledger rows store no
- * raw payload, only identity fields + a payloadHash) — and re-execute after
+ * raw payload/target, only identity fields, a redacted destination digest,
+ * and a payloadHash) — and re-execute after
  * the original attempt failed before crossing the external boundary.
  *
  * Anything not listed here makes `buildGatewayExternalSideEffectReplayJob`
@@ -43,7 +50,8 @@ export function buildGatewayExternalSideEffectReplayJob(
   host: IntegrationActionHost,
   run: ExternalSideEffectRunRecord,
   _payload: ExternalSideEffectReplayWorkflowPayload,
-): IdempotentExternalSideEffectRunInput<Record<string, unknown>> | undefined {
+): GatewayExternalSideEffectReplayJob | undefined {
+  const storage = host.storage;
   // Reason: allowlist miss — boundary/catalogId/actionId is not an exact
   // match for a production-approved replay integration.
   const allowlisted = EXTERNAL_SIDE_EFFECT_REPLAY_JOB_ALLOWLIST.find(
@@ -60,7 +68,7 @@ export function buildGatewayExternalSideEffectReplayJob(
 
   let connection: IntegrationConnection | undefined;
   try {
-    connection = host.storage.integrationConnections.get(run.connectionId);
+    connection = storage.integrationConnections.get(run.connectionId);
   } catch {
     connection = undefined;
   }
@@ -68,6 +76,19 @@ export function buildGatewayExternalSideEffectReplayJob(
   // original claim (the connection now points at a different provider) —
   // replaying against a different provider would not be the same action.
   if (!connection || connection.catalogId !== allowlisted.catalogId) {
+    return undefined;
+  }
+  // Reason: connection ownership drift. Replaying a run recorded in one
+  // workspace through a connection now owned by another workspace would cross
+  // the original policy/actor boundary even if the connection ID stayed the same.
+  if ((connection.workspaceId ?? "default") !== run.workspaceId) {
+    return undefined;
+  }
+
+  // Reason: replay must atomically fence mutation ownership with the durable
+  // side-effect boundary. A host without the canonical transaction owner is
+  // not allowed to construct an executable replay job.
+  if (!storage.runImmediateTransaction) {
     return undefined;
   }
 
@@ -80,7 +101,7 @@ export function buildGatewayExternalSideEffectReplayJob(
   // so a `wardEffect` is never even attached to the job we return below.
   const wardAction = buildIntegrationWardAction(allowlisted.catalogId, allowlisted.actionId);
   const wardResolution = resolveWardEffectForExternalAction({
-    storage: host.storage,
+    storage,
     workspaceId: connection.workspaceId,
     action: wardAction,
   });
@@ -115,19 +136,25 @@ export function buildGatewayExternalSideEffectReplayJob(
   if ("blockedReason" in parts) {
     return undefined;
   }
+  if (!parts.input.externalDestinationFingerprint) {
+    return undefined;
+  }
 
   return {
     ...parts.input,
     checkedAt,
     // Identity is pinned from the RUN ROW, not freshly derived, so the
-    // replay-safe worker's identity-mismatch check (idempotency key,
-    // boundary, catalogId, connectionId, actionId) always passes and the
-    // idempotency claim lands on the SAME logical operation as the original
-    // attempt — never a fresh one.
+    // replay-safe worker's identity-mismatch check pins the idempotency key,
+    // boundary, catalog, connection, action, actor, and route. The payload hash
+    // additionally binds the redacted destination digest, so target drift
+    // blocks before provider contact.
     idempotencyKey: run.idempotencyKey,
     actorScope: run.actorScope,
     workspaceId: run.workspaceId,
     mutationStore: host.mutationStore,
     sideEffectRunStore: host.sideEffectRunStore,
+    externalDestinationFingerprint: parts.input.externalDestinationFingerprint,
+    runClaimTransaction: (work) => storage.runImmediateTransaction!(work),
+    requireDurableBoundaryRecord: true,
   };
 }

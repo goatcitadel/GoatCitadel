@@ -2583,4 +2583,92 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       },
     ],
   },
+  {
+    version: 82,
+    name: "mutation_idempotency_claim_lease_parity",
+    sql: `
+      ALTER TABLE mutation_idempotency
+        ADD COLUMN IF NOT EXISTS claim_token TEXT,
+        ADD COLUMN IF NOT EXISTS claim_expires_at TEXT;
+
+      UPDATE mutation_idempotency
+      SET claim_token = COALESCE(
+            claim_token,
+            'legacy-' || md5(method || route_path || idempotency_key || actor_scope || random()::text)
+          ),
+          claim_expires_at = COALESCE(claim_expires_at, updated_at)
+      WHERE status = 'pending';
+
+      CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_pending_lease
+        ON mutation_idempotency(status, claim_expires_at, updated_at);
+    `,
+  },
+  {
+    version: 83,
+    name: "chat_delegation_step_plan_truth",
+    sql: `
+      ALTER TABLE chat_delegation_steps
+        ADD COLUMN IF NOT EXISTS parallelizable BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS depends_on_step_ids_json TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+  {
+    version: 84,
+    name: "chat_delegation_dispatch_claim_lease",
+    sql: `
+      ALTER TABLE chat_delegation_steps
+        ADD COLUMN IF NOT EXISTS dispatch_claim_token TEXT,
+        ADD COLUMN IF NOT EXISTS dispatch_claim_expires_at TEXT;
+
+      UPDATE chat_delegation_steps
+      SET dispatch_claim_token = child_session_id,
+          dispatch_claim_expires_at = CASE
+            WHEN child_session_id ~ '^delegation-claim:v1:[0-9]+:' THEN
+              to_char(
+                to_timestamp(
+                  substring(child_session_id from '^delegation-claim:v1:([0-9]+):')::double precision / 1000.0
+                ) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              )
+            ELSE '1970-01-01T00:00:00.000Z'
+          END,
+          child_session_id = NULL
+      WHERE child_session_id LIKE 'delegation-claim:v1:%';
+
+      UPDATE chat_delegation_steps
+      SET dispatch_claim_token = child_turn_id,
+          dispatch_claim_expires_at = CASE
+            WHEN child_turn_id ~ '^delegation-dispatch:v1:[0-9]+:' THEN
+              to_char(
+                to_timestamp(
+                  substring(child_turn_id from '^delegation-dispatch:v1:([0-9]+):')::double precision / 1000.0
+                ) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              )
+            ELSE '1970-01-01T00:00:00.000Z'
+          END,
+          child_turn_id = NULL
+      WHERE child_turn_id LIKE 'delegation-dispatch:v1:%';
+
+      CREATE INDEX IF NOT EXISTS idx_chat_delegation_steps_dispatch_claim
+        ON chat_delegation_steps(status, dispatch_claim_expires_at, step_id);
+    `,
+  },
+  {
+    version: 85,
+    name: "scrub_legacy_remote_approval_bearers_from_effect_results",
+    sql: "",
+    integritySha256: "ef8cc376dbcba14eb6dd496d5cf14be19183096bafcab2ae57395dedae76df74",
+    batchedStatements: [
+      {
+        name: "scrub_approval_effect_results",
+        sql: buildPostgresV81BoundedUpdate({
+          table: "approval_effects",
+          keyColumns: ["effect_id"],
+          predicate: postgresV81BearerPredicate(["result_json", "detail", "details_json", "outcome"]),
+          assignments: postgresV81RedactAssignments(["result_json", "detail", "details_json", "outcome"]),
+        }),
+      },
+    ],
+  },
 ];

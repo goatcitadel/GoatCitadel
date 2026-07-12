@@ -11,6 +11,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  APPROVAL_EXPIRY_ACTOR_ID,
   type ApprovalEffectRecord,
   type ApprovalListResponse,
   ConflictError,
@@ -44,7 +45,7 @@ import {
 } from "./approval-observability.js";
 import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-follow-up.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
-import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import type { ApprovalCreateAuthority, ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
 export class ApprovalExpiredAfterCommitError extends ValidationError {
@@ -57,15 +58,6 @@ export class ApprovalExpiredAfterCommitError extends ValidationError {
     this.name = "ApprovalExpiredAfterCommitError";
   }
 }
-
-class ApprovalExpiredDuringCommitError extends Error {
-  public constructor(public readonly approvalId: string) {
-    super(`Approval ${approvalId} expired during resolution commit.`);
-    this.name = "ApprovalExpiredDuringCommitError";
-  }
-}
-
-const APPROVAL_EXPIRY_ACTOR = "system:approval-expiry";
 
 export type ApprovalCreateCommitHook = (approval: ApprovalRequest) =>
   | readonly ApprovalObservabilityEffectInput[]
@@ -106,7 +98,10 @@ export interface ApprovalLifecycleHost {
   >;
 
   // ── services ───────────────────────────────────────────────────────
-  readonly policyEngine: Pick<ToolPolicyEngine, "listGrants" | "createGrant" | "revokeGrant" | "executeApprovedAction">;
+  readonly policyEngine: Pick<
+    ToolPolicyEngine,
+    "listGrants" | "listActiveGrants" | "createGrant" | "revokeGrant" | "executeApprovedAction"
+  >;
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   readonly approvalWaitRunService: Pick<
     ApprovalWaitRunService,
@@ -212,7 +207,6 @@ export function listApprovals(
 ): ApprovalRequest[] {
   return host.storage.approvals
     .list(status, limit, workspaceId)
-    .filter((approval) => status !== "pending" || !isApprovalExpired(approval))
     .map((approval) =>
       withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
     );
@@ -229,21 +223,11 @@ export function listApprovalsPage(
 ): ApprovalListResponse {
   const page = host.storage.approvals.listPage(input);
   return {
-    items: page.items
-      .filter((approval) => input.status !== "pending" || !isApprovalExpired(approval))
-      .map((approval) =>
-        withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
-      ),
+    items: page.items.map((approval) =>
+      withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
+    ),
     nextCursor: page.nextCursor,
   };
-}
-
-function isApprovalExpired(approval: ApprovalRequest): boolean {
-  if (!approval.expiresAt) {
-    return false;
-  }
-  const expiresAt = Date.parse(approval.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
 interface ApprovalExpirationContext {
@@ -258,11 +242,7 @@ interface ApprovalExpirationOutcome {
 
 export function expirePendingApprovals(host: ApprovalLifecycleHost, limit = 100): number {
   const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 100;
-  const candidates = host.storage.approvals.listExpiredPending(
-    new Date().toISOString(),
-    boundedLimit,
-    DEVICE_ACCESS_APPROVAL_KIND,
-  );
+  const candidates = host.storage.approvals.listExpiredPending(undefined, boundedLimit, DEVICE_ACCESS_APPROVAL_KIND);
   let committed = 0;
   let firstFailure: { error: unknown } | undefined;
   for (const approval of candidates) {
@@ -285,15 +265,16 @@ function reconcileExpiredApproval(
   approval: ApprovalRequest,
   context?: Pick<ApprovalExpirationContext, "requestedDecision">,
 ): ApprovalExpirationOutcome {
-  if (approval.status !== "pending" || !isApprovalExpired(approval)) {
+  const approvals = host.storage.approvals;
+  if (approval.status !== "pending" || !approvals.isExpiredPendingAtDatabaseNow(approval.approvalId)) {
     return { approval, committed: false };
   }
 
   let outcome!: ApprovalExpirationOutcome;
   try {
     host.storage.runImmediateTransaction(() => {
-      const current = host.storage.approvals.get(approval.approvalId);
-      if (current.status !== "pending" || !isApprovalExpired(current)) {
+      const current = approvals.get(approval.approvalId);
+      if (current.status !== "pending" || !approvals.isExpiredPendingAtDatabaseNow(current.approvalId)) {
         outcome = { approval: current, committed: false };
         return;
       }
@@ -310,7 +291,7 @@ function reconcileExpiredApproval(
     if (!(error instanceof ConflictError)) {
       throw error;
     }
-    const latest = host.storage.approvals.get(approval.approvalId);
+    const latest = approvals.get(approval.approvalId);
     if (latest.status === "pending") {
       throw error;
     }
@@ -409,6 +390,7 @@ export async function createApproval(
   host: ApprovalLifecycleHost,
   input: ApprovalCreateInput,
   onCreated?: ApprovalCreateCommitHook,
+  authority?: ApprovalCreateAuthority,
 ): Promise<ApprovalRequest> {
   const approvalHookWorkspaceId = host.resolveApprovalHookWorkspaceId({
     ...(input.payload ?? {}),
@@ -512,7 +494,10 @@ export async function createApproval(
 
   let approval!: ApprovalRequest;
   host.storage.runImmediateTransaction(() => {
-    approval = host.storage.approvals.create(transactionalCreateInput);
+    approval =
+      authority?.ttlMs !== undefined
+        ? host.storage.approvals.createWithTtlDuration(transactionalCreateInput, authority.ttlMs)
+        : host.storage.approvals.create(transactionalCreateInput);
     if (policyOutcome.explanations.length > 0) {
       host.storage.approvals.setShellExplanations(approval.approvalId, policyOutcome.explanations);
       approval = host.storage.approvals.get(approval.approvalId);
@@ -601,34 +586,20 @@ export async function resolveApproval(
           message: `Approval ${approvalId} is already resolved`,
         });
       }
-      const resolvedAt = new Date().toISOString();
-      const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
-      if (Number.isFinite(expiresAt) && expiresAt <= Date.parse(resolvedAt)) {
-        commitExpiredApprovalResolution(host, current, {
-          requestedDecision: input.decision,
-          reason: `Approval ${approvalId} expired before operator resolution.`,
-        });
-        expiredMutationCommitted = true;
-        return;
-      }
       if (context?.remoteToken) {
         storage.approvals.mergeLinkage(approvalId, {
           connectorId: context.remoteToken.connectorId,
           tokenId: context.remoteToken.tokenId,
         });
       }
-      result = commitStandardApprovalResolution(host, approvalId, input, { resolvedAt });
-      const commitExpiresAt = result.approval.expiresAt ? Date.parse(result.approval.expiresAt) : Number.NaN;
-      if (Number.isFinite(commitExpiresAt) && commitExpiresAt <= Date.now()) {
-        throw new ApprovalExpiredDuringCommitError(approvalId);
-      }
+      result = commitStandardApprovalResolution(host, approvalId, input);
     });
   } catch (error) {
-    if (!(error instanceof ApprovalExpiredDuringCommitError)) {
+    if (!isApprovalExpiryConflict(error, approvalId)) {
       throw error;
     }
-    // The first transaction rolled back the stale operator decision. Do not
-    // let its in-memory result escape after the expiry reconciliation commits.
+    // The database rejected an operator decision at its own expiry boundary.
+    // Reconcile that still-pending request as an explicit system rejection.
     result = undefined;
     const expiration = reconcileExpiredApproval(host, storage.approvals.get(approvalId), {
       requestedDecision: input.decision,
@@ -668,6 +639,14 @@ export async function resolveApproval(
   }
 }
 
+function isApprovalExpiryConflict(error: unknown, approvalId: string): error is ConflictError {
+  return (
+    error instanceof ConflictError &&
+    error.details?.reason === "approval_expired" &&
+    error.details.approvalId === approvalId
+  );
+}
+
 function commitExpiredApprovalResolution(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
@@ -675,11 +654,10 @@ function commitExpiredApprovalResolution(
 ): ApprovalResolveResult {
   const input: ApprovalResolveInput = {
     decision: "reject",
-    resolvedBy: APPROVAL_EXPIRY_ACTOR,
+    resolvedBy: APPROVAL_EXPIRY_ACTOR_ID,
     resolutionNote: expiration.reason,
   };
   return commitStandardApprovalResolution(host, approval.approvalId, input, {
-    resolvedAt: new Date().toISOString(),
     allowExpired: true,
     expiration,
   });
@@ -690,7 +668,6 @@ function commitStandardApprovalResolution(
   approvalId: string,
   input: ApprovalResolveInput,
   options: {
-    resolvedAt?: string;
     allowExpired?: boolean;
     expiration?: ApprovalExpirationContext;
   } = {},
@@ -717,9 +694,7 @@ function commitStandardApprovalResolution(
   const approval = storage.approvals.resolve(
     approvalId,
     input,
-    options.resolvedAt || options.allowExpired
-      ? { resolvedAt: options.resolvedAt, allowExpired: options.allowExpired }
-      : undefined,
+    options.allowExpired ? { allowExpired: true } : undefined,
   );
   const expiredRemoteTokenCount = storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
 
@@ -768,7 +743,7 @@ function commitStandardApprovalResolution(
       storage.approvalEvents.append({
         approvalId,
         eventType: "pending_action_refused",
-        actorId: APPROVAL_EXPIRY_ACTOR,
+        actorId: APPROVAL_EXPIRY_ACTOR_ID,
         payload: {
           actionType: pendingAction.actionType,
           decision: "reject",
@@ -1058,14 +1033,7 @@ function findExistingGrant(
   scopeRef: string,
   toolPattern: string,
 ): ToolGrantRecord | undefined {
-  const now = Date.now();
   return host.policyEngine
-    .listGrants(scope, scopeRef, 500)
-    .find(
-      (grant) =>
-        grant.decision === "allow" &&
-        grant.toolPattern === toolPattern &&
-        !grant.revokedAt &&
-        (!grant.expiresAt || Date.parse(grant.expiresAt) > now),
-    );
+    .listActiveGrants(scope, scopeRef, 500)
+    .find((grant) => grant.decision === "allow" && grant.toolPattern === toolPattern);
 }

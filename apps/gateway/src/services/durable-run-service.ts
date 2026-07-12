@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Durable run lifecycle service intentionally centralizes lease, recovery, timeline, and diagnostics behavior. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ChatTurnTraceRecord,
   DurableCheckpointRecord,
@@ -7,13 +7,19 @@ import type {
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
   RealtimeEvent,
+  DurableRetryRecord,
   DurableRetryPolicy,
   DurableRunCreateRequest,
   DurableRunRecord,
   DurableRunTimelineEvent,
   DurableWakeResult,
 } from "@goatcitadel/contracts";
-import { CHAT_TURN_ACTIVE_STATUSES, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
+import {
+  CHAT_TURN_ACTIVE_STATUSES,
+  isChatTurnTerminalStatus,
+  isDurableRunTerminal,
+  NotFoundError,
+} from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -21,14 +27,19 @@ import type { DurableWorkflowExecutorRegistry } from "./durable-execution-servic
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import {
   AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
+  GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS,
   GENERAL_CHAT_POST_COMMIT_EFFECTS,
   GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
+  type AutonomousChatPostCommitPendingMarker,
   type GeneralChatPostCommitEffect,
+  type GeneralChatPostCommitDurableEffectInput,
+  type GeneralChatPostCommitEffectWorkflowPayload,
   type GeneralChatPostCommitPendingMarker,
   type GeneralChatPostCommitProgress,
   hasAutonomousChatPostCommitPending,
   hasGeneralChatPostCommitPending,
   markGeneralChatPostCommitPending,
+  readAutonomousChatPostCommitPendingMarker,
   readGeneralChatPostCommitCompletedEffects,
   readGeneralChatPostCommitPendingMarker,
 } from "./chat-durable-run-service.js";
@@ -85,6 +96,85 @@ function sameGeneralChatPostCommitGeneration(
   right: GeneralChatPostCommitPendingMarker,
 ): boolean {
   return left.generationId === right.generationId && left.traceStatus === right.traceStatus;
+}
+
+function buildGeneralChatPostCommitEffectRunId(
+  parentRunId: string,
+  generationId: string,
+  effect: GeneralChatPostCommitDurableEffectInput["effect"],
+): string {
+  const digest = createHash("sha256")
+    .update(`${parentRunId}\u0000${generationId}\u0000${effect}`)
+    .digest("hex")
+    .slice(0, 32);
+  return `chat-post-commit-${digest}`;
+}
+
+function assertGeneralChatPostCommitEffectChild(
+  child: DurableRunRecord,
+  expected: GeneralChatPostCommitEffectWorkflowPayload,
+): void {
+  if (child.workflowKey !== "chat.post_commit.effect" || JSON.stringify(child.payload) !== JSON.stringify(expected)) {
+    throw new Error(
+      `Durable Chat post-commit child ${child.runId} does not match its parent generation and effect payload.`,
+    );
+  }
+}
+
+function findDurableRun(storage: Storage, runId: string): DurableRunRecord | undefined {
+  try {
+    return storage.durableRuns.getRun(runId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function assertIdempotentDurableRunMatches(
+  existing: DurableRunRecord,
+  workflowKey: string,
+  payload: Record<string, unknown>,
+): void {
+  if (existing.workflowKey !== workflowKey || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
+    throw new Error(`Durable run ${existing.runId} is already owned by a different immutable workflow payload.`);
+  }
+}
+
+function assertGeneralChatPostCommitEffectChildLink(
+  child: DurableRunRecord,
+  parentRunId: string,
+  generationId: string,
+  effect: GeneralChatPostCommitDurableEffectInput["effect"],
+): void {
+  const payload = child.payload as Partial<GeneralChatPostCommitEffectWorkflowPayload>;
+  if (
+    child.workflowKey !== "chat.post_commit.effect" ||
+    payload.version !== "chat.post_commit.effect.v1" ||
+    payload.parentRunId !== parentRunId ||
+    payload.generationId !== generationId ||
+    payload.input?.effect !== effect ||
+    child.metadata?.parentRunId !== parentRunId ||
+    child.metadata?.generationId !== generationId ||
+    child.metadata?.effect !== effect
+  ) {
+    throw new Error(`Durable Chat post-commit child ${child.runId} has inconsistent parent linkage.`);
+  }
+}
+
+function isGeneralChatPostCommitDurableEffect(
+  effect: GeneralChatPostCommitEffect,
+): effect is GeneralChatPostCommitDurableEffectInput["effect"] {
+  return (GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS as readonly string[]).includes(effect);
+}
+
+function readGeneralChatPostCommitWorkspaceId(input: GeneralChatPostCommitDurableEffectInput): string {
+  return input.workspaceId;
+}
+
+function readGeneralChatPostCommitTurnId(input: GeneralChatPostCommitDurableEffectInput): string {
+  return input.turnId;
 }
 
 function containsRawRemoteApprovalBearer(value: unknown): boolean {
@@ -167,6 +257,21 @@ function assertDurableChatCancellationTraceLink(
 }
 
 const LINKED_FINALIZATION_CLAIM_TTL_MS = 30_000;
+const LINKED_FINALIZATION_TIMEOUT_MS = 60_000;
+const AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS = 30_000;
+const AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS = 60_000;
+
+export interface AutonomousChatPostCommitContext {
+  claimId: string;
+  signal: AbortSignal;
+}
+
+function sameAutonomousChatPostCommitGeneration(
+  left: AutonomousChatPostCommitPendingMarker,
+  right: AutonomousChatPostCommitPendingMarker,
+): boolean {
+  return left.version === right.version && left.requestedAt === right.requestedAt;
+}
 
 function readLinkedFinalizationPending(run: DurableRunRecord): LinkedFinalizationPending | undefined {
   const value = (run.metadata as { linkedFinalizationPending?: unknown } | undefined)?.linkedFinalizationPending;
@@ -201,7 +306,7 @@ class DurableWorkflowTimeoutError extends Error {
   }
 }
 
-class DurableWorkerInterruptionError extends Error {
+export class DurableWorkerInterruptionError extends Error {
   public constructor(
     public readonly kind: "worker_stopped" | "lease_lost" | "heartbeat_unavailable",
     message: string,
@@ -317,6 +422,7 @@ export class DurableRunService {
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
       onAutonomousChatPostCommit?: (
         run: DurableRunRecord,
+        context: AutonomousChatPostCommitContext,
       ) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void;
       onGeneralChatPostCommit?: (
         run: DurableRunRecord,
@@ -595,25 +701,34 @@ export class DurableRunService {
     ) {
       throw new Error("durable recovery metadata is reserved for internal state transitions");
     }
-    const current = this.ctx.storage.durableRuns.getRun(input.runId);
-    if (input.expectedLeaseOwnerId && !this.hasActiveLeaseOwner(current, input.expectedLeaseOwnerId)) {
-      throw new DurableWorkerInterruptionError(
-        "lease_lost",
-        `Durable run ${input.runId} lease ownership moved before its workflow state could commit.`,
-      );
+    const update = (current: DurableRunRecord) =>
+      this.ctx.storage.durableRuns.updateRun({
+        runId: input.runId,
+        status: input.status ?? current.status,
+        metadata: input.metadata ?? current.metadata,
+        lastError: input.lastError,
+        clearLastError: input.clearLastError,
+        finishedAt: input.finishedAt,
+        clearFinishedAt: input.clearFinishedAt,
+        clearLease: input.clearLease,
+        updatedAt: new Date().toISOString(),
+        expectedVersion: current.version,
+      });
+    if (!input.expectedLeaseOwnerId) {
+      return update(this.ctx.storage.durableRuns.getRun(input.runId));
     }
-    return this.ctx.storage.durableRuns.updateRun({
-      runId: input.runId,
-      status: input.status ?? current.status,
-      metadata: input.metadata ?? current.metadata,
-      lastError: input.lastError,
-      clearLastError: input.clearLastError,
-      finishedAt: input.finishedAt,
-      clearFinishedAt: input.clearFinishedAt,
-      clearLease: input.clearLease,
-      updatedAt: new Date().toISOString(),
-      expectedVersion: current.version,
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshLeaseOwnerForTransition(input.runId, input.expectedLeaseOwnerId!);
+      if (!current) {
+        throw new DurableWorkerInterruptionError(
+          "lease_lost",
+          `Durable run ${input.runId} lease ownership moved before its workflow state could commit.`,
+        );
+      }
+      next = update(current);
     });
+    return next;
   }
 
   async reconcileAutonomousChatPostCommit(runId: string): Promise<boolean> {
@@ -622,12 +737,76 @@ export class DurableRunService {
     }
     try {
       const observed = this.ctx.storage.durableRuns.getRun(runId);
-      if (!hasAutonomousChatPostCommitPending(observed)) {
+      if (!readAutonomousChatPostCommitPendingMarker(observed)) {
+        if (AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY in (observed.metadata ?? {})) {
+          throw new Error(`Autonomous Chat post-commit ${runId} has an invalid pending marker.`);
+        }
         return true;
       }
-      const resolution = await this.deps.onAutonomousChatPostCommit(observed);
+      const claim = this.claimAutonomousChatPostCommit(observed);
+      if (!claim) {
+        return false;
+      }
+      const postCommitAbort = new AbortController();
+      const claimHeartbeat = setInterval(
+        () => {
+          try {
+            if (!this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending)) {
+              postCommitAbort.abort(
+                new DurableWorkerInterruptionError(
+                  "lease_lost",
+                  `Autonomous Chat post-commit ${claim.run.runId} lost claim ownership.`,
+                ),
+              );
+            }
+          } catch (error) {
+            this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+            postCommitAbort.abort(error);
+          }
+        },
+        Math.floor(AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS / 3),
+      );
+      claimHeartbeat.unref?.();
+      const postCommitTimeout = setTimeout(() => {
+        postCommitAbort.abort(new DurableWorkflowTimeoutError(claim.run.runId, AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS));
+      }, AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS);
+      postCommitTimeout.unref?.();
+      let rejectOnAbort: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        rejectOnAbort = () => {
+          const reason = postCommitAbort.signal.reason;
+          reject(reason instanceof Error ? reason : new Error(String(reason ?? "autonomous post-commit aborted")));
+        };
+        postCommitAbort.signal.addEventListener("abort", rejectOnAbort, { once: true });
+      });
+      let resolution: Record<string, unknown> | void;
+      try {
+        resolution = await Promise.race([
+          this.deps.onAutonomousChatPostCommit(claim.run, {
+            claimId: claim.pending.claimId!,
+            signal: postCommitAbort.signal,
+          }),
+          aborted,
+        ]);
+      } finally {
+        clearInterval(claimHeartbeat);
+        clearTimeout(postCommitTimeout);
+        if (rejectOnAbort) {
+          postCommitAbort.signal.removeEventListener("abort", rejectOnAbort);
+        }
+      }
+      if (postCommitAbort.signal.aborted) {
+        return false;
+      }
+      let clearedClaim = false;
       const cleared = this.retryDurableRunUpdate(runId, (current) => {
-        if (current.status !== "completed" || !hasAutonomousChatPostCommitPending(current)) {
+        const currentPending = readAutonomousChatPostCommitPendingMarker(current);
+        if (
+          current.status !== "completed" ||
+          !currentPending ||
+          !sameAutonomousChatPostCommitGeneration(claim.pending, currentPending) ||
+          currentPending.claimId !== claim.pending.claimId
+        ) {
           return current;
         }
         const metadata = { ...(current.metadata ?? {}) };
@@ -636,19 +815,100 @@ export class DurableRunService {
           ...(resolution ?? {}),
           completedAt: new Date().toISOString(),
         };
-        return this.ctx.storage.durableRuns.updateRun({
+        const updated = this.ctx.storage.durableRuns.updateRun({
           runId: current.runId,
           status: current.status,
           metadata,
           updatedAt: new Date().toISOString(),
           expectedVersion: current.version,
         });
+        clearedClaim = true;
+        return updated;
       });
-      return !hasAutonomousChatPostCommitPending(cleared);
+      return clearedClaim && !hasAutonomousChatPostCommitPending(cleared);
     } catch (error) {
       this.reportDurableRunRecoveryFailure(runId, error);
       return false;
     }
+  }
+
+  private claimAutonomousChatPostCommit(
+    observed: DurableRunRecord,
+  ): { run: DurableRunRecord; pending: AutonomousChatPostCommitPendingMarker } | undefined {
+    const observedPending = readAutonomousChatPostCommitPendingMarker(observed);
+    if (!observedPending) {
+      return undefined;
+    }
+    const claimId = randomUUID();
+    let claim: { run: DurableRunRecord; pending: AutonomousChatPostCommitPendingMarker } | undefined;
+    this.retryDurableRunUpdate(observed.runId, (current) => {
+      claim = undefined;
+      const pending = readAutonomousChatPostCommitPendingMarker(current);
+      if (
+        current.status !== "completed" ||
+        !pending ||
+        !sameAutonomousChatPostCommitGeneration(observedPending, pending)
+      ) {
+        return current;
+      }
+      const claimedAt = this.readDurableDatabaseNow();
+      const claimedAtMs = Date.parse(claimedAt);
+      const activeClaimExpiresAt = pending.claimExpiresAt ? Date.parse(pending.claimExpiresAt) : Number.NaN;
+      if (pending.claimId && Number.isFinite(activeClaimExpiresAt) && activeClaimExpiresAt > claimedAtMs) {
+        return current;
+      }
+      const claimedPending: AutonomousChatPostCommitPendingMarker = {
+        ...pending,
+        claimId,
+        claimExpiresAt: new Date(claimedAtMs + AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS).toISOString(),
+      };
+      const claimedRun = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: current.status,
+        metadata: {
+          ...(current.metadata ?? {}),
+          [AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY]: claimedPending,
+        },
+        updatedAt: claimedAt,
+        expectedVersion: current.version,
+      });
+      claim = { run: claimedRun, pending: claimedPending };
+      return claimedRun;
+    });
+    return claim;
+  }
+
+  private renewAutonomousChatPostCommitClaim(runId: string, claimed: AutonomousChatPostCommitPendingMarker): boolean {
+    let renewed = false;
+    this.retryDurableRunUpdate(runId, (current) => {
+      const pending = readAutonomousChatPostCommitPendingMarker(current);
+      if (
+        current.status !== "completed" ||
+        !pending ||
+        !sameAutonomousChatPostCommitGeneration(claimed, pending) ||
+        pending.claimId !== claimed.claimId
+      ) {
+        return current;
+      }
+      const now = this.readDurableDatabaseNow();
+      const nowMs = Date.parse(now);
+      const next = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: current.status,
+        metadata: {
+          ...(current.metadata ?? {}),
+          [AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY]: {
+            ...pending,
+            claimExpiresAt: new Date(nowMs + AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS).toISOString(),
+          },
+        },
+        updatedAt: now,
+        expectedVersion: current.version,
+      });
+      renewed = true;
+      return next;
+    });
+    return renewed;
   }
 
   async reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
@@ -684,10 +944,15 @@ export class DurableRunService {
         const completedEffects = new Set(readGeneralChatPostCommitCompletedEffects(observed));
         const progress: GeneralChatPostCommitProgress = {
           generationId: marker.generationId,
+          requestedAt: marker.requestedAt,
           targetTraceStatus: marker.traceStatus,
           completedEffects: [...completedEffects],
           runEffect: (effect, callback) =>
             this.runGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects),
+          publishEffect: (effect, callback) =>
+            this.publishGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects),
+          enqueueDurableEffect: (input) =>
+            this.enqueueGeneralChatPostCommitEffect(runId, marker, input, completedEffects),
         };
         const resolution = await this.deps.onGeneralChatPostCommit(observed, progress);
         const reconciled = this.ctx.storage.durableRuns.getRun(runId);
@@ -701,41 +966,99 @@ export class DurableRunService {
         if (!sameGeneralChatPostCommitGeneration(marker, reconciledMarker)) {
           continue;
         }
-        const reconciledEffects = new Set(readGeneralChatPostCommitCompletedEffects(reconciled));
-        const missingEffects = GENERAL_CHAT_POST_COMMIT_EFFECTS.filter((effect) => !reconciledEffects.has(effect));
-        if (missingEffects.length > 0) {
-          throw new Error(
-            `Durable Chat post-commit ${runId} returned before reconciling effects: ${missingEffects.join(", ")}.`,
-          );
-        }
         let generationChanged = false;
-        const cleared = this.retryDurableRunUpdate(runId, (current) => {
+        let childrenPending = false;
+        const queuedChildRunIds: string[] = [];
+        let cleared = reconciled;
+        this.ctx.storage.runImmediateTransaction(() => {
+          const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
           const currentMarker = readGeneralChatPostCommitPendingMarker(current);
           if (!currentMarker) {
-            return current;
+            cleared = current;
+            return;
           }
           if (!sameGeneralChatPostCommitGeneration(marker, currentMarker)) {
             generationChanged = true;
-            return current;
+            cleared = current;
+            return;
+          }
+          const currentEffects = new Set(readGeneralChatPostCommitCompletedEffects(current));
+          const missingEffects = GENERAL_CHAT_POST_COMMIT_EFFECTS.filter(
+            (effect) =>
+              !currentEffects.has(effect) &&
+              (!isGeneralChatPostCommitDurableEffect(effect) || !currentMarker.durableEffectRunIds[effect]),
+          );
+          if (missingEffects.length > 0) {
+            throw new Error(
+              `Durable Chat post-commit ${runId} returned before reconciling effects: ${missingEffects.join(", ")}.`,
+            );
+          }
+          const durableEffectOutcomes: Record<string, Record<string, unknown>> = {};
+          for (const effect of GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS) {
+            const childRunId = currentMarker.durableEffectRunIds[effect];
+            if (!childRunId) {
+              continue;
+            }
+            const expectedChildRunId = buildGeneralChatPostCommitEffectRunId(runId, marker.generationId, effect);
+            if (childRunId !== expectedChildRunId) {
+              throw new Error(`Durable Chat post-commit ${runId} has an invalid ${effect} child-run receipt.`);
+            }
+            const child = this.ctx.storage.durableRuns.getRunForUpdate(childRunId);
+            assertGeneralChatPostCommitEffectChildLink(child, runId, marker.generationId, effect);
+            if (!isDurableRunTerminal(child.status)) {
+              childrenPending = true;
+              if (child.status === "queued") {
+                queuedChildRunIds.push(childRunId);
+              }
+              continue;
+            }
+            durableEffectOutcomes[effect] = {
+              runId: childRunId,
+              status: child.status,
+              settledAt: child.finishedAt ?? child.updatedAt,
+              ...(child.lastError ? { error: child.lastError } : {}),
+            };
+            if (child.status === "completed") {
+              currentEffects.add(effect);
+            }
+          }
+          if (childrenPending) {
+            cleared = current;
+            return;
           }
           const metadata = { ...(current.metadata ?? {}) };
           delete metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
+          const settledAt = new Date().toISOString();
+          const allDurableEffectsSucceeded = Object.values(durableEffectOutcomes).every(
+            (outcome) => outcome.status === "completed",
+          );
           metadata.generalChatPostCommit = {
             ...(resolution ?? {}),
             generationId: marker.generationId,
             traceStatus: marker.traceStatus,
-            completedAt: new Date().toISOString(),
+            completedEffects: [...currentEffects],
+            durableEffectRunIds: { ...currentMarker.durableEffectRunIds },
+            durableEffectOutcomes,
+            settlementStatus: allDurableEffectsSucceeded ? "completed" : "settled_with_failures",
+            settledAt,
+            ...(allDurableEffectsSucceeded ? { completedAt: settledAt } : {}),
           };
-          return this.ctx.storage.durableRuns.updateRun({
+          cleared = this.ctx.storage.durableRuns.updateRun({
             runId: current.runId,
             status: current.status,
             metadata,
-            updatedAt: new Date().toISOString(),
+            updatedAt: settledAt,
             expectedVersion: current.version,
           });
         });
         if (generationChanged) {
           continue;
+        }
+        if (childrenPending) {
+          for (const childRunId of queuedChildRunIds) {
+            this.requestRunProcessing(childRunId);
+          }
+          return false;
         }
         return !hasGeneralChatPostCommitPending(cleared);
       }
@@ -747,11 +1070,11 @@ export class DurableRunService {
   }
 
   /**
-   * Atomically applies one synchronous consumer and records its per-turn
-   * receipt. If the callback or the receipt write fails, the storage
-   * transaction rolls both back; if a prior attempt committed, a retry skips
-   * the callback. This is the canonical crash-gap boundary for general Chat
-   * post-commit work.
+   * Atomically applies one synchronous local consumer and records its per-turn
+   * receipt. PostgreSQL workers serialize on the parent row before invoking
+   * the callback, so two processes cannot both run the same callback. This
+   * guarantee covers only work that commits synchronously on the same database
+   * connection; provider-backed consumers use deterministic child runs below.
    */
   private runGeneralChatPostCommitEffect(
     runId: string,
@@ -765,7 +1088,7 @@ export class DurableRunService {
     }
     let applied = false;
     this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRun(runId);
+      const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
       const currentMarker = readGeneralChatPostCommitPendingMarker(current);
       if (!currentMarker || !sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker)) {
         return;
@@ -804,7 +1127,189 @@ export class DurableRunService {
     return applied;
   }
 
-  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
+  /**
+   * Receipt-first notification path. The publisher runs only after the parent
+   * transaction commits, and it also runs when the receipt already exists so an
+   * idempotent retained delivery closes a crash gap without emitting ghosts.
+   */
+  private publishGeneralChatPostCommitEffect(
+    runId: string,
+    expectedMarker: GeneralChatPostCommitPendingMarker,
+    effect: GeneralChatPostCommitEffect,
+    callback: () => void,
+    completedEffects: Set<GeneralChatPostCommitEffect>,
+  ): boolean {
+    const applied = this.runGeneralChatPostCommitEffect(
+      runId,
+      expectedMarker,
+      effect,
+      () => undefined,
+      completedEffects,
+    );
+    const committed = this.ctx.storage.durableRuns.getRun(runId);
+    const currentMarker = readGeneralChatPostCommitPendingMarker(committed);
+    if (
+      currentMarker &&
+      sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker) &&
+      currentMarker.completedEffects.includes(effect)
+    ) {
+      callback();
+    }
+    return applied;
+  }
+
+  private enqueueGeneralChatPostCommitEffect(
+    parentRunId: string,
+    expectedMarker: GeneralChatPostCommitPendingMarker,
+    input: GeneralChatPostCommitDurableEffectInput,
+    completedEffects: Set<GeneralChatPostCommitEffect>,
+  ): string | undefined {
+    const effect = input.effect;
+    const childRunId = buildGeneralChatPostCommitEffectRunId(parentRunId, expectedMarker.generationId, effect);
+    const dispatchedChildRunId = expectedMarker.durableEffectRunIds[effect];
+    if (dispatchedChildRunId) {
+      if (dispatchedChildRunId !== childRunId) {
+        throw new Error(`Durable Chat post-commit ${parentRunId} has an invalid ${effect} child-run receipt.`);
+      }
+      const child = this.ctx.storage.durableRuns.getRun(childRunId);
+      assertGeneralChatPostCommitEffectChildLink(child, parentRunId, expectedMarker.generationId, effect);
+      if (child.status === "queued") {
+        this.requestRunProcessing(childRunId);
+      }
+      return undefined;
+    }
+    if (completedEffects.has(effect)) {
+      return undefined;
+    }
+    let committedChildRunId: string | undefined;
+    let createdChild: DurableRunRecord | undefined;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.ctx.storage.durableRuns.getRunForUpdate(parentRunId);
+      const currentMarker = readGeneralChatPostCommitPendingMarker(current);
+      if (!currentMarker || !sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker)) {
+        return;
+      }
+      const currentEffects = readGeneralChatPostCommitCompletedEffects(current);
+      const recordedChildRunId = currentMarker.durableEffectRunIds[effect];
+      if (recordedChildRunId) {
+        if (recordedChildRunId !== childRunId) {
+          throw new Error(`Durable Chat post-commit ${parentRunId} has an invalid ${effect} child-run receipt.`);
+        }
+        committedChildRunId = childRunId;
+        return;
+      }
+      if (currentEffects.includes(effect)) {
+        completedEffects.add(effect);
+        return;
+      }
+
+      const payload: GeneralChatPostCommitEffectWorkflowPayload = {
+        version: "chat.post_commit.effect.v1",
+        parentRunId,
+        generationId: expectedMarker.generationId,
+        traceStatus: expectedMarker.traceStatus,
+        input,
+      };
+      let child: DurableRunRecord | undefined;
+      try {
+        child = this.ctx.storage.durableRuns.getRun(childRunId);
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
+      }
+      if (child) {
+        assertGeneralChatPostCommitEffectChild(child, payload);
+      } else {
+        const now = new Date().toISOString();
+        child = this.ctx.storage.durableRuns.createRun({
+          runId: childRunId,
+          workflowKey: "chat.post_commit.effect",
+          status: "queued",
+          attemptCount: 0,
+          maxAttempts: DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+          payload: payload as unknown as Record<string, unknown>,
+          metadata: {
+            retryPolicy: DURABLE_RETRY_POLICY_DEFAULT,
+            parentRunId,
+            generationId: expectedMarker.generationId,
+            effect,
+            workspaceId: readGeneralChatPostCommitWorkspaceId(input),
+            sessionId: input.sessionId,
+            ...(readGeneralChatPostCommitTurnId(input) ? { turnId: readGeneralChatPostCommitTurnId(input) } : {}),
+          },
+          now,
+        });
+        this.ctx.storage.durableRuns.createCheckpoint({
+          runId: childRunId,
+          checkpointKind: "run_created",
+          state: {
+            workflowKey: child.workflowKey,
+            status: child.status,
+            parentRunId,
+            generationId: expectedMarker.generationId,
+            effect,
+          },
+          createdAt: now,
+        });
+        this.recordDurableTimelineEvent(childRunId, "run_created", {
+          workflowKey: child.workflowKey,
+          status: child.status,
+          parentRunId,
+          generationId: expectedMarker.generationId,
+          effect,
+          workspaceId: readGeneralChatPostCommitWorkspaceId(input),
+          sessionId: input.sessionId,
+          ...(readGeneralChatPostCommitTurnId(input) ? { turnId: readGeneralChatPostCommitTurnId(input) } : {}),
+        });
+        createdChild = child;
+      }
+
+      this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: current.status,
+        metadata: {
+          ...(current.metadata ?? {}),
+          [GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY]: {
+            ...currentMarker,
+            completedEffects: currentEffects,
+            durableEffectRunIds: {
+              ...currentMarker.durableEffectRunIds,
+              [effect]: childRunId,
+            },
+          },
+        },
+        updatedAt: new Date().toISOString(),
+        expectedVersion: current.version,
+      });
+      committedChildRunId = childRunId;
+    });
+    if (createdChild) {
+      this.ctx.publishRealtime(
+        "system",
+        "durable",
+        {
+          type: "durable_run_created",
+          runId: createdChild.runId,
+          workflowKey: createdChild.workflowKey,
+          status: createdChild.status,
+          parentRunId,
+          generationId: expectedMarker.generationId,
+          effect,
+        },
+        buildDurableRealtimeOptions(createdChild.runId),
+      );
+    }
+    if (committedChildRunId) {
+      this.requestRunProcessing(committedChildRunId);
+    }
+    return committedChildRunId;
+  }
+
+  createDurableRun(
+    input: DurableRunCreateRequest,
+    options: { publishRealtime?: boolean; idempotentIfExists?: boolean } = {},
+  ): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(input);
     if (
@@ -827,51 +1332,74 @@ export class DurableRunService {
       retryPolicy,
       waitForEvent: input.waitForEvent ?? null,
     };
+    const stableRunId =
+      (options.idempotentIfExists ?? workflowKey === "chat.turn.execute") ? input.runId?.trim() : undefined;
+    if (stableRunId) {
+      const existing = findDurableRun(this.ctx.storage, stableRunId);
+      if (existing) {
+        assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {});
+        return existing;
+      }
+    }
     let run!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      run = this.ctx.storage.durableRuns.createRun({
-        runId: input.runId,
-        workflowKey,
-        status,
-        attemptCount: 0,
-        maxAttempts: retryPolicy.maxAttempts,
-        payload: input.payload ?? {},
-        metadata,
-        startedAt: status === "queued" ? undefined : now,
-        now,
-      });
-      this.createDurableCheckpoint({
-        runId: run.runId,
-        checkpointKind: "run_created",
-        state: {
+    try {
+      this.ctx.storage.runImmediateTransaction(() => {
+        run = this.ctx.storage.durableRuns.createRun({
+          runId: input.runId,
+          workflowKey,
+          status,
+          attemptCount: 0,
+          maxAttempts: retryPolicy.maxAttempts,
+          payload: input.payload ?? {},
+          metadata,
+          startedAt: status === "queued" ? undefined : now,
+          now,
+        });
+        this.createDurableCheckpoint({
+          runId: run.runId,
+          checkpointKind: "run_created",
+          state: {
+            workflowKey: run.workflowKey,
+            status: run.status,
+          },
+          createdAt: now,
+        });
+        this.recordDurableTimelineEvent(run.runId, "run_created", {
           workflowKey: run.workflowKey,
           status: run.status,
-        },
-        createdAt: now,
+        });
+        if (status === "waiting") {
+          this.createDurableCheckpoint({
+            runId: run.runId,
+            checkpointKind: "run_waiting",
+            state: {
+              waitForEvent: input.waitForEvent ?? null,
+            },
+          });
+          this.recordDurableTimelineEvent(run.runId, "run_waiting", {
+            waitForEvent: input.waitForEvent ?? null,
+          });
+        }
       });
-      this.recordDurableTimelineEvent(run.runId, "run_created", {
+    } catch (error) {
+      if (!stableRunId) {
+        throw error;
+      }
+      const existing = findDurableRun(this.ctx.storage, stableRunId);
+      if (!existing) {
+        throw error;
+      }
+      assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {});
+      return existing;
+    }
+    if (options.publishRealtime !== false) {
+      this.publishDurableRealtimeSafely(run.runId, {
+        type: "durable_run_created",
+        runId: run.runId,
         workflowKey: run.workflowKey,
         status: run.status,
       });
-      if (status === "waiting") {
-        this.createDurableCheckpoint({
-          runId: run.runId,
-          checkpointKind: "run_waiting",
-          state: {
-            waitForEvent: input.waitForEvent ?? null,
-          },
-        });
-        this.recordDurableTimelineEvent(run.runId, "run_waiting", {
-          waitForEvent: input.waitForEvent ?? null,
-        });
-      }
-    });
-    this.publishDurableRealtimeSafely(run.runId, {
-      type: "durable_run_created",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-      status: run.status,
-    });
+    }
     return run;
   }
 
@@ -969,30 +1497,35 @@ export class DurableRunService {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
     const now = new Date().toISOString();
-    const chatLink = readDurableChatCancellationLink(current);
-    let chatTrace: ChatTurnTraceRecord | undefined;
-    if (chatLink) {
-      try {
-        chatTrace = this.ctx.storage.chatTurnTraces.get(chatLink.turnId);
-      } catch (error) {
-        if (error instanceof NotFoundError) {
-          throw new Error(`Durable Chat run ${runId} cannot be cancelled without its canonical turn trace.`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-      assertDurableChatCancellationTraceLink(runId, chatLink, chatTrace);
-      if (isChatTurnTerminalStatus(chatTrace.status) && chatTrace.status !== "cancelled") {
-        throw new Error(
-          `Durable Chat run ${runId} cannot be cancelled because turn ${chatLink.turnId} is already ${chatTrace.status}.`,
-        );
-      }
-    }
+    let chatLink: DurableChatCancellationLink | undefined;
+    let transitioned = false;
     let next!: DurableRunRecord;
     this.ctx.storage.runImmediateTransaction(() => {
-      if (chatLink && chatTrace?.status !== "cancelled") {
-        const latestTrace = this.ctx.storage.chatTurnTraces.get(chatLink.turnId);
+      const lockedCurrent = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+      if (lockedCurrent.status === "cancelled") {
+        next = lockedCurrent;
+        return;
+      }
+      if (
+        lockedCurrent.status === "completed" ||
+        lockedCurrent.status === "failed" ||
+        lockedCurrent.status === "dead_lettered"
+      ) {
+        throw new Error(`Durable run ${runId} is already terminal (${lockedCurrent.status})`);
+      }
+      chatLink = readDurableChatCancellationLink(lockedCurrent);
+      if (chatLink) {
+        let latestTrace: ChatTurnTraceRecord;
+        try {
+          latestTrace = this.ctx.storage.chatTurnTraces.get(chatLink.turnId);
+        } catch (error) {
+          if (error instanceof NotFoundError) {
+            throw new Error(`Durable Chat run ${runId} cannot be cancelled without its canonical turn trace.`, {
+              cause: error,
+            });
+          }
+          throw error;
+        }
         assertDurableChatCancellationTraceLink(runId, chatLink, latestTrace);
         if (isChatTurnTerminalStatus(latestTrace.status) && latestTrace.status !== "cancelled") {
           throw new Error(
@@ -1031,23 +1564,27 @@ export class DurableRunService {
         clearLease: true,
         updatedAt: now,
         lastError: `cancelled by ${actorId}`,
-        ...(chatLink ? { metadata: markGeneralChatPostCommitPending(current.metadata, now, "cancelled") } : {}),
-        expectedVersion: current.version,
+        ...(chatLink ? { metadata: markGeneralChatPostCommitPending(lockedCurrent.metadata, now, "cancelled") } : {}),
+        expectedVersion: lockedCurrent.version,
       });
       this.createDurableCheckpoint({
         runId,
         checkpointKind: "run_cancelled",
         state: {
           actorId,
-          previousStatus: current.status,
+          previousStatus: lockedCurrent.status,
           ...(chatLink ? { sessionId: chatLink.sessionId, turnId: chatLink.turnId } : {}),
         },
       });
       this.recordDurableTimelineEvent(runId, "run_cancelled", {
         actorId,
-        previousStatus: current.status,
+        previousStatus: lockedCurrent.status,
       });
+      transitioned = true;
     });
+    if (!transitioned) {
+      return next;
+    }
     this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`, "cancelled");
     this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_cancelled",
@@ -1085,97 +1622,116 @@ export class DurableRunService {
   ): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer({ reason, actorId });
-    const current = this.ctx.storage.durableRuns.getRun(runId);
-    if (!this.hasActiveLeaseOwner(current, expectedLeaseOwnerId)) {
-      throw new Error(`Durable run ${runId} cannot schedule running retry from ${current.status}`);
-    }
-    const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
-    if (recoverability && !recoverability.recoverable) {
-      throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
-    }
-    return this.scheduleDurableRunRetry(current, reason, actorId);
+    const observed = this.ctx.storage.durableRuns.getRun(runId);
+    let scheduled!: ReturnType<DurableRunService["persistDurableRunRetry"]>;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = expectedLeaseOwnerId
+        ? this.lockFreshLeaseOwnerForTransition(runId, expectedLeaseOwnerId)
+        : undefined;
+      if (!current) {
+        throw new Error(`Durable run ${runId} cannot schedule running retry from ${observed.status}`);
+      }
+      const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+      if (recoverability && !recoverability.recoverable) {
+        throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
+      }
+      scheduled = this.persistDurableRunRetry(current, reason, actorId);
+    });
+    this.publishDurableRunRetryResult(scheduled);
+    return scheduled.run;
   }
 
   private scheduleDurableRunRetry(current: DurableRunRecord, reason: string, actorId: string): DurableRunRecord {
+    let scheduled!: ReturnType<DurableRunService["persistDurableRunRetry"]>;
+    this.ctx.storage.runImmediateTransaction(() => {
+      scheduled = this.persistDurableRunRetry(current, reason, actorId);
+    });
+    this.publishDurableRunRetryResult(scheduled);
+    return scheduled.run;
+  }
+
+  /** Persists a retry/dead-letter transition. The caller owns the transaction. */
+  private persistDurableRunRetry(
+    current: DurableRunRecord,
+    reason: string,
+    actorId: string,
+  ):
+    | { outcome: "dead_lettered"; run: DurableRunRecord; attemptNo: number; reason: string }
+    | { outcome: "scheduled"; run: DurableRunRecord; attemptNo: number; nextRetryAt: string } {
     const runId = current.runId;
     const attemptNo = current.attemptCount + 1;
     if (attemptNo > current.maxAttempts) {
       const now = new Date().toISOString();
-      let deadLetterReason = `retry_exhausted:${reason}`;
-      let deadLettered!: DurableRunRecord;
-      this.ctx.storage.runImmediateTransaction(() => {
-        const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
-          runId,
-          reason: deadLetterReason,
-          payload: {
-            actorId,
-            attemptNo,
-            maxAttempts: current.maxAttempts,
-          },
-        });
-        deadLetterReason = deadLetter.reason;
-        deadLettered = this.ctx.storage.durableRuns.updateRun({
-          runId,
-          status: "dead_lettered",
-          attemptCount: attemptNo,
-          updatedAt: now,
-          finishedAt: now,
-          clearLease: true,
-          lastError: deadLetter.reason,
-          expectedVersion: current.version,
-        });
-        this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
+      const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
+        runId,
+        reason: `retry_exhausted:${reason}`,
+        payload: {
           actorId,
-          reason: deadLetter.reason,
-        });
-        this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
-          actorId,
-          reason: deadLetter.reason,
           attemptNo,
           maxAttempts: current.maxAttempts,
-        });
+        },
       });
-      this.publishDurableRealtimeSafely(runId, {
-        type: "durable_run_dead_lettered",
+      const deadLettered = this.ctx.storage.durableRuns.updateRun({
         runId,
-        reason: deadLetterReason,
-      });
-      return deadLettered;
-    }
-    const delayMs = this.computeDurableRetryDelayMs(current, attemptNo);
-    const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
-    let next!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      this.ctx.storage.durableRuns.upsertRetry({
-        runId,
-        attemptNo,
-        reason,
-        nextRetryAt,
-      });
-      this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
-        actorId,
-        reason,
-        nextRetryAt,
-        attemptNo,
-      });
-      next = this.ctx.storage.durableRuns.updateRun({
-        runId,
-        status: "queued",
+        status: "dead_lettered",
         attemptCount: attemptNo,
-        updatedAt: new Date().toISOString(),
-        clearFinishedAt: true,
+        updatedAt: now,
+        finishedAt: now,
         clearLease: true,
-        clearLastError: true,
+        lastError: deadLetter.reason,
         expectedVersion: current.version,
       });
-    });
-    this.publishDurableRealtimeSafely(runId, {
-      type: "durable_run_retry_scheduled",
-      runId,
+      this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
+        actorId,
+        reason: deadLetter.reason,
+      });
+      this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
+        actorId,
+        reason: deadLetter.reason,
+        attemptNo,
+        maxAttempts: current.maxAttempts,
+      });
+      return { outcome: "dead_lettered", run: deadLettered, attemptNo, reason: deadLetter.reason };
+    }
+    const delayMs = this.computeDurableRetryDelayMs(current, attemptNo);
+    const retry = this.upsertRetryWithDatabaseClock({ runId, attemptNo, reason, delayMs });
+    if (!retry.nextRetryAt) {
+      throw new Error(`Durable retry ${runId}/${attemptNo} is missing database-clock readiness.`);
+    }
+    this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
+      actorId,
+      reason,
+      nextRetryAt: retry.nextRetryAt,
       attemptNo,
-      nextRetryAt,
     });
-    return next;
+    const next = this.ctx.storage.durableRuns.updateRun({
+      runId,
+      status: "queued",
+      attemptCount: attemptNo,
+      updatedAt: retry.createdAt,
+      clearFinishedAt: true,
+      clearLease: true,
+      clearLastError: true,
+      expectedVersion: current.version,
+    });
+    return { outcome: "scheduled", run: next, attemptNo, nextRetryAt: retry.nextRetryAt };
+  }
+
+  private publishDurableRunRetryResult(result: ReturnType<DurableRunService["persistDurableRunRetry"]>): void {
+    if (result.outcome === "dead_lettered") {
+      this.publishDurableRealtimeSafely(result.run.runId, {
+        type: "durable_run_dead_lettered",
+        runId: result.run.runId,
+        reason: result.reason,
+      });
+      return;
+    }
+    this.publishDurableRealtimeSafely(result.run.runId, {
+      type: "durable_run_retry_scheduled",
+      runId: result.run.runId,
+      attemptNo: result.attemptNo,
+      nextRetryAt: result.nextRetryAt,
+    });
   }
 
   wakeDurableRun(
@@ -1509,13 +2065,9 @@ export class DurableRunService {
     for (const runId of runningRunIds) {
       try {
         const run = this.ctx.storage.durableRuns.getRun(runId);
-        if (run.status !== "running" || !this.isLeaseExpiredAt(run, recoveryObservedAt)) {
+        if (run.status !== "running" || !run.leaseExpiresAt) {
           continue;
         }
-        this.recordDurableTimelineEventSafely(run.runId, "run_lease_expired", {
-          leaseOwnerId: run.leaseOwnerId,
-          leaseExpiresAt: run.leaseExpiresAt,
-        });
         const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(run);
         if (!recoverability.recoverable) {
           const reason = recoverability.reason ?? "Run could not be recovered after restart.";
@@ -1525,33 +2077,28 @@ export class DurableRunService {
         let reclaimedByThisPass = false;
         let reclaimed!: DurableRunRecord;
         this.ctx.storage.runImmediateTransaction(() => {
-          reclaimed = this.retryDurableRunUpdate(run.runId, (current) => {
-            if (
-              current.status !== "running" ||
-              !this.isLeaseExpiredAt(current, recoveryObservedAt) ||
-              current.leaseOwnerId !== run.leaseOwnerId ||
-              current.leaseExpiresAt !== run.leaseExpiresAt
-            ) {
-              return current;
-            }
-            const next = this.ctx.storage.durableRuns.updateRun({
-              runId: current.runId,
-              status: "queued",
-              clearFinishedAt: true,
-              clearLease: true,
-              clearLastError: true,
-              updatedAt: new Date().toISOString(),
-              expectedVersion: current.version,
-            });
-            reclaimedByThisPass = true;
-            return next;
-          });
-          if (reclaimedByThisPass) {
-            this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
-              previousLeaseOwnerId: run.leaseOwnerId,
-              previousLeaseExpiresAt: run.leaseExpiresAt,
-            });
+          const current = this.lockExpiredExecutionLeaseForRecovery(run);
+          if (!current) {
+            return;
           }
+          this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
+            leaseOwnerId: current.leaseOwnerId,
+            leaseExpiresAt: current.leaseExpiresAt,
+          });
+          reclaimed = this.ctx.storage.durableRuns.updateRun({
+            runId: current.runId,
+            status: "queued",
+            clearFinishedAt: true,
+            clearLease: true,
+            clearLastError: true,
+            updatedAt: recoveryObservedAt,
+            expectedVersion: current.version,
+          });
+          reclaimedByThisPass = true;
+          this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
+            previousLeaseOwnerId: current.leaseOwnerId,
+            previousLeaseExpiresAt: current.leaseExpiresAt,
+          });
         });
         if (!reclaimedByThisPass) {
           continue;
@@ -1574,18 +2121,19 @@ export class DurableRunService {
   ): Promise<DurableRunRecord | undefined> {
     const safeReason = redactRawRemoteApprovalBearerText(reason);
     let transitioned = false;
-    const failed = this.retryDurableRunUpdate(observed.runId, (current) => {
-      if (
-        current.status !== "running" ||
-        !this.isLeaseExpiredAt(current, recoveryObservedAt) ||
-        current.leaseOwnerId !== observed.leaseOwnerId ||
-        current.leaseExpiresAt !== observed.leaseExpiresAt
-      ) {
-        return current;
+    let failed = observed;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockExpiredExecutionLeaseForRecovery(observed);
+      if (!current) {
+        return;
       }
+      this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
+        leaseOwnerId: current.leaseOwnerId,
+        leaseExpiresAt: current.leaseExpiresAt,
+      });
       const priorMetadata = { ...(current.metadata ?? {}) };
       delete (priorMetadata as { linkedFinalizationPending?: unknown }).linkedFinalizationPending;
-      const next = this.persistFailedRun(current, safeReason, recoveryObservedAt, {
+      failed = this.persistFailedRunInTransaction(current, safeReason, recoveryObservedAt, {
         linkedFinalizationPending: {
           reason: safeReason,
           requestedAt: recoveryObservedAt,
@@ -1594,7 +2142,6 @@ export class DurableRunService {
         ...priorMetadata,
       });
       transitioned = true;
-      return next;
     });
     if (!transitioned) {
       return undefined;
@@ -1677,21 +2224,55 @@ export class DurableRunService {
     if (!claim) {
       return;
     }
+    const finalizationAbort = new AbortController();
     const claimHeartbeat = setInterval(
       () => {
         try {
-          this.renewPendingLinkedFinalizationClaim(claim.run.runId, claim.pending);
+          if (!this.renewPendingLinkedFinalizationClaim(claim.run.runId, claim.pending)) {
+            finalizationAbort.abort(
+              new DurableWorkerInterruptionError(
+                "lease_lost",
+                `Durable linked finalization ${claim.pending.finalizationId} lost claim ownership.`,
+              ),
+            );
+          }
         } catch (error) {
           this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+          finalizationAbort.abort(error);
         }
       },
       Math.floor(LINKED_FINALIZATION_CLAIM_TTL_MS / 3),
     );
     claimHeartbeat.unref?.();
+    const finalizationTimeout = setTimeout(() => {
+      finalizationAbort.abort(new DurableWorkflowTimeoutError(claim.run.runId, LINKED_FINALIZATION_TIMEOUT_MS));
+    }, LINKED_FINALIZATION_TIMEOUT_MS);
+    finalizationTimeout.unref?.();
+    let rejectOnAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectOnAbort = () => {
+        const reason = finalizationAbort.signal.reason;
+        reject(reason instanceof Error ? reason : new Error(String(reason ?? "linked finalization aborted")));
+      };
+      finalizationAbort.signal.addEventListener("abort", rejectOnAbort, { once: true });
+    });
     try {
-      await this.deps.workflowRegistry.markWorkflowUnrecoverable(claim.run, claim.pending.reason);
+      await Promise.race([
+        this.deps.workflowRegistry.markWorkflowUnrecoverable(claim.run, claim.pending.reason, {
+          finalizationId: claim.pending.finalizationId,
+          signal: finalizationAbort.signal,
+        }),
+        aborted,
+      ]);
     } finally {
       clearInterval(claimHeartbeat);
+      clearTimeout(finalizationTimeout);
+      if (rejectOnAbort) {
+        finalizationAbort.signal.removeEventListener("abort", rejectOnAbort);
+      }
+    }
+    if (finalizationAbort.signal.aborted) {
+      return;
     }
     this.retryDurableRunUpdate(run.runId, (current) => {
       const currentPending = readLinkedFinalizationPending(current);
@@ -1723,8 +2304,6 @@ export class DurableRunService {
       return undefined;
     }
     const claimId = randomUUID();
-    const claimedAtMs = Date.now();
-    const claimExpiresAt = new Date(claimedAtMs + LINKED_FINALIZATION_CLAIM_TTL_MS).toISOString();
     let claim: { run: DurableRunRecord; pending: LinkedFinalizationPending } | undefined;
     this.retryDurableRunUpdate(observed.runId, (current) => {
       claim = undefined;
@@ -1732,6 +2311,8 @@ export class DurableRunService {
       if (current.status !== "failed" || !pending || pending.finalizationId !== observedPending.finalizationId) {
         return current;
       }
+      const claimedAt = this.readDurableDatabaseNow();
+      const claimedAtMs = Date.parse(claimedAt);
       const activeClaimExpiresAt = pending.claimExpiresAt ? Date.parse(pending.claimExpiresAt) : Number.NaN;
       if (pending.claimId && Number.isFinite(activeClaimExpiresAt) && activeClaimExpiresAt > claimedAtMs) {
         return current;
@@ -1739,7 +2320,7 @@ export class DurableRunService {
       const claimedPending: LinkedFinalizationPending = {
         ...pending,
         claimId,
-        claimExpiresAt,
+        claimExpiresAt: new Date(claimedAtMs + LINKED_FINALIZATION_CLAIM_TTL_MS).toISOString(),
       };
       const metadata = {
         ...(current.metadata ?? {}),
@@ -1749,7 +2330,7 @@ export class DurableRunService {
         runId: current.runId,
         status: current.status,
         metadata,
-        updatedAt: new Date(claimedAtMs).toISOString(),
+        updatedAt: claimedAt,
         expectedVersion: current.version,
       });
       claim = { run: claimedRun, pending: claimedPending };
@@ -1758,8 +2339,8 @@ export class DurableRunService {
     return claim;
   }
 
-  private renewPendingLinkedFinalizationClaim(runId: string, claimed: LinkedFinalizationPending): void {
-    const nowMs = Date.now();
+  private renewPendingLinkedFinalizationClaim(runId: string, claimed: LinkedFinalizationPending): boolean {
+    let renewed = false;
     this.retryDurableRunUpdate(runId, (current) => {
       const pending = readLinkedFinalizationPending(current);
       if (
@@ -1770,7 +2351,9 @@ export class DurableRunService {
       ) {
         return current;
       }
-      return this.ctx.storage.durableRuns.updateRun({
+      const now = this.readDurableDatabaseNow();
+      const nowMs = Date.parse(now);
+      const next = this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata: {
@@ -1780,10 +2363,13 @@ export class DurableRunService {
             claimExpiresAt: new Date(nowMs + LINKED_FINALIZATION_CLAIM_TTL_MS).toISOString(),
           },
         },
-        updatedAt: new Date(nowMs).toISOString(),
+        updatedAt: now,
         expectedVersion: current.version,
       });
+      renewed = true;
+      return next;
     });
+    return renewed;
   }
 
   private reportDurableRunRecoveryFailure(runId: string, error: unknown): void {
@@ -1857,7 +2443,7 @@ export class DurableRunService {
         }
       } finally {
         const current = this.ctx.storage.durableRuns.getRun(run.runId);
-        if (!preserveForLeaseRecovery && this.hasExpectedActiveLease(current, run)) {
+        if (!preserveForLeaseRecovery && current.status === "running" && current.leaseOwnerId === run.leaseOwnerId) {
           const incompleteMessage = "Durable workflow exited without marking a terminal or waiting state.";
           const failedByThisPass = await this.failWorkflowRun(current, incompleteMessage);
           if (failedByThisPass) {
@@ -1894,8 +2480,8 @@ export class DurableRunService {
     const blockedStatus = gateDecision.decision === "stop" ? "cancelled" : "paused";
     const blockedEventType = blockedStatus === "cancelled" ? "run_cancelled" : "run_paused";
     this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.ctx.storage.durableRuns.getRun(run.runId);
-      if (!this.hasExpectedActiveLease(current, run)) {
+      const current = this.lockFreshExecutionLeaseForTransition(run);
+      if (!current) {
         throw new DurableWorkerInterruptionError(
           "lease_lost",
           `Durable run ${run.runId} lease ownership moved before its continuation gate could commit.`,
@@ -2014,43 +2600,38 @@ export class DurableRunService {
       timeoutMs: error.timeoutMs,
       waitForEvent,
     };
-    const waiting = this.retryDurableRunUpdate(run.runId, (current) => {
-      if (this.isTerminalRunStatus(current.status)) {
-        return current;
+    let waiting = this.ctx.storage.durableRuns.getRun(run.runId);
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshExecutionLeaseForTransition(run);
+      if (!current) {
+        return;
       }
-      if (!this.hasExpectedActiveLease(current, run, now)) {
-        return current;
-      }
-      let next!: DurableRunRecord;
-      this.ctx.storage.runImmediateTransaction(() => {
-        next = this.ctx.storage.durableRuns.updateRun({
-          runId: current.runId,
-          status: "waiting",
-          clearFinishedAt: true,
-          clearLease: true,
-          clearLastError: true,
-          updatedAt: now,
-          metadata: {
-            ...current.metadata,
-            waitForEvent,
-            coworkWatchdog: {
-              reason: "workflow_timeout",
-              timedOutAt: now,
-              timeoutMs: error.timeoutMs,
-              message: safeErrorMessage,
-            },
+      waiting = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: "waiting",
+        clearFinishedAt: true,
+        clearLease: true,
+        clearLastError: true,
+        updatedAt: now,
+        metadata: {
+          ...current.metadata,
+          waitForEvent,
+          coworkWatchdog: {
+            reason: "workflow_timeout",
+            timedOutAt: now,
+            timeoutMs: error.timeoutMs,
+            message: safeErrorMessage,
           },
-          expectedVersion: current.version,
-        });
-        this.createDurableCheckpoint({
-          runId: next.runId,
-          checkpointKind: "run_waiting",
-          state: checkpointState,
-          createdAt: now,
-        });
-        this.recordDurableTimelineEvent(next.runId, "run_waiting", checkpointState);
+        },
+        expectedVersion: current.version,
       });
-      return next;
+      this.createDurableCheckpoint({
+        runId: waiting.runId,
+        checkpointKind: "run_waiting",
+        state: checkpointState,
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(waiting.runId, "run_waiting", checkpointState);
     });
     if (waiting.status !== "waiting") {
       return;
@@ -2076,42 +2657,37 @@ export class DurableRunService {
       message: safeErrorMessage,
       waitForEvent,
     };
-    const waiting = this.retryDurableRunUpdate(run.runId, (current) => {
-      if (this.isTerminalRunStatus(current.status)) {
-        return current;
+    let waiting = this.ctx.storage.durableRuns.getRun(run.runId);
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshExecutionLeaseForTransition(run);
+      if (!current) {
+        return;
       }
-      if (!this.hasExpectedActiveLease(current, run, now)) {
-        return current;
-      }
-      let next!: DurableRunRecord;
-      this.ctx.storage.runImmediateTransaction(() => {
-        next = this.ctx.storage.durableRuns.updateRun({
-          runId: current.runId,
-          status: "waiting",
-          clearFinishedAt: true,
-          clearLease: true,
-          clearLastError: true,
-          updatedAt: now,
-          metadata: {
-            ...current.metadata,
-            waitForEvent,
-            autonomyKillSwitch: {
-              reason: "autonomyV1Disabled",
-              blockedAt: now,
-              message: safeErrorMessage,
-            },
+      waiting = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: "waiting",
+        clearFinishedAt: true,
+        clearLease: true,
+        clearLastError: true,
+        updatedAt: now,
+        metadata: {
+          ...current.metadata,
+          waitForEvent,
+          autonomyKillSwitch: {
+            reason: "autonomyV1Disabled",
+            blockedAt: now,
+            message: safeErrorMessage,
           },
-          expectedVersion: current.version,
-        });
-        this.createDurableCheckpoint({
-          runId: next.runId,
-          checkpointKind: "run_waiting",
-          state: checkpointState,
-          createdAt: now,
-        });
-        this.recordDurableTimelineEvent(next.runId, "run_waiting", checkpointState);
+        },
+        expectedVersion: current.version,
       });
-      return next;
+      this.createDurableCheckpoint({
+        runId: waiting.runId,
+        checkpointKind: "run_waiting",
+        state: checkpointState,
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(waiting.runId, "run_waiting", checkpointState);
     });
     if (waiting.status !== "waiting") {
       return;
@@ -2158,25 +2734,16 @@ export class DurableRunService {
     execute: (context: { signal: AbortSignal; controller: AbortController }) => Promise<T>,
   ): Promise<T> {
     const owned = this.ctx.storage.durableRuns.getRun(run.runId);
-    const executionStartedAtMs = Date.now();
-    if (
-      owned.status !== "running" ||
-      owned.leaseOwnerId !== run.leaseOwnerId ||
-      this.isLeaseExpiredAt(owned, new Date().toISOString()) ||
-      this.workerStopped
-    ) {
+    if (owned.status !== "running" || owned.leaseOwnerId !== run.leaseOwnerId || this.workerStopped) {
       throw new DurableWorkerInterruptionError(
         this.workerStopped ? "worker_stopped" : "lease_lost",
         `Durable run ${run.runId} lease ownership was lost before workflow execution.`,
       );
     }
-    const executionStartedAt = new Date(executionStartedAtMs).toISOString();
-    const renewedBeforeExecution = this.ctx.storage.durableRuns.renewLease({
+    const renewedBeforeExecution = this.renewLeaseWithDatabaseClock({
       runId: run.runId,
       workerId: run.leaseOwnerId!,
-      leaseHeartbeatAt: executionStartedAt,
-      leaseExpiresAt: new Date(executionStartedAtMs + DURABLE_LEASE_TTL_MS).toISOString(),
-      updatedAt: executionStartedAt,
+      leaseDurationMs: DURABLE_LEASE_TTL_MS,
     });
     if (!renewedBeforeExecution) {
       throw new DurableWorkerInterruptionError(
@@ -2241,8 +2808,7 @@ export class DurableRunService {
         rejectHeartbeatFailure(interruption);
         return;
       }
-      const now = new Date().toISOString();
-      if (!this.hasExpectedActiveLease(current, run, now)) {
+      if (current.status !== "running" || current.leaseOwnerId !== run.leaseOwnerId) {
         // Definitive ownership loss is not retryable: another worker (or the
         // reaper) owns the run now, so executing further would double-run it.
         active = false;
@@ -2255,12 +2821,10 @@ export class DurableRunService {
         return;
       }
       try {
-        const renewed = this.ctx.storage.durableRuns.renewLease({
+        const renewed = this.renewLeaseWithDatabaseClock({
           runId: run.runId,
           workerId: run.leaseOwnerId!,
-          leaseHeartbeatAt: now,
-          leaseExpiresAt: new Date(Date.now() + DURABLE_LEASE_TTL_MS).toISOString(),
-          updatedAt: now,
+          leaseDurationMs: DURABLE_LEASE_TTL_MS,
         });
         if (!renewed) {
           // A clean false/undefined from renewLease is a definitive CAS loss
@@ -2350,39 +2914,36 @@ export class DurableRunService {
     if (queuedRunIds.length === 0) {
       return undefined;
     }
-    const now = new Date().toISOString();
-    const runId = queuedRunIds.find((candidate) => !this.hasFutureRetryGate(candidate, now));
-    if (!runId) {
-      return undefined;
-    }
-    const leaseExpiresAt = new Date(Date.now() + DURABLE_LEASE_TTL_MS).toISOString();
-    const leaseOwnerId = randomUUID();
     let run: DurableRunRecord | undefined;
-    this.ctx.storage.runImmediateTransaction(() => {
-      run = this.ctx.storage.durableRuns.tryClaimQueuedRun({
-        runId,
-        workerId: leaseOwnerId,
-        leaseHeartbeatAt: now,
-        leaseExpiresAt,
-        updatedAt: now,
-      });
-      if (!run) {
-        return;
-      }
-      this.createDurableCheckpoint({
-        runId: run.runId,
-        checkpointKind: "run_started",
-        state: {
+    for (const runId of queuedRunIds) {
+      const leaseOwnerId = randomUUID();
+      this.ctx.storage.runImmediateTransaction(() => {
+        run = this.tryClaimQueuedRunWithDatabaseClock({
+          runId,
+          workerId: leaseOwnerId,
+          leaseDurationMs: DURABLE_LEASE_TTL_MS,
+        });
+        if (!run) {
+          return;
+        }
+        this.createDurableCheckpoint({
+          runId: run.runId,
+          checkpointKind: "run_started",
+          state: {
+            workflowKey: run.workflowKey,
+            status: run.status,
+          },
+          createdAt: run.leaseHeartbeatAt ?? run.updatedAt,
+        });
+        this.recordDurableTimelineEvent(run.runId, "run_started", {
           workflowKey: run.workflowKey,
           status: run.status,
-        },
-        createdAt: now,
+        });
       });
-      this.recordDurableTimelineEvent(run.runId, "run_started", {
-        workflowKey: run.workflowKey,
-        status: run.status,
-      });
-    });
+      if (run) {
+        break;
+      }
+    }
     if (!run) {
       return undefined;
     }
@@ -2394,33 +2955,119 @@ export class DurableRunService {
     return run;
   }
 
-  private hasFutureRetryGate(runId: string, nowIso: string): boolean {
-    const latestRetry = this.ctx.storage.durableRuns.listRetries(runId, 100).at(-1);
-    if (!latestRetry?.nextRetryAt) {
-      return false;
+  private tryClaimQueuedRunWithDatabaseClock(input: {
+    runId: string;
+    workerId: string;
+    leaseDurationMs: number;
+  }): DurableRunRecord | undefined {
+    const durableRuns = this.ctx.storage.durableRuns;
+    const claim = durableRuns.tryClaimQueuedRunWithDatabaseClock;
+    if (typeof claim === "function") {
+      return claim.call(durableRuns, input);
     }
-    const nextRetryAt = Date.parse(latestRetry.nextRetryAt);
-    const now = Date.parse(nowIso);
-    if (!Number.isFinite(nextRetryAt) || !Number.isFinite(now)) {
-      return false;
+    if (process.env.NODE_ENV === "test") {
+      const leaseHeartbeatAt = new Date().toISOString();
+      return durableRuns.tryClaimQueuedRun({
+        runId: input.runId,
+        workerId: input.workerId,
+        leaseHeartbeatAt,
+        leaseExpiresAt: new Date(Date.now() + input.leaseDurationMs).toISOString(),
+        updatedAt: leaseHeartbeatAt,
+      });
     }
-    return nextRetryAt > now;
+    throw new Error("Durable run repository is missing database-clock lease claim authority");
+  }
+
+  private renewLeaseWithDatabaseClock(input: {
+    runId: string;
+    workerId: string;
+    leaseDurationMs: number;
+  }): DurableRunRecord | undefined {
+    const durableRuns = this.ctx.storage.durableRuns;
+    const renew = durableRuns.renewLeaseWithDatabaseClock;
+    if (typeof renew === "function") {
+      return renew.call(durableRuns, input);
+    }
+    if (process.env.NODE_ENV === "test") {
+      const leaseHeartbeatAt = new Date().toISOString();
+      return durableRuns.renewLease({
+        runId: input.runId,
+        workerId: input.workerId,
+        leaseHeartbeatAt,
+        leaseExpiresAt: new Date(Date.now() + input.leaseDurationMs).toISOString(),
+        updatedAt: leaseHeartbeatAt,
+      });
+    }
+    throw new Error("Durable run repository is missing database-clock lease renewal authority");
+  }
+
+  private upsertRetryWithDatabaseClock(input: {
+    runId: string;
+    attemptNo: number;
+    reason: string;
+    delayMs: number;
+  }): DurableRetryRecord {
+    const durableRuns = this.ctx.storage.durableRuns;
+    const upsert = durableRuns.upsertRetryWithDatabaseClock;
+    if (typeof upsert === "function") {
+      return upsert.call(durableRuns, input);
+    }
+    if (process.env.NODE_ENV === "test") {
+      const createdAt = new Date().toISOString();
+      return durableRuns.upsertRetry({
+        runId: input.runId,
+        attemptNo: input.attemptNo,
+        reason: input.reason,
+        createdAt,
+        nextRetryAt: new Date(Date.now() + input.delayMs).toISOString(),
+      });
+    }
+    throw new Error("Durable run repository is missing database-clock retry scheduling authority");
+  }
+
+  private readDurableDatabaseNow(): string {
+    const durableRuns = this.ctx.storage.durableRuns;
+    const read = durableRuns.readDatabaseNow;
+    if (typeof read === "function") {
+      return read.call(durableRuns);
+    }
+    if (process.env.NODE_ENV === "test") {
+      return new Date().toISOString();
+    }
+    throw new Error("Durable run repository is missing database-clock recovery claim authority");
   }
 
   private async failWorkflowRun(run: DurableRunRecord, message: string): Promise<boolean> {
     const now = new Date().toISOString();
     const safeMessage = redactRawRemoteApprovalBearerText(message);
     let transitioned = false;
-    const failed = this.retryDurableRunUpdate(run.runId, (current) => {
-      if (this.isTerminalRunStatus(current.status)) {
-        return current;
+    let failed = this.ctx.storage.durableRuns.getRun(run.runId);
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshExecutionLeaseForTransition(run);
+      if (!current) {
+        return;
       }
-      if (!this.hasExpectedActiveLease(current, run, now)) {
-        return current;
-      }
-      const next = this.persistFailedRun(current, safeMessage, now);
+      failed = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: "failed",
+        finishedAt: now,
+        clearLease: true,
+        lastError: safeMessage,
+        metadata: current.metadata,
+        updatedAt: now,
+        expectedVersion: current.version,
+      });
+      this.createDurableCheckpoint({
+        runId: failed.runId,
+        checkpointKind: "run_failed",
+        state: { workflowKey: failed.workflowKey, error: safeMessage },
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(failed.runId, "run_failed", {
+        workflowKey: failed.workflowKey,
+        error: safeMessage,
+      });
       transitioned = true;
-      return next;
     });
     if (!transitioned) {
       if (failed.leaseOwnerId !== run.leaseOwnerId) {
@@ -2460,37 +3107,34 @@ export class DurableRunService {
     }
   }
 
-  private persistFailedRun(
+  private persistFailedRunInTransaction(
     current: DurableRunRecord,
     message: string,
     now: string,
     metadata: Record<string, unknown> | undefined = current.metadata,
   ): DurableRunRecord {
-    let next!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      next = this.ctx.storage.durableRuns.updateRun({
-        runId: current.runId,
-        status: "failed",
-        finishedAt: now,
-        clearLease: true,
-        lastError: message,
-        metadata,
-        updatedAt: now,
-        expectedVersion: current.version,
-      });
-      this.createDurableCheckpoint({
-        runId: next.runId,
-        checkpointKind: "run_failed",
-        state: {
-          workflowKey: next.workflowKey,
-          error: message,
-        },
-        createdAt: now,
-      });
-      this.recordDurableTimelineEvent(next.runId, "run_failed", {
+    const next = this.ctx.storage.durableRuns.updateRun({
+      runId: current.runId,
+      status: "failed",
+      finishedAt: now,
+      clearLease: true,
+      lastError: message,
+      metadata,
+      updatedAt: now,
+      expectedVersion: current.version,
+    });
+    this.createDurableCheckpoint({
+      runId: next.runId,
+      checkpointKind: "run_failed",
+      state: {
         workflowKey: next.workflowKey,
         error: message,
-      });
+      },
+      createdAt: now,
+    });
+    this.recordDurableTimelineEvent(next.runId, "run_failed", {
+      workflowKey: next.workflowKey,
+      error: message,
     });
     return next;
   }
@@ -2503,12 +3147,50 @@ export class DurableRunService {
     );
   }
 
-  private hasExpectedActiveLease(
-    current: DurableRunRecord,
-    claimed: DurableRunRecord,
-    nowIso = new Date().toISOString(),
-  ): boolean {
-    return this.hasActiveLeaseOwner(current, claimed.leaseOwnerId, nowIso);
+  private lockFreshExecutionLeaseForTransition(run: DurableRunRecord): DurableRunRecord | undefined {
+    const expectedLeaseOwnerId = run.leaseOwnerId?.trim();
+    if (!expectedLeaseOwnerId) {
+      return undefined;
+    }
+    return this.lockFreshLeaseOwnerForTransition(run.runId, expectedLeaseOwnerId);
+  }
+
+  private lockFreshLeaseOwnerForTransition(runId: string, expectedLeaseOwnerId: string): DurableRunRecord | undefined {
+    const durableRuns = this.ctx.storage.durableRuns;
+    const lock = durableRuns.lockFreshActiveLeaseForUpdate;
+    if (typeof lock === "function") {
+      return lock.call(durableRuns, runId, expectedLeaseOwnerId);
+    }
+    if (process.env.NODE_ENV === "test") {
+      const current = durableRuns.getRun(runId);
+      return this.hasActiveLeaseOwner(current, expectedLeaseOwnerId) ? current : undefined;
+    }
+    throw new Error("Durable run repository is missing the database-clock transition fence");
+  }
+
+  private lockExpiredExecutionLeaseForRecovery(observed: DurableRunRecord): DurableRunRecord | undefined {
+    if (!observed.leaseExpiresAt) {
+      return undefined;
+    }
+    const durableRuns = this.ctx.storage.durableRuns;
+    const lock = durableRuns.lockExpiredLeaseForUpdate;
+    if (typeof lock === "function") {
+      return lock.call(durableRuns, {
+        runId: observed.runId,
+        expectedLeaseOwnerId: observed.leaseOwnerId,
+        expectedLeaseExpiresAt: observed.leaseExpiresAt,
+      });
+    }
+    if (process.env.NODE_ENV === "test") {
+      const current = durableRuns.getRun(observed.runId);
+      return current.status === "running" &&
+        current.leaseOwnerId === observed.leaseOwnerId &&
+        current.leaseExpiresAt === observed.leaseExpiresAt &&
+        this.isLeaseExpiredAt(current, new Date().toISOString())
+        ? current
+        : undefined;
+    }
+    throw new Error("Durable run repository is missing the database-clock recovery fence");
   }
 
   private hasActiveLeaseOwner(

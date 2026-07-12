@@ -52,6 +52,7 @@ describe("A2A gRPC transport", () => {
       allowlist: ["127.0.0.1"],
     });
     const task = readTask(created);
+    const localTaskId = String(task.metadata.localTaskId);
     const events = await client.call({
       grpcUrl: handle.address!,
       method: "SubscribeToTask",
@@ -64,7 +65,7 @@ describe("A2A gRPC transport", () => {
     expect(task).toMatchObject({
       contextId: "ctx-grpc",
       metadata: {
-        localTaskId: "task-1",
+        localTaskId,
         sessionId: "session-1",
         durableRunId: "durable-1",
       },
@@ -74,6 +75,7 @@ describe("A2A gRPC transport", () => {
     expect(harness.chatTurnRuntime.agentSendChatMessage).toHaveBeenCalledWith(
       "session-1",
       expect.objectContaining({ authActorSource: "a2a_peer" }),
+      expect.objectContaining({ turnIdentity: expect.any(Object) }),
     );
   });
 
@@ -392,7 +394,7 @@ describe("A2A gRPC transport", () => {
       transcriptsDir: ".",
       auditDir: ".",
     });
-    const task: TaskRecord = {
+    let task: TaskRecord = {
       taskId: "task-1",
       workspaceId: "default",
       title: "A2A task",
@@ -403,11 +405,29 @@ describe("A2A gRPC transport", () => {
     };
     const tasks = {
       appendTaskActivity: vi.fn(),
-      createTask: vi.fn((input: Partial<TaskRecord>) => ({ ...task, ...input })),
+      createTask: vi.fn((input: Partial<TaskRecord>, createOptions?: { taskId?: string }) => {
+        task = { ...task, ...input, taskId: createOptions?.taskId ?? task.taskId } as TaskRecord;
+        return task;
+      }),
       getTask: vi.fn(() => task),
       invokeAgenticControl: vi.fn(),
       listTaskDeliverables: vi.fn(() => options.deliverables ?? []),
-      updateTask: vi.fn((_taskId: string, input: Partial<TaskRecord>) => ({ ...task, ...input })),
+      persistDelegationActivityOnce: vi.fn(
+        (activityId: string, taskId: string, input: Record<string, unknown>, createdAt: string) => ({
+          activity: { activityId, taskId, ...input, createdAt },
+          created: true,
+        }),
+      ),
+      persistA2ADurableRunLink: vi.fn((_taskId: string, durableRunId: string) => {
+        task = { ...task, agenticContext: { ...task.agenticContext!, durableRunId } };
+        return task;
+      }),
+      publishDelegationActivity: vi.fn(),
+      publishA2ADurableRunLink: vi.fn(),
+      updateTask: vi.fn((_taskId: string, input: Partial<TaskRecord>) => {
+        task = { ...task, ...input } as TaskRecord;
+        return task;
+      }),
     };
     const chatTurnRuntime = {
       agentSendChatMessage: vi.fn(async () => ({
@@ -448,7 +468,10 @@ describe("A2A gRPC transport", () => {
       config,
       storage,
       tasks,
-      createChatSession: vi.fn(() => ({ sessionId: "session-1" })),
+      createChatSession: vi.fn((input) => {
+        storage!.chatSessionMeta.ensure("session-1", "2026-06-01T00:00:00.000Z", input.workspaceId ?? "default");
+        return { sessionId: "session-1" };
+      }),
       chatTurnRuntime,
       mutationIdempotencyStore: storage.mutationIdempotency,
       grpcClient: options.grpcClient,

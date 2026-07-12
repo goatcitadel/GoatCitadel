@@ -205,6 +205,120 @@ describe("non-stream Chat route commit truth", () => {
   });
 });
 
+describe("streamed Chat route commit truth", () => {
+  it.each(streamRouteScenarios)(
+    "releases the $label idempotency claim when the source fails before its first canonical mutation",
+    async (scenario) => {
+      let attempts = 0;
+      const mutation = vi.fn((...args: unknown[]) => {
+        attempts += 1;
+        const lifecycle = args.at(-1) as { markCommitted?: () => void } | undefined;
+        return (async function* () {
+          if (attempts === 1) {
+            throw new Error("source failed before canonical mutation");
+          }
+          lifecycle?.markCommitted?.();
+          yield {
+            type: "done",
+            sessionId: "session-1",
+            turnId: "turn-2",
+            messageId: "assistant-2",
+          };
+        })();
+      });
+      const app = await createStreamCommitTruthApp(scenario.methodName, mutation);
+      const request = {
+        method: "POST" as const,
+        url: scenario.url,
+        headers: { "idempotency-key": `chat-stream-precommit-${scenario.label}` },
+        payload: scenario.payload,
+      };
+
+      const first = await app.inject(request);
+      const retry = await app.inject(request);
+      const replay = await app.inject(request);
+
+      expect(first.statusCode).toBe(200);
+      expect(first.body).toContain('"type":"error"');
+      expect(retry.statusCode).toBe(200);
+      expect(retry.body).toContain('"type":"done"');
+      expect(replay.statusCode).toBe(409);
+      expect(mutation).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(streamRouteScenarios)(
+    "keeps the $label idempotency claim committed when the source fails after commit but before yielding",
+    async (scenario) => {
+      let receivedLifecycle: { markCommitted?: () => void } | undefined;
+      const mutation = vi.fn((...args: unknown[]) => {
+        receivedLifecycle = args.at(-1) as { markCommitted?: () => void } | undefined;
+        return (async function* () {
+          receivedLifecycle?.markCommitted?.();
+          yield* [];
+          throw new Error("source failed after canonical mutation but before first yield");
+        })();
+      });
+      const app = await createStreamCommitTruthApp(scenario.methodName, mutation);
+      const request = {
+        method: "POST" as const,
+        url: scenario.url,
+        headers: { "idempotency-key": `chat-stream-postcommit-${scenario.label}` },
+        payload: scenario.payload,
+      };
+
+      const first = await app.inject(request);
+      const replay = await app.inject(request);
+
+      expect(first.statusCode).toBe(200);
+      expect(first.body).toContain('"type":"error"');
+      expect(typeof receivedLifecycle?.markCommitted).toBe("function");
+      expect(replay.statusCode).toBe(409);
+      expect(mutation).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+const streamRouteScenarios = [
+  {
+    label: "send stream",
+    methodName: "agentSendChatMessageStream",
+    url: "/api/v1/chat/sessions/session-1/agent-send/stream",
+    payload: { content: "hello", routeDecision: routeDecision("send") },
+  },
+  {
+    label: "retry stream",
+    methodName: "retryChatTurnStream",
+    url: "/api/v1/chat/sessions/session-1/turns/turn-1/retry/stream",
+    payload: { routeDecision: routeDecision("retry", "turn-1") },
+  },
+  {
+    label: "edit stream",
+    methodName: "editChatTurnStream",
+    url: "/api/v1/chat/sessions/session-1/turns/turn-1/edit/stream",
+    payload: { content: "updated", routeDecision: routeDecision("edit", "turn-1") },
+  },
+] as const;
+
+async function createStreamCommitTruthApp(
+  methodName: (typeof streamRouteScenarios)[number]["methodName"],
+  mutation: ReturnType<typeof vi.fn>,
+): Promise<FastifyInstance> {
+  const app = Fastify();
+  apps.push(app);
+  app.decorate("services", {
+    chatMessages: {
+      routePreflight: vi.fn(async () => ({ decision: { fingerprint: "route-fingerprint-1" } })),
+      [methodName]: mutation,
+    },
+  } as never);
+  await app.register(idempotencyHeaderPlugin, {
+    mutationStore: new FakeMutationIdempotencyStore() as never,
+  });
+  registerChatMessageRoutes(app);
+  return app;
+}
+
 function routeDecision(action: "send" | "retry" | "edit", turnId?: string) {
   return {
     action,

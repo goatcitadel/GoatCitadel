@@ -7,18 +7,25 @@ import type {
   ChatStreamChunk,
 } from "@goatcitadel/contracts";
 import * as chatTurnEntryService from "./chat-turn-entry-service.js";
+import type { AgentChatTurnRequestOptions } from "./chat-turn-entry-service.js";
 import type { ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
+import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
+
+export interface ChatTurnStreamRequestOptions {
+  abortSignal?: AbortSignal;
+  mutationLifecycle?: ChatStreamMutationLifecycle;
+}
 
 export interface ChatTurnRuntime {
   agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: AgentChatTurnRequestOptions,
   ): Promise<ChatSendMessageResponse>;
   agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk>;
   retryChatTurn(
     sessionId: string,
@@ -29,14 +36,14 @@ export interface ChatTurnRuntime {
     sessionId: string,
     turnId: string,
     overrides?: Partial<ChatSendMessageRequest>,
-    options?: { abortSignal?: AbortSignal },
+    options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk>;
   editChatTurn(sessionId: string, turnId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
   editChatTurnStream(
     sessionId: string,
     turnId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk>;
   cancelChatTurn(sessionId: string, turnId: string, cancelledBy?: string): Promise<ChatCancelTurnResponse>;
   resumeAgentChatTurnStream(
@@ -54,7 +61,7 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
   public agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: AgentChatTurnRequestOptions,
   ): Promise<ChatSendMessageResponse> {
     return chatTurnEntryService.agentSendChatMessage(this.host, sessionId, input, options);
   }
@@ -62,7 +69,7 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
   public agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk> {
     return options
       ? chatTurnEntryService.agentSendChatMessageStream(this.host, sessionId, input, options)
@@ -81,7 +88,7 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
     sessionId: string,
     turnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
-    options?: { abortSignal?: AbortSignal },
+    options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk> {
     return options
       ? chatTurnEntryService.retryChatTurnStream(this.host, sessionId, turnId, overrides, options)
@@ -100,7 +107,7 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
     sessionId: string,
     turnId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk> {
     return options
       ? chatTurnEntryService.editChatTurnStream(this.host, sessionId, turnId, input, options)

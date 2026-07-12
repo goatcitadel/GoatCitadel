@@ -147,6 +147,8 @@ export class MemoryMaintenanceRepository {
   private readonly upsertPolicyStmt;
   private readonly getStateStmt;
   private readonly upsertStateStmt;
+  private readonly insertStateIfAbsentStmt;
+  private readonly getStateForUpdateStmt;
   private readonly getRunStmt;
   private readonly getRunByDurableRunStmt;
   private readonly insertRunStmt;
@@ -256,6 +258,21 @@ export class MemoryMaintenanceRepository {
         active_run_id = excluded.active_run_id,
         last_recommendation_at = excluded.last_recommendation_at,
         updated_at = excluded.updated_at
+    `);
+    this.insertStateIfAbsentStmt = db.prepare(`
+      INSERT INTO workspace_memory_maintenance_state (
+        workspace_id, last_eligibility_at, last_successful_run_at, changed_session_count,
+        active_run_id, last_recommendation_at, created_at, updated_at
+      ) VALUES (
+        @workspaceId, @lastEligibilityAt, @lastSuccessfulRunAt, @changedSessionCount,
+        @activeRunId, @lastRecommendationAt, @createdAt, @updatedAt
+      )
+      ON CONFLICT(workspace_id) DO NOTHING
+    `);
+    this.getStateForUpdateStmt = db.prepare(`
+      SELECT *
+      FROM workspace_memory_maintenance_state
+      WHERE workspace_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}
     `);
     this.getRunStmt = db.prepare(`
       SELECT *
@@ -754,6 +771,29 @@ export class MemoryMaintenanceRepository {
       updatedAt: record.updatedAt,
     });
     return this.requireState(record.workspaceId);
+  }
+
+  /**
+   * Ensures and locks the workspace scheduler state for a larger enqueue
+   * transaction. This serializes due/active-run decisions across independent
+   * post-turn effect children on PostgreSQL.
+   */
+  public lockStateForUpdate(fallback: MemoryMaintenanceStateRecord): MemoryMaintenanceStateRecord {
+    this.insertStateIfAbsentStmt.run({
+      workspaceId: fallback.workspaceId,
+      lastEligibilityAt: fallback.lastEligibilityAt ?? null,
+      lastSuccessfulRunAt: fallback.lastSuccessfulRunAt ?? null,
+      changedSessionCount: fallback.changedSessionCount,
+      activeRunId: normalizeNullableText(fallback.activeRunId),
+      lastRecommendationAt: fallback.lastRecommendationAt ?? null,
+      createdAt: fallback.createdAt,
+      updatedAt: fallback.updatedAt,
+    });
+    const row = toMemoryMaintenanceStateRow(this.getStateForUpdateStmt.get(fallback.workspaceId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Memory maintenance state", id: fallback.workspaceId });
+    }
+    return mapStateRow(row);
   }
 
   public requireState(workspaceId: string): MemoryMaintenanceStateRecord {

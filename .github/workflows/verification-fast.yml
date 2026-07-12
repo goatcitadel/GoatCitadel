@@ -78,18 +78,28 @@ jobs:
           GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
         run: pnpm --filter @goatcitadel/storage test:postgres
 
+      - name: Run real Postgres Gateway auth lane
+        env:
+          GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
+        run: pnpm --filter @goatcitadel/gateway test:postgres:auth
+
       - name: Enforce production coverage gate
         run: pnpm coverage:collect && pnpm coverage:gate:production
 
       - name: Verify artifact redaction
         id: artifact-redaction
         if: always()
-        run: pnpm verify:artifacts:redaction
+        run: |
+          pnpm verify:artifacts:redaction
+          node scripts/verify-artifact-redaction.mjs artifacts/coverage
 
       - name: Upload verification artifacts
         if: always() && steps.artifact-redaction.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: verification-fast-artifacts
-          path: artifacts/verification
+          path: |
+            artifacts/verification
+            artifacts/coverage/coverage-summary.json
+            artifacts/coverage/coverage-summary.md
           if-no-files-found: error

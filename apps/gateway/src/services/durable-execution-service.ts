@@ -46,19 +46,24 @@ import { hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload } from "./app
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import {
+  hasAutonomousChatPostCommitPending,
+  readGeneralChatPostCommitPendingMarker,
+  type GeneralChatPostCommitDurableEffectInput,
+  type GeneralChatPostCommitDurableEffectExecutionInput,
+  type GeneralChatPostCommitEffectWorkflowPayload,
+  type GeneralChatPostCommitEffect,
+  type GeneralChatPostCommitProgress,
+} from "./chat-durable-run-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { enqueueAgentEndHook } from "./chat-turn-stream-events.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
 import type { CuratorService } from "./curator-service.js";
-import {
-  hasAutonomousChatPostCommitPending,
-  type GeneralChatPostCommitEffect,
-  type GeneralChatPostCommitProgress,
-} from "./chat-durable-run-service.js";
 import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
+import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import {
@@ -177,6 +182,10 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
   cleanupSilentHeartbeatTurn?(input: SilentHeartbeatCleanupRequest): SilentHeartbeatCleanupResult;
   reconcileAutonomousChatPostCommit?(runId: string): Promise<boolean>;
   reconcileGeneralChatPostCommit?(runId: string): Promise<boolean>;
+  executeGeneralChatPostCommitDurableEffect(
+    input: GeneralChatPostCommitDurableEffectExecutionInput,
+    context: GeneralChatPostCommitEffectExecutionContext,
+  ): Promise<Record<string, unknown> | void>;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
@@ -212,16 +221,36 @@ export interface DurableWorkflowExecutionContext {
   signal?: AbortSignal;
 }
 
+export interface GeneralChatPostCommitEffectExecutionContext extends DurableWorkflowExecutionContext {
+  effectRunId: string;
+  parentRunId: string;
+  generationId: string;
+  leaseOwnerId: string;
+}
+
+export interface DurableWorkflowFinalizationContext {
+  finalizationId: string;
+  signal: AbortSignal;
+}
+
 export interface DurableWorkflowExecutor {
   execute(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isRecoverable?(run: DurableRunRecord): DurableWorkflowRecoverability;
-  markUnrecoverable?(run: DurableRunRecord, reason: string): Promise<void> | void;
+  markUnrecoverable?(
+    run: DurableRunRecord,
+    reason: string,
+    context?: DurableWorkflowFinalizationContext,
+  ): Promise<void> | void;
 }
 
 export interface DurableWorkflowExecutorRegistry {
   executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isWorkflowRecoverable(run: DurableRunRecord): DurableWorkflowRecoverability;
-  markWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void>;
+  markWorkflowUnrecoverable(
+    run: DurableRunRecord,
+    reason: string,
+    context?: DurableWorkflowFinalizationContext,
+  ): Promise<void>;
 }
 
 type DurableWorkflowCompletionHost = Pick<
@@ -244,6 +273,9 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "reconcileAutonomousChatPostCommit"
     | "reconcileGeneralChatPostCommit"
   >;
+
+export type DurableChatPostCommitEffectWorkflowPort = DurableWorkflowCompletionHost &
+  Pick<DurableExecutionHost, "storage" | "executeGeneralChatPostCommitDurableEffect">;
 
 type DurableProactiveTickWorkflowHost = Pick<
   DurableExecutionHost,
@@ -290,6 +322,7 @@ type DurableCuratorTickWorkflowHost = DurableWorkflowCompletionHost & {
 export interface DurableWorkflowExecutorHosts {
   memoryMaintenance: DurableMemoryMaintenanceWorkflowHost;
   chatTurn: DurableChatTurnWorkflowHost;
+  chatPostCommitEffect: DurableWorkflowExecutor;
   proactiveTick: DurableProactiveTickWorkflowHost;
   approvalWait: DurableApprovalWaitWorkflowHost;
   connectorDelivery: DurableConnectorDeliveryWorkflowHost;
@@ -414,6 +447,53 @@ export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatT
     return undefined;
   }
   return payload as DurableChatTurnExecutionPayload;
+}
+
+export function parseGeneralChatPostCommitEffectWorkflowPayload(
+  run: DurableRunRecord,
+): GeneralChatPostCommitEffectWorkflowPayload | undefined {
+  const payload = run.payload as Partial<GeneralChatPostCommitEffectWorkflowPayload> | undefined;
+  if (
+    !payload ||
+    payload.version !== "chat.post_commit.effect.v1" ||
+    typeof payload.parentRunId !== "string" ||
+    !payload.parentRunId.trim() ||
+    typeof payload.generationId !== "string" ||
+    !payload.generationId.trim() ||
+    typeof payload.traceStatus !== "string" ||
+    !payload.input ||
+    typeof payload.input !== "object" ||
+    !isGeneralChatPostCommitDurableEffectInput(payload.input)
+  ) {
+    return undefined;
+  }
+  return payload as GeneralChatPostCommitEffectWorkflowPayload;
+}
+
+function isGeneralChatPostCommitDurableEffectInput(
+  input: Record<string, unknown>,
+): input is GeneralChatPostCommitDurableEffectInput {
+  if (
+    !readRequiredString(input.sessionId) ||
+    !readRequiredString(input.workspaceId) ||
+    !readRequiredString(input.turnId)
+  ) {
+    return false;
+  }
+  if (input.effect === "memory_maintenance") {
+    return typeof input.delegatedChild === "boolean";
+  }
+  if (
+    (input.effect !== "commitments" && input.effect !== "background_review") ||
+    typeof input.autonomous !== "boolean"
+  ) {
+    return false;
+  }
+  return input.effect !== "background_review" || typeof input.delegatedChild === "boolean";
+}
+
+function readRequiredString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 export function buildDurableChatTurnResumeContent(
@@ -587,13 +667,28 @@ export function createDurableWorkflowExecutorRegistry(
       return executor.isRecoverable?.(run) ?? { recoverable: true };
     },
 
-    async markWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
+    async markWorkflowUnrecoverable(
+      run: DurableRunRecord,
+      reason: string,
+      context?: DurableWorkflowFinalizationContext,
+    ): Promise<void> {
       const executor = getExecutor(run);
       if (!executor) {
         return;
       }
-      await executor.markUnrecoverable?.(run, reason);
+      await executor.markUnrecoverable?.(run, reason, context);
     },
+  };
+}
+
+export function createDeferredDurableWorkflowExecutorRegistry(
+  resolveRegistry: () => DurableWorkflowExecutorRegistry,
+): DurableWorkflowExecutorRegistry {
+  return {
+    executeWorkflow: (run, context) => resolveRegistry().executeWorkflow(run, context),
+    isWorkflowRecoverable: (run) => resolveRegistry().isWorkflowRecoverable(run),
+    markWorkflowUnrecoverable: (run, reason, context) =>
+      resolveRegistry().markWorkflowUnrecoverable(run, reason, context),
   };
 }
 
@@ -614,16 +709,19 @@ export function buildDurableWorkflowExecutors(
         hosts.memoryMaintenance.memoryLifecycleService.parseMaintenanceWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable memory maintenance payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason) => {
+      markUnrecoverable: async (run, reason, context) => {
+        throwIfDurableWorkflowAborted(context);
         hosts.memoryMaintenance.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-        publishUnrecoverableProjectionSafely(hosts.memoryMaintenance, run, reason, { runId: run.runId });
+        publishUnrecoverableProjectionSafely(hosts.memoryMaintenance, run, reason, { runId: run.runId }, context);
       },
     },
     "chat.turn.execute": {
       execute: (run, context) => executeDurableChatTurnRun(hosts.chatTurn, run, context),
       isRecoverable: (run) => isDurableChatTurnRecoverable(hosts.chatTurn, run),
-      markUnrecoverable: (run, reason) => markDurableChatTurnUnrecoverable(hosts.chatTurn, run, reason),
+      markUnrecoverable: (run, reason, context) =>
+        markDurableChatTurnUnrecoverable(hosts.chatTurn, run, reason, context),
     },
+    "chat.post_commit.effect": hosts.chatPostCommitEffect,
     "proactive.tick": {
       execute: (run, context) => {
         assertAutonomousDurableRunAllowed(hosts.proactiveTick, run);
@@ -633,7 +731,8 @@ export function buildDurableWorkflowExecutors(
         parseProactiveTickWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable proactive tick payload is invalid or incomplete." },
-      markUnrecoverable: (run, reason) => markDurableProactiveTickUnrecoverable(hosts.proactiveTick, run, reason),
+      markUnrecoverable: (run, reason, context) =>
+        markDurableProactiveTickUnrecoverable(hosts.proactiveTick, run, reason, context),
     },
     "curator.tick": {
       execute: async (run, context) => {
@@ -648,8 +747,9 @@ export function buildDurableWorkflowExecutors(
         parseCuratorTickWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable curator tick payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason) => {
-        publishUnrecoverableProjectionSafely(hosts.curatorTick, run, reason, { runId: run.runId });
+      markUnrecoverable: async (run, reason, context) => {
+        throwIfDurableWorkflowAborted(context);
+        publishUnrecoverableProjectionSafely(hosts.curatorTick, run, reason, { runId: run.runId }, context);
       },
     },
     "approval.wait": {
@@ -658,11 +758,18 @@ export function buildDurableWorkflowExecutors(
         parseApprovalWaitWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable approval wait payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason) => {
-        publishUnrecoverableProjectionSafely(hosts.approvalWait, run, reason, {
-          runId: run.runId,
-          approvalId: parseApprovalWaitWorkflowPayload(run)?.approvalId,
-        });
+      markUnrecoverable: async (run, reason, context) => {
+        throwIfDurableWorkflowAborted(context);
+        publishUnrecoverableProjectionSafely(
+          hosts.approvalWait,
+          run,
+          reason,
+          {
+            runId: run.runId,
+            approvalId: parseApprovalWaitWorkflowPayload(run)?.approvalId,
+          },
+          context,
+        );
       },
     },
     "connector.delivery": {
@@ -671,11 +778,18 @@ export function buildDurableWorkflowExecutors(
         parseConnectorDeliveryWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason) => {
-        publishUnrecoverableProjectionSafely(hosts.connectorDelivery, run, reason, {
-          runId: run.runId,
-          connectorId: parseConnectorDeliveryWorkflowPayload(run)?.connectorId,
-        });
+      markUnrecoverable: async (run, reason, context) => {
+        throwIfDurableWorkflowAborted(context);
+        publishUnrecoverableProjectionSafely(
+          hosts.connectorDelivery,
+          run,
+          reason,
+          {
+            runId: run.runId,
+            connectorId: parseConnectorDeliveryWorkflowPayload(run)?.connectorId,
+          },
+          context,
+        );
       },
     },
     "hook.delivery": {
@@ -684,7 +798,8 @@ export function buildDurableWorkflowExecutors(
         parseHookDeliveryWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable hook delivery payload is invalid or incomplete." },
-      markUnrecoverable: (run, reason) => markDurableHookDeliveryUnrecoverable(hosts.hookDelivery, run, reason),
+      markUnrecoverable: (run, reason, context) =>
+        markDurableHookDeliveryUnrecoverable(hosts.hookDelivery, run, reason, context),
     },
     "external_side_effect.replay": {
       execute: (run, context) =>
@@ -693,8 +808,15 @@ export function buildDurableWorkflowExecutors(
         parseExternalSideEffectReplayWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable external side-effect replay payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason) => {
-        publishUnrecoverableProjectionSafely(hosts.externalSideEffectReplay, run, reason, { runId: run.runId });
+      markUnrecoverable: async (run, reason, context) => {
+        throwIfDurableWorkflowAborted(context);
+        publishUnrecoverableProjectionSafely(
+          hosts.externalSideEffectReplay,
+          run,
+          reason,
+          { runId: run.runId },
+          context,
+        );
       },
     },
     "orchestration.plan.execute": {
@@ -713,8 +835,9 @@ export function buildDurableWorkflowExecutors(
         parseOrchestrationWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable orchestration payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason) => {
-        publishUnrecoverableProjectionSafely(hosts.orchestration, run, reason, { runId: run.runId });
+      markUnrecoverable: async (run, reason, context) => {
+        throwIfDurableWorkflowAborted(context);
+        publishUnrecoverableProjectionSafely(hosts.orchestration, run, reason, { runId: run.runId }, context);
       },
     },
   };
@@ -726,6 +849,7 @@ function buildDurableWorkflowExecutorsFromExecutionHost(
   return buildDurableWorkflowExecutors({
     memoryMaintenance: host,
     chatTurn: host,
+    chatPostCommitEffect: createDurableChatPostCommitEffectWorkflowExecutor(host),
     proactiveTick: host,
     approvalWait: host,
     connectorDelivery: host,
@@ -759,8 +883,8 @@ function completeDurableWorkflowRun(
   const safeCheckpointState = redactStructuredSecrets(checkpointState).value;
   let completed: DurableRunRecord | undefined;
   runDurableCompletionTransaction(host, () => {
-    const current = host.storage.durableRuns.getRun(run.runId);
-    if (!hasExpectedExecutionLease(current, run)) {
+    const current = lockExpectedFreshExecutionLease(host, run);
+    if (!current) {
       return;
     }
     completed = host.storage.durableRuns.updateRun({
@@ -812,8 +936,8 @@ function failDurableWorkflowRun(
         : "Durable workflow failed.";
   let failed = false;
   runDurableCompletionTransaction(host, () => {
-    const current = host.storage.durableRuns.getRun(run.runId);
-    if (!hasExpectedExecutionLease(current, run)) {
+    const current = lockExpectedFreshExecutionLease(host, run);
+    if (!current) {
       return;
     }
     host.storage.durableRuns.updateRun({
@@ -845,16 +969,24 @@ function failDurableWorkflowRun(
   });
 }
 
-function hasExpectedExecutionLease(current: DurableRunRecord, claimed: DurableRunRecord): boolean {
-  const leaseExpiresAt = current.leaseExpiresAt ? Date.parse(current.leaseExpiresAt) : Number.NaN;
-  return (
-    current.status === "running" &&
-    typeof claimed.leaseOwnerId === "string" &&
-    claimed.leaseOwnerId.length > 0 &&
-    current.leaseOwnerId === claimed.leaseOwnerId &&
-    Number.isFinite(leaseExpiresAt) &&
-    leaseExpiresAt > Date.now()
-  );
+function lockExpectedFreshExecutionLease(
+  host: DurableWorkflowCompletionHost,
+  claimed: DurableRunRecord,
+): DurableRunRecord | undefined {
+  const expectedLeaseOwnerId = claimed.leaseOwnerId?.trim();
+  if (!expectedLeaseOwnerId) {
+    return undefined;
+  }
+  const durableRuns = host.storage.durableRuns;
+  const lockFreshActiveLeaseForUpdate = durableRuns.lockFreshActiveLeaseForUpdate;
+  if (typeof lockFreshActiveLeaseForUpdate === "function") {
+    return lockFreshActiveLeaseForUpdate.call(durableRuns, claimed.runId, expectedLeaseOwnerId);
+  }
+  if (process.env.NODE_ENV === "test") {
+    const current = durableRuns.getRun(claimed.runId);
+    return current.status === "running" && current.leaseOwnerId === expectedLeaseOwnerId ? current : undefined;
+  }
+  throw new Error("Durable completion repository is missing the database-clock lease fence");
 }
 
 function publishDurableWorkflowProjectionSafely(
@@ -1105,63 +1237,27 @@ export async function executeDurableConnectorDeliveryRun(
 ): Promise<void> {
   throwIfDurableWorkflowAborted(context);
   assertAutonomousDurableRunAllowed(host, run);
-  const { approvalRemoteTokenSecrets, publishRealtime, storage } = host;
+  const { approvalRemoteTokenSecrets, storage } = host;
   const payload = parseConnectorDeliveryWorkflowPayload(run);
   if (!payload) {
     throw new Error("Durable connector delivery payload is invalid or incomplete.");
   }
   const approvalActionTokenRef = payload.secretRefs?.approvalActionToken;
   const approvalAction = payload.approvalAction;
-  if (approvalAction && Date.parse(approvalAction.expiresAt) <= Date.now()) {
-    let secretCleanupPending = false;
-    if (approvalActionTokenRef) {
-      try {
-        approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
-      } catch {
-        // Keep the canonical token pending-but-expired so the approval expiry
-        // worker can select it again and retry keychain cleanup by token id.
-        secretCleanupPending = true;
-      }
-    }
-    if (!secretCleanupPending) {
-      try {
-        storage.remoteActionTokens.expirePendingAtOrBefore(approvalAction.tokenId, new Date().toISOString());
-      } catch (error) {
-        if (!(error instanceof NotFoundError)) {
-          throw error;
-        }
-      }
-    }
-    const checkpointState = {
-      connectorId: payload.connectorId,
-      connectorType: payload.connectorType,
-      action: payload.action,
-      tokenId: approvalAction.tokenId,
-      expiresAt: approvalAction.expiresAt,
-      deliveryStatus: "expired",
-      secretCleanupPending,
-      error: "Approval remote-action delivery expired before dispatch.",
-    };
-    failDurableWorkflowRun(host, run, checkpointState);
+  if (
+    approvalAction &&
+    process.env.NODE_ENV === "test" &&
+    typeof storage.remoteActionTokens?.findPendingFresh !== "function"
+  ) {
     try {
-      publishRealtime(
-        "connector_delivery_expired",
-        "connectors",
-        { runId: run.runId, ...checkpointState },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: buildConnectorDeliveryRealtimeLinks({
-            runId: run.runId,
-            connectorId: payload.connectorId,
-            payload: payload as unknown as Record<string, unknown>,
-          }),
-        },
-      );
-    } catch {
-      // The durable failure/checkpoint is canonical; retained realtime is best-effort.
+      assertApprovalActionFreshForDelivery(host, payload, approvalActionTokenRef);
+    } catch (error) {
+      if (!(error instanceof ApprovalActionDeliveryUnavailableError)) {
+        throw error;
+      }
+      failApprovalActionConnectorDelivery(host, run, payload, error);
+      return;
     }
-    return;
   }
   const connector = host.requireConnectorRecord(payload.connectorId);
   if (payload.simulateFailureReason?.trim()) {
@@ -1174,6 +1270,7 @@ export async function executeDurableConnectorDeliveryRun(
   const sideEffect = await runIdempotentExternalSideEffect({
     mutationStore: storage.mutationIdempotency,
     sideEffectRunStore: storage.externalSideEffectRuns,
+    runClaimTransaction: (work) => storage.runImmediateTransaction(work),
     workspaceId,
     boundary: "durable_connector_delivery",
     catalogId: `connector.${connector.connectorType}`,
@@ -1187,6 +1284,13 @@ export async function executeDurableConnectorDeliveryRun(
     output: { durableRunId: run.runId, connectorId: connector.connectorId, action: payload.action },
     requireDurableBoundaryRecord: true,
     execute: (claim) => {
+      const assertApprovalActionFresh = () =>
+        assertApprovalActionFreshForDelivery(host, payload, approvalActionTokenRef);
+      assertApprovalActionFresh();
+      const markExternalCallStarted = () => {
+        assertApprovalActionFresh();
+        claim.markExternalCallStarted();
+      };
       const dispatchPayload =
         hydratesBrowserApprovalBearer && approvalActionTokenRef
           ? hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
@@ -1196,31 +1300,31 @@ export async function executeDurableConnectorDeliveryRun(
           : payload;
       return dispatchConnectorDelivery(connector, dispatchPayload, {
         commsSend: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.commsSend(input);
         },
         commsReply: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.commsReply(input);
         },
         commsReact: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.commsReact(input);
         },
         commsUnsend: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.commsUnsend(input);
         },
         commsTyping: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.commsTyping(input);
         },
         commsActivity: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.commsActivity(input);
         },
         invokeMcpTool: (input) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           return host.invokeMcpTool({ ...input, signal: context?.signal });
         },
         mcpInvokeContext: {
@@ -1249,16 +1353,20 @@ export async function executeDurableConnectorDeliveryRun(
           },
         },
         publishRealtime: (eventType, source, eventPayload, options) => {
-          claim.markExternalCallStarted();
+          markExternalCallStarted();
           host.publishRealtime(eventType, source, eventPayload, options);
         },
-        markExternalCallStarted: () => claim.markExternalCallStarted(),
+        markExternalCallStarted,
         deliveryEffectId,
         signal: context?.signal,
       });
     },
   });
   if (sideEffect.status === "failed") {
+    if (sideEffect.error instanceof ApprovalActionDeliveryUnavailableError) {
+      failApprovalActionConnectorDelivery(host, run, payload, sideEffect.error);
+      return;
+    }
     throw sideEffect.error;
   }
   if (sideEffect.status === "blocked") {
@@ -1306,6 +1414,141 @@ export async function executeDurableConnectorDeliveryRun(
     }
   }
   publishConnectorDeliveryCompletedSafely(host, run, connector, payload, checkpointState);
+}
+
+class ApprovalActionDeliveryUnavailableError extends Error {
+  public constructor(
+    public readonly deliveryStatus: "expired" | "unavailable",
+    public readonly secretCleanupPending: boolean,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApprovalActionDeliveryUnavailableError";
+  }
+}
+
+function assertApprovalActionFreshForDelivery(
+  host: DurableConnectorDeliveryWorkflowHost,
+  payload: ConnectorDeliveryWorkflowPayload,
+  tokenRef: string | undefined,
+): void {
+  const approvalAction = payload.approvalAction;
+  if (!approvalAction) {
+    return;
+  }
+  const tokens = host.storage.remoteActionTokens;
+  if (typeof tokens?.findPendingFresh !== "function") {
+    if (process.env.NODE_ENV !== "test") {
+      throw new Error("Remote action token repository is missing the database-clock freshness fence");
+    }
+    if (Date.parse(approvalAction.expiresAt) > Date.now()) {
+      return;
+    }
+    let secretCleanupPending = false;
+    if (tokenRef) {
+      try {
+        host.approvalRemoteTokenSecrets.delete(tokenRef);
+      } catch {
+        secretCleanupPending = true;
+      }
+    }
+    if (!secretCleanupPending) {
+      try {
+        tokens?.expirePendingAtOrBefore(approvalAction.tokenId, new Date().toISOString());
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
+      }
+    }
+    throw new ApprovalActionDeliveryUnavailableError(
+      "expired",
+      secretCleanupPending,
+      "Approval remote-action delivery expired before dispatch.",
+    );
+  }
+
+  const fresh = tokens.findPendingFresh(approvalAction.tokenId);
+  if (fresh) {
+    if (fresh.connectorId !== payload.connectorId) {
+      throw new ApprovalActionDeliveryUnavailableError(
+        "unavailable",
+        false,
+        "Approval remote-action delivery token is bound to a different connector.",
+      );
+    }
+    return;
+  }
+
+  let current;
+  try {
+    current = tokens.get(approvalAction.tokenId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      throw new ApprovalActionDeliveryUnavailableError(
+        "unavailable",
+        false,
+        "Approval remote-action delivery token is unavailable before dispatch.",
+      );
+    }
+    throw error;
+  }
+  let secretCleanupPending = false;
+  if ((current.state === "pending" || current.state === "expired") && tokenRef) {
+    try {
+      host.approvalRemoteTokenSecrets.delete(tokenRef);
+    } catch {
+      secretCleanupPending = true;
+    }
+  }
+  if (current.state === "pending" && !secretCleanupPending) {
+    current = tokens.expirePendingIfExpired(current.tokenId);
+  }
+  const deliveryStatus = current.state === "expired" ? "expired" : "unavailable";
+  throw new ApprovalActionDeliveryUnavailableError(
+    deliveryStatus,
+    secretCleanupPending,
+    deliveryStatus === "expired"
+      ? "Approval remote-action delivery expired before dispatch."
+      : "Approval remote-action delivery token is no longer pending before dispatch.",
+  );
+}
+
+function failApprovalActionConnectorDelivery(
+  host: DurableConnectorDeliveryWorkflowHost,
+  run: DurableRunRecord,
+  payload: ConnectorDeliveryWorkflowPayload,
+  error: ApprovalActionDeliveryUnavailableError,
+): void {
+  const checkpointState = {
+    connectorId: payload.connectorId,
+    connectorType: payload.connectorType,
+    action: payload.action,
+    tokenId: payload.approvalAction?.tokenId,
+    expiresAt: payload.approvalAction?.expiresAt,
+    deliveryStatus: error.deliveryStatus,
+    secretCleanupPending: error.secretCleanupPending,
+    error: error.message,
+  };
+  failDurableWorkflowRun(host, run, checkpointState);
+  try {
+    host.publishRealtime(
+      error.deliveryStatus === "expired" ? "connector_delivery_expired" : "connector_delivery_blocked",
+      "connectors",
+      { runId: run.runId, ...checkpointState },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: buildConnectorDeliveryRealtimeLinks({
+          runId: run.runId,
+          connectorId: payload.connectorId,
+          payload: payload as unknown as Record<string, unknown>,
+        }),
+      },
+    );
+  } catch {
+    // The durable failure/checkpoint is canonical; retained realtime is best-effort.
+  }
 }
 
 function publishConnectorDeliveryCompletedSafely(
@@ -1485,6 +1728,141 @@ async function reconcileDurableChatPostCommit(
   maybeCleanupSilentHeartbeatTurn(host, run, payload);
 }
 
+export function createDurableChatPostCommitEffectWorkflowExecutor(
+  port: DurableChatPostCommitEffectWorkflowPort,
+): DurableWorkflowExecutor {
+  return {
+    execute: (run, context) => executeGeneralChatPostCommitEffectRun(port, run, context),
+    isRecoverable: (run) =>
+      parseGeneralChatPostCommitEffectWorkflowPayload(run)
+        ? { recoverable: true }
+        : { recoverable: false, reason: "Durable Chat post-commit effect payload is invalid or incomplete." },
+    markUnrecoverable: async (run, reason, context) => {
+      throwIfDurableWorkflowAborted(context);
+      const payload = parseGeneralChatPostCommitEffectWorkflowPayload(run);
+      publishUnrecoverableProjectionSafely(
+        port,
+        run,
+        reason,
+        { runId: run.runId, sessionId: payload?.input.sessionId },
+        context,
+      );
+    },
+  };
+}
+
+async function executeGeneralChatPostCommitEffectRun(
+  port: DurableChatPostCommitEffectWorkflowPort,
+  run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
+): Promise<void> {
+  throwIfDurableWorkflowAborted(context);
+  const payload = parseGeneralChatPostCommitEffectWorkflowPayload(run);
+  if (!payload) {
+    throw new Error(`Durable Chat post-commit effect payload is invalid for run ${run.runId}.`);
+  }
+  const provenance = assertGeneralChatPostCommitEffectProvenance(port, run, payload);
+  const executionInput = hydrateGeneralChatPostCommitEffectInput(port, payload.input, provenance);
+  if (!run.leaseOwnerId) {
+    throw new Error(`Durable Chat post-commit effect ${run.runId} is missing its claimed lease owner.`);
+  }
+  const result = await port.executeGeneralChatPostCommitDurableEffect(executionInput, {
+    effectRunId: run.runId,
+    parentRunId: payload.parentRunId,
+    generationId: payload.generationId,
+    leaseOwnerId: run.leaseOwnerId,
+    ...(context?.signal ? { signal: context.signal } : {}),
+  });
+  throwIfDurableWorkflowAborted(context);
+  completeDurableWorkflowRun(port, run, {
+    ...(result ?? {}),
+    workflow: "chat.post_commit.effect",
+    status: "completed",
+    parentRunId: payload.parentRunId,
+    generationId: payload.generationId,
+    effect: payload.input.effect,
+    workspaceId: payload.input.workspaceId,
+    sessionId: payload.input.sessionId,
+    turnId: payload.input.turnId,
+    deliverySemantics: "at_least_once",
+  });
+}
+
+function assertGeneralChatPostCommitEffectProvenance(
+  port: DurableChatPostCommitEffectWorkflowPort,
+  run: DurableRunRecord,
+  payload: GeneralChatPostCommitEffectWorkflowPayload,
+): { parentPayload: DurableChatTurnExecutionPayload; trace: ChatTurnTraceRecord } {
+  const parent = port.storage.durableRuns.getRun(payload.parentRunId);
+  const parentPayload = parseDurableChatTurnPayload(parent);
+  if (
+    !parentPayload ||
+    parentPayload.sessionId !== payload.input.sessionId ||
+    parentPayload.turnId !== payload.input.turnId
+  ) {
+    throw new Error(`Durable Chat post-commit effect ${run.runId} does not match its parent Chat provenance.`);
+  }
+  const pending = readGeneralChatPostCommitPendingMarker(parent);
+  const completed = parent.metadata?.generalChatPostCommit as
+    | {
+        generationId?: unknown;
+        durableEffectRunIds?: Record<string, unknown>;
+      }
+    | undefined;
+  const linkedRunId =
+    pending?.generationId === payload.generationId
+      ? pending.durableEffectRunIds[payload.input.effect]
+      : completed?.generationId === payload.generationId
+        ? completed.durableEffectRunIds?.[payload.input.effect]
+        : undefined;
+  if (linkedRunId !== run.runId) {
+    throw new Error(`Durable Chat post-commit effect ${run.runId} is not linked from its parent generation.`);
+  }
+  const trace = port.storage.chatTurnTraces.get(payload.input.turnId);
+  const traceWorkspaceId = trace.guidance?.workspaceId?.trim() || "default";
+  if (
+    trace.sessionId !== payload.input.sessionId ||
+    traceWorkspaceId !== payload.input.workspaceId ||
+    run.metadata?.parentRunId !== payload.parentRunId ||
+    run.metadata?.generationId !== payload.generationId ||
+    run.metadata?.effect !== payload.input.effect ||
+    run.metadata?.workspaceId !== payload.input.workspaceId ||
+    run.metadata?.sessionId !== payload.input.sessionId ||
+    run.metadata?.turnId !== payload.input.turnId
+  ) {
+    throw new Error(`Durable Chat post-commit effect ${run.runId} has inconsistent workspace/session/turn provenance.`);
+  }
+  return { parentPayload, trace };
+}
+
+function hydrateGeneralChatPostCommitEffectInput(
+  port: DurableChatPostCommitEffectWorkflowPort,
+  input: GeneralChatPostCommitDurableEffectInput,
+  provenance: { parentPayload: DurableChatTurnExecutionPayload; trace: ChatTurnTraceRecord },
+): GeneralChatPostCommitDurableEffectExecutionInput {
+  if (input.effect === "memory_maintenance") {
+    return input;
+  }
+  const userMessage = port.storage.chatMessages.get(provenance.parentPayload.userMessageId);
+  const assistantMessage = provenance.trace.assistantMessageId
+    ? port.storage.chatMessages.get(provenance.trace.assistantMessageId)
+    : undefined;
+  if (
+    userMessage?.role !== "user" ||
+    userMessage.sessionId !== input.sessionId ||
+    assistantMessage?.role !== "assistant" ||
+    assistantMessage.sessionId !== input.sessionId ||
+    !assistantMessage.content.trim()
+  ) {
+    throw new Error(`Durable Chat post-commit ${input.effect} cannot hydrate its canonical user/assistant transcript.`);
+  }
+  return {
+    ...input,
+    userText: userMessage.content,
+    assistantText: assistantMessage.content,
+  };
+}
+
 export function executeGeneralChatPostCommit(
   host: DurableChatTurnWorkflowHost,
   run: DurableRunRecord,
@@ -1541,6 +1919,23 @@ export function executeGeneralChatPostCommit(
     }
     return progress.runEffect(effect, callback) ? "reconciled" : "already_reconciled";
   };
+  const enqueueDurableEffect = (
+    input: GeneralChatPostCommitDurableEffectInput,
+    applicable: boolean,
+    compatibilityCallback: () => void,
+  ): "durably_enqueued" | "already_enqueued" | "not_applicable" | "reconciled" => {
+    if (!applicable) {
+      if (progress) {
+        progress.runEffect(input.effect, () => undefined);
+      }
+      return "not_applicable";
+    }
+    if (!progress) {
+      compatibilityCallback();
+      return "reconciled";
+    }
+    return progress.enqueueDurableEffect(input) ? "durably_enqueued" : "already_enqueued";
+  };
 
   const capabilityGap = runEffect("capability_gap", hasTranscript || trace.status === "waiting_for_approval", () => {
     host.recordCapabilityGapFromTrace({
@@ -1564,7 +1959,14 @@ export function executeGeneralChatPostCommit(
       trace: hydratedTrace,
     });
   });
-  const commitments = runEffect("commitments", transcriptCompleted, () => {
+  const commitmentsInput: GeneralChatPostCommitDurableEffectInput = {
+    effect: "commitments",
+    sessionId: payload.sessionId,
+    workspaceId,
+    turnId: payload.turnId,
+    autonomous,
+  };
+  const commitments = enqueueDurableEffect(commitmentsInput, transcriptCompleted, () => {
     host.recordTurnCommitments({
       sessionId: payload.sessionId,
       workspaceId,
@@ -1573,7 +1975,15 @@ export function executeGeneralChatPostCommit(
       autonomous,
     });
   });
-  const backgroundReview = runEffect("background_review", transcriptCompleted, () => {
+  const backgroundReviewInput: GeneralChatPostCommitDurableEffectInput = {
+    effect: "background_review",
+    sessionId: payload.sessionId,
+    workspaceId,
+    turnId: payload.turnId,
+    delegatedChild,
+    autonomous,
+  };
+  const backgroundReview = enqueueDurableEffect(backgroundReviewInput, transcriptCompleted, () => {
     host.scheduleBackgroundReviewIfDue({
       sessionId: payload.sessionId,
       workspaceId,
@@ -1584,7 +1994,14 @@ export function executeGeneralChatPostCommit(
       autonomous,
     });
   });
-  const memoryMaintenance = runEffect("memory_maintenance", transcriptCompleted, () => {
+  const memoryMaintenanceInput: GeneralChatPostCommitDurableEffectInput = {
+    effect: "memory_maintenance",
+    sessionId: payload.sessionId,
+    workspaceId,
+    turnId: payload.turnId,
+    delegatedChild,
+  };
+  const memoryMaintenance = enqueueDurableEffect(memoryMaintenanceInput, transcriptCompleted, () => {
     host.scheduleMemoryMaintenancePostTurnEvaluation({
       sessionId: payload.sessionId,
       turnId: payload.turnId,
@@ -1598,7 +2015,8 @@ export function executeGeneralChatPostCommit(
       relationScope: "self",
     });
   });
-  const realtime = runEffect("realtime", hasTranscript || isDurableChatWaitingStatus(trace.status), () => {
+  const realtimeApplicable = hasTranscript || isDurableChatWaitingStatus(trace.status);
+  const publishThreadUpdate = () => {
     host.publishRealtime(
       "chat_thread_updated",
       "chat",
@@ -1607,10 +2025,28 @@ export function executeGeneralChatPostCommit(
         sessionId: payload.sessionId,
         turnId: payload.turnId,
         activeLeafTurnId: payload.turnId,
+        ...(progress
+          ? {
+              [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: {
+                deliveryId: `${run.runId}:${progress.generationId}:chat-thread-updated`,
+                occurredAt: progress.requestedAt,
+              },
+            }
+          : {}),
       },
       buildChatTurnRealtimeOptions({ sessionId: payload.sessionId, turnId: payload.turnId }),
     );
-  });
+  };
+  let realtime: "reconciled" | "already_reconciled" | "not_applicable";
+  if (!realtimeApplicable) {
+    progress?.runEffect("realtime", () => undefined);
+    realtime = "not_applicable";
+  } else if (!progress) {
+    publishThreadUpdate();
+    realtime = "reconciled";
+  } else {
+    realtime = progress.publishEffect("realtime", publishThreadUpdate) ? "reconciled" : "already_reconciled";
+  }
   const agentEnd = runEffect("agent_end", true, () => {
     enqueueAgentEndHook(host, {
       workspaceId,
@@ -1947,12 +2383,15 @@ export function maybeCleanupSilentHeartbeatTurn(
 export function executeAutonomousChatPostCommit(
   host: DurableChatTurnWorkflowHost,
   run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
 ): Record<string, unknown> {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
     throw new Error(`Autonomous Chat post-commit recovery payload is invalid for run ${run.runId}.`);
   }
   const currentRun = readCurrentDurableRun(host, run);
+  throwIfDurableWorkflowAborted(context);
   if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
     return {
       delivery: { status: "skipped", reason: "parent_not_pending" },
@@ -1966,6 +2405,7 @@ export function executeAutonomousChatPostCommit(
   const deliveryIntended = Boolean(
     autonomous && hasDeliveryChannel && assistantText && (autonomous.deliverMode !== "on_notify" || notifyRequested),
   );
+  throwIfDurableWorkflowAborted(context);
   const deliveryRunId = maybeEnqueueAutonomousDelivery(host, currentRun, payload);
   if (deliveryIntended && !deliveryRunId) {
     throw new Error(`Autonomous Chat delivery could not be durably enqueued for run ${run.runId}.`);
@@ -1974,6 +2414,7 @@ export function executeAutonomousChatPostCommit(
   if (cleanupRequired && typeof host.cleanupSilentHeartbeatTurn !== "function") {
     throw new Error(`Silent heartbeat cleanup host is unavailable for run ${run.runId}.`);
   }
+  throwIfDurableWorkflowAborted(context);
   const cleanup = maybeCleanupSilentHeartbeatTurn(host, run, payload);
   if (cleanup.status === "retryable_failure") {
     throw new Error(`Silent heartbeat cleanup did not commit for run ${run.runId}.`);
@@ -2049,7 +2490,9 @@ function markDurableProactiveTickUnrecoverable(
   host: DurableProactiveTickWorkflowHost,
   run: DurableRunRecord,
   reason: string,
+  context?: DurableWorkflowFinalizationContext,
 ): void {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseProactiveTickWorkflowPayload(run);
   if (payload) {
     const proactiveRun = host
@@ -2075,44 +2518,43 @@ function markDurableProactiveTickUnrecoverable(
         });
     }
   }
-  publishUnrecoverableProjectionSafely(host, run, reason, {
-    runId: run.runId,
-    proactiveRunId: payload?.proactiveRunId,
-    sessionId: payload?.sessionId,
-    taskId: payload?.taskId,
-  });
+  publishUnrecoverableProjectionSafely(
+    host,
+    run,
+    reason,
+    {
+      runId: run.runId,
+      proactiveRunId: payload?.proactiveRunId,
+      sessionId: payload?.sessionId,
+      taskId: payload?.taskId,
+    },
+    context,
+  );
 }
 
 function markDurableHookDeliveryUnrecoverable(
   host: DurableHookDeliveryWorkflowHost,
   run: DurableRunRecord,
   reason: string,
+  context?: DurableWorkflowFinalizationContext,
 ): void {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseHookDeliveryWorkflowPayload(run);
   if (payload) {
     host.hooksService.markHookRunDeadLettered(payload.hookRunId, reason);
   }
-  publishUnrecoverableProjectionSafely(host, run, reason, { runId: run.runId });
+  publishUnrecoverableProjectionSafely(host, run, reason, { runId: run.runId }, context);
 }
 
 function markDurableChatTurnUnrecoverable(
   host: DurableChatTurnWorkflowHost,
   run: DurableRunRecord,
   reason: string,
+  context?: DurableWorkflowFinalizationContext,
 ): void {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
-    return;
-  }
-  let trace: ChatTurnTraceRecord | undefined;
-  try {
-    trace = host.storage.chatTurnTraces.get(payload.turnId);
-  } catch (error) {
-    if (!(error instanceof NotFoundError)) {
-      throw error;
-    }
-  }
-  if (!trace) {
     return;
   }
   const durableFailure = {
@@ -2121,6 +2563,18 @@ function markDurableChatTurnUnrecoverable(
     checkpointKind: "run_failed",
   };
   host.storage.runImmediateTransaction(() => {
+    let trace: ChatTurnTraceRecord;
+    try {
+      trace = host.storage.chatTurnTraces.getForUpdate(payload.turnId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return;
+      }
+      throw error;
+    }
+    if (!matchesDurableChatTraceLink(trace, payload, run.runId)) {
+      return;
+    }
     if (!CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])) {
       host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [trace.status], {
         durable: durableFailure,
@@ -2144,7 +2598,10 @@ function markDurableChatTurnUnrecoverable(
       durable: durableFailure,
     });
     if (!failedTrace) {
-      const latestTrace = host.storage.chatTurnTraces.get(payload.turnId);
+      const latestTrace = host.storage.chatTurnTraces.getForUpdate(payload.turnId);
+      if (!matchesDurableChatTraceLink(latestTrace, payload, run.runId)) {
+        return;
+      }
       if (!CHAT_TURN_ACTIVE_STATUSES.includes(latestTrace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])) {
         host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [latestTrace.status], {
           durable: durableFailure,
@@ -2164,11 +2621,26 @@ function markDurableChatTurnUnrecoverable(
   });
 }
 
+function matchesDurableChatTraceLink(
+  trace: ChatTurnTraceRecord,
+  payload: DurableChatTurnExecutionPayload,
+  durableRunId: string,
+): boolean {
+  return (
+    trace.turnId === payload.turnId &&
+    trace.sessionId === payload.sessionId &&
+    trace.userMessageId === payload.userMessageId &&
+    (!trace.assistantMessageId || trace.assistantMessageId === payload.assistantMessageId) &&
+    trace.durable?.runId === durableRunId
+  );
+}
+
 function publishUnrecoverableProjectionSafely(
   host: Pick<DurableExecutionHost, "publishRealtime">,
   run: DurableRunRecord,
   reason: string,
   links: Parameters<typeof buildDurableRealtimeOptions>[0],
+  context?: DurableWorkflowFinalizationContext,
 ): void {
   try {
     host.publishRealtime(
@@ -2179,6 +2651,7 @@ function publishUnrecoverableProjectionSafely(
         runId: run.runId,
         workflowKey: run.workflowKey,
         reason,
+        ...(context ? { finalizationId: context.finalizationId } : {}),
       },
       buildDurableRealtimeOptions(links),
     );
@@ -2220,9 +2693,10 @@ export async function markDurableWorkflowUnrecoverable(
   host: DurableExecutionHost,
   run: DurableRunRecord,
   reason: string,
+  context?: DurableWorkflowFinalizationContext,
 ): Promise<void> {
   const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutorsFromExecutionHost(host));
-  await registry.markWorkflowUnrecoverable(run, reason);
+  await registry.markWorkflowUnrecoverable(run, reason, context);
 }
 
 function throwIfDurableWorkflowAborted(context?: DurableWorkflowExecutionContext): void {

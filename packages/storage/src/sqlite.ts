@@ -1649,6 +1649,105 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "scrub_legacy_remote_approval_bearers",
         up: scrubLegacyRemoteApprovalBearers,
       },
+      {
+        version: 140,
+        name: "mutation_idempotency_claim_lease_parity",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "mutation_idempotency", "claim_token", "TEXT");
+          addColumnIfMissingIfTableExists(db, "mutation_idempotency", "claim_expires_at", "TEXT");
+          if (tableExists(db, "mutation_idempotency")) {
+            db.exec(`
+              UPDATE mutation_idempotency
+              SET claim_token = COALESCE(claim_token, 'legacy-' || lower(hex(randomblob(16)))),
+                  claim_expires_at = COALESCE(claim_expires_at, updated_at)
+              WHERE status = 'pending';
+
+              CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_pending_lease
+                ON mutation_idempotency(status, claim_expires_at, updated_at);
+            `);
+          }
+        },
+      },
+      {
+        version: 141,
+        name: "chat_delegation_step_plan_truth",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "parallelizable", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissingIfTableExists(
+            db,
+            "chat_delegation_steps",
+            "depends_on_step_ids_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+          );
+        },
+      },
+      {
+        version: 142,
+        name: "chat_delegation_dispatch_claim_lease",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "dispatch_claim_token", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "dispatch_claim_expires_at", "TEXT");
+          if (tableExists(db, "chat_delegation_steps")) {
+            db.exec(`
+              UPDATE chat_delegation_steps
+              SET dispatch_claim_token = child_session_id,
+                  dispatch_claim_expires_at = COALESCE(
+                    strftime(
+                      '%Y-%m-%dT%H:%M:%fZ',
+                      CAST(
+                        substr(
+                          child_session_id,
+                          length('delegation-claim:v1:') + 1,
+                          instr(substr(child_session_id, length('delegation-claim:v1:') + 1), ':') - 1
+                        ) AS REAL
+                      ) / 1000.0,
+                      'unixepoch'
+                    ),
+                    '1970-01-01T00:00:00.000Z'
+                  ),
+                  child_session_id = NULL
+              WHERE child_session_id LIKE 'delegation-claim:v1:%';
+
+              UPDATE chat_delegation_steps
+              SET dispatch_claim_token = child_turn_id,
+                  dispatch_claim_expires_at = COALESCE(
+                    strftime(
+                      '%Y-%m-%dT%H:%M:%fZ',
+                      CAST(
+                        substr(
+                          child_turn_id,
+                          length('delegation-dispatch:v1:') + 1,
+                          instr(substr(child_turn_id, length('delegation-dispatch:v1:') + 1), ':') - 1
+                        ) AS REAL
+                      ) / 1000.0,
+                      'unixepoch'
+                    ),
+                    '1970-01-01T00:00:00.000Z'
+                  ),
+                  child_turn_id = NULL
+              WHERE child_turn_id LIKE 'delegation-dispatch:v1:%';
+
+              CREATE INDEX IF NOT EXISTS idx_chat_delegation_steps_dispatch_claim
+                ON chat_delegation_steps(status, dispatch_claim_expires_at, step_id);
+            `);
+          }
+        },
+      },
+      {
+        version: 143,
+        name: "scrub_legacy_remote_approval_bearers_from_effect_results",
+        up: (db) => {
+          // v139 intentionally remains frozen. This forward correction covers
+          // current result truth plus legacy effect detail columns that v139
+          // did not inspect.
+          scrubLegacyRemoteApprovalBearerColumns(db, "approval_effects", [
+            "result_json",
+            "detail",
+            "details_json",
+            "outcome",
+          ]);
+        },
+      },
     ],
   },
 ];

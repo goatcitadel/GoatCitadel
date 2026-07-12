@@ -48,6 +48,60 @@ describe("RemoteActionTokenRepository", () => {
     assert.deepEqual(found?.mutation, { approvalId: "apr-1" });
   });
 
+  it("owns relative token issuance and expiry on the database clock under host skew", () => {
+    const repo = createRepo();
+    const realDateNow = Date.now;
+    const databaseNow = realDateNow();
+    try {
+      Date.now = () => Date.parse("2100-01-01T00:00:00.000Z");
+      const fastHost = repo.createWithTtl({
+        tokenHash: "hash-db-issued-fast-host",
+        actionType: "approval.resolve",
+        connectorId: "mission-control",
+        expiresInMs: 60_000,
+      });
+      Date.now = () => Date.parse("2000-01-01T00:00:00.000Z");
+      const slowHost = repo.createWithTtl({
+        tokenHash: "hash-db-issued-slow-host",
+        actionType: "approval.resolve",
+        connectorId: "mission-control",
+        expiresInMs: 60_000,
+      });
+
+      for (const record of [fastHost, slowHost]) {
+        assert.ok(Math.abs(Date.parse(record.createdAt) - databaseNow) < 5_000);
+        assert.ok(Math.abs(Date.parse(record.expiresAt) - Date.parse(record.createdAt) - 60_000) < 5);
+      }
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
+  it("rejects a sub-millisecond relative token TTL before database issuance", () => {
+    const repo = createRepo();
+
+    assert.throws(
+      () =>
+        repo.createWithTtl({
+          tokenHash: "hash-sub-millisecond-ttl",
+          actionType: "approval.resolve",
+          connectorId: "mission-control",
+          expiresInMs: 0.5,
+        }),
+      /positive duration/,
+    );
+    assert.throws(
+      () =>
+        repo.createWithTtl({
+          tokenHash: "hash-overlong-ttl",
+          actionType: "approval.resolve",
+          connectorId: "mission-control",
+          expiresInMs: 24 * 60 * 60 * 1000 + 1,
+        }),
+      /cannot exceed 24 hours/,
+    );
+  });
+
   it("updates token state and consumption metadata", () => {
     const repo = createRepo();
     const created = repo.create({
@@ -91,7 +145,8 @@ describe("RemoteActionTokenRepository", () => {
     assert.equal(first?.state, "consumed");
     assert.equal(second, undefined);
     const persisted = repo.get(created.tokenId);
-    assert.equal(persisted.consumedAt, "2026-03-20T10:00:00.000Z");
+    assert.ok(persisted.consumedAt);
+    assert.equal(persisted.consumedAt, first?.consumedAt);
     assert.equal(persisted.consumedBy, "connector:first");
   });
 
@@ -125,8 +180,8 @@ describe("RemoteActionTokenRepository", () => {
     assert.equal(first.outcome, "claimed");
     assert.equal(resumed.outcome, "resumed");
     assert.equal(mismatch.outcome, "fingerprint_mismatch");
-    assert.equal(first.record?.consumedAt, "2026-03-20T10:00:00.000Z");
-    assert.equal(resumed.record?.consumedAt, "2026-03-20T10:00:00.000Z");
+    assert.ok(first.record?.consumedAt);
+    assert.equal(resumed.record?.consumedAt, first.record?.consumedAt);
     assert.equal(resumed.record?.consumedBy, "connector:first");
     assert.equal(repo.readClaimFingerprint(resumed.record), "sha256:request-a");
     assert.deepEqual(resumed.record?.mutation, {
@@ -343,6 +398,38 @@ describe("RemoteActionTokenRepository", () => {
     assert.throws(() => repo.listPendingExpiredAtOrBefore("not-a-date"), /valid timestamp/);
   });
 
+  it("selects expiry-cleanup candidates with the database clock instead of the host clock", () => {
+    const repo = createRepo();
+    const expired = repo.createWithTtl({
+      tokenHash: "hash-database-expiry-cleanup",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresInMs: 60_000,
+    });
+    const fresh = repo.createWithTtl({
+      tokenHash: "hash-database-expiry-cleanup-fresh",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresInMs: 60_000,
+    });
+    (repo as unknown as { db: DatabaseClient }).db
+      .prepare(
+        "UPDATE remote_action_tokens SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') WHERE token_id = ?",
+      )
+      .run(expired.tokenId);
+    const realDateNow = Date.now;
+    try {
+      Date.now = () => Date.parse("2100-01-01T00:00:00.000Z");
+      assert.deepEqual(
+        repo.listPendingExpired(10).map((token) => token.tokenId),
+        [expired.tokenId],
+      );
+      assert.equal(repo.findPendingFresh(fresh.tokenId)?.tokenId, fresh.tokenId);
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
   it("does not let a stale caller timestamp cross the database-clock expiry boundary", () => {
     const repo = createRepo();
     const now = Date.now();
@@ -378,16 +465,50 @@ describe("RemoteActionTokenRepository", () => {
     );
   });
 
+  it("does not let a fast caller clock reject a token that is fresh on the database clock", () => {
+    const repo = createRepo();
+    const databaseNow = Date.now();
+    const expiresAt = new Date(databaseNow + 60_000).toISOString();
+    const fastConsumedAt = new Date(databaseNow + 60 * 60 * 1_000).toISOString();
+    const resumable = repo.create({
+      tokenHash: "hash-fast-db-clock-resumable",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt,
+    });
+    const legacy = repo.create({
+      tokenHash: "hash-fast-db-clock-legacy",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt,
+    });
+
+    const claimed = repo.claimPending(resumable.tokenId, {
+      consumedAt: fastConsumedAt,
+      consumedBy: "connector:first",
+      claimFingerprint: "sha256:first",
+    });
+    const consumed = repo.consumePending(legacy.tokenId, {
+      consumedAt: fastConsumedAt,
+      consumedBy: "connector:first",
+    });
+
+    assert.equal(claimed.outcome, "claimed");
+    assert.equal(consumed?.state, "consumed");
+    assert.ok(Math.abs(Date.parse(claimed.record?.consumedAt ?? "") - databaseNow) < 5_000);
+    assert.ok(Math.abs(Date.parse(consumed?.consumedAt ?? "") - databaseNow) < 5_000);
+  });
+
   it("uses a volatile database-clock expiry fence for PostgreSQL token claims", () => {
     const db = new RecordingDatabase("postgres");
     new RemoteActionTokenRepository(db);
     const claimStatements = db.statements.filter((sql) => sql.includes("UPDATE remote_action_tokens"));
 
     assert.equal(claimStatements.length >= 2, true);
+    const consumedStatements = claimStatements.filter((sql) => sql.includes("state = 'consumed'"));
+    assert.equal(consumedStatements.length >= 2, true);
     assert.equal(
-      claimStatements
-        .filter((sql) => sql.includes("state = 'consumed'"))
-        .every((sql) => /gc_try_parse_timestamptz\(expires_at\) > clock_timestamp\(\)/.test(sql)),
+      consumedStatements.every((sql) => /gc_try_parse_timestamptz\(expires_at\) > clock_timestamp\(\)/.test(sql)),
       true,
     );
   });

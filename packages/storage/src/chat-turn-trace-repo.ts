@@ -112,6 +112,7 @@ export interface ChatTurnTracePatchInput {
 
 export class ChatTurnTraceRepository {
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly patchIfStatusStmt;
@@ -124,6 +125,9 @@ export class ChatTurnTraceRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_turn_traces WHERE turn_id = ?");
+    this.getForUpdateStmt = db.prepare(
+      `SELECT * FROM chat_turn_traces WHERE turn_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+    );
     this.insertStmt = db.prepare(`
       INSERT INTO chat_turn_traces (
         turn_id, session_id, user_message_id, parent_turn_id, branch_kind, source_turn_id,
@@ -225,6 +229,15 @@ export class ChatTurnTraceRepository {
     return mapRow(row);
   }
 
+  /** Lock a trace before a transactionally fenced read-modify-write. */
+  public getForUpdate(turnId: string): ChatTurnTraceRecord {
+    const row = toChatTurnTraceRow(this.getForUpdateStmt.get(turnId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Chat turn trace", id: turnId });
+    }
+    return mapRow(row);
+  }
+
   public create(input: ChatTurnTraceCreateInput): ChatTurnTraceRecord {
     return this.db.transaction("immediate", () => {
       this.insertStmt.run({
@@ -287,15 +300,17 @@ export class ChatTurnTraceRepository {
     expectedStatuses: readonly ChatTurnTraceRecord["status"][],
     input: ChatTurnTracePatchInput,
   ): ChatTurnTraceRecord | undefined {
-    const current = this.get(turnId);
-    if (!expectedStatuses.includes(current.status)) {
-      return undefined;
-    }
-    const result = this.patchIfStatusStmt.run({
-      ...this.buildPatchParams(turnId, input, current),
-      expectedStatus: current.status,
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(turnId);
+      if (!expectedStatuses.includes(current.status)) {
+        return undefined;
+      }
+      const result = this.patchIfStatusStmt.run({
+        ...this.buildPatchParams(turnId, input, current),
+        expectedStatus: current.status,
+      });
+      return result.changes > 0 ? this.get(turnId) : undefined;
     });
-    return result.changes > 0 ? this.get(turnId) : undefined;
   }
 
   private buildPatchParams(

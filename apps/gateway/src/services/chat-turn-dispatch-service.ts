@@ -7,6 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { CHAT_TURN_ACTIVE_STATUSES, NotFoundError } from "@goatcitadel/contracts";
+/* eslint-disable max-lines -- Chat dispatch keeps provider, durable, integration, and ownership boundaries co-located for auditability. */
 import type {
   ChatCitationRecord,
   ChatMessageRecord,
@@ -21,6 +22,8 @@ import {
   ChatTurnCancelledError,
   dedupeChatCitations,
   patchChatTurnTraceIfStatus,
+  readDurableCancellation,
+  readDurableRecoveryInterruption,
   splitIntoChunks,
   tryPatchChatTurnTraceIfStatus,
 } from "./chat-turn-helpers.js";
@@ -30,11 +33,14 @@ import {
 } from "./chat-turn-execution-registry.js";
 import {
   isPersistableChatStreamChunk,
+  type ChatStreamMutationLifecycle,
   type InspectableChatStreamChunk,
+  type PreparedAgentChatTurnDispatchOptions,
   type PreparedChatExecutionPlanResolution,
 } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { persistInitialChatTurnTrace } from "./chat-durable-run-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import type {
   ChatTurnDurableRunOwner,
@@ -89,9 +95,16 @@ export function shouldUseDurableExecution(
   host: ChatTurnDispatchHost,
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
+  requireDurableExecution = false,
 ): boolean {
   if (!isDurableExecutionEnabled(host)) {
+    if (requireDurableExecution) {
+      throw new Error("Deterministic delegated Chat execution requires durable execution to be enabled.");
+    }
     return false;
+  }
+  if (requireDurableExecution) {
+    return true;
   }
   if (prepared.normalized.normalizationProfile === "quick_web") {
     return false;
@@ -130,12 +143,12 @@ export async function consumePreparedAgentChatTurn(
   prepared: PreparedAgentChatTurn,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-  options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
+  options?: PreparedAgentChatTurnDispatchOptions,
 ): Promise<ChatSendMessageResponse> {
   let assistantMessage: ChatMessageRecord | undefined;
   let trace: ChatTurnTraceRecord | undefined;
   let citations: ChatCitationRecord[] = [];
-  const useDurableExecution = shouldUseDurableExecution(host, prepared, input);
+  const useDurableExecution = shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
   let launchedDurableRunId: string | undefined;
   if (useDurableExecution) {
     launchedDurableRunId = launchPreparedAgentChatTurnStream(
@@ -145,13 +158,8 @@ export async function consumePreparedAgentChatTurn(
       prepared,
       threadEventType,
       resolvedOrchestration,
+      options,
     );
-    if (launchedDurableRunId && options?.onChildDurableRunLaunched) {
-      // Report the launched durable child run id to interested callers (e.g.
-      // orchestration phase dispatch) the moment the child run row exists, so a
-      // crash mid-turn leaves a harvestable linkage instead of a re-dispatch.
-      options.onChildDurableRunLaunched(launchedDurableRunId);
-    }
   }
   // Wire the external abort signal to both the in-process turn controller
   // (used by the inline orchestration path that registers via
@@ -162,6 +170,9 @@ export async function consumePreparedAgentChatTurn(
   // the parent's await-loop bail out promptly via `ChatTurnCancelledError`.
   const detachAbortListener = bindConsumeAbortToTurn(host, prepared.turnId, launchedDurableRunId, options?.abortSignal);
   try {
+    if (!useDurableExecution) {
+      options?.assertDispatchOwnership?.();
+    }
     const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
       ? host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
           liveTail: true,
@@ -263,6 +274,7 @@ export async function executePreparedAgentChatTurnBackground(
     skipMessageStart?: boolean;
     abortSignal?: AbortSignal;
     durableLeaseOwnerId?: string;
+    mutationLifecycle?: ChatStreamMutationLifecycle;
   },
 ): Promise<void> {
   let preserveForDurableRecovery = false;
@@ -453,7 +465,7 @@ export async function executePreparedAgentChatTurnBackground(
   }
 }
 
-function buildDurableChatCanonicalWriteFence(
+export function buildDurableChatCanonicalWriteFence(
   host: ChatTurnDispatchHost,
   prepared: PreparedAgentChatTurn,
   durableRunId: string | undefined,
@@ -469,36 +481,26 @@ function buildDurableChatCanonicalWriteFence(
   return <T>(work: () => T): T => {
     options.streamRegistration.requireActive(prepared.turnId);
     return host.storage.runImmediateTransaction(() => {
-      options.streamRegistration.requireActive(prepared.turnId);
-      if (
-        !expectedLeaseOwnerId ||
-        !host.storage.durableRuns.lockActiveLeaseForUpdate(durableRunId, expectedLeaseOwnerId, new Date().toISOString())
-      ) {
-        const error = new Error(
-          `Durable Chat worker lost canonical write ownership for run ${durableRunId}; ` +
-            `lease ${expectedLeaseOwnerId ?? "missing"} is no longer active.`,
-        );
-        error.name = "DurableWorkerInterruptionError";
-        throw error;
-      }
-      return work();
+      const requireFreshLease = () => {
+        options.streamRegistration.requireActive(prepared.turnId);
+        if (
+          !expectedLeaseOwnerId ||
+          !host.storage.durableRuns.lockFreshActiveLeaseForUpdate(durableRunId, expectedLeaseOwnerId)
+        ) {
+          const error = new Error(
+            `Durable Chat worker lost canonical write ownership for run ${durableRunId}; ` +
+              `lease ${expectedLeaseOwnerId ?? "missing"} is no longer active.`,
+          );
+          error.name = "DurableWorkerInterruptionError";
+          throw error;
+        }
+      };
+      requireFreshLease();
+      const result = work();
+      requireFreshLease();
+      return result;
     });
   };
-}
-
-function readDurableRecoveryInterruption(signal: AbortSignal | undefined, error: unknown): Error | undefined {
-  const candidate = signal?.aborted ? signal.reason : error;
-  if (!(candidate instanceof Error)) {
-    return undefined;
-  }
-  return candidate.name === "DurableWorkerInterruptionError" || candidate.name === "DurableRunPausedError"
-    ? candidate
-    : undefined;
-}
-
-function readDurableCancellation(signal: AbortSignal | undefined, error: unknown): Error | undefined {
-  const candidate = signal?.aborted ? signal.reason : error;
-  return candidate instanceof Error && candidate.name === "DurableRunCancelledError" ? candidate : undefined;
 }
 
 export function launchPreparedAgentChatTurnStream(
@@ -508,9 +510,15 @@ export function launchPreparedAgentChatTurnStream(
   prepared: PreparedAgentChatTurn,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
+  options?: PreparedAgentChatTurnDispatchOptions,
 ): string | undefined {
-  const durableRequested = shouldUseDurableExecution(host, prepared, input);
-  const durableRun = host.beginDurableChatRun(prepared, input, threadEventType);
+  const backgroundTasks = host.backgroundTasks;
+  const durableRequested = shouldUseDurableExecution(host, prepared, input, options?.requireDurableExecution);
+  options?.assertDispatchOwnership?.();
+  const durableRun = host.beginDurableChatRun(prepared, input, threadEventType, {
+    mutationLifecycle: options?.mutationLifecycle,
+    runId: options?.durableRunId,
+  });
   const streamRegistration = host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId, {
     ...(durableRun ? { reservation: true } : {}),
   });
@@ -533,11 +541,18 @@ export function launchPreparedAgentChatTurnStream(
       threadEventType,
     },
   });
+  if (!durableRun && !durableRequested && options?.mutationLifecycle) {
+    persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+    options.mutationLifecycle.markCommitted();
+  }
   if (durableRun) {
+    options?.onChildDurableRunLaunched?.(durableRun.runId);
     return durableRun.runId;
   }
   if (durableRequested) {
-    persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration);
+    if (persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration)) {
+      options?.mutationLifecycle?.markCommitted();
+    }
     return undefined;
   }
   const task = executePreparedAgentChatTurnBackground(
@@ -548,13 +563,16 @@ export function launchPreparedAgentChatTurnStream(
     threadEventType,
     undefined,
     resolvedOrchestration,
-    { streamRegistration },
+    {
+      streamRegistration,
+      ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+    },
   );
   const removeBackgroundTask = (): void => {
-    host.backgroundTasks.delete(task);
+    backgroundTasks.delete(task);
   };
   void task.then(removeBackgroundTask, removeBackgroundTask);
-  host.backgroundTasks.add(task);
+  backgroundTasks.add(task);
   return undefined;
 }
 
@@ -563,7 +581,8 @@ function persistDurableUnavailableFailure(
   sessionId: string,
   prepared: PreparedAgentChatTurn,
   streamRegistration: ActiveChatTurnStreamExecution,
-): void {
+): boolean {
+  let mutationCommitted = false;
   try {
     recordChatDispatchDiagnosticSafely(host, {
       level: "warn",
@@ -593,7 +612,7 @@ function persistDurableUnavailableFailure(
       if (!(error instanceof NotFoundError)) {
         throw error;
       }
-      return;
+      return false;
     }
     const failureResult = tryPatchChatTurnTraceIfStatus(
       host.storage.chatTurnTraces,
@@ -616,6 +635,7 @@ function persistDurableUnavailableFailure(
       },
     );
     if (failureResult.patched) {
+      mutationCommitted = true;
       host.persistChatStreamChunk(
         {
           type: "trace_update",
@@ -637,6 +657,7 @@ function persistDurableUnavailableFailure(
         streamRegistration,
       );
     }
+    return mutationCommitted;
   } finally {
     streamRegistration.complete();
     setTimeout(() => streamRegistration.close(), 30_000);
@@ -650,7 +671,7 @@ export async function sendPreparedIntegrationChatTurn(
   prepared: PreparedAgentChatTurn,
   binding: ChatSessionBindingRecord,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): Promise<ChatSendMessageResponse> {
   const startedAt = new Date().toISOString();
   const storage = host.storage;
@@ -679,6 +700,7 @@ export async function sendPreparedIntegrationChatTurn(
       startedAt,
     });
     traceCreated = true;
+    options?.mutationLifecycle?.markCommitted();
     assertIntegrationCompletionWritable(host, prepared.turnId, controller.signal, deliveryCommitted);
     if (!binding.connectionId || !binding.target) {
       throw new Error("Integration binding is missing connectionId or target");
@@ -978,7 +1000,7 @@ export async function* streamPreparedIntegrationChatTurn(
   prepared: PreparedAgentChatTurn,
   binding: ChatSessionBindingRecord,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): AsyncGenerator<ChatStreamChunkDraft> {
   yield {
     type: "message_start",

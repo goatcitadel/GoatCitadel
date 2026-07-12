@@ -23,6 +23,7 @@ import {
   type ProactiveRunRecord,
   type SessionMeta,
   type TaskRecord,
+  type ToolInvokeRequest,
   type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
@@ -324,6 +325,120 @@ describe("ChatProactiveService", () => {
     expect(row.linked_durable_run_id).toBe("durable-new"); // first writer's field preserved
     expect(row.status).toBe("running"); // second writer's field applied
     expect(row.approval_id).toBeNull(); // second writer cleared the approval
+  });
+
+  it("preserves same-owner metadata written before the waiting transaction locks the durable run", () => {
+    const harness = createHarness();
+    const runId = "durable-waiting-metadata-race";
+    const claimed: DurableRunRecord = {
+      runId,
+      workflowKey: "proactive.tick",
+      status: "running",
+      attemptCount: 0,
+      maxAttempts: 3,
+      version: 1,
+      payload: {},
+      metadata: {
+        stableMarker: "v1",
+        proactive: { phase: "planning", taskId: "task-v1" },
+      },
+      leaseOwnerId: "worker-race",
+      leaseHeartbeatAt: "2026-07-11T10:00:00.000Z",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+      createdAt: "2026-07-11T10:00:00.000Z",
+      updatedAt: "2026-07-11T10:00:00.000Z",
+    };
+    harness.state.durableRuns.set(runId, claimed);
+    const sameOwnerV2: DurableRunRecord = {
+      ...claimed,
+      version: 2,
+      metadata: {
+        stableMarker: "v2",
+        sameOwnerWrite: { revision: 2, source: "heartbeat" },
+        proactive: { phase: "planning", taskId: "task-v2" },
+      },
+      updatedAt: "2026-07-11T10:00:01.000Z",
+    };
+    let enteredTransaction = false;
+    const runImmediateTransaction = harness.storage.runImmediateTransaction;
+    harness.storage.runImmediateTransaction = <T>(work: () => T): T => {
+      if (!enteredTransaction) {
+        enteredTransaction = true;
+        harness.state.durableRuns.set(runId, sameOwnerV2);
+      }
+      return runImmediateTransaction(work);
+    };
+    const lockFreshActiveLeaseForUpdate = vi.spyOn(harness.storage.durableRuns, "lockFreshActiveLeaseForUpdate");
+
+    const updated = (
+      harness.service as unknown as {
+        markDurableRunWaiting(
+          run: DurableRunRecord,
+          waitForEvent: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
+          statePatch: Record<string, unknown>,
+        ): DurableRunRecord;
+      }
+    ).markDurableRunWaiting(
+      claimed,
+      {
+        eventKey: "approval.resolved",
+        correlationId: "approval-race",
+        payload: { proactiveRunId: "proactive-race" },
+      },
+      { phase: "awaiting_approval", approvalId: "approval-race" },
+    );
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(runId, "worker-race");
+    expect(updated.metadata).toMatchObject({
+      stableMarker: "v2",
+      sameOwnerWrite: { revision: 2, source: "heartbeat" },
+      proactive: {
+        phase: "awaiting_approval",
+        taskId: "task-v2",
+        approvalId: "approval-race",
+      },
+    });
+    expect(harness.state.checkpoints.at(-1)?.state).toMatchObject({
+      waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-race" },
+      proactive: {
+        phase: "awaiting_approval",
+        taskId: "task-v2",
+        approvalId: "approval-race",
+      },
+    });
+  });
+
+  it("uses the database-clock lease lock for proactive state updates and completion", () => {
+    const harness = createHarness();
+    const runId = "durable-proactive-fresh-lease";
+    const claimed: DurableRunRecord = {
+      runId,
+      workflowKey: "proactive.tick",
+      status: "running",
+      attemptCount: 0,
+      maxAttempts: 3,
+      version: 1,
+      payload: {},
+      metadata: { proactive: { phase: "planning" } },
+      leaseOwnerId: "worker-fresh",
+      leaseHeartbeatAt: "2026-07-11T10:00:00.000Z",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+      createdAt: "2026-07-11T10:00:00.000Z",
+      updatedAt: "2026-07-11T10:00:00.000Z",
+    };
+    harness.state.durableRuns.set(runId, claimed);
+    const lockFreshActiveLeaseForUpdate = vi.spyOn(harness.storage.durableRuns, "lockFreshActiveLeaseForUpdate");
+    const service = harness.service as unknown as {
+      updateProactiveDurableRunState(run: DurableRunRecord, patch: Record<string, unknown>): DurableRunRecord;
+      completeDurableRun(run: DurableRunRecord, checkpointState: Record<string, unknown>): void;
+    };
+
+    const updated = service.updateProactiveDurableRunState(claimed, { phase: "executing" });
+    service.completeDurableRun(updated, { proactiveRunId: "proactive-fresh" });
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenNthCalledWith(1, runId, "worker-fresh");
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenNthCalledWith(2, runId, "worker-fresh");
+    expect(harness.state.durableRuns.get(runId)).toMatchObject({ status: "completed", leaseOwnerId: undefined });
   });
 
   it("resumes approval-blocked proactive durable runs from checkpoint without rerunning completed actions", async () => {
@@ -628,6 +743,102 @@ describe("ChatProactiveService", () => {
     expect(state.durableRuns.get(durableRunId)?.status).toBe("completed");
   });
 
+  it.each([
+    {
+      caseName: "HTTP 5xx",
+      domainResult: { status: 503, error: "provider returned 503 after dispatch" },
+      expectedError: "provider returned 503 after dispatch",
+    },
+    {
+      caseName: "ok false",
+      domainResult: { ok: false, error: "provider rejected the approved mutation" },
+      expectedError: "provider rejected the approved mutation",
+    },
+    {
+      caseName: "manual reconciliation",
+      domainResult: {
+        externalOutcome: "unknown_after_send",
+        manualReconciliationRequired: true,
+        fallbackReason: "manual reconciliation required after dispatch",
+      },
+      expectedError: "manual reconciliation required after dispatch",
+    },
+  ])(
+    "does not report a resumed approval action as executed when its stored domain result failed ($caseName)",
+    async ({ domainResult, expectedError }) => {
+      const harness = createHarness();
+      const { service, state, invokeTool } = harness;
+      const planSpy = vi.spyOn(
+        service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+        "planProactiveActions",
+      );
+      planSpy.mockResolvedValue({
+        confidence: 0.9,
+        reasoningSummary: "One approval-gated action is required.",
+        actions: [{ kind: "tool", toolName: "http.post", args: { url: "https://example.com/mutate" } }],
+      });
+
+      let approvalId = "";
+      invokeTool.mockImplementationOnce(async () => {
+        const approval = harness.storage.approvals.create({
+          kind: "tool.invoke",
+          riskLevel: "danger",
+          payload: { toolName: "http.post" },
+          preview: { title: "Approve external mutation" },
+          linkage: { sessionId: state.session.sessionId, originSurface: "chat" },
+        });
+        approvalId = approval.approvalId;
+        harness.storage.pendingApprovalActions.upsertPending({
+          approvalId,
+          actionType: "tool.invoke",
+          request: { toolName: "http.post", args: { url: "https://example.com/mutate" } },
+        });
+        return {
+          outcome: "approval_required",
+          approvalId,
+          policyReason: "Approval required by policy.",
+          auditEventId: "audit-approval-domain-failure",
+        } satisfies ToolInvokeResult;
+      });
+
+      const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+      const durableRunId = started.linkedDurableRunId!;
+      await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+
+      harness.storage.pendingApprovalActions.markResolved(approvalId, "executed", {
+        outcome: "executed",
+        policyReason: "execution outcome unknown",
+        result: domainResult,
+      });
+      harness.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+      const waiting = state.durableRuns.get(durableRunId)!;
+      state.durableRuns.set(durableRunId, {
+        ...waiting,
+        status: "running",
+        version: waiting.version + 1,
+        leaseOwnerId: `test-resume-claim:${durableRunId}`,
+        leaseHeartbeatAt: new Date().toISOString(),
+        leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+      });
+
+      await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+
+      expect(invokeTool).toHaveBeenCalledTimes(1);
+      expect(readRun(state, started.runId)).toMatchObject({
+        status: "failed",
+        stopReason: "terminal_failure",
+        error: expectedError,
+      });
+      expect(actionsForRun(state, started.runId)).toEqual([
+        expect.objectContaining({
+          status: "failed",
+          approvalId,
+          error: expectedError,
+        }),
+      ]);
+    },
+  );
+
   it("fails before invoking a proactive tool when the durable boundary marker cannot be recorded", async () => {
     const harness = createHarness();
     const { service, state, invokeTool } = harness;
@@ -642,6 +853,10 @@ describe("ChatProactiveService", () => {
       auditEventId: "audit-1",
       result: { ok: true },
     } satisfies ToolInvokeResult);
+    harness.callbacks.invokeTool = async (request, options) => {
+      options?.externalSideEffect?.markStarted();
+      return invokeTool(request);
+    };
 
     const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
     const durableRunId = started.linkedDurableRunId!;
@@ -656,6 +871,269 @@ describe("ChatProactiveService", () => {
     await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
     expect(invokeTool).toHaveBeenCalledTimes(1);
     expect(readRun(state, started.runId).status).toBe("executed");
+  });
+
+  it("checks the database-clock lease immediately before proactive tool execution", async () => {
+    const harness = createHarness();
+    const started = await harness.service.triggerChatSessionProactive(harness.state.session.sessionId, {
+      source: "manual",
+    });
+    const durableRunId = started.linkedDurableRunId!;
+    const durableRun = harness.state.durableRuns.get(durableRunId)!;
+    harness.state.durableRuns.set(durableRunId, {
+      ...durableRun,
+      status: "running",
+      leaseOwnerId: "worker-tool-fence",
+      leaseHeartbeatAt: "2026-07-11T10:00:00.000Z",
+      leaseExpiresAt: "2099-12-31T23:59:59.999Z",
+    });
+    const action: ProactiveActionRecord = {
+      actionId: "action-tool-lease-fence",
+      runId: started.runId,
+      sessionId: harness.state.session.sessionId,
+      kind: "tool",
+      status: "suggested",
+      triggerSource: "manual",
+      originSurface: "chat",
+      toolName: "browser.search",
+      args: { query: "latest state" },
+      createdAt: "2026-07-11T10:00:00.000Z",
+    };
+    (
+      harness.service as unknown as {
+        insertProactiveAction(current: ProactiveActionRecord): void;
+      }
+    ).insertProactiveAction(action);
+    const lockFreshActiveLeaseForUpdate = vi.spyOn(harness.storage.durableRuns, "lockFreshActiveLeaseForUpdate");
+    harness.callbacks.invokeTool = vi.fn(async (_request, options) => {
+      options?.executionFence?.();
+      options?.externalSideEffect?.markNotRequired();
+      return {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-tool-lease-fence",
+        result: { ok: true },
+      } satisfies ToolInvokeResult;
+    });
+
+    await (
+      harness.service as unknown as {
+        executeProactiveToolAction(
+          current: ProactiveActionRecord,
+          durableRunId: string,
+          signal: AbortSignal | undefined,
+          expectedLeaseOwnerId: string,
+        ): Promise<ProactiveActionRecord>;
+      }
+    ).executeProactiveToolAction(action, durableRunId, undefined, "worker-tool-fence");
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(durableRunId, "worker-tool-fence");
+  });
+
+  it("keeps proactive preflight failures retryable before the external-call boundary", async () => {
+    const harness = createHarness();
+    const preflightInvoke = vi.fn(async () => {
+      throw new Error("tool preflight unavailable");
+    });
+    harness.callbacks.invokeTool = preflightInvoke;
+    const started = await harness.service.triggerChatSessionProactive(harness.state.session.sessionId, {
+      source: "manual",
+    });
+    const action: ProactiveActionRecord = {
+      actionId: "action-preflight-failure",
+      runId: started.runId,
+      sessionId: harness.state.session.sessionId,
+      kind: "tool",
+      status: "suggested",
+      triggerSource: "manual",
+      originSurface: "chat",
+      toolName: "browser.search",
+      args: { query: "latest state" },
+      createdAt: "2026-07-11T10:00:00.000Z",
+    };
+    (
+      harness.service as unknown as {
+        insertProactiveAction(current: ProactiveActionRecord): void;
+      }
+    ).insertProactiveAction(action);
+    const markExternalCallStarted = vi.spyOn(harness.storage.externalSideEffectRuns, "markExternalCallStarted");
+    const markSideEffectFailure = vi.spyOn(harness.storage.externalSideEffectRuns, "markFailureIfStatus");
+    const reopenMutation = vi.spyOn(harness.storage.mutationIdempotency, "markFailed");
+
+    await expect(
+      (
+        harness.service as unknown as {
+          executeProactiveToolAction(
+            current: ProactiveActionRecord,
+            durableRunId: string,
+          ): Promise<ProactiveActionRecord>;
+        }
+      ).executeProactiveToolAction(action, started.linkedDurableRunId!),
+    ).rejects.toThrow("tool preflight unavailable");
+
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
+    expect(markSideEffectFailure).toHaveBeenCalledWith(
+      expect.any(String),
+      "claimed_not_sent",
+      expect.objectContaining({ status: "failed_before_boundary", errorText: "tool preflight unavailable" }),
+      expect.any(String),
+    );
+    expect(reopenMutation).toHaveBeenCalledOnce();
+    expect(actionsForRun(harness.state, started.runId)).toEqual([
+      expect.objectContaining({ actionId: action.actionId, status: "suggested" }),
+    ]);
+  });
+
+  it("rejects an executed tool envelope whose concrete domain result failed before dispatch", async () => {
+    const harness = createHarness();
+    const invokeTool = vi.fn(
+      async (_request: ToolInvokeRequest, options?: Parameters<ChatProactiveServiceCallbacks["invokeTool"]>[1]) => {
+        options?.externalSideEffect?.markNotRequired();
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-domain-failure",
+          result: {
+            status: "failed",
+            deliveryStatus: "blocked",
+            error: "blocked: Integration connection is disabled or disconnected.",
+          },
+        } satisfies ToolInvokeResult;
+      },
+    );
+    harness.callbacks.invokeTool = invokeTool;
+    const started = await harness.service.triggerChatSessionProactive(harness.state.session.sessionId, {
+      source: "manual",
+    });
+    const action: ProactiveActionRecord = {
+      actionId: "action-domain-failure",
+      runId: started.runId,
+      sessionId: harness.state.session.sessionId,
+      kind: "tool",
+      status: "suggested",
+      triggerSource: "manual",
+      originSurface: "chat",
+      toolName: "channel.send",
+      args: { connectionId: "disconnected", message: "hello" },
+      createdAt: "2026-07-11T10:00:00.000Z",
+    };
+    (
+      harness.service as unknown as {
+        insertProactiveAction(current: ProactiveActionRecord): void;
+      }
+    ).insertProactiveAction(action);
+    const markExternalCallStarted = vi.spyOn(harness.storage.externalSideEffectRuns, "markExternalCallStarted");
+    const markSideEffectFailure = vi.spyOn(harness.storage.externalSideEffectRuns, "markFailureIfStatus");
+    const reopenMutation = vi.spyOn(harness.storage.mutationIdempotency, "markFailed");
+
+    await expect(
+      (
+        harness.service as unknown as {
+          executeProactiveToolAction(
+            current: ProactiveActionRecord,
+            durableRunId: string,
+          ): Promise<ProactiveActionRecord>;
+        }
+      ).executeProactiveToolAction(action, started.linkedDurableRunId!),
+    ).rejects.toThrow("Integration connection is disabled or disconnected");
+
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
+    expect(markSideEffectFailure).toHaveBeenCalledWith(
+      expect.any(String),
+      "claimed_not_sent",
+      expect.objectContaining({
+        status: "failed_before_boundary",
+        errorText: "blocked: Integration connection is disabled or disconnected.",
+      }),
+      expect.any(String),
+    );
+    expect(reopenMutation).toHaveBeenCalledOnce();
+    expect(actionsForRun(harness.state, started.runId)).toEqual([
+      expect.objectContaining({ actionId: action.actionId, status: "suggested" }),
+    ]);
+  });
+
+  it("keeps proactive provider-call failures unknown and non-replayable after the boundary", async () => {
+    const harness = createHarness();
+    const providerInvoke = vi.fn(
+      async (
+        _request: ToolInvokeRequest,
+        options?: Parameters<ChatProactiveServiceCallbacks["invokeTool"]>[1],
+      ): Promise<ToolInvokeResult> => {
+        options?.externalSideEffect?.markStarted();
+        return {
+          outcome: "executed",
+          policyReason: "execution outcome unknown: provider call failed after dispatch",
+          auditEventId: "audit-provider-failure",
+          result: {
+            status: "failed",
+            deliveryStatus: "manual_reconciliation_required",
+            manualReconciliationRequired: true,
+            error: "execution error: provider call failed after dispatch",
+          },
+        };
+      },
+    );
+    harness.callbacks.invokeTool = providerInvoke;
+    const started = await harness.service.triggerChatSessionProactive(harness.state.session.sessionId, {
+      source: "manual",
+    });
+    const action: ProactiveActionRecord = {
+      actionId: "action-provider-failure",
+      runId: started.runId,
+      sessionId: harness.state.session.sessionId,
+      kind: "tool",
+      status: "suggested",
+      triggerSource: "manual",
+      originSurface: "chat",
+      toolName: "browser.search",
+      args: { query: "latest state" },
+      createdAt: "2026-07-11T10:00:00.000Z",
+    };
+    (
+      harness.service as unknown as {
+        insertProactiveAction(current: ProactiveActionRecord): void;
+      }
+    ).insertProactiveAction(action);
+    const markSideEffectFailure = vi.spyOn(harness.storage.externalSideEffectRuns, "markFailureIfStatus");
+    const reopenMutation = vi.spyOn(harness.storage.mutationIdempotency, "markFailed");
+    const execute = () =>
+      (
+        harness.service as unknown as {
+          executeProactiveToolAction(
+            current: ProactiveActionRecord,
+            durableRunId: string,
+          ): Promise<ProactiveActionRecord>;
+        }
+      ).executeProactiveToolAction(action, started.linkedDurableRunId!);
+
+    await expect(execute()).resolves.toMatchObject({
+      actionId: action.actionId,
+      status: "failed",
+      error: "execution error: provider call failed after dispatch",
+    });
+    expect(providerInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "browser.search" }),
+      expect.objectContaining({
+        externalSideEffect: expect.objectContaining({
+          markStarted: expect.any(Function),
+          markNotRequired: expect.any(Function),
+        }),
+      }),
+    );
+    expect(markSideEffectFailure).toHaveBeenCalledWith(
+      expect.any(String),
+      "external_call_started",
+      expect.objectContaining({
+        status: "unknown_external_outcome",
+        errorText: "execution error: provider call failed after dispatch",
+      }),
+      expect.any(String),
+    );
+    expect(reopenMutation).not.toHaveBeenCalled();
+
+    await expect(execute()).resolves.toMatchObject({ actionId: action.actionId, status: "failed" });
+    expect(providerInvoke).toHaveBeenCalledTimes(1);
   });
 
   it("does not invoke the same proactive action twice when executions overlap", async () => {
@@ -734,6 +1212,10 @@ describe("ChatProactiveService", () => {
           request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true });
         }),
     );
+    harness.callbacks.invokeTool = async (request, options) => {
+      options?.externalSideEffect?.markStarted();
+      return invokeTool(request);
+    };
 
     const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
     const durableRunId = started.linkedDurableRunId!;
@@ -786,6 +1268,10 @@ describe("ChatProactiveService", () => {
       actions: [{ kind: "tool", toolName: "time.now", args: { timezone: "UTC" } }],
     });
     invokeTool.mockRejectedValueOnce(new Error("tool runtime unavailable"));
+    harness.callbacks.invokeTool = async (request, options) => {
+      options?.externalSideEffect?.markStarted();
+      return invokeTool(request);
+    };
 
     const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
     const durableRunId = started.linkedDurableRunId!;
@@ -1231,7 +1717,13 @@ function createHarness(options?: {
     hasRunningTurn: () => false,
     getSessionIdleSeconds: () => 600,
     listChatMessages: async (sessionId) => state.messages.get(sessionId) ?? [],
-    invokeTool,
+    invokeTool: async (request, options) => {
+      const result = await invokeTool(request);
+      if (result?.outcome === "executed") {
+        options?.externalSideEffect?.markStarted();
+      }
+      return result;
+    },
     detectDelegationRoles: () => [],
     createDurableRun: (input) => {
       const created = durableRunService.createDurableRun(input);
@@ -1421,6 +1913,25 @@ function createStorage(state: HarnessState) {
         sideEffectRecords.set(runId, record);
         return record;
       },
+      markFailureIfStatus: (
+        runId: string,
+        expectedStatus: ExternalSideEffectRunRecord["status"],
+        input: { status: "failed_before_boundary" | "unknown_external_outcome"; errorText: string },
+        now = new Date().toISOString(),
+      ) => {
+        const current = sideEffectRecords.get(runId)!;
+        if (current.status !== expectedStatus) {
+          return current;
+        }
+        const record = {
+          ...current,
+          status: input.status,
+          errorText: input.errorText,
+          updatedAt: now,
+        };
+        sideEffectRecords.set(runId, record);
+        return record;
+      },
       get: (runId: string) => sideEffectRecords.get(runId)!,
     },
     durableRuns: {
@@ -1439,6 +1950,32 @@ function createStorage(state: HarnessState) {
       getRun: (runId: string) => {
         const run = state.durableRuns.get(runId);
         if (!run) throw new Error(`Unknown run ${runId}`);
+        return run;
+      },
+      lockActiveLeaseForUpdate: (runId: string, expectedLeaseOwnerId: string, now: string) => {
+        const run = state.durableRuns.get(runId);
+        if (
+          !run ||
+          run.status !== "running" ||
+          run.leaseOwnerId !== expectedLeaseOwnerId ||
+          !run.leaseExpiresAt ||
+          Date.parse(run.leaseExpiresAt) <= Date.parse(now)
+        ) {
+          return undefined;
+        }
+        return run;
+      },
+      lockFreshActiveLeaseForUpdate: (runId: string, expectedLeaseOwnerId: string) => {
+        const run = state.durableRuns.get(runId);
+        if (
+          !run ||
+          run.status !== "running" ||
+          run.leaseOwnerId !== expectedLeaseOwnerId ||
+          !run.leaseExpiresAt ||
+          Date.parse(run.leaseExpiresAt) <= Date.now()
+        ) {
+          return undefined;
+        }
         return run;
       },
       createRun: (input: {
@@ -1482,6 +2019,7 @@ function createStorage(state: HarnessState) {
         finishedAt?: string;
         lastError?: string;
         updatedAt?: string;
+        clearLease?: boolean;
       }) => {
         const current = state.durableRuns.get(input.runId);
         if (!current) throw new Error(`Unknown run ${input.runId}`);
@@ -1495,6 +2033,9 @@ function createStorage(state: HarnessState) {
           finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finishedAt,
           lastError: input.lastError !== undefined ? input.lastError : current.lastError,
           updatedAt: input.updatedAt ?? new Date().toISOString(),
+          ...(input.clearLease
+            ? { leaseOwnerId: undefined, leaseHeartbeatAt: undefined, leaseExpiresAt: undefined }
+            : {}),
         };
         state.durableRuns.set(next.runId, next);
         return next;

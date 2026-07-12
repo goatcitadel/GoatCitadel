@@ -8,15 +8,17 @@ const REMOTE_APPROVAL_ACCOUNT_PREFIX = "approval-remote-action:";
 type ApprovalRemoteTokenSecretStore = Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret">;
 type ApprovalRemoteTokenRepository = Pick<
   Storage["remoteActionTokens"],
-  "listPendingExpiredAtOrBefore" | "expirePendingAtOrBefore"
+  "listPendingExpired" | "expirePendingIfExpired"
 >;
 
 export class ApprovalRemoteTokenSecretService {
   public constructor(
     private readonly storeBackend: ApprovalRemoteTokenSecretStore,
     private readonly tokens: ApprovalRemoteTokenRepository,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
+    _now: () => Date = () => new Date(),
+  ) {
+    void _now;
+  }
 
   public store(tokenId: string, token: string): string {
     return storeApprovalRemoteTokenSecret(this.storeBackend, tokenId, token);
@@ -35,8 +37,7 @@ export class ApprovalRemoteTokenSecretService {
   }
 
   public reconcileExpired(limit = 100): number {
-    const boundaryAt = this.now().toISOString();
-    const candidates = this.tokens.listPendingExpiredAtOrBefore(boundaryAt, limit);
+    const candidates = this.tokens.listPendingExpired(limit);
     let expired = 0;
     let cleanupError: unknown;
     for (const candidate of candidates) {
@@ -46,7 +47,7 @@ export class ApprovalRemoteTokenSecretService {
         cleanupError ??= error;
         continue;
       }
-      const current = this.tokens.expirePendingAtOrBefore(candidate.tokenId, boundaryAt);
+      const current = this.tokens.expirePendingIfExpired(candidate.tokenId);
       if (current.state === "expired") {
         expired += 1;
       }

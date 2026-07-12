@@ -90,6 +90,20 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
   };
   const storage = {
     runImmediateTransaction: vi.fn(<T>(callback: () => T): T => callback()),
+    durableRuns: {
+      lockFreshActiveLeaseForUpdate: vi.fn((runId: string, expectedLeaseOwnerId: string) => {
+        if (
+          durableRun.runId !== runId ||
+          durableRun.status !== "running" ||
+          durableRun.leaseOwnerId !== expectedLeaseOwnerId ||
+          !durableRun.leaseExpiresAt ||
+          Date.parse(durableRun.leaseExpiresAt) <= Date.now()
+        ) {
+          return undefined;
+        }
+        return durableRun;
+      }),
+    },
     orchestration: {
       upsertPlan: vi.fn(),
       getPlan: vi.fn(() => plan),

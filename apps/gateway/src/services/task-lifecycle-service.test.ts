@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Storage } from "@goatcitadel/storage";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 
 const storages: Storage[] = [];
@@ -34,6 +35,135 @@ function createService(overrides: Partial<ConstructorParameters<typeof TaskLifec
 }
 
 describe("TaskLifecycleService agentic runtime", () => {
+  it("keeps A2A durable linkage idempotent and refuses a locked conflicting target", () => {
+    const { service, storage } = createService();
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "A2A durable link",
+      status: "in_progress",
+      agenticContext: { runId: "a2a-run-link", surface: "chat", status: "running" },
+    });
+
+    const first = storage.runImmediateTransaction(() => service.persistA2ADurableRunLink(task.taskId, "durable-a"));
+    const replay = storage.runImmediateTransaction(() => service.persistA2ADurableRunLink(task.taskId, "durable-a"));
+    expect(first.agenticContext?.durableRunId).toBe("durable-a");
+    expect(replay.agenticContext?.durableRunId).toBe("durable-a");
+
+    expect(() =>
+      storage.runImmediateTransaction(() => service.persistA2ADurableRunLink(task.taskId, "durable-b")),
+    ).toThrow(ConflictError);
+    expect(storage.tasks.get(task.taskId).agenticContext?.durableRunId).toBe("durable-a");
+  });
+
+  it("preserves task lifecycle ownership when an internal workflow supplies a stable task identity", () => {
+    const { service, publishRealtime } = createService();
+
+    const task = service.createTask(
+      { workspaceId: "default", title: "Stable delegation task", createdBy: "chat" },
+      { taskId: "delegation-task-stable" },
+    );
+
+    expect(task.taskId).toBe("delegation-task-stable");
+    expect(service.getTask(task.taskId).title).toBe("Stable delegation task");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "task_created",
+      "tasks",
+      expect.objectContaining({ task: expect.objectContaining({ taskId: "delegation-task-stable" }) }),
+      expect.any(Object),
+    );
+    expect(() =>
+      service.createTask({ workspaceId: "default", title: "Conflicting task" }, { taskId: task.taskId }),
+    ).toThrow(/UNIQUE|constraint/i);
+  });
+
+  it("publishes a delegation subagent projection only after its caller-owned transaction commits", () => {
+    const { service, publishRealtime } = createService();
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Dispatch-fenced delegation",
+      status: "in_progress",
+      createdBy: "chat",
+    });
+    service.registerTaskSubagent(task.taskId, {
+      agentSessionId: "child-dispatch-fenced",
+      agentName: "researcher",
+    });
+    publishRealtime.mockClear();
+
+    const persisted = service.persistDelegationSubagentProjection("child-dispatch-fenced", {
+      status: "paused",
+      metadata: { runId: "run-dispatch-fenced", heartbeatAt: "2026-07-11T00:00:00.000Z" },
+    });
+
+    expect(persisted).toEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        agentSessionId: "child-dispatch-fenced",
+        status: "paused",
+        endedAt: undefined,
+      }),
+    );
+    expect(publishRealtime).not.toHaveBeenCalled();
+
+    service.publishDelegationSubagentProjection(persisted);
+
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "subagent_updated",
+      "tasks",
+      { taskId: task.taskId, session: persisted },
+      expect.any(Object),
+    );
+  });
+
+  it("projects canonical waiting provenance into the operator run tree", () => {
+    const { service } = createService();
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Waiting delegation",
+      status: "in_progress",
+      createdBy: "chat",
+      agenticContext: {
+        runId: "run-waiting-provenance",
+        surface: "chat",
+        status: "running",
+      },
+    });
+    service.registerTaskSubagent(task.taskId, {
+      agentSessionId: "child-waiting-provenance",
+      agentName: "researcher",
+      metadata: {
+        runId: "child-run-waiting-provenance",
+        profileId: "researcher",
+        waiting: {
+          status: "waiting_for_approval",
+          reason: "Approve read access to the project workspace.",
+          childTurnId: "turn-waiting-provenance",
+          durableRunId: "durable-waiting-provenance",
+          observedAt: "2026-07-11T00:00:00.000Z",
+        },
+      },
+    });
+
+    const tree = service.getAgenticRunTree("run-waiting-provenance");
+    const node = tree.nodes.find((candidate) => candidate.id === "subagent:child-waiting-provenance");
+
+    expect(node).toEqual(
+      expect.objectContaining({
+        status: "active",
+        summary: "Approve read access to the project workspace.",
+        agentSessionId: "child-waiting-provenance",
+        metadata: expect.objectContaining({
+          role: "researcher",
+          childTraceStatus: "waiting_for_approval",
+          childSessionId: "child-waiting-provenance",
+          childTurnId: "turn-waiting-provenance",
+          durableRunId: "durable-waiting-provenance",
+          waitObservedAt: "2026-07-11T00:00:00.000Z",
+        }),
+      }),
+    );
+  });
+
   it("lists durable agentic runs, builds run trees, records diagnostics, and applies controls", () => {
     const { service, storage, publishRealtime } = createService();
     const task = service.createTask({
@@ -131,7 +261,7 @@ describe("TaskLifecycleService agentic runtime", () => {
       status: "recorded",
       controlId: "kill-child-once",
     });
-    expect(storage.taskSubagents.getByAgentSessionId("child-session-1").status).toBe("killed");
+    expect(storage.taskSubagents.getByAgentSessionId("child-session-1").status).toBe("active");
     const replay = service.invokeAgenticControl("run-1", {
       action: "kill_child",
       controlId: "kill-child-once",
@@ -348,6 +478,64 @@ describe("TaskLifecycleService agentic runtime", () => {
     ).toThrow(/different agentic control payload/);
   });
 
+  it.each([
+    { action: "pause" as const, taskStatus: "in_progress" as const, agenticStatus: "running" as const },
+    { action: "cancel" as const, taskStatus: "in_progress" as const, agenticStatus: "running" as const },
+    { action: "retry" as const, taskStatus: "blocked" as const, agenticStatus: "failed" as const },
+    { action: "kill_child" as const, taskStatus: "in_progress" as const, agenticStatus: "running" as const },
+    { action: "approve" as const, taskStatus: "in_progress" as const, agenticStatus: "running" as const },
+    { action: "reject" as const, taskStatus: "in_progress" as const, agenticStatus: "running" as const },
+  ])(
+    "records $action intent without claiming a state-only executor transition",
+    ({ action, taskStatus, agenticStatus }) => {
+      const { service, storage } = createService();
+      const runId = `state-only-${action}`;
+      const task = service.createTask({
+        workspaceId: "default",
+        title: `State-only ${action}`,
+        status: taskStatus,
+        agenticContext: { runId, surface: "chat", status: agenticStatus },
+      });
+      service.registerTaskSubagent(task.taskId, {
+        agentSessionId: `child-${action}`,
+        agentName: "worker",
+      });
+
+      const claim = vi.spyOn(storage.mutationIdempotency, "claim");
+      const result = service.invokeAgenticControl(runId, {
+        action,
+        controlId: `control-${action}`,
+        reason: `operator requested ${action}`,
+        ...(action === "kill_child" ? { agentSessionId: `child-${action}` } : {}),
+      });
+
+      expect(result).toMatchObject({ status: "recorded", runtimeEffect: "state_only" });
+      expect(claim).toHaveBeenCalledWith(expect.objectContaining({ leaseDurationMs: expect.any(Number) }));
+      if (action === "approve" || action === "reject") {
+        expect(result.message).toMatch(/No approval was resolved.*canonical approval-resolution endpoint/i);
+      }
+      expect(storage.tasks.get(task.taskId)).toEqual(
+        expect.objectContaining({
+          status: taskStatus,
+          agenticContext: expect.objectContaining({ status: agenticStatus }),
+        }),
+      );
+      expect(storage.taskSubagents.getByAgentSessionId(`child-${action}`).status).toBe("active");
+      expect(storage.taskActivities.listByTask(task.taskId, 20)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            activityType: "control",
+            metadata: expect.objectContaining({
+              action,
+              resultStatus: "recorded",
+              runtimeEffect: "state_only",
+            }),
+          }),
+        ]),
+      );
+    },
+  );
+
   it("applies pause through the attached durable run when one is available", () => {
     const pauseDurableRun = vi.fn(() => ({ status: "paused" }));
     const { service, storage } = createService({ pauseDurableRun });
@@ -373,7 +561,7 @@ describe("TaskLifecycleService agentic runtime", () => {
 
     const result = service.invokeAgenticControl("agentic-run-1", {
       action: "pause",
-      controlId: "pause-durable-once",
+      controlId: "  pause-durable-once  ",
       actorId: "operator",
     });
     expect(pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "operator");
@@ -395,7 +583,303 @@ describe("TaskLifecycleService agentic runtime", () => {
       runtimeEffect: "runtime_pause",
       idempotentReplay: true,
     });
+    expect(replay.message).toBe(result.message);
     expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("paused");
+  });
+
+  it("claims a controlId before the runtime effect and rejects a concurrent duplicate", () => {
+    const serviceRef: { current?: TaskLifecycleService } = {};
+    let nestedError: unknown;
+    let attemptedNestedReplay = false;
+    const pauseDurableRun = vi.fn(() => {
+      if (!attemptedNestedReplay) {
+        attemptedNestedReplay = true;
+        try {
+          serviceRef.current!.invokeAgenticControl("agentic-run-concurrent-pause", {
+            action: "pause",
+            controlId: "pause-concurrent-once",
+            actorId: "operator",
+          });
+        } catch (error) {
+          nestedError = error;
+        }
+      }
+      return { status: "paused" };
+    });
+    const built = createService({ pauseDurableRun });
+    const service = built.service;
+    serviceRef.current = service;
+    const { storage } = built;
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Concurrently controlled run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-concurrent-pause",
+        durableRunId: "durable-run-concurrent-pause",
+        surface: "chat",
+        status: "running",
+      },
+    });
+    const originalMarkCompleted = storage.mutationIdempotency.markCompleted.bind(storage.mutationIdempotency);
+    const markCompleted = vi.spyOn(storage.mutationIdempotency, "markCompleted").mockImplementation((input) => {
+      expect(storage.taskActivities.findControlByTaskAndControlId(task.taskId, "pause-concurrent-once")).toBeDefined();
+      return originalMarkCompleted(input);
+    });
+
+    const result = service.invokeAgenticControl("agentic-run-concurrent-pause", {
+      action: "pause",
+      controlId: "pause-concurrent-once",
+      actorId: "operator",
+    });
+
+    expect(result).toMatchObject({ status: "applied", runtimeEffect: "runtime_pause" });
+    expect(nestedError).toBeInstanceOf(ConflictError);
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+    expect(
+      storage.taskActivities.listByTask(task.taskId).filter((activity) => activity.activityType === "control"),
+    ).toHaveLength(1);
+    expect(markCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("derives the same missing runtime controlId for concurrency and response-loss retry, then advances after resume", () => {
+    const serviceRef: { current?: TaskLifecycleService } = {};
+    let nestedError: unknown;
+    let nestedAttempted = false;
+    let durableState = { status: "running", version: 8 };
+    const pauseDurableRun = vi.fn(() => {
+      if (!nestedAttempted) {
+        nestedAttempted = true;
+        try {
+          serviceRef.current!.invokeAgenticControl("agentic-run-derived-control", {
+            action: "pause",
+            actorId: "operator",
+          });
+        } catch (error) {
+          nestedError = error;
+        }
+      }
+      return { status: "paused" };
+    });
+    const built = createService({ pauseDurableRun });
+    const service = built.service;
+    serviceRef.current = service;
+    const { storage } = built;
+    vi.spyOn(storage.durableRuns, "getRun").mockImplementation(() => durableState as never);
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Derived control generation",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-derived-control",
+        durableRunId: "durable-run-derived-control",
+        surface: "chat",
+        status: "running",
+      },
+    });
+
+    const first = service.invokeAgenticControl("agentic-run-derived-control", {
+      action: "pause",
+      actorId: "operator",
+    });
+    expect(first.controlId).toMatch(/^implicit-agentic-control-/);
+    expect(nestedError).toBeInstanceOf(ConflictError);
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+
+    durableState = { status: "paused", version: 9 };
+    const responseLossRetry = service.invokeAgenticControl("agentic-run-derived-control", {
+      action: "pause",
+      actorId: "operator",
+    });
+    expect(responseLossRetry).toMatchObject({ controlId: first.controlId, idempotentReplay: true });
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+
+    durableState = { status: "running", version: 10 };
+    storage.tasks.update(task.taskId, {
+      agenticContext: { ...storage.tasks.get(task.taskId).agenticContext!, status: "running" },
+    });
+    const afterResume = service.invokeAgenticControl("agentic-run-derived-control", {
+      action: "pause",
+      actorId: "operator",
+    });
+    expect(afterResume.controlId).toMatch(/^implicit-agentic-control-/);
+    expect(afterResume.controlId).not.toBe(first.controlId);
+    expect(pauseDurableRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("generates and returns distinct reservations for repeated missing-ID state-only intent", () => {
+    const { service, storage } = createService();
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Repeated steering intent",
+      status: "in_progress",
+      agenticContext: { runId: "agentic-run-generated-control", surface: "chat", status: "running" },
+    });
+
+    const first = service.invokeAgenticControl("agentic-run-generated-control", {
+      action: "steer",
+      instruction: "Check the latest logs.",
+    });
+    const second = service.invokeAgenticControl("agentic-run-generated-control", {
+      action: "steer",
+      instruction: "Check the latest logs.",
+    });
+
+    expect(first.controlId).toMatch(/^generated-agentic-control-/);
+    expect(second.controlId).toMatch(/^generated-agentic-control-/);
+    expect(second.controlId).not.toBe(first.controlId);
+    expect(
+      storage.taskActivities.listByTask(task.taskId).filter((activity) => activity.activityType === "control"),
+    ).toHaveLength(2);
+  });
+
+  it("rejects a concurrent controlId payload mismatch before either second runtime effect", () => {
+    const serviceRef: { current?: TaskLifecycleService } = {};
+    let nestedError: unknown;
+    const cancelDurableRun = vi.fn(() => ({ status: "cancelled" }));
+    const pauseDurableRun = vi.fn(() => {
+      try {
+        serviceRef.current!.invokeAgenticControl("agentic-run-concurrent-mismatch", {
+          action: "cancel",
+          controlId: "shared-concurrent-control",
+          actorId: "operator",
+        });
+      } catch (error) {
+        nestedError = error;
+      }
+      return { status: "paused" };
+    });
+    const built = createService({ pauseDurableRun, cancelDurableRun });
+    const service = built.service;
+    serviceRef.current = service;
+    service.createTask({
+      workspaceId: "default",
+      title: "Concurrent mismatch run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-concurrent-mismatch",
+        durableRunId: "durable-run-concurrent-mismatch",
+        surface: "chat",
+        status: "running",
+      },
+    });
+
+    service.invokeAgenticControl("agentic-run-concurrent-mismatch", {
+      action: "pause",
+      controlId: "shared-concurrent-control",
+      actorId: "operator",
+    });
+
+    expect(nestedError).toBeInstanceOf(ValidationError);
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+    expect(cancelDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the task and receipt when control activity persistence fails, then probes before retry", () => {
+    const pauseDurableRun = vi.fn(() => ({ status: "paused" }));
+    const { service, storage } = createService({ pauseDurableRun });
+    vi.spyOn(storage.durableRuns, "getRun").mockReturnValue({ status: "paused" } as never);
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Receipt rollback control",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-receipt-rollback",
+        durableRunId: "durable-run-receipt-rollback",
+        surface: "chat",
+        status: "running",
+      },
+    });
+    const append = storage.taskActivities.append.bind(storage.taskActivities);
+    vi.spyOn(storage.taskActivities, "append")
+      .mockImplementationOnce(() => {
+        throw new Error("control receipt append failed");
+      })
+      .mockImplementation(append);
+    const request = {
+      action: "pause" as const,
+      controlId: "pause-receipt-rollback",
+      actorId: "operator",
+    };
+
+    expect(() => service.invokeAgenticControl("agentic-run-receipt-rollback", request)).toThrow(
+      "control receipt append failed",
+    );
+    expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("running");
+    expect(storage.taskActivities.findControlByTaskAndControlId(task.taskId, request.controlId)).toBeUndefined();
+
+    expect(service.invokeAgenticControl("agentic-run-receipt-rollback", request)).toMatchObject({
+      status: "applied",
+      runtimeEffect: "runtime_pause",
+    });
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+    expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("paused");
+  });
+
+  it("rolls back a control receipt when the idempotency claim token is lost", () => {
+    const pauseDurableRun = vi.fn(() => ({ status: "paused" }));
+    const { service, storage } = createService({ pauseDurableRun });
+    vi.spyOn(storage.durableRuns, "getRun").mockReturnValue({ status: "paused" } as never);
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Lost control ownership",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-lost-control-token",
+        durableRunId: "durable-run-lost-control-token",
+        surface: "chat",
+        status: "running",
+      },
+    });
+    const markCompleted = storage.mutationIdempotency.markCompleted.bind(storage.mutationIdempotency);
+    vi.spyOn(storage.mutationIdempotency, "markCompleted")
+      .mockImplementationOnce(() => false)
+      .mockImplementation(markCompleted);
+    const request = {
+      action: "pause" as const,
+      controlId: "pause-lost-control-token",
+      actorId: "operator",
+    };
+
+    expect(() => service.invokeAgenticControl("agentic-run-lost-control-token", request)).toThrow(ConflictError);
+    expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("running");
+    expect(storage.taskActivities.findControlByTaskAndControlId(task.taskId, request.controlId)).toBeUndefined();
+
+    expect(service.invokeAgenticControl("agentic-run-lost-control-token", request)).toMatchObject({
+      status: "applied",
+      runtimeEffect: "runtime_pause",
+    });
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when a thrown runtime control cannot be reconciled to durable status", () => {
+    const pauseDurableRun = vi.fn(() => {
+      throw new Error("ambiguous runtime failure");
+    });
+    const { service, storage } = createService({ pauseDurableRun });
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Ambiguous runtime control",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-ambiguous-control",
+        durableRunId: "missing-durable-run",
+        surface: "chat",
+        status: "running",
+      },
+    });
+
+    expect(() =>
+      service.invokeAgenticControl("agentic-run-ambiguous-control", {
+        action: "pause",
+        controlId: "pause-ambiguous-control",
+        actorId: "operator",
+      }),
+    ).toThrow(ConflictError);
+    expect(
+      storage.taskActivities.findControlByTaskAndControlId(task.taskId, "pause-ambiguous-control"),
+    ).toBeUndefined();
+    expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("running");
   });
 
   it("applies cancel through the attached durable run when one is available", () => {
@@ -450,11 +934,108 @@ describe("TaskLifecycleService agentic runtime", () => {
     expect(updated.agenticContext?.status).toBe("cancelled");
   });
 
+  it("keeps cancellation authoritative when a different worker mirrors an earlier pause after cancel", () => {
+    let nestedCancelResponse: ReturnType<TaskLifecycleService["invokeAgenticControl"]> | undefined;
+    const cancelDurableRun = vi.fn((durableRunId: string) => {
+      const current = storageRef.durableRuns.getRun(durableRunId);
+      storageRef.durableRuns.updateRun({
+        runId: durableRunId,
+        status: "cancelled",
+        expectedVersion: current.version,
+      });
+      return { status: "cancelled" };
+    });
+    const pauseDurableRun = vi.fn((durableRunId: string) => {
+      const current = storageRef.durableRuns.getRun(durableRunId);
+      storageRef.durableRuns.updateRun({
+        runId: durableRunId,
+        status: "paused",
+        expectedVersion: current.version,
+      });
+      nestedCancelResponse = serviceRef.invokeAgenticControl("agentic-run-pause-cancel-race", {
+        action: "cancel",
+        controlId: "cancel-wins-race",
+        actorId: "worker-b",
+      });
+      return { status: "paused" };
+    });
+    const built = createService({ pauseDurableRun, cancelDurableRun });
+    const serviceRef = built.service;
+    const storageRef = built.storage;
+    storageRef.durableRuns.createRun({
+      runId: "durable-run-pause-cancel-race",
+      workflowKey: "approval.wait",
+      status: "running",
+    });
+    const task = serviceRef.createTask({
+      workspaceId: "default",
+      title: "Pause versus cancel race",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-pause-cancel-race",
+        durableRunId: "durable-run-pause-cancel-race",
+        surface: "chat",
+        status: "running",
+      },
+    });
+
+    const pauseResponse = serviceRef.invokeAgenticControl("agentic-run-pause-cancel-race", {
+      action: "pause",
+      controlId: "pause-loses-race",
+      actorId: "worker-a",
+    });
+
+    expect(nestedCancelResponse).toMatchObject({ status: "applied", runtimeEffect: "runtime_cancel" });
+    expect(storageRef.durableRuns.getRun("durable-run-pause-cancel-race").status).toBe("cancelled");
+    expect(storageRef.tasks.get(task.taskId)).toMatchObject({
+      status: "blocked",
+      agenticContext: expect.objectContaining({ status: "cancelled" }),
+    });
+    expect(pauseResponse).toMatchObject({
+      action: "pause",
+      status: "applied",
+      runtimeEffect: "runtime_cancel",
+      message: expect.stringMatching(/pause was superseded by cancellation/i),
+    });
+    expect(storageRef.taskActivities.findControlByTaskAndControlId(task.taskId, "pause-loses-race")).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          action: "pause",
+          canonicalDurableStatus: "cancelled",
+          resultStatus: "applied",
+          runtimeEffect: "runtime_cancel",
+          superseded: true,
+          responseMessage: expect.stringMatching(/pause was superseded by cancellation/i),
+        }),
+      }),
+    );
+    expect(
+      serviceRef.invokeAgenticControl("agentic-run-pause-cancel-race", {
+        action: "pause",
+        controlId: "pause-loses-race",
+        actorId: "worker-a",
+      }),
+    ).toMatchObject({
+      idempotentReplay: true,
+      runtimeEffect: "runtime_cancel",
+      message: expect.stringMatching(/pause was superseded by cancellation/i),
+    });
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+    expect(cancelDurableRun).toHaveBeenCalledTimes(1);
+  });
+
   it("records stale durable pause failures as rejected controls", () => {
     const pauseDurableRun = vi.fn(() => {
       throw new Error("Durable run is already completed.");
     });
     const { service, storage } = createService({ pauseDurableRun });
+    storage.durableRuns.createRun({
+      runId: "durable-run-stale-pause",
+      workflowKey: "approval.wait",
+      status: "completed",
+      startedAt: "2026-07-11T00:00:00.000Z",
+      finishedAt: "2026-07-11T00:01:00.000Z",
+    });
     const task = service.createTask({
       workspaceId: "default",
       title: "Stale durable Cowork run",
@@ -521,6 +1102,13 @@ describe("TaskLifecycleService agentic runtime", () => {
       throw new Error("Durable run is already terminal (dead_lettered)");
     });
     const { service, storage } = createService({ pauseDurableRun, cancelDurableRun });
+    storage.durableRuns.createRun({
+      runId: "durable-run-dead-lettered",
+      workflowKey: "approval.wait",
+      status: "dead_lettered",
+      startedAt: "2026-07-11T00:00:00.000Z",
+      finishedAt: "2026-07-11T00:01:00.000Z",
+    });
     const task = service.createTask({
       workspaceId: "default",
       title: "Stale dead-lettered durable Cowork run",
@@ -559,6 +1147,37 @@ describe("TaskLifecycleService agentic runtime", () => {
           title: "Durable run control rejected",
         }),
       ]),
+    );
+  });
+
+  it("records an applied pause when the runtime reaches paused state before throwing", () => {
+    const pauseDurableRun = vi.fn(() => {
+      throw new Error("post-commit notification failed");
+    });
+    const { service, storage } = createService({ pauseDurableRun });
+    vi.spyOn(storage.durableRuns, "getRun").mockReturnValue({ status: "paused" } as never);
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Pause post-commit failure",
+      status: "in_progress",
+      agenticContext: {
+        runId: "agentic-run-pause-post-commit",
+        durableRunId: "durable-run-pause-post-commit",
+        surface: "chat",
+        status: "running",
+      },
+    });
+
+    const result = service.invokeAgenticControl("agentic-run-pause-post-commit", {
+      action: "pause",
+      controlId: "pause-post-commit-once",
+      actorId: "operator",
+    });
+
+    expect(result).toMatchObject({ status: "applied", runtimeEffect: "runtime_pause" });
+    expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("paused");
+    expect(storage.taskActivities.findControlByTaskAndControlId(task.taskId, "pause-post-commit-once")).toEqual(
+      expect.objectContaining({ metadata: expect.objectContaining({ resultStatus: "applied" }) }),
     );
   });
 
@@ -842,7 +1461,7 @@ describe("TaskLifecycleService agentic runtime", () => {
     });
   }, 20_000);
 
-  it("does not let child-run controls kill parent-owned subagents", () => {
+  it("records child-run kill intent without mutating child or parent subagents", () => {
     const { service, storage } = createService();
     const parent = service.createTask({
       workspaceId: "default",
@@ -888,8 +1507,8 @@ describe("TaskLifecycleService agentic runtime", () => {
         agentSessionId: "child-subagent",
       }),
     ).toMatchObject({ status: "recorded" });
-    expect(storage.taskSubagents.findByAgentSessionId("child-subagent")?.status).toBe("killed");
-    expect(storage.taskSubagents.findByAgentSessionId("parent-subagent")?.status).not.toBe("killed");
+    expect(storage.taskSubagents.findByAgentSessionId("child-subagent")?.status).toBe("active");
+    expect(storage.taskSubagents.findByAgentSessionId("parent-subagent")?.status).toBe("active");
   });
 
   it("rejects idempotent control replays when the payload changes", () => {
@@ -1458,7 +2077,7 @@ describe("TaskLifecycleService workspace access", () => {
     ).toHaveLength(0);
   });
 
-  it("allows kill_child controls for subagents attached to child tasks in the selected run tree", () => {
+  it("records kill_child intent for subagents attached to child tasks in the selected run tree", () => {
     const { service, storage } = createService();
     service.createTask({
       workspaceId: "workspace-a",
@@ -1499,6 +2118,6 @@ describe("TaskLifecycleService workspace access", () => {
         { workspaceId: "workspace-a" },
       ),
     ).toMatchObject({ action: "kill_child", status: "recorded" });
-    expect(storage.taskSubagents.getByAgentSessionId("nested-child-agent").status).toBe("killed");
+    expect(storage.taskSubagents.getByAgentSessionId("nested-child-agent").status).toBe("active");
   });
 });

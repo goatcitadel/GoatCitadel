@@ -327,6 +327,29 @@ describe("Postgres runtime schema generation", () => {
     assert.match(degradedMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT/);
   });
 
+  it("adds delegation dependency-plan columns as a new forward migration", () => {
+    const planMigration = POSTGRES_MIGRATIONS.find((migration) => migration.name === "chat_delegation_step_plan_truth");
+
+    assert.equal(planMigration?.version, 83);
+    assert.match(planMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
+    assert.match(planMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS parallelizable BIGINT NOT NULL DEFAULT 0/);
+    assert.match(
+      planMigration?.sql ?? "",
+      /ADD COLUMN IF NOT EXISTS depends_on_step_ids_json TEXT NOT NULL DEFAULT '\[\]'/,
+    );
+  });
+
+  it("adds private delegation dispatch-claim columns as a new forward migration", () => {
+    const claimMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "chat_delegation_dispatch_claim_lease",
+    );
+
+    assert.equal(claimMigration?.version, 84);
+    assert.match(claimMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS dispatch_claim_token TEXT/);
+    assert.match(claimMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS dispatch_claim_expires_at TEXT/);
+    assert.match(claimMigration?.sql ?? "", /idx_chat_delegation_steps_dispatch_claim/);
+  });
+
   it("adds Citadel parent scope as a NEW migration for already-migrated Postgres runtimes", () => {
     const citadelMigration = POSTGRES_MIGRATIONS.find(
       (migration) => migration.name === "citadel_operating_model_parent_scope",
@@ -658,6 +681,23 @@ describe("Postgres runtime schema generation", () => {
     assert.equal(batchSql.includes("\\M"), false);
     assert.doesNotMatch(batchSql, /LIKE '%grat_%'/);
     assert.doesNotMatch(batchSql, /SKIP LOCKED/);
+  });
+
+  it("ships a forward Postgres scrub for approval effect result and legacy detail truth", () => {
+    const migration = POSTGRES_MIGRATIONS.find(
+      (item) => item.name === "scrub_legacy_remote_approval_bearers_from_effect_results",
+    );
+    assert.ok(migration, "expected approval-effect bearer forward scrub migration");
+    assert.equal(migration.version, 85);
+    assert.equal(migration.sql, "");
+    assert.equal(migration.batchedStatements?.length, 1);
+    assert.match(migration.integritySha256 ?? "", /^[a-f0-9]{64}$/);
+    const sql = migration.batchedStatements?.[0]?.sql ?? "";
+    for (const column of ["result_json", "detail", "details_json", "outcome"]) {
+      assert.match(sql, new RegExp(`regexp_replace\\(${column}`));
+    }
+    assert.match(sql, /LIMIT 250/);
+    assert.match(sql, /FOR UPDATE/);
   });
 
   it("auto-derives capability_scope_assignments into the runtime schema", () => {

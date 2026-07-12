@@ -321,3 +321,18 @@ export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitati
   }
   return deduped;
 }
+
+export function readDurableRecoveryInterruption(signal: AbortSignal | undefined, error: unknown): Error | undefined {
+  const candidate = signal?.aborted ? signal.reason : error;
+  if (!(candidate instanceof Error)) {
+    return undefined;
+  }
+  return candidate.name === "DurableWorkerInterruptionError" || candidate.name === "DurableRunPausedError"
+    ? candidate
+    : undefined;
+}
+
+export function readDurableCancellation(signal: AbortSignal | undefined, error: unknown): Error | undefined {
+  const candidate = signal?.aborted ? signal.reason : error;
+  return candidate instanceof Error && candidate.name === "DurableRunCancelledError" ? candidate : undefined;
+}

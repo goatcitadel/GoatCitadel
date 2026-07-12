@@ -2,9 +2,8 @@
  * P0-4 governance/safety regression — tool-grant precedence and pattern parsing.
  *
  * Covers gaps flagged in review that the existing `engine.test.ts` suite leaves thin:
- *   1. Declared tool-grant parsing: how grant `toolPattern` matches the requested tool
- *      (exact, glob, the `*` catch-all), and that revoked / expired / used-up grants are
- *      NOT parsed as live grants.
+ *   1. Declared tool-grant parsing: how an active grant's `toolPattern` matches the
+ *      requested tool (exact, glob, and the `*` catch-all).
  *   2. Glob / alias command allowlist edge cases: `matchesToolPattern` literal-vs-glob
  *      behaviour for regex-special characters, mid-string wildcards, and oversized input.
  *   3. Allow-vs-block precedence when multiple rules match: deny-wins across the SAME and
@@ -22,6 +21,11 @@ import { ToolPolicyEngine } from "./engine.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 
 function createStorageStub(): Storage {
+  const toolGrants = {
+    list: vi.fn(() => [] as ReturnType<Storage["toolGrants"]["list"]>),
+    listActive: vi.fn(() => [] as ReturnType<Storage["toolGrants"]["listActive"]>),
+    consumeOne: vi.fn(() => true),
+  };
   return {
     approvals: {
       create: vi.fn((input: { kind: string; riskLevel: string }) => ({
@@ -41,10 +45,7 @@ function createStorageStub(): Storage {
       countToolCallsInLastHourInScope: vi.fn(() => 0),
       countWritesInLastHourInScope: vi.fn(() => 0),
     },
-    toolGrants: {
-      list: vi.fn(() => []),
-      consumeOne: vi.fn(() => true),
-    },
+    toolGrants,
     pendingApprovalActions: {
       upsertPending: vi.fn(),
       find: vi.fn(() => undefined),
@@ -72,7 +73,9 @@ const baseConfig: ToolPolicyConfig = {
   },
 };
 
-function grant(overrides: Partial<ToolGrantRecord> & Pick<ToolGrantRecord, "toolPattern" | "decision">): ToolGrantRecord {
+function grant(
+  overrides: Partial<ToolGrantRecord> & Pick<ToolGrantRecord, "toolPattern" | "decision">,
+): ToolGrantRecord {
   return {
     grantId: overrides.grantId ?? `grant-${overrides.toolPattern}-${overrides.decision}`,
     scope: overrides.scope ?? "session",
@@ -84,10 +87,10 @@ function grant(overrides: Partial<ToolGrantRecord> & Pick<ToolGrantRecord, "tool
   } as ToolGrantRecord;
 }
 
-/** Wire a fixed set of grants into the stub via the `list(scope, scopeRef, limit)` path
- *  (the engine filters by active-ness and scope/pattern match itself). */
-function withGrants(storage: Storage, grants: ToolGrantRecord[]): void {
-  vi.mocked(storage.toolGrants.list).mockImplementation((scope?: string, scopeRef?: string) =>
+/** Wire repository-active rows into the policy stub. Grant lifecycle predicates belong
+ *  to ToolGrantRepository tests; this suite owns policy matching and precedence. */
+function withActiveGrants(storage: Storage, grants: ToolGrantRecord[]): void {
+  vi.mocked(storage.toolGrants.listActive).mockImplementation((scope?: string, scopeRef?: string) =>
     grants.filter((g) => g.scope === scope && g.scopeRef === scopeRef),
   );
 }
@@ -148,7 +151,7 @@ describe("matchesToolPattern (grant/allowlist pattern parsing)", () => {
 describe("declared tool-grant parsing", () => {
   it("honours an allow-grant whose glob pattern covers the requested tool", () => {
     const storage = createStorageStub();
-    withGrants(storage, [grant({ grantId: "grant-fs-glob", toolPattern: "fs.*", decision: "allow" })]);
+    withActiveGrants(storage, [grant({ grantId: "grant-fs-glob", toolPattern: "fs.*", decision: "allow" })]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
     const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "fs.write", args: { path: "./workspace/x" } });
@@ -160,7 +163,7 @@ describe("declared tool-grant parsing", () => {
   it("ignores a grant whose pattern does not cover the requested tool", () => {
     const storage = createStorageStub();
     // A grant for `git.*` must not satisfy an `fs.write` request.
-    withGrants(storage, [grant({ grantId: "grant-git", toolPattern: "git.*", decision: "allow" })]);
+    withActiveGrants(storage, [grant({ grantId: "grant-git", toolPattern: "git.*", decision: "allow" })]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
     const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "fs.write", args: { path: "./workspace/x" } });
@@ -171,27 +174,9 @@ describe("declared tool-grant parsing", () => {
     expect(evaluation.requiresApproval).toBe(true);
   });
 
-  it.each([
-    ["revoked", { revokedAt: "2026-06-18T12:30:00.000Z" }],
-    ["expired", { expiresAt: "2000-01-01T00:00:00.000Z" }],
-    ["used-up", { usesRemaining: 0 }],
-  ])("does not parse a %s grant as a live allow", (_label, lifecycle) => {
-    const storage = createStorageStub();
-    withGrants(storage, [
-      grant({ grantId: "grant-dead", toolPattern: "shell.exec", decision: "allow", ...lifecycle } as Partial<ToolGrantRecord> & Pick<ToolGrantRecord, "toolPattern" | "decision">),
-    ]);
-    const engine = new ToolPolicyEngine(baseConfig, storage);
-
-    const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "shell.exec", args: { command: "echo hi" } });
-
-    // The dead grant must not short-circuit approval — no live allow-grant remains.
-    expect(evaluation.matchedGrantId).toBeUndefined();
-    expect(evaluation.requiresApproval).toBe(true);
-  });
-
   it("blocks an allow-grant whose constraints reject the request (host out of allowlist)", () => {
     const storage = createStorageStub();
-    withGrants(storage, [
+    withActiveGrants(storage, [
       grant({
         grantId: "grant-host-bound",
         toolPattern: "http.get",
@@ -219,7 +204,7 @@ describe("declared tool-grant parsing", () => {
 describe("allow-vs-block precedence (multiple matching rules)", () => {
   it("deny-wins when an allow and a deny grant match at the same scope", () => {
     const storage = createStorageStub();
-    withGrants(storage, [
+    withActiveGrants(storage, [
       grant({ grantId: "grant-allow", toolPattern: "shell.exec", decision: "allow" }),
       grant({ grantId: "grant-deny", toolPattern: "shell.exec", decision: "deny" }),
     ]);
@@ -234,7 +219,7 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
 
   it("deny-wins is order-independent (deny listed before the allow still blocks)", () => {
     const storage = createStorageStub();
-    withGrants(storage, [
+    withActiveGrants(storage, [
       grant({ grantId: "grant-deny-first", toolPattern: "shell.*", decision: "deny" }),
       grant({ grantId: "grant-allow-second", toolPattern: "shell.exec", decision: "allow" }),
     ]);
@@ -250,7 +235,7 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     const storage = createStorageStub();
     // Allow scoped tightly to the task; deny scoped broadly to the workspace. Deny must win
     // regardless of specificity — there is no "most-specific allow overrides deny".
-    withGrants(storage, [
+    withActiveGrants(storage, [
       grant({ grantId: "task-allow", toolPattern: "fs.delete", decision: "allow", scope: "task", scopeRef: "task-1" }),
       grant({
         grantId: "workspace-deny",
@@ -291,11 +276,8 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
     const storage = createStorageStub();
     // Even with a live allow-grant for the exact tool, the config-level deny glob wins:
     // the deny-set is checked before grants are resolved.
-    withGrants(storage, [grant({ grantId: "grant-allow", toolPattern: "git.commit", decision: "allow" })]);
-    const engine = new ToolPolicyEngine(
-      { ...baseConfig, tools: { ...baseConfig.tools, deny: ["git.*"] } },
-      storage,
-    );
+    withActiveGrants(storage, [grant({ grantId: "grant-allow", toolPattern: "git.commit", decision: "allow" })]);
+    const engine = new ToolPolicyEngine({ ...baseConfig, tools: { ...baseConfig.tools, deny: ["git.*"] } }, storage);
 
     const evaluation = engine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });
 
@@ -307,7 +289,7 @@ describe("allow-vs-block precedence (multiple matching rules)", () => {
 
   it("a matching allow-grant suppresses the approval a bare danger tool would otherwise need", () => {
     const storage = createStorageStub();
-    withGrants(storage, [grant({ grantId: "grant-allow-commit", toolPattern: "git.commit", decision: "allow" })]);
+    withActiveGrants(storage, [grant({ grantId: "grant-allow-commit", toolPattern: "git.commit", decision: "allow" })]);
     const engine = new ToolPolicyEngine(baseConfig, storage);
 
     const granted = engine.evaluateAccess({ ...baseRequest, toolName: "git.commit", args: {} });

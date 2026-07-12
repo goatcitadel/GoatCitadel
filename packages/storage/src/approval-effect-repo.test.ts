@@ -142,8 +142,9 @@ describe("ApprovalEffectRepository", () => {
       "2026-03-21T10:03:00.000Z",
       "2026-03-21T10:08:00.000Z",
     );
-    assert.equal(renewed?.leaseExpiresAt, "2026-03-21T10:08:00.000Z");
-    assert.equal(renewed?.version, 3);
+    assert.ok(Date.parse(renewed?.leaseExpiresAt ?? "") - Date.now() > 4 * 60_000);
+    assert.ok(Date.parse(renewed?.leaseExpiresAt ?? "") - Date.now() < 6 * 60_000);
+    assert.equal(renewed?.version, 2);
 
     const deferred = repo.deferEffectForRetry(pending.effectId, "worker-1", renewed!.version, {
       result: { deliveryState: "retry_scheduled", attemptCount: 1 },
@@ -152,7 +153,8 @@ describe("ApprovalEffectRepository", () => {
       updatedAt: "2026-03-21T10:03:30.000Z",
     });
     assert.equal(deferred?.status, "running");
-    assert.equal(deferred?.leaseExpiresAt, "2026-03-21T10:09:00.000Z");
+    assert.ok(Date.parse(deferred?.leaseExpiresAt ?? "") - Date.now() > 5 * 60_000);
+    assert.ok(Date.parse(deferred?.leaseExpiresAt ?? "") - Date.now() < 6 * 60_000);
     assert.equal(deferred?.lastError, "audit unavailable");
     assert.deepEqual(deferred?.result, { deliveryState: "retry_scheduled", attemptCount: 1 });
 
@@ -180,7 +182,7 @@ describe("ApprovalEffectRepository", () => {
       status: "running",
       claimedBy: "worker-2",
       claimedAt: "2026-03-21T10:10:00.000Z",
-      leaseExpiresAt: "2026-03-21T10:20:00.000Z",
+      leaseExpiresAt: "2099-03-21T10:20:00.000Z",
       version: 4,
       result: { old: true },
       createdAt: "2026-03-21T10:10:00.000Z",
@@ -203,7 +205,7 @@ describe("ApprovalEffectRepository", () => {
       status: "running",
       claimedBy: "worker-3",
       claimedAt: "2026-03-21T10:15:00.000Z",
-      leaseExpiresAt: "2026-03-21T10:25:00.000Z",
+      leaseExpiresAt: "2099-03-21T10:25:00.000Z",
       version: 6,
       createdAt: "2026-03-21T10:15:00.000Z",
       updatedAt: "2026-03-21T10:15:00.000Z",
@@ -246,6 +248,152 @@ describe("ApprovalEffectRepository", () => {
     );
     assert.equal(claimedRecovered?.effectId, expired.effectId);
     assert.equal(claimedRecovered?.attemptCount, 1);
+  });
+
+  it("uses the database clock for claim, heartbeat, and reclaim across skewed workers", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-effect-clock-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const dbA = createDatabase({ dbPath });
+    const dbB = createDatabase({ dbPath });
+    const workerA = new ApprovalEffectRepository(dbA);
+    const workerB = new ApprovalEffectRepository(dbB);
+    insertApproval(dbA, "approval-clock");
+    const pending = workerA.upsert({
+      approvalId: "approval-clock",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-clock",
+    });
+
+    const claimed = workerA.claimNextPendingEffect(
+      "slow-worker",
+      "2000-01-01T00:00:00.000Z",
+      "2000-01-01T00:05:00.000Z",
+    );
+    assert.equal(claimed?.effectId, pending.effectId);
+    assert.ok(Math.abs(Date.parse(claimed?.claimedAt ?? "") - Date.now()) < 5_000);
+    assert.ok(Date.parse(claimed?.leaseExpiresAt ?? "") - Date.now() > 4 * 60_000);
+
+    assert.equal(
+      workerB.claimNextPendingEffect("fast-worker", "2099-01-01T00:00:00.000Z", "2099-01-01T00:05:00.000Z"),
+      undefined,
+    );
+    const renewed = workerA.renewEffectLease(
+      pending.effectId,
+      "slow-worker",
+      claimed!.version,
+      "2099-01-01T00:00:00.000Z",
+      "2099-01-01T00:05:00.000Z",
+    );
+    assert.ok(Date.parse(renewed?.leaseExpiresAt ?? "") - Date.now() > 4 * 60_000);
+    assert.ok(Date.parse(renewed?.leaseExpiresAt ?? "") < Date.parse("2098-01-01T00:00:00.000Z"));
+
+    dbA
+      .prepare("UPDATE approval_effects SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE effect_id = ?")
+      .run(pending.effectId);
+    assert.equal(
+      workerA.renewEffectLease(
+        pending.effectId,
+        "slow-worker",
+        renewed!.version,
+        "2000-01-01T00:00:00.000Z",
+        "2000-01-01T00:05:00.000Z",
+      ),
+      undefined,
+    );
+    const reclaimed = workerB.claimNextPendingEffect(
+      "slow-worker",
+      "2000-01-01T00:00:00.000Z",
+      "2000-01-01T00:05:00.000Z",
+    );
+    assert.equal(reclaimed?.effectId, pending.effectId);
+    assert.equal(reclaimed?.claimedBy, "slow-worker");
+    assert.ok(Math.abs(Date.parse(reclaimed?.claimedAt ?? "") - Date.now()) < 5_000);
+    assert.equal(
+      workerA.completeEffect(pending.effectId, "slow-worker", renewed!.version, { result: { stale: true } }),
+      undefined,
+    );
+    assert.equal(
+      workerA.completeEffect(pending.effectId, "slow-worker", reclaimed!.version, { result: { fresh: true } })?.status,
+      "completed",
+    );
+
+    const heartbeatEffect = workerA.upsert({
+      approvalId: "approval-clock",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-heartbeat",
+    });
+    const heartbeatClaim = workerA.claimNextPendingEffect(
+      "heartbeat-worker",
+      "2000-01-01T00:00:00.000Z",
+      "2000-01-01T00:05:00.000Z",
+    );
+    assert.equal(heartbeatClaim?.effectId, heartbeatEffect.effectId);
+    const heartbeatRenewed = workerA.renewEffectLease(
+      heartbeatEffect.effectId,
+      "heartbeat-worker",
+      heartbeatClaim!.version,
+      "2099-01-01T00:00:00.000Z",
+      "2099-01-01T00:05:00.000Z",
+    );
+    assert.equal(heartbeatRenewed?.version, heartbeatClaim?.version);
+    assert.equal(
+      workerA.completeEffect(heartbeatEffect.effectId, "heartbeat-worker", heartbeatClaim!.version, {
+        result: { completedAfterHeartbeat: true },
+      })?.status,
+      "completed",
+    );
+
+    dbB.close();
+    dbA.close();
+  });
+
+  it("rejects every claimed transition after its database lease expires", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-expired-transitions");
+    const methods = ["defer", "complete", "skip", "fail"] as const;
+    for (const method of methods) {
+      const effect = repo.upsert({
+        approvalId: "approval-expired-transitions",
+        effectKind: "pending_action_execute",
+        targetKind: "pending_action",
+        targetId: `target-${method}`,
+        status: "running",
+        claimedBy: "expired-worker",
+        leaseExpiresAt: "2000-01-01T00:00:00.000Z",
+        version: 7,
+      });
+      const result =
+        method === "defer"
+          ? repo.deferEffectForRetry(effect.effectId, "expired-worker", 7, {
+              result: {},
+              lastError: "retry",
+              updatedAt: "2000-01-01T00:00:00.000Z",
+              retryAt: "2000-01-01T00:05:00.000Z",
+            })
+          : method === "complete"
+            ? repo.completeEffect(effect.effectId, "expired-worker", 7, {})
+            : method === "skip"
+              ? repo.skipEffect(effect.effectId, "expired-worker", 7, {})
+              : repo.failEffect(effect.effectId, "expired-worker", 7, { lastError: "failed" });
+      assert.equal(result, undefined, `${method} must not cross an expired lease`);
+      assert.equal(repo.get(effect.effectId).status, "running");
+    }
+    const malformed = repo.upsert({
+      approvalId: "approval-expired-transitions",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "malformed-lease",
+      status: "running",
+      claimedBy: "legacy-worker",
+      leaseExpiresAt: "not-a-timestamp",
+      version: 4,
+    });
+    assert.equal(
+      repo.recoverExpiredEffect(malformed.effectId, malformed.version, "2099-01-01T00:00:00.000Z")?.status,
+      "pending",
+    );
   });
 
   it("claims pending approved action execution before durable wake effects", () => {
@@ -565,7 +713,7 @@ describe("ApprovalEffectRepository", () => {
       lastError: "old failure",
       claimedBy: "worker-defaults",
       claimedAt: "2026-03-22T10:00:00.000Z",
-      leaseExpiresAt: "2026-03-22T10:10:00.000Z",
+      leaseExpiresAt: "2099-03-22T10:10:00.000Z",
       version: 7,
       completedAt: "2026-03-22T10:01:00.000Z",
     });
@@ -577,7 +725,7 @@ describe("ApprovalEffectRepository", () => {
     assert.equal(explicit.lastError, "old failure");
     assert.equal(explicit.claimedBy, "worker-defaults");
     assert.equal(explicit.claimedAt, "2026-03-22T10:00:00.000Z");
-    assert.equal(explicit.leaseExpiresAt, "2026-03-22T10:10:00.000Z");
+    assert.equal(explicit.leaseExpiresAt, "2099-03-22T10:10:00.000Z");
     assert.equal(explicit.version, 7);
     assert.equal(explicit.completedAt, "2026-03-22T10:01:00.000Z");
 
@@ -594,6 +742,7 @@ describe("ApprovalEffectRepository", () => {
       targetId: "action-defaults",
       status: "running",
       claimedBy: "worker-skip",
+      leaseExpiresAt: "2099-03-22T10:10:00.000Z",
       version: 1,
     });
     const skipped = repo.skipEffect(skippedBase.effectId, "worker-skip", 1, {});
@@ -608,6 +757,7 @@ describe("ApprovalEffectRepository", () => {
       targetId: "turn-defaults",
       status: "running",
       claimedBy: "worker-fail",
+      leaseExpiresAt: "2099-03-22T10:10:00.000Z",
       version: 1,
     });
     const failed = repo.failEffect(failedBase.effectId, "worker-fail", 1, {
@@ -684,6 +834,7 @@ interface ConcurrentObservabilityWorkerInput {
 
 async function runConcurrentObservabilityWorkers(input: ConcurrentObservabilityWorkerInput): Promise<void> {
   const startGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const runtimeModuleExtension = import.meta.url.endsWith(".js") ? ".js" : ".ts";
   const workers = ["left", "right"].map(
     (prefix) =>
       new Worker(CONCURRENT_OBSERVABILITY_WORKER_SOURCE, {
@@ -692,9 +843,9 @@ async function runConcurrentObservabilityWorkers(input: ConcurrentObservabilityW
           ...input,
           prefix,
           startGate,
-          repoModuleUrl: new URL("./approval-effect-repo.ts", import.meta.url).href,
-          sqliteModuleUrl: new URL("./sqlite.ts", import.meta.url).href,
-          postgresModuleUrl: new URL("./postgres/sync.ts", import.meta.url).href,
+          repoModuleUrl: new URL(`./approval-effect-repo${runtimeModuleExtension}`, import.meta.url).href,
+          sqliteModuleUrl: new URL(`./sqlite${runtimeModuleExtension}`, import.meta.url).href,
+          postgresModuleUrl: new URL(`./postgres/sync${runtimeModuleExtension}`, import.meta.url).href,
           tsxApiUrl: import.meta.resolve("tsx/esm/api"),
         },
       }),

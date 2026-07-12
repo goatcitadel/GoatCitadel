@@ -40,6 +40,7 @@ export async function runArchitectureMetricsLane(context, deps) {
           gatewayInternalPublicCount: metrics.gatewayInternalPublicCount,
           serviceContextConsumerCount: metrics.serviceContextConsumerCount,
           totalHostCallbacks: metrics.totalHostCallbacks,
+          totalDependencyMemberAccesses: metrics.totalDependencyMemberAccesses,
           routeFacingServiceCount: metrics.routeFacingServiceCount,
           baselineGatewayLineCount: baseline.gatewayLineCount,
           baselineGatewayPublicMethodCount: baseline.gatewayPublicMethodCount,
@@ -48,6 +49,7 @@ export async function runArchitectureMetricsLane(context, deps) {
           baselineGatewayInternalPublicCount: baseline.gatewayInternalPublicCount,
           baselineServiceContextConsumerCount: baseline.serviceContextConsumerCount,
           baselineTotalHostCallbacks: baseline.totalHostCallbacks,
+          baselineTotalDependencyMemberAccesses: baseline.totalDependencyMemberAccesses,
           baselineRouteFacingServiceCount: baseline.routeFacingServiceCount,
         },
         artifacts: {

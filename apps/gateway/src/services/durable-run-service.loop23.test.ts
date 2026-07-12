@@ -399,6 +399,13 @@ function createContext(
           }
           return run;
         },
+        getRunForUpdate: (runId: string) => {
+          const run = runs.get(runId);
+          if (!run) {
+            throw new Error(`Unknown run ${runId}`);
+          }
+          return run;
+        },
         createRun: (input: {
           workflowKey: string;
           status?: DurableRunRecord["status"];

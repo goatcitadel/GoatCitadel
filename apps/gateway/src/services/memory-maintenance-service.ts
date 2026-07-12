@@ -54,7 +54,7 @@ interface MemoryMaintenanceWorkflowPayload {
 }
 
 interface MemoryMaintenanceServiceCallbacks {
-  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
+  createDurableRun(input: DurableRunCreateRequest, options?: { deferRealtime?: boolean }): DurableRunRecord;
   getDurableRun(runId: string): DurableRunRecord;
 }
 
@@ -83,6 +83,14 @@ interface DueEvaluation {
   nextDueAt?: string;
   dueBySchedule: boolean;
   thresholdsMet: boolean;
+}
+
+export interface MemoryMaintenancePostTurnEvaluationResult {
+  status: "skipped" | "evaluated" | "enqueued";
+  workspaceId?: string;
+  reason?: string;
+  memoryMaintenanceRunId?: string;
+  durableRunId?: string;
 }
 
 export interface MemoryMaintenanceServiceContext {
@@ -234,19 +242,36 @@ export class MemoryMaintenanceService {
     }
     const workspaceIds = this.ctx.storage.memoryMaintenance.listEnabledPolicyWorkspaceIds();
     for (const workspaceId of workspaceIds) {
-      await this.evaluateWorkspace(this.normalizeWorkspaceId(workspaceId), "scheduler");
+      this.evaluateWorkspace(this.normalizeWorkspaceId(workspaceId), "scheduler");
     }
   }
 
   public async noteSuccessfulRootTurn(sessionId: string): Promise<void> {
+    this.evaluateSuccessfulRootTurn(sessionId, false);
+  }
+
+  /**
+   * Synchronous post-turn evaluation used by a durable child while its live
+   * lease and stage receipt are locked in the surrounding storage transaction.
+   * All recommendation, due-decision, maintenance-run, and durable-run writes
+   * therefore commit with that receipt or roll back with it.
+   */
+  public noteSuccessfulRootTurnSync(sessionId: string): MemoryMaintenancePostTurnEvaluationResult {
+    return this.evaluateSuccessfulRootTurn(sessionId, true);
+  }
+
+  private evaluateSuccessfulRootTurn(
+    sessionId: string,
+    deferRealtime: boolean,
+  ): MemoryMaintenancePostTurnEvaluationResult {
     if (!this.isOperational()) {
-      return;
+      return { status: "skipped", reason: "not_operational" };
     }
     const sessionInfo = this.getEligibleSession(sessionId);
     if (!sessionInfo) {
-      return;
+      return { status: "skipped", reason: "ineligible_session" };
     }
-    await this.evaluateWorkspace(sessionInfo.workspaceId, "post_turn");
+    return this.evaluateWorkspace(sessionInfo.workspaceId, "post_turn", deferRealtime);
   }
 
   public async executeDurableRun(
@@ -293,7 +318,7 @@ export class MemoryMaintenanceService {
         sourceSessionCount: 0,
         changedArtifactCount: 0,
       });
-      await this.maybeCreateUnavailableModelRecommendation(workspaceId, policy, unavailableReason);
+      this.maybeCreateUnavailableModelRecommendation(workspaceId, policy, unavailableReason);
       return {
         memoryMaintenanceRunId: skipped.runId,
         workspaceId,
@@ -349,8 +374,8 @@ export class MemoryMaintenanceService {
         touchEligibility: false,
         overrideLastSuccessfulRunAt: completed.finishedAt ?? new Date().toISOString(),
       });
-      await this.maybeCreateBacklogRecommendation(workspaceId, policy, refreshedState);
-      await this.maybeCreateActivityWindowRecommendation(workspaceId, policy);
+      this.maybeCreateBacklogRecommendation(workspaceId, policy, refreshedState);
+      this.maybeCreateActivityWindowRecommendation(workspaceId, policy);
 
       return {
         memoryMaintenanceRunId: completed.runId,
@@ -637,39 +662,53 @@ export class MemoryMaintenanceService {
     return deltaMs >= policy.minHoursSinceLastSuccess * 60 * 60 * 1000;
   }
 
-  private async evaluateWorkspace(workspaceId: string, source: "scheduler" | "post_turn"): Promise<void> {
+  private evaluateWorkspace(
+    workspaceId: string,
+    source: "scheduler" | "post_turn",
+    deferRealtime = false,
+  ): MemoryMaintenancePostTurnEvaluationResult {
+    if (deferRealtime) {
+      this.ctx.storage.memoryMaintenance.lockStateForUpdate(this.defaultState(workspaceId));
+    }
     const policy = this.ensurePolicy(workspaceId);
     const state = this.refreshState(workspaceId, { touchEligibility: true });
-    await this.maybeCreateBacklogRecommendation(workspaceId, policy, state);
-    await this.maybeCreateActivityWindowRecommendation(workspaceId, policy);
+    this.maybeCreateBacklogRecommendation(workspaceId, policy, state);
+    this.maybeCreateActivityWindowRecommendation(workspaceId, policy);
 
     if (!policy.enabled) {
-      return;
+      return { status: "evaluated", workspaceId, reason: "policy_disabled" };
     }
     const normalizedState = this.syncWorkspaceActiveRun(state);
     if (normalizedState.activeRunId) {
-      return;
+      return { status: "evaluated", workspaceId, reason: "active_run" };
     }
     if (policy.runMode === "manual") {
-      return;
+      return { status: "evaluated", workspaceId, reason: "manual_mode" };
     }
 
     const lastRun = this.ctx.storage.memoryMaintenance.listRuns(workspaceId, 1)[0];
     const due = this.evaluateDue(policy, normalizedState, lastRun, new Date());
     if (!due.dueBySchedule || !due.thresholdsMet) {
-      return;
+      return { status: "evaluated", workspaceId, reason: "not_due" };
     }
     if (source === "post_turn" && policy.runMode !== "hybrid") {
-      return;
+      return { status: "evaluated", workspaceId, reason: "post_turn_not_hybrid" };
     }
     const triggerSource = policy.runMode === "scheduled" ? "scheduled" : "hybrid_due";
-    this.enqueueRun(workspaceId, policy, triggerSource);
+    const run = this.enqueueRun(workspaceId, policy, triggerSource, deferRealtime);
+    return {
+      status: "enqueued",
+      workspaceId,
+      memoryMaintenanceRunId: run.runId,
+      ...(run.durableRunId ? { durableRunId: run.durableRunId } : {}),
+    };
   }
 
   private enqueueRun(
     workspaceId: string,
     policy: MemoryMaintenancePolicyRecord,
     triggerSource: MemoryMaintenanceRunRecord["triggerSource"],
+    deferRealtime = false,
   ): MemoryMaintenanceRunRecord {
     const state = this.refreshState(workspaceId, { touchEligibility: false });
     if (state.activeRunId) {
@@ -679,20 +718,23 @@ export class MemoryMaintenanceService {
     const now = new Date().toISOString();
     const modelSelection = this.resolveProviderAndModel(policy);
     const runId = `mmrun_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
-    const durableRun = this.callbacks.createDurableRun({
-      workflowKey: MEMORY_MAINTENANCE_WORKFLOW_KEY,
-      payload: {
-        version: MEMORY_MAINTENANCE_WORKFLOW_VERSION,
-        workspaceId,
-        memoryMaintenanceRunId: runId,
-        triggerSource,
-        requestedAt: now,
-      } satisfies MemoryMaintenanceWorkflowPayload,
-      metadata: {
-        workspaceId,
-        triggerSource,
+    const durableRun = this.callbacks.createDurableRun(
+      {
+        workflowKey: MEMORY_MAINTENANCE_WORKFLOW_KEY,
+        payload: {
+          version: MEMORY_MAINTENANCE_WORKFLOW_VERSION,
+          workspaceId,
+          memoryMaintenanceRunId: runId,
+          triggerSource,
+          requestedAt: now,
+        } satisfies MemoryMaintenanceWorkflowPayload,
+        metadata: {
+          workspaceId,
+          triggerSource,
+        },
       },
-    });
+      deferRealtime ? { deferRealtime: true } : undefined,
+    );
     const record = this.ctx.storage.memoryMaintenance.createRun({
       runId,
       durableRunId: durableRun.runId,
@@ -712,13 +754,15 @@ export class MemoryMaintenanceService {
       activeRunId: record.runId,
       updatedAt: now,
     });
-    this.ctx.publishRealtime("system", "memory", {
-      type: "memory_maintenance_run_created",
-      workspaceId,
-      runId: record.runId,
-      durableRunId: durableRun.runId,
-      triggerSource,
-    });
+    if (!deferRealtime) {
+      this.ctx.publishRealtime("system", "memory", {
+        type: "memory_maintenance_run_created",
+        workspaceId,
+        runId: record.runId,
+        durableRunId: durableRun.runId,
+        triggerSource,
+      });
+    }
     return record;
   }
 
@@ -1118,11 +1162,11 @@ export class MemoryMaintenanceService {
     };
   }
 
-  private async maybeCreateBacklogRecommendation(
+  private maybeCreateBacklogRecommendation(
     workspaceId: string,
     policy: MemoryMaintenancePolicyRecord,
     state: MemoryMaintenanceStateRecord,
-  ): Promise<void> {
+  ): void {
     if (policy.minChangedSessions <= 1) {
       return;
     }
@@ -1133,7 +1177,7 @@ export class MemoryMaintenanceService {
     if (proposedThreshold >= policy.minChangedSessions) {
       return;
     }
-    await this.maybeCreateRecommendation(workspaceId, {
+    this.maybeCreateRecommendation(workspaceId, {
       kind: "threshold_adjustment",
       summary: `Workspace backlog is consistently above the current Dream threshold (${state.changedSessionCount} changed sessions waiting).`,
       rationale: `Lowering the minimum changed-session threshold to ${proposedThreshold} will make maintenance eligible sooner when backlog density grows.`,
@@ -1143,10 +1187,7 @@ export class MemoryMaintenanceService {
     });
   }
 
-  private async maybeCreateActivityWindowRecommendation(
-    workspaceId: string,
-    policy: MemoryMaintenancePolicyRecord,
-  ): Promise<void> {
+  private maybeCreateActivityWindowRecommendation(workspaceId: string, policy: MemoryMaintenancePolicyRecord): void {
     if (!policy.schedule || policy.runMode === "manual") {
       return;
     }
@@ -1168,7 +1209,7 @@ export class MemoryMaintenanceService {
     if (Math.abs(preferredHour - policy.schedule.hour) < 4) {
       return;
     }
-    await this.maybeCreateRecommendation(workspaceId, {
+    this.maybeCreateRecommendation(workspaceId, {
       kind: "schedule_adjustment",
       summary: `Recent workspace activity clusters around ${preferredHour}:00 ${policy.timeZone}, away from the current Dream schedule.`,
       rationale:
@@ -1182,14 +1223,14 @@ export class MemoryMaintenanceService {
     });
   }
 
-  private async maybeCreateUnavailableModelRecommendation(
+  private maybeCreateUnavailableModelRecommendation(
     workspaceId: string,
     policy: MemoryMaintenancePolicyRecord,
     reason: string,
-  ): Promise<void> {
+  ): void {
     const proposedPatch =
       policy.executionTarget === "local" ? { executionTarget: "cloud" } : { unavailableModelPolicy: "error" };
-    await this.maybeCreateRecommendation(workspaceId, {
+    this.maybeCreateRecommendation(workspaceId, {
       kind: policy.executionTarget === "local" ? "execution_target_adjustment" : "model_adjustment",
       summary: reason,
       rationale: "The configured local model or provider was unavailable for maintenance execution.",
@@ -1197,7 +1238,7 @@ export class MemoryMaintenanceService {
     });
   }
 
-  private async maybeCreateRecommendation(
+  private maybeCreateRecommendation(
     workspaceId: string,
     input: {
       kind: MemoryMaintenanceRecommendationKind;
@@ -1205,7 +1246,7 @@ export class MemoryMaintenanceService {
       rationale?: string;
       proposedPatch: Record<string, unknown>;
     },
-  ): Promise<MemoryMaintenanceRecommendationRecord | undefined> {
+  ): MemoryMaintenanceRecommendationRecord | undefined {
     const existing = this.ctx.storage.memoryMaintenance.listRecommendations(workspaceId, 25);
     if (
       shouldSuppressMaintenanceRecommendation({

@@ -437,6 +437,7 @@ Proof-type shorthand:
 - Backup proof: `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set.
 - Parity sample: `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario; it is a parity sample, not proof every future visible catalog entry has a live action.
 - Architecture debt guard: `verify:architecture:metrics` fails on coupling regressions and reports large-service debt. It is not proof broad `GatewayService` decomposition is complete.
+- Architecture baseline provenance: update the accepted snapshot only with `pnpm architecture:baseline:update`. The generator refuses dirty measured Gateway or collector source and binds the regenerated metrics to the clean `HEAD` revision; do not hand-edit the metric values or source-revision fields.
 
 For UI changes, include browser or visual proof when practical. `verify:visual:regression` compares checked-in shell and route baselines for the current Mission Control Next surface. Intentional visual baseline updates go through:
 

@@ -21,6 +21,8 @@ import { executePreparedAgentChatTurnBackground } from "./chat-turn-dispatch-ser
 import {
   buildDurableChatTurnResumeContent,
   buildDurableWorkflowExecutors,
+  createDurableChatPostCommitEffectWorkflowExecutor,
+  createDeferredDurableWorkflowExecutorRegistry,
   createDurableWorkflowExecutorRegistry,
   executeDurableApprovalWaitRun,
   executeDurableChatTurnRun,
@@ -40,10 +42,12 @@ import {
   parseConnectorDeliveryWorkflowPayload,
   parseDurableChatTurnPayload,
   parseExternalSideEffectReplayWorkflowPayload,
+  parseGeneralChatPostCommitEffectWorkflowPayload,
   parseHookDeliveryWorkflowPayload,
   parseOrchestrationWorkflowPayload,
   parseProactiveTickWorkflowPayload,
   type DurableWorkflowExecutorHosts,
+  type DurableChatPostCommitEffectWorkflowPort,
 } from "./durable-execution-service.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
@@ -81,11 +85,28 @@ function buildRun(): DurableRunRecord {
   };
 }
 
-function createConnectorDeliveryLedger(options?: { failMutationCompletion?: boolean }) {
-  let mutationStatus: "pending" | "completed" | "failed" | undefined;
+function createConnectorDeliveryLedger(options?: {
+  failMutationCompletion?: boolean;
+  initialMutationStatus?: "pending" | "completed" | "failed";
+  initialSideEffectStatus?: ExternalSideEffectRunRecord["status"];
+}) {
+  let mutationStatus: "pending" | "completed" | "failed" | undefined = options?.initialMutationStatus;
   let mutationRecord: Record<string, string> | undefined;
   let sideEffectRecord: ExternalSideEffectRunRecord | undefined;
   return {
+    runImmediateTransaction: <T>(work: () => T): T => {
+      const mutationStatusSnapshot = mutationStatus;
+      const mutationRecordSnapshot = mutationRecord ? { ...mutationRecord } : undefined;
+      const sideEffectRecordSnapshot = sideEffectRecord ? { ...sideEffectRecord } : undefined;
+      try {
+        return work();
+      } catch (error) {
+        mutationStatus = mutationStatusSnapshot;
+        mutationRecord = mutationRecordSnapshot;
+        sideEffectRecord = sideEffectRecordSnapshot;
+        throw error;
+      }
+    },
     mutationIdempotency: {
       claim: vi.fn((input: Record<string, string>) => {
         mutationRecord ??= {
@@ -131,7 +152,7 @@ function createConnectorDeliveryLedger(options?: { failMutationCompletion?: bool
           actorScope: input.actorScope as string,
           idempotencyKey: input.idempotencyKey as string,
           payloadHash: input.payloadHash as string,
-          status: input.status as ExternalSideEffectRunRecord["status"],
+          status: options?.initialSideEffectStatus ?? (input.status as ExternalSideEffectRunRecord["status"]),
           replayPolicy: "idempotent_external",
           replayOutcome: input.replayOutcome as ExternalSideEffectRunRecord["replayOutcome"],
           replayAttempt: input.replayAttempt as ExternalSideEffectRunRecord["replayAttempt"],
@@ -163,6 +184,7 @@ function createHosts(outcome: "paused" | "completed" | "failed" | "cancelled"): 
   hosts: DurableWorkflowExecutorHosts;
   durableRuns: {
     getRun: ReturnType<typeof vi.fn>;
+    lockFreshActiveLeaseForUpdate: ReturnType<typeof vi.fn>;
     updateRun: ReturnType<typeof vi.fn>;
     createCheckpoint: ReturnType<typeof vi.fn>;
   };
@@ -175,6 +197,10 @@ function createHosts(outcome: "paused" | "completed" | "failed" | "cancelled"): 
     getRun: vi.fn((runId: string) => {
       expect(runId).toBe("durable-run-1");
       return storedRun;
+    }),
+    lockFreshActiveLeaseForUpdate: vi.fn((runId: string, expectedLeaseOwnerId: string) => {
+      expect(runId).toBe("durable-run-1");
+      return storedRun.status === "running" && storedRun.leaseOwnerId === expectedLeaseOwnerId ? storedRun : undefined;
     }),
     updateRun: vi.fn((patch: Record<string, unknown>) => {
       storedRun = {
@@ -217,6 +243,7 @@ function createHosts(outcome: "paused" | "completed" | "failed" | "cancelled"): 
     hosts: {
       memoryMaintenance: inertHost,
       chatTurn: {} as DurableWorkflowExecutorHosts["chatTurn"],
+      chatPostCommitEffect: {} as DurableWorkflowExecutorHosts["chatPostCommitEffect"],
       proactiveTick: {} as DurableWorkflowExecutorHosts["proactiveTick"],
       approvalWait: {} as DurableWorkflowExecutorHosts["approvalWait"],
       connectorDelivery: {} as DurableWorkflowExecutorHosts["connectorDelivery"],
@@ -231,6 +258,149 @@ function createHosts(outcome: "paused" | "completed" | "failed" | "cancelled"): 
     executeDurableOrchestrationRun,
   };
 }
+
+describe("durable Chat post-commit effect workflow", () => {
+  it("awaits the effect and validates operator-visible parent/workspace/session/turn linkage", async () => {
+    const parentRunId = "parent-post-commit-1";
+    const childRunId = "chat-post-commit-child-1";
+    const generationId = "generation-post-commit-1";
+    const parent = {
+      ...buildRunWithPayload("chat.turn.execute", {
+        version: "chat.turn.execute.v1",
+        sessionId: "session-post-commit-1",
+        turnId: "turn-post-commit-1",
+        userMessageId: "user-post-commit-1",
+        assistantMessageId: "assistant-post-commit-1",
+        branchKind: "append",
+        threadEventType: "chat_thread_turn_appended",
+        request: { content: "remember this" },
+      }),
+      runId: parentRunId,
+      status: "completed" as const,
+      metadata: {
+        generalChatPostCommit: {
+          generationId,
+          durableEffectRunIds: { commitments: childRunId },
+        },
+      },
+    } satisfies DurableRunRecord;
+    let child = {
+      ...buildRunWithPayload("chat.post_commit.effect", {
+        version: "chat.post_commit.effect.v1",
+        parentRunId,
+        generationId,
+        traceStatus: "completed",
+        input: {
+          effect: "commitments",
+          sessionId: "session-post-commit-1",
+          workspaceId: "workspace-post-commit-1",
+          turnId: "turn-post-commit-1",
+          autonomous: false,
+        },
+      }),
+      runId: childRunId,
+      metadata: {
+        parentRunId,
+        generationId,
+        effect: "commitments",
+        workspaceId: "workspace-post-commit-1",
+        sessionId: "session-post-commit-1",
+        turnId: "turn-post-commit-1",
+      },
+    } satisfies DurableRunRecord;
+    let releaseEffect!: () => void;
+    const effectGate = new Promise<void>((resolve) => {
+      releaseEffect = resolve;
+    });
+    const executeEffect = vi.fn(async () => {
+      await effectGate;
+      return { status: "evaluated" };
+    });
+    const storage = {
+      runImmediateTransaction: <T>(work: () => T): T => work(),
+      durableRuns: {
+        getRun: vi.fn((runId: string) => (runId === parentRunId ? parent : child)),
+        updateRun: vi.fn((input: { status: DurableRunRecord["status"]; updatedAt: string }) => {
+          child = { ...child, status: input.status, updatedAt: input.updatedAt, version: child.version + 1 };
+          return child;
+        }),
+        createCheckpoint: vi.fn(),
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => ({
+          turnId: "turn-post-commit-1",
+          sessionId: "session-post-commit-1",
+          assistantMessageId: "assistant-post-commit-1",
+          guidance: {
+            workspaceId: "workspace-post-commit-1",
+            globalFilesUsed: [],
+            workspaceFilesUsed: [],
+            truncated: false,
+          },
+        })),
+      },
+      chatMessages: {
+        get: vi.fn((messageId: string) =>
+          messageId === "user-post-commit-1"
+            ? {
+                messageId,
+                sessionId: "session-post-commit-1",
+                role: "user",
+                content: "canonical user text",
+              }
+            : {
+                messageId,
+                sessionId: "session-post-commit-1",
+                role: "assistant",
+                content: "canonical assistant text",
+              },
+        ),
+      },
+    };
+    const port = {
+      storage,
+      executeGeneralChatPostCommitDurableEffect: executeEffect,
+      publishRealtime: vi.fn(),
+      recordDurableTimelineEvent: vi.fn(),
+      recordImprovementDurableRunCompletion: vi.fn(),
+    } as unknown as DurableChatPostCommitEffectWorkflowPort;
+    const inert = {} as DurableWorkflowExecutorHosts["memoryMaintenance"];
+    const executors = buildDurableWorkflowExecutors({
+      memoryMaintenance: inert,
+      chatTurn: {} as DurableWorkflowExecutorHosts["chatTurn"],
+      chatPostCommitEffect: createDurableChatPostCommitEffectWorkflowExecutor(port),
+      proactiveTick: {} as DurableWorkflowExecutorHosts["proactiveTick"],
+      approvalWait: {} as DurableWorkflowExecutorHosts["approvalWait"],
+      connectorDelivery: {} as DurableWorkflowExecutorHosts["connectorDelivery"],
+      hookDelivery: {} as DurableWorkflowExecutorHosts["hookDelivery"],
+      orchestration: {} as DurableWorkflowExecutorHosts["orchestration"],
+      externalSideEffectReplay: {} as DurableWorkflowExecutorHosts["externalSideEffectReplay"],
+      curatorTick: {} as DurableWorkflowExecutorHosts["curatorTick"],
+    });
+
+    const execution = executors["chat.post_commit.effect"]!.execute(child);
+    await vi.waitFor(() => expect(executeEffect).toHaveBeenCalledTimes(1));
+    expect(child.status).toBe("running");
+    expect(executeEffect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effect: "commitments",
+        userText: "canonical user text",
+        assistantText: "canonical assistant text",
+      }),
+      expect.objectContaining({ effectRunId: childRunId, parentRunId, generationId }),
+    );
+    releaseEffect();
+    await execution;
+
+    expect(child.status).toBe("completed");
+    expect(storage.durableRuns.createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: childRunId,
+        state: expect.objectContaining({ deliverySemantics: "at_least_once" }),
+      }),
+    );
+  });
+});
 
 describe("durable-execution-service orchestration workflow", () => {
   it("validates durable workflow payload parser boundaries", () => {
@@ -249,6 +419,35 @@ describe("durable-execution-service orchestration workflow", () => {
       ),
     ).toEqual(expect.objectContaining({ sessionId: "session-1", turnId: "turn-1" }));
     expect(parseDurableChatTurnPayload(buildRunWithPayload("chat.turn.execute", { version: "wrong" }))).toBeUndefined();
+
+    expect(
+      parseGeneralChatPostCommitEffectWorkflowPayload(
+        buildRunWithPayload("chat.post_commit.effect", {
+          version: "chat.post_commit.effect.v1",
+          parentRunId: "parent-1",
+          generationId: "generation-1",
+          traceStatus: "completed",
+          input: {
+            effect: "memory_maintenance",
+            sessionId: "session-1",
+            workspaceId: "workspace-1",
+            turnId: "turn-1",
+            delegatedChild: false,
+          },
+        }),
+      ),
+    ).toMatchObject({ parentRunId: "parent-1", input: { effect: "memory_maintenance" } });
+    expect(
+      parseGeneralChatPostCommitEffectWorkflowPayload(
+        buildRunWithPayload("chat.post_commit.effect", {
+          version: "chat.post_commit.effect.v1",
+          parentRunId: "parent-1",
+          generationId: "generation-1",
+          traceStatus: "completed",
+          input: { effect: "memory_maintenance", sessionId: "session-1" },
+        }),
+      ),
+    ).toBeUndefined();
 
     expect(
       parseApprovalWaitWorkflowPayload(
@@ -364,6 +563,82 @@ describe("durable-execution-service orchestration workflow", () => {
     await expect(registry.markWorkflowUnrecoverable(run, "terminal")).resolves.toBeUndefined();
   });
 
+  it("forwards finalization identity and cancellation through the deferred Gateway registry bridge", async () => {
+    const finalization = {
+      finalizationId: "finalization-bridge-1",
+      signal: new AbortController().signal,
+    };
+    const markWorkflowUnrecoverable = vi.fn(async () => undefined);
+    const registry = createDeferredDurableWorkflowExecutorRegistry(() => ({
+      executeWorkflow: vi.fn(async () => undefined),
+      isWorkflowRecoverable: vi.fn(() => ({ recoverable: true })),
+      markWorkflowUnrecoverable,
+    }));
+    const run = buildRun();
+
+    await registry.markWorkflowUnrecoverable(run, "terminal", finalization);
+
+    expect(markWorkflowUnrecoverable).toHaveBeenCalledWith(run, "terminal", finalization);
+  });
+
+  it("honors an aborted finalization before mutating linked workflow state", async () => {
+    const markHookRunDeadLettered = vi.fn();
+    const publishRealtime = vi.fn();
+    const hosts = {
+      memoryMaintenance: {} as DurableWorkflowExecutorHosts["memoryMaintenance"],
+      chatTurn: {} as DurableWorkflowExecutorHosts["chatTurn"],
+      proactiveTick: {} as DurableWorkflowExecutorHosts["proactiveTick"],
+      approvalWait: {} as DurableWorkflowExecutorHosts["approvalWait"],
+      connectorDelivery: {} as DurableWorkflowExecutorHosts["connectorDelivery"],
+      hookDelivery: {
+        hooksService: { markHookRunDeadLettered },
+        publishRealtime,
+      } as unknown as DurableWorkflowExecutorHosts["hookDelivery"],
+      orchestration: {} as DurableWorkflowExecutorHosts["orchestration"],
+      externalSideEffectReplay: {} as DurableWorkflowExecutorHosts["externalSideEffectReplay"],
+      curatorTick: {} as DurableWorkflowExecutorHosts["curatorTick"],
+    };
+    const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
+    const run = buildRunWithPayload("hook.delivery", {
+      version: "hook.delivery.v1",
+      hookRunId: "hook-run-aborted",
+      hookId: "hook-aborted",
+      workspaceId: "default",
+      trigger: "agent_end",
+      entityType: "chat_turn",
+      entityId: "turn-aborted",
+    });
+    const abort = new AbortController();
+    const interruption = new Error("finalization ownership moved");
+    abort.abort(interruption);
+
+    await expect(
+      registry.markWorkflowUnrecoverable(run, "terminal", {
+        finalizationId: "finalization-aborted-1",
+        signal: abort.signal,
+      }),
+    ).rejects.toBe(interruption);
+    expect(markHookRunDeadLettered).not.toHaveBeenCalled();
+    expect(publishRealtime).not.toHaveBeenCalled();
+
+    const liveFinalization = {
+      finalizationId: "finalization-live-1",
+      signal: new AbortController().signal,
+    };
+    await registry.markWorkflowUnrecoverable(run, "terminal", liveFinalization);
+
+    expect(markHookRunDeadLettered).toHaveBeenCalledWith("hook-run-aborted", "terminal");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_workflow_unrecoverable",
+        finalizationId: liveFinalization.finalizationId,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("executes external side-effect replay workflows through integration-owned replay jobs only", async () => {
     const run = buildRunWithPayload("external_side_effect.replay", {
       version: "external_side_effect.replay.v1",
@@ -373,18 +648,17 @@ describe("durable-execution-service orchestration workflow", () => {
       runIds: ["extfx-retry", "extfx-retry", "extfx-missing"],
     });
     let storedRun = { ...run, status: "running" as const };
-    const externalRun = {
+    const externalRun: ExternalSideEffectRunRecord = {
       runId: "extfx-retry",
       workspaceId: "default",
       boundary: "integration_operator_action",
-      routePath:
-        "/api/v1/external-side-effects/integration_operator_action/automation.activepieces/conn-1/trigger_webhook",
+      routePath: "external_side_effect:integration_operator_action:automation.activepieces:conn-1:trigger_webhook",
       catalogId: "automation.activepieces",
       connectionId: "conn-1",
       actionId: "trigger_webhook",
-      actorScope: "",
+      actorScope: "conn-1",
       idempotencyKey: "key-1",
-      payloadHash: "hash-1",
+      payloadHash: "802624c9dab98681fc943c66e08422d1619a24739bb2dc703f91877cf4fbc09a",
       status: "failed_before_boundary",
       replayPolicy: "idempotent_external",
       replayOutcome: "claimed",
@@ -395,9 +669,67 @@ describe("durable-execution-service orchestration workflow", () => {
       updatedAt: "2026-05-31T00:00:00.000Z",
     };
     const mutationStore = {
-      markFailed: vi.fn(),
-      claim: vi.fn(() => ({ outcome: "claimed", claimKind: "retry_after_failure" })),
-      markCompleted: vi.fn(),
+      markFailed: vi.fn(() => true),
+      claim: vi
+        .fn()
+        .mockReturnValueOnce({
+          outcome: "claimed",
+          claimKind: "retry_after_failure",
+          record: {
+            method: "POST",
+            routePath: externalRun.routePath,
+            idempotencyKey: externalRun.idempotencyKey,
+            actorScope: externalRun.actorScope,
+            payloadHash: externalRun.payloadHash,
+            status: "pending",
+            claimToken: "durable-replay-claim-1",
+            createdAt: externalRun.createdAt,
+            updatedAt: externalRun.updatedAt,
+          },
+        })
+        .mockReturnValueOnce({
+          outcome: "claimed",
+          claimKind: "retry_after_failure",
+          record: {
+            method: "POST",
+            routePath: externalRun.routePath,
+            idempotencyKey: externalRun.idempotencyKey,
+            actorScope: externalRun.actorScope,
+            payloadHash: externalRun.payloadHash,
+            status: "pending",
+            claimToken: "durable-replay-boundary-2",
+            createdAt: externalRun.createdAt,
+            updatedAt: externalRun.updatedAt,
+          },
+        }),
+      markCompleted: vi.fn(() => true),
+    };
+    let currentExternalRun: ExternalSideEffectRunRecord = { ...externalRun };
+    const sideEffectRunStore = {
+      createOrGet: vi.fn(() => currentExternalRun),
+      markExternalCallStarted: vi.fn((_runId, _input, now) => {
+        currentExternalRun = {
+          ...currentExternalRun,
+          status: "external_call_started",
+          attemptCount: currentExternalRun.attemptCount + 1,
+          updatedAt: now,
+        };
+        return currentExternalRun;
+      }),
+      markCompleted: vi.fn((_runId, _input, now) => {
+        currentExternalRun = { ...currentExternalRun, status: "completed", updatedAt: now };
+        return currentExternalRun;
+      }),
+      markFailure: vi.fn((_runId, input, now) => {
+        currentExternalRun = { ...currentExternalRun, status: input.status, updatedAt: now };
+        return currentExternalRun;
+      }),
+      markFailureIfStatus: vi.fn((_runId, expectedStatus, input, now) => {
+        if (currentExternalRun.status === expectedStatus) {
+          currentExternalRun = { ...currentExternalRun, status: input.status, updatedAt: now };
+        }
+        return currentExternalRun;
+      }),
     };
     const createCheckpoint = vi.fn();
     const updateRun = vi.fn((patch: Record<string, unknown>) => {
@@ -426,15 +758,21 @@ describe("durable-execution-service orchestration workflow", () => {
       recordDurableTimelineEvent: vi.fn(),
       buildExternalSideEffectReplayJob: vi.fn((candidate) => ({
         mutationStore,
+        sideEffectRunStore,
+        runClaimTransaction: (work) => work(),
         boundary: candidate.boundary,
         catalogId: candidate.catalogId,
         connectionId: candidate.connectionId,
         actionId: candidate.actionId,
         checkedAt: "2026-05-31T00:00:01.000Z",
         idempotencyKey: candidate.idempotencyKey,
+        actorScope: candidate.actorScope,
         payload: { replay: true },
         label: "Activepieces replay",
-        execute: vi.fn(async () => ({ replayed: true })),
+        execute: vi.fn(async (claim) => {
+          claim.markExternalCallStarted();
+          return { replayed: true };
+        }),
       })),
     };
 
@@ -569,7 +907,7 @@ describe("durable-execution-service orchestration workflow", () => {
       runIds: ["extfx-activepieces"],
     });
     let storedRun = { ...run, status: "running" as const };
-    const externalRun = {
+    const externalRun: ExternalSideEffectRunRecord = {
       runId: "extfx-activepieces",
       workspaceId: "default",
       boundary: "integration_operator_action",
@@ -579,7 +917,7 @@ describe("durable-execution-service orchestration workflow", () => {
       actionId: "trigger_webhook",
       actorScope: "actor-1",
       idempotencyKey: "key-activepieces-1",
-      payloadHash: "hash-1",
+      payloadHash: "183a143763547eabd66a12ae7762fb872bb3105cbc4918d8014ec063b308b2c1",
       status: "failed_before_boundary",
       replayPolicy: "idempotent_external",
       replayOutcome: "claimed",
@@ -613,8 +951,38 @@ describe("durable-execution-service orchestration workflow", () => {
           headers: { "content-type": "application/json" },
         }),
     );
+    let currentExternalRun: ExternalSideEffectRunRecord = { ...externalRun };
+    const sideEffectRunStore = {
+      createOrGet: vi.fn(() => currentExternalRun),
+      markExternalCallStarted: vi.fn((_runId, _input, now) => {
+        currentExternalRun = {
+          ...currentExternalRun,
+          status: "external_call_started",
+          attemptCount: currentExternalRun.attemptCount + 1,
+          updatedAt: now,
+        };
+        return currentExternalRun;
+      }),
+      markCompleted: vi.fn((_runId, _input, now) => {
+        currentExternalRun = { ...currentExternalRun, status: "completed", updatedAt: now };
+        return currentExternalRun;
+      }),
+      markFailure: vi.fn((_runId, input, now) => {
+        currentExternalRun = { ...currentExternalRun, status: input.status, updatedAt: now };
+        return currentExternalRun;
+      }),
+      markFailureIfStatus: vi.fn((_runId, expectedStatus, input, now) => {
+        if (currentExternalRun.status === expectedStatus) {
+          currentExternalRun = { ...currentExternalRun, status: input.status, updatedAt: now };
+        }
+        return currentExternalRun;
+      }),
+    };
     const integrationActionHost = {
-      storage: { integrationConnections: { get: vi.fn(() => connection) } },
+      storage: {
+        integrationConnections: { get: vi.fn(() => connection) },
+        runImmediateTransaction: (work: () => unknown) => work(),
+      },
       fetchWithDiagnosticsTimeout: fetchMock,
       readConnectionConfigValue: (config: Record<string, unknown>, key: string) => {
         const value = config[key];
@@ -622,22 +990,41 @@ describe("durable-execution-service orchestration workflow", () => {
       },
       resolveConnectionSecret: () => undefined,
       publishRealtime: vi.fn(),
+      sideEffectRunStore,
       mutationStore: {
-        claim: vi.fn(() => ({
-          outcome: "claimed" as const,
-          record: {
-            method: "POST",
-            routePath: externalRun.routePath,
-            idempotencyKey: externalRun.idempotencyKey,
-            actorScope: externalRun.actorScope,
-            payloadHash: "hash",
-            status: "pending" as const,
-            createdAt: "2026-06-01T00:00:00.000Z",
-            updatedAt: "2026-06-01T00:00:00.000Z",
-          },
-        })),
-        markCompleted: vi.fn(),
-        markFailed: vi.fn(),
+        claim: vi
+          .fn()
+          .mockReturnValueOnce({
+            outcome: "claimed" as const,
+            record: {
+              method: "POST",
+              routePath: externalRun.routePath,
+              idempotencyKey: externalRun.idempotencyKey,
+              actorScope: externalRun.actorScope,
+              payloadHash: "hash",
+              status: "pending" as const,
+              claimToken: "activepieces-replay-claim-1",
+              createdAt: "2026-06-01T00:00:00.000Z",
+              updatedAt: "2026-06-01T00:00:00.000Z",
+            },
+          })
+          .mockReturnValueOnce({
+            outcome: "claimed" as const,
+            claimKind: "retry_after_failure" as const,
+            record: {
+              method: "POST",
+              routePath: externalRun.routePath,
+              idempotencyKey: externalRun.idempotencyKey,
+              actorScope: externalRun.actorScope,
+              payloadHash: "hash",
+              status: "pending" as const,
+              claimToken: "activepieces-replay-boundary-2",
+              createdAt: "2026-06-01T00:00:00.000Z",
+              updatedAt: "2026-06-01T00:00:00.000Z",
+            },
+          }),
+        markCompleted: vi.fn(() => true),
+        markFailed: vi.fn(() => true),
       },
     };
     const host = {
@@ -650,7 +1037,7 @@ describe("durable-execution-service orchestration workflow", () => {
         externalSideEffectRuns: {
           get: vi.fn((runId: string) => {
             if (runId === "extfx-activepieces") {
-              return externalRun;
+              return currentExternalRun;
             }
             throw new Error(`missing run ${runId}`);
           }),
@@ -836,6 +1223,51 @@ describe("durable-execution-service orchestration workflow", () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow("lease lost");
+  });
+
+  it("uses the database clock fence when completing despite a fast or slow host clock", async () => {
+    const databaseNow = Date.now();
+    const payload = {
+      version: "approval.wait.v1" as const,
+      approvalId: "approval-1",
+      approvalKind: "tool.invoke",
+      createdAt: new Date(databaseNow).toISOString(),
+    };
+    const freshRun = {
+      ...buildRunWithPayload("approval.wait", payload),
+      leaseExpiresAt: new Date(databaseNow + 60_000).toISOString(),
+    };
+    const fastHost = createApprovalWaitHost(freshRun, "approved");
+    fastHost.storage.durableRuns.lockFreshActiveLeaseForUpdate.mockReturnValue(freshRun);
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(databaseNow + 60 * 60 * 1_000);
+
+    await executeDurableApprovalWaitRun(fastHost as never, freshRun);
+
+    expect(fastHost.storage.durableRuns.lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(
+      freshRun.runId,
+      freshRun.leaseOwnerId,
+    );
+    expect(fastHost.storage.durableRuns.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: freshRun.runId, status: "completed" }),
+    );
+
+    const expiredRun = {
+      ...freshRun,
+      leaseExpiresAt: new Date(databaseNow - 60_000).toISOString(),
+    };
+    const slowHost = createApprovalWaitHost(expiredRun, "approved");
+    slowHost.storage.durableRuns.lockFreshActiveLeaseForUpdate.mockReturnValue(undefined);
+    dateNow.mockReturnValue(databaseNow - 60 * 60 * 1_000);
+
+    await executeDurableApprovalWaitRun(slowHost as never, expiredRun);
+
+    expect(slowHost.storage.durableRuns.lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(
+      expiredRun.runId,
+      expiredRun.leaseOwnerId,
+    );
+    expect(slowHost.storage.durableRuns.updateRun).not.toHaveBeenCalled();
+    expect(slowHost.storage.durableRuns.createCheckpoint).not.toHaveBeenCalled();
+    dateNow.mockRestore();
   });
 
   it("marks wrapper workflow types unrecoverable with retained realtime links", async () => {
@@ -1399,7 +1831,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(currentRun.status).toBe("completed");
   });
 
-  it("recovers from a completed side-effect row when mutation completion persistence failed", async () => {
+  it("recovers from a legacy completed side-effect row while mutation completion is still pending", async () => {
     const connector = {
       connectorId: "connector-ledger-recovery",
       connectorType: "integration_connection",
@@ -1429,7 +1861,10 @@ describe("durable-execution-service orchestration workflow", () => {
       };
       return currentRun;
     });
-    const ledger = createConnectorDeliveryLedger({ failMutationCompletion: true });
+    const ledger = createConnectorDeliveryLedger({
+      initialMutationStatus: "pending",
+      initialSideEffectStatus: "completed",
+    });
     vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
       deps.markExternalCallStarted?.();
       return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send" } as never;
@@ -1457,7 +1892,7 @@ describe("durable-execution-service orchestration workflow", () => {
     currentRun = replacementClaim;
     await executeDurableConnectorDeliveryRun(host as never, replacementClaim);
 
-    expect(dispatchConnectorDelivery).toHaveBeenCalledTimes(1);
+    expect(dispatchConnectorDelivery).not.toHaveBeenCalled();
     expect(currentRun.status).toBe("completed");
   });
 
@@ -1573,6 +2008,133 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
+  it("dispatches a database-fresh approval token even when the host clock is far ahead", async () => {
+    const payload = {
+      version: "connector.delivery.v1" as const,
+      connectorId: "connector-fast-clock",
+      connectorType: "integration_connection",
+      action: "channel.send",
+      approvalAction: { tokenId: "token-fast-clock", expiresAt: "2026-07-11T23:59:00.000Z" },
+      payload: { target: "#approvals", message: "approve" },
+    };
+    const run = buildRunWithPayload("connector.delivery", payload);
+    const updateRun = vi.fn((input: Record<string, unknown>) => ({
+      ...run,
+      status: input.status as DurableRunRecord["status"],
+      version: run.version + 1,
+    }));
+    const findPendingFresh = vi.fn(() => ({
+      tokenId: payload.approvalAction.tokenId,
+      state: "pending",
+      connectorId: payload.connectorId,
+      expiresAt: payload.approvalAction.expiresAt,
+    }));
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      deps.markExternalCallStarted?.();
+      return { capabilityId: "outbound_messages", dispatchKind: "integration_channel_send" } as never;
+    });
+    const host = {
+      requireConnectorRecord: vi.fn(() => ({
+        connectorId: payload.connectorId,
+        connectorType: payload.connectorType,
+        capabilities: [{ id: "outbound_messages", enabled: true }],
+      })),
+      approvalRemoteTokenSecrets: { resolve: vi.fn(), delete: vi.fn() },
+      storage: {
+        ...createConnectorDeliveryLedger(),
+        remoteActionTokens: {
+          findPendingFresh,
+          get: vi.fn(),
+          expirePendingIfExpired: vi.fn(),
+          expirePendingAtOrBefore: vi.fn(),
+        },
+        durableRuns: {
+          getRun: vi.fn(() => run),
+          lockFreshActiveLeaseForUpdate: vi.fn(() => run),
+          updateRun,
+          createCheckpoint: vi.fn(),
+        },
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime: vi.fn(),
+      resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
+    };
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2100-07-11T00:00:00.000Z"));
+
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(findPendingFresh).toHaveBeenCalledWith(payload.approvalAction.tokenId);
+    expect(dispatchConnectorDelivery).toHaveBeenCalledTimes(1);
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+    dateNow.mockRestore();
+  });
+
+  it("does not dispatch a database-expired approval token when the host clock is far behind", async () => {
+    const payload = {
+      version: "connector.delivery.v1" as const,
+      connectorId: "connector-slow-clock",
+      connectorType: "integration_connection",
+      action: "channel.send",
+      approvalAction: { tokenId: "token-slow-clock", expiresAt: "2099-07-11T23:59:00.000Z" },
+      payload: { target: "#approvals", message: "approve" },
+    };
+    const run = buildRunWithPayload("connector.delivery", payload);
+    const updateRun = vi.fn((input: Record<string, unknown>) => ({
+      ...run,
+      status: input.status as DurableRunRecord["status"],
+      version: run.version + 1,
+    }));
+    const expirePendingIfExpired = vi.fn(() => ({
+      tokenId: payload.approvalAction.tokenId,
+      state: "expired",
+      connectorId: payload.connectorId,
+      expiresAt: payload.approvalAction.expiresAt,
+    }));
+    const host = {
+      requireConnectorRecord: vi.fn(() => ({
+        connectorId: payload.connectorId,
+        connectorType: payload.connectorType,
+        capabilities: [{ id: "outbound_messages", enabled: true }],
+      })),
+      approvalRemoteTokenSecrets: { resolve: vi.fn(), delete: vi.fn() },
+      storage: {
+        ...createConnectorDeliveryLedger(),
+        remoteActionTokens: {
+          findPendingFresh: vi.fn(() => undefined),
+          get: vi.fn(() => ({
+            tokenId: payload.approvalAction.tokenId,
+            state: "pending",
+            connectorId: payload.connectorId,
+            expiresAt: payload.approvalAction.expiresAt,
+          })),
+          expirePendingIfExpired,
+        },
+        durableRuns: {
+          getRun: vi.fn(() => run),
+          lockFreshActiveLeaseForUpdate: vi.fn(() => run),
+          updateRun,
+          createCheckpoint: vi.fn(),
+        },
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime: vi.fn(),
+      resolveDurableRunHookWorkspaceId: vi.fn(() => "default"),
+    };
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2000-07-11T00:00:00.000Z"));
+
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(expirePendingIfExpired).toHaveBeenCalledWith(payload.approvalAction.tokenId);
+    expect(dispatchConnectorDelivery).not.toHaveBeenCalled();
+    expect(updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        lastError: "Approval remote-action delivery expired before dispatch.",
+      }),
+    );
+    dateNow.mockRestore();
+  });
+
   it("leaves an expired token pending until failed keychain cleanup can be reconciled", async () => {
     const tokenId = "token-expired-retry";
     const tokenRef = `keychain:goatcitadel:approval-remote-action:${tokenId}`;
@@ -1595,11 +2157,12 @@ describe("durable-execution-service orchestration workflow", () => {
       secretPresent = false;
     });
     const tokens = {
-      listPendingExpiredAtOrBefore: vi.fn(() => (tokenState === "pending" ? [{ tokenId }] : [])),
-      expirePendingAtOrBefore: vi.fn(() => {
+      listPendingExpired: vi.fn(() => (tokenState === "pending" ? [{ tokenId }] : [])),
+      expirePendingIfExpired: vi.fn(() => {
         tokenState = "expired";
         return { state: tokenState };
       }),
+      expirePendingAtOrBefore: vi.fn(() => ({ state: tokenState })),
     };
     const tokenSecrets = new ApprovalRemoteTokenSecretService(
       { setSecret: vi.fn(), getSecret: vi.fn(), deleteSecret } as never,
@@ -1626,7 +2189,7 @@ describe("durable-execution-service orchestration workflow", () => {
 
     expect(tokenState).toBe("pending");
     expect(secretPresent).toBe(true);
-    expect(tokens.expirePendingAtOrBefore).not.toHaveBeenCalled();
+    expect(tokens.expirePendingIfExpired).not.toHaveBeenCalled();
     expect(createCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({ state: expect.objectContaining({ secretCleanupPending: true }) }),
     );
@@ -2142,9 +2705,11 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(() =>
       executeGeneralChatPostCommit(host as never, run, {
         generationId: "generation-stale-wait",
+        requestedAt: "2026-07-11T00:00:00.000Z",
         targetTraceStatus: "waiting_for_approval",
         completedEffects: [],
         runEffect: vi.fn(),
+        publishEffect: vi.fn(),
       }),
     ).toThrow(/targets waiting_for_approval, but the canonical trace is completed/);
     expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
@@ -2495,6 +3060,15 @@ describe("durable-execution-service orchestration workflow", () => {
             sessionId: "session-1",
             userMessageId: "user-1",
             status: traceStatus,
+            durable: { runId: run.runId, status: "running" },
+            completion: { finishReason: "error", repaired: true },
+          })),
+          getForUpdate: vi.fn(() => ({
+            turnId: "turn-1",
+            sessionId: "session-1",
+            userMessageId: "user-1",
+            status: traceStatus,
+            durable: { runId: run.runId, status: "running" },
             completion: { finishReason: "error", repaired: true },
           })),
           patchIfStatus,
@@ -2589,6 +3163,7 @@ describe("durable-execution-service orchestration workflow", () => {
         runImmediateTransaction: (callback: () => unknown) => callback(),
         chatTurnTraces: {
           get: vi.fn(() => completedTrace),
+          getForUpdate: vi.fn(() => completedTrace),
           patchIfStatus,
         },
       },
@@ -2606,6 +3181,108 @@ describe("durable-execution-service orchestration workflow", () => {
     });
     expect(persistChatStreamChunk).not.toHaveBeenCalled();
   });
+
+  it.each(["running", "completed"] as const)(
+    "does not let an unrecoverable stale run overwrite a %s trace rebound to another durable run",
+    async (status) => {
+      const run = buildRunWithPayload("chat.turn.execute", {
+        version: "chat.turn.execute.v1",
+        sessionId: "session-rebound",
+        turnId: "turn-rebound",
+        userMessageId: "user-rebound",
+        assistantMessageId: "assistant-rebound",
+        branchKind: "new",
+        threadEventType: "chat_thread_turn_appended",
+        request: { content: "new durable owner" },
+      });
+      let insideTransaction = false;
+      const staleTrace = {
+        turnId: "turn-rebound",
+        sessionId: "session-rebound",
+        userMessageId: "user-rebound",
+        status,
+        durable: { runId: run.runId, status: "running" },
+        toolRuns: [],
+        citations: [],
+        routing: {},
+      } as ChatTurnTraceRecord;
+      const reboundTrace = {
+        ...staleTrace,
+        durable: { runId: "durable-run-new-owner", status: "running" },
+      } as ChatTurnTraceRecord;
+      const patchIfStatus = vi.fn(() => reboundTrace);
+      const persistChatStreamChunk = vi.fn();
+      const host = {
+        storage: {
+          runImmediateTransaction: (callback: () => unknown) => {
+            insideTransaction = true;
+            return callback();
+          },
+          chatTurnTraces: {
+            get: vi.fn(() => (insideTransaction ? reboundTrace : staleTrace)),
+            getForUpdate: vi.fn(() => (insideTransaction ? reboundTrace : staleTrace)),
+            patchIfStatus,
+          },
+        },
+        persistChatStreamChunk,
+      };
+
+      await markDurableWorkflowUnrecoverable(host as never, run, "stale worker failed");
+
+      expect(patchIfStatus).not.toHaveBeenCalled();
+      expect(persistChatStreamChunk).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "durable run", tracePatch: {} },
+    { label: "session", tracePatch: { sessionId: "session-foreign" } },
+    { label: "user message", tracePatch: { userMessageId: "user-foreign" } },
+    { label: "assistant message", tracePatch: { assistantMessageId: "assistant-foreign" } },
+  ])(
+    "does not let an unrecoverable run overwrite an unlinked trace with incomplete or foreign $label linkage",
+    async ({ tracePatch }) => {
+      const run = buildRunWithPayload("chat.turn.execute", {
+        version: "chat.turn.execute.v1",
+        sessionId: "session-unlinked",
+        turnId: "turn-unlinked",
+        userMessageId: "user-unlinked",
+        assistantMessageId: "assistant-unlinked",
+        branchKind: "new",
+        threadEventType: "chat_thread_turn_appended",
+        request: { content: "stale durable payload" },
+      });
+      const foreignTrace = {
+        turnId: "turn-unlinked",
+        sessionId: "session-unlinked",
+        userMessageId: "user-unlinked",
+        assistantMessageId: "assistant-unlinked",
+        status: "running",
+        toolRuns: [],
+        citations: [],
+        routing: {},
+        ...tracePatch,
+      } as ChatTurnTraceRecord;
+      const patchIfStatus = vi.fn();
+      const persistChatStreamChunk = vi.fn();
+      const host = {
+        storage: {
+          runImmediateTransaction: (callback: () => unknown) => callback(),
+          chatTurnTraces: {
+            get: vi.fn(() => foreignTrace),
+            getForUpdate: vi.fn(() => foreignTrace),
+            patchIfStatus,
+          },
+        },
+        persistChatStreamChunk,
+      };
+
+      await markDurableWorkflowUnrecoverable(host as never, run, "stale worker failed");
+
+      expect(patchIfStatus).not.toHaveBeenCalled();
+      expect(persistChatStreamChunk).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes durable chat worker cancellation into the active turn dispatcher", async () => {
     vi.mocked(executePreparedAgentChatTurnBackground).mockResolvedValue(undefined as never);
@@ -3156,6 +3833,25 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
+  it("does not fail a durable run after the database clock says its lease expired", async () => {
+    const databaseNow = Date.now();
+    const { hosts, durableRuns } = createHosts("failed");
+    const run = {
+      ...buildRun(),
+      leaseExpiresAt: new Date(databaseNow - 60_000).toISOString(),
+    };
+    durableRuns.getRun.mockReturnValue(run);
+    durableRuns.lockFreshActiveLeaseForUpdate.mockReturnValue(undefined);
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(databaseNow - 60 * 60 * 1_000);
+
+    await createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts)).executeWorkflow(run);
+
+    expect(durableRuns.lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(run.runId, run.leaseOwnerId);
+    expect(durableRuns.updateRun).not.toHaveBeenCalled();
+    expect(durableRuns.createCheckpoint).not.toHaveBeenCalled();
+    dateNow.mockRestore();
+  });
+
   it("completes orchestration.plan.execute runs through the durable registry", async () => {
     const { hosts, durableRuns, publishRealtime, recordDurableTimelineEvent, executeDurableOrchestrationRun } =
       createHosts("completed");
@@ -3641,6 +4337,9 @@ function createApprovalWaitHost(run: DurableRunRecord, status: "pending" | "appr
       },
       durableRuns: {
         getRun: vi.fn(() => storedRun),
+        lockFreshActiveLeaseForUpdate: vi.fn((_runId: string, expectedLeaseOwnerId: string) =>
+          storedRun.status === "running" && storedRun.leaseOwnerId === expectedLeaseOwnerId ? storedRun : undefined,
+        ),
         updateRun: vi.fn((patch: Partial<DurableRunRecord> & { clearLease?: boolean }) => {
           storedRun = { ...storedRun, ...patch, version: storedRun.version + 1 };
           return storedRun;

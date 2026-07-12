@@ -17,9 +17,19 @@ export interface SystemSettingRecord<T = unknown> {
 export class SystemSettingsRepository {
   private readonly getStmt;
   private readonly upsertStmt;
+  private readonly insertIfAbsentStmt;
+  private readonly getForUpdateStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM system_settings WHERE setting_key = ?");
+    this.insertIfAbsentStmt = db.prepare(`
+      INSERT INTO system_settings (setting_key, value_json, updated_at)
+      VALUES (@key, @valueJson, @updatedAt)
+      ON CONFLICT(setting_key) DO NOTHING
+    `);
+    this.getForUpdateStmt = db.prepare(
+      `SELECT * FROM system_settings WHERE setting_key = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+    );
     this.upsertStmt = db.prepare(`
       INSERT INTO system_settings (setting_key, value_json, updated_at)
       VALUES (@key, @valueJson, @updatedAt)
@@ -53,10 +63,36 @@ export class SystemSettingsRepository {
     }
     return saved;
   }
+
+  /**
+   * Atomically advances a shared cyclic counter. PostgreSQL locks the setting
+   * row (including safe first-insert contention); SQLite callers are serialized
+   * by the surrounding IMMEDIATE transaction. Callers can include this write in
+   * a larger transaction so their domain receipt commits with the increment.
+   */
+  public advanceCyclicCounter(
+    key: string,
+    resetAt: number,
+    now = new Date().toISOString(),
+  ): { previous: number; value: number; due: boolean } {
+    const threshold = Math.max(1, Math.floor(resetAt));
+    return this.db.transaction("immediate", () => {
+      this.insertIfAbsentStmt.run({ key, valueJson: "0", updatedAt: now });
+      const row = this.getForUpdateStmt.get(key) as SystemSettingRow | undefined;
+      if (!row) {
+        throw new NotFoundError(`Failed to lock setting ${key}`);
+      }
+      const parsed = parseValue(row.value_json);
+      const previous = typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0;
+      const next = previous + 1;
+      const due = next >= threshold;
+      const value = due ? 0 : next;
+      this.upsertStmt.run({ key, valueJson: JSON.stringify(value), updatedAt: now });
+      return { previous, value, due };
+    });
+  }
 }
 
 function parseValue(raw: string): unknown {
   return safeJsonParse<unknown>(raw, raw);
 }
-
-

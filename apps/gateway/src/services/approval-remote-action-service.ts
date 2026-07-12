@@ -86,16 +86,15 @@ export function createApprovalRemoteActionToken(
   let created!: RemoteActionTokenRecord;
   let deliveryApproval!: ApprovalRequest;
   context.storage.runImmediateTransaction(() => {
-    const issuedAt = new Date();
-    deliveryApproval = context.storage.approvals.get(approvalId);
-    assertApprovalIssuable(deliveryApproval, issuedAt);
-    created = context.storage.remoteActionTokens.create({
+    deliveryApproval = context.storage.approvals.lockPendingForUpdate(approvalId);
+    assertApprovalIssuable(context, deliveryApproval);
+    created = context.storage.remoteActionTokens.createWithTtl({
       tokenHash: hashSensitiveToken(token),
       actionType: "approval.resolve",
       approvalId,
       connectorId: input.connectorId,
       mutation: { approvalId },
-      expiresAt: new Date(issuedAt.getTime() + expiresInMs).toISOString(),
+      expiresInMs,
     });
     context.enqueueApprovalObservabilityEffects(approvalId, [
       {
@@ -137,10 +136,9 @@ export function createApprovalRemoteActionToken(
         },
       },
     ]);
-    deliveryApproval = context.storage.approvals.get(approvalId);
-    const commitBoundary = new Date();
-    assertApprovalIssuable(deliveryApproval, commitBoundary);
-    if (Date.parse(created.expiresAt) <= commitBoundary.getTime()) {
+    deliveryApproval = context.storage.approvals.lockPendingForUpdate(approvalId);
+    assertApprovalIssuable(context, deliveryApproval);
+    if (!context.storage.remoteActionTokens.findPendingFresh(created.tokenId)) {
       throw new ValidationError({
         message: `Remote action token for approval ${approvalId} expired before issuance committed.`,
       });
@@ -277,10 +275,9 @@ function assertApprovalPending(approval: ApprovalRequest): void {
   }
 }
 
-function assertApprovalIssuable(approval: ApprovalRequest, issuedAt: Date): void {
+function assertApprovalIssuable(context: ApprovalRemoteActionContext, approval: ApprovalRequest): void {
   assertApprovalPending(approval);
-  const expiresAt = approval.expiresAt ? Date.parse(approval.expiresAt) : Number.NaN;
-  if (Number.isFinite(expiresAt) && expiresAt <= issuedAt.getTime()) {
+  if (context.storage.approvals.isExpiredPendingAtDatabaseNow(approval.approvalId)) {
     throw new ValidationError({
       message: `Approval ${approval.approvalId} has expired and can no longer issue a remote action token.`,
     });

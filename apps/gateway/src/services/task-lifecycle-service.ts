@@ -9,6 +9,7 @@ import type {
   AgenticRunTreeResponse,
   AgenticSurface,
   AgenticTaskContext,
+  DurableRunStatus,
   RealtimeEvent,
   TaskActivityCreateInput,
   TaskActivityRecord,
@@ -24,14 +25,18 @@ import type {
   TaskSubagentUpdateInput,
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
-import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, isDurableRunStatus, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } from "./task-distress-engine.js";
 import { verifyClaimedArtifacts, type ArtifactProbers } from "./task-artifact-verifier.js";
 import type { Storage } from "@goatcitadel/storage";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { CoworkAgenticProjectionService } from "./cowork-agentic-projection-service.js";
+import { canonicalJsonString } from "./evidence-receipt-service.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
+const AGENTIC_CONTROL_IDEMPOTENCY_METHOD = "AGENTIC_CONTROL";
+const AGENTIC_CONTROL_IDEMPOTENCY_ROUTE = "/internal/agentic-controls";
+const AGENTIC_RUNTIME_CONTROL_CLAIM_LEASE_MS = 60_000;
 
 type BulkTaskRevisionGuard = {
   expectedUpdatedAtByTaskId?: Record<string, string>;
@@ -45,7 +50,10 @@ export type BulkTaskAction = BulkTaskRevisionGuard &
     | { action: "close"; taskIds: string[] }
   );
 
-type TaskStorage = Pick<Storage, "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents"> &
+type TaskStorage = Pick<
+  Storage,
+  "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents" | "mutationIdempotency" | "runImmediateTransaction"
+> &
   Partial<Pick<Storage, "chatDelegationRuns" | "chatDelegationSteps" | "chatExecutionPlans" | "chatSessionMeta">> &
   Partial<Pick<Storage, "chatTurnTraces" | "durableRuns">>;
 
@@ -54,6 +62,27 @@ type TaskRealtimeOptions = {
   eventClass: NonNullable<RealtimeEvent["eventClass"]>;
   links?: RealtimeEvent["links"];
 };
+
+interface AgenticControlMutationClaim {
+  identity: {
+    method: string;
+    routePath: string;
+    idempotencyKey: string;
+    actorScope: string;
+  };
+  claimToken: string;
+  claimKind: "new" | "retry_after_failure" | "retry_after_stale_claim";
+}
+
+interface AgenticControlCommitOutcome {
+  nextStatus?: TaskStatus;
+  nextAgenticStatus?: AgenticTaskContext["status"];
+  responseStatus: AgenticControlResponse["status"];
+  runtimeEffect: AgenticControlResponse["runtimeEffect"];
+  responseMessage: string;
+  canonicalDurableStatus?: DurableRunStatus;
+  superseded?: boolean;
+}
 
 export interface TaskLifecycleServiceDependencies {
   publishRealtime(
@@ -97,11 +126,134 @@ export class TaskLifecycleService {
     return this.requireTaskInWorkspace(taskId, options);
   }
 
-  public createTask(input: TaskCreateInput): TaskRecord {
-    const created = this.deps.storage.tasks.create({
+  /** Locks a task for a caller-owned cross-repository transaction. */
+  public lockTaskForDelegationAggregate(taskId: string): TaskRecord {
+    return this.deps.storage.tasks.getForUpdate(taskId);
+  }
+
+  /** Locks a task subagent after the parent/run/step/task lock order is established. */
+  public lockDelegationSubagentProjection(agentSessionId: string): TaskSubagentSession {
+    return this.deps.storage.taskSubagents.getByAgentSessionIdForUpdate(agentSessionId);
+  }
+
+  /** Persists delegation-owned task truth without publishing before commit. */
+  public persistDelegationAggregateTask(
+    taskId: string,
+    input: { status: TaskStatus; agenticContext: Partial<AgenticTaskContext> },
+  ): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    return this.deps.storage.tasks.update(taskId, {
+      status: input.status,
+      agenticContext: mergeAgenticContext(current.agenticContext, input.agenticContext),
+    });
+  }
+
+  /** Publishes the already-committed aggregate task snapshot. */
+  public publishDelegationAggregateTask(task: TaskRecord): void {
+    this.publishTaskEvent("task_updated", { task }, buildTaskRealtimeLinks(task));
+  }
+
+  /** Links an A2A task to canonical durable execution inside a caller-owned transaction. */
+  public persistA2ADurableRunLink(taskId: string, durableRunId: string): TaskRecord {
+    const current = this.deps.storage.tasks.getForUpdate(taskId);
+    const existingDurableRunId = current.agenticContext?.durableRunId?.trim();
+    if (existingDurableRunId && existingDurableRunId !== durableRunId) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Task ${taskId} is already linked to durable run ${existingDurableRunId}.`,
+      });
+    }
+    if (existingDurableRunId === durableRunId) {
+      return current;
+    }
+    return this.deps.storage.tasks.update(taskId, {
+      agenticContext: mergeAgenticContext(current.agenticContext, { durableRunId }),
+    });
+  }
+
+  /** Publishes an A2A durable-run link only after the caller commits binding and task truth. */
+  public publishA2ADurableRunLink(task: TaskRecord): void {
+    this.publishTaskEvent("task_updated", { task }, buildTaskRealtimeLinks(task));
+  }
+
+  /** Persists a dispatch-fenced waiting subagent projection without publishing before commit. */
+  public persistDelegationSubagentProjection(
+    agentSessionId: string,
+    input: TaskSubagentUpdateInput,
+  ): TaskSubagentSession {
+    const current = this.deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
+    if (!current) {
+      throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
+    }
+    return input.metadata
+      ? this.deps.storage.taskSubagents.updateByAgentSessionIdWithMetadataPatch(agentSessionId, {
+          status: input.status,
+          endedAt: input.endedAt,
+          metadataPatch: input.metadata,
+        })
+      : this.deps.storage.taskSubagents.updateByAgentSessionId(agentSessionId, input);
+  }
+
+  /** Publishes an already-committed dispatch-fenced subagent projection. */
+  public publishDelegationSubagentProjection(session: TaskSubagentSession): void {
+    this.publishTaskEvent(
+      "subagent_updated",
+      { taskId: session.taskId, session },
+      buildTaskRealtimeLinks(this.deps.storage.tasks.find(session.taskId), session.taskId),
+    );
+  }
+
+  /** Persists delegation evidence inside a caller-owned outcome transaction. */
+  public persistDelegationActivity(
+    taskId: string,
+    input: TaskActivityCreateInput,
+    createdAt: string,
+  ): TaskActivityRecord {
+    return this.deps.storage.taskActivities.append(taskId, input, createdAt);
+  }
+
+  public persistDelegationActivityOnce(
+    activityId: string,
+    taskId: string,
+    input: TaskActivityCreateInput,
+    createdAt: string,
+  ): { activity: TaskActivityRecord; created: boolean } {
+    return this.deps.storage.taskActivities.appendOnce(activityId, taskId, input, createdAt);
+  }
+
+  public publishDelegationActivity(activity: TaskActivityRecord): void {
+    this.publishTaskEvent(
+      "activity_logged",
+      { taskId: activity.taskId, activity },
+      buildTaskRealtimeLinks(this.deps.storage.tasks.find(activity.taskId), activity.taskId),
+    );
+  }
+
+  /** Persists a delegation deliverable inside a caller-owned outcome transaction. */
+  public persistDelegationDeliverable(
+    taskId: string,
+    input: TaskDeliverableCreateInput,
+    createdAt: string,
+  ): TaskDeliverableRecord {
+    return this.deps.storage.taskDeliverables.append(taskId, input, createdAt);
+  }
+
+  public publishDelegationDeliverable(deliverable: TaskDeliverableRecord): void {
+    this.publishTaskEvent(
+      "deliverable_added",
+      { taskId: deliverable.taskId, deliverable },
+      buildTaskRealtimeLinks(this.deps.storage.tasks.find(deliverable.taskId), deliverable.taskId),
+    );
+  }
+
+  public createTask(input: TaskCreateInput, options?: { taskId?: string }): TaskRecord {
+    const normalizedInput = {
       ...input,
       workspaceId: this.normalizeWorkspaceId(input.workspaceId),
-    });
+    };
+    const created = options?.taskId
+      ? this.deps.storage.tasks.create(normalizedInput, undefined, { taskId: options.taskId })
+      : this.deps.storage.tasks.create(normalizedInput);
     this.publishTaskEvent("task_created", { task: created }, buildTaskRealtimeLinks(created));
     return created;
   }
@@ -453,6 +605,7 @@ export class TaskLifecycleService {
 
       for (const subagent of this.deps.storage.taskSubagents.listByTask(task.taskId, 200)) {
         const subagentNodeId = `subagent:${subagent.agentSessionId}`;
+        const waiting = subagent.metadata?.waiting;
         nodes.push({
           id: subagentNodeId,
           kind: "subagent",
@@ -461,7 +614,9 @@ export class TaskLifecycleService {
           parentId: taskNodeId,
           taskId: task.taskId,
           agentSessionId: subagent.agentSessionId,
+          summary: waiting?.reason,
           metadata: compactRecord({
+            role: subagent.metadata?.profileId ?? subagent.agentName,
             index: subagent.metadata?.index,
             depth: subagent.metadata?.depth,
             dependsOnStepIds: subagent.metadata?.dependsOnStepIds,
@@ -473,6 +628,11 @@ export class TaskLifecycleService {
             filesTouched: subagent.metadata?.filesTouched,
             tokenTotal: subagent.metadata?.tokenTotal,
             costUsd: subagent.metadata?.costUsd,
+            childTraceStatus: waiting?.status,
+            childSessionId: waiting ? subagent.agentSessionId : undefined,
+            childTurnId: waiting?.childTurnId,
+            durableRunId: waiting?.durableRunId,
+            waitObservedAt: waiting?.observedAt,
           }),
         });
         edges.push({ from: taskNodeId, to: subagentNodeId, kind: "spawned" });
@@ -572,9 +732,11 @@ export class TaskLifecycleService {
   }
 
   public updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): TaskRecord {
-    const current = this.deps.storage.tasks.get(taskId);
-    const updated = this.deps.storage.tasks.update(taskId, {
-      agenticContext: mergeAgenticContext(current.agenticContext, patch),
+    const updated = this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.tasks.getForUpdate(taskId);
+      return this.deps.storage.tasks.update(taskId, {
+        agenticContext: mergeAgenticContext(current.agenticContext, patch),
+      });
     });
     this.publishTaskEvent(
       "agentic_context_updated",
@@ -590,8 +752,8 @@ export class TaskLifecycleService {
     if (input.agentSessionId) {
       const subagent = this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
       if (subagent) {
-        this.deps.storage.taskSubagents.updateByAgentSessionId(input.agentSessionId, {
-          metadata: { ...(subagent.metadata ?? {}), heartbeatAt: now },
+        this.deps.storage.taskSubagents.updateByAgentSessionIdWithMetadataPatch(input.agentSessionId, {
+          metadataPatch: { heartbeatAt: now },
         });
       }
     }
@@ -673,38 +835,65 @@ export class TaskLifecycleService {
   ): AgenticControlResponse {
     const task = this.findRootTaskForRun(runId, this.normalizeWorkspaceAccessOptions(options));
     const now = new Date().toISOString();
-    const controlId = input.controlId?.trim();
-    if (controlId) {
-      const existing = findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
-      if (existing) {
-        const mismatch = findAgenticControlReplayMismatch(input, existing);
-        if (mismatch === "action") {
-          throw new ValidationError({
-            field: "controlId",
-            message: "controlId has already been used for a different agentic control action.",
-          });
-        }
-        if (mismatch) {
-          throw new ValidationError({
-            field: "controlId",
-            message: "controlId has already been used for a different agentic control payload.",
-          });
-        }
-        return buildIdempotentControlReplay(task, input, existing);
-      }
+    const controlId = input.controlId?.trim() || this.buildImplicitAgenticControlId(task, runId, input);
+    input = { ...input, controlId };
+    const existing = findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
+    if (existing) {
+      return buildValidatedIdempotentControlReplay(task, input, existing);
     }
+
+    const identity = {
+      method: AGENTIC_CONTROL_IDEMPOTENCY_METHOD,
+      routePath: AGENTIC_CONTROL_IDEMPOTENCY_ROUTE,
+      idempotencyKey: controlId,
+      actorScope: task.taskId,
+    };
+    const claim = this.deps.storage.mutationIdempotency.claim({
+      ...identity,
+      payloadHash: hashAgenticControlPayload(runId, task.taskId, input),
+      leaseDurationMs: AGENTIC_RUNTIME_CONTROL_CLAIM_LEASE_MS,
+    });
+    if (claim.outcome === "payload_mismatch") {
+      throw new ValidationError({
+        field: "controlId",
+        message: "controlId has already been used for a different agentic control payload.",
+      });
+    }
+    if (claim.outcome === "duplicate" || claim.outcome === "in_progress") {
+      const receipt = findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
+      if (receipt) {
+        return buildValidatedIdempotentControlReplay(task, input, receipt);
+      }
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message:
+          claim.outcome === "in_progress"
+            ? `Agentic control ${controlId} is already in progress.`
+            : `Agentic control ${controlId} is completed without its durable activity receipt.`,
+      });
+    }
+    const claimToken = claim.record.claimToken?.trim();
+    if (!claimToken) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Agentic control ${controlId} was claimed without an ownership token.`,
+      });
+    }
+    const mutationClaim: AgenticControlMutationClaim = { identity, claimToken, claimKind: claim.claimKind };
 
     const reason = input.reason?.trim() || input.instruction?.trim() || "Operator control recorded.";
     let nextStatus: TaskStatus | undefined;
     let nextAgenticStatus: AgenticTaskContext["status"] | undefined;
     let runtimeEffect: AgenticControlResponse["runtimeEffect"] = "state_only";
     let responseStatus: AgenticControlResponse["status"] = "recorded";
+    let runtimeReportedStatus: string | undefined;
     const currentStatus = task.agenticContext?.status ?? task.status;
     const rejectionReason = validateAgenticControlTransition(currentStatus, input);
 
     if (rejectionReason) {
       return this.recordRejectedAgenticControl(task, input, {
         controlId,
+        mutationClaim,
         message: rejectionReason,
         now,
         runtimeEffect,
@@ -713,52 +902,67 @@ export class TaskLifecycleService {
       });
     }
 
+    let runtimeEffectAlreadyApplied =
+      mutationClaim && mutationClaim.claimKind !== "new"
+        ? this.probeAgenticRuntimeControlOutcome(task, input, controlId!)
+        : false;
+
     if (input.action === "pause") {
       const durableRunId = task.agenticContext?.durableRunId?.trim();
       if (durableRunId && this.deps.pauseDurableRun) {
         try {
-          this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator");
+          if (!runtimeEffectAlreadyApplied) {
+            runtimeReportedStatus = this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator").status;
+          }
         } catch (error) {
-          return this.recordRejectedAgenticControl(task, input, {
-            controlId,
-            evidenceRef: durableRunId,
-            message: `Could not pause attached durable run: ${formatErrorMessage(error)}`,
-            now,
-            runtimeEffect: "state_only",
-            signalPrefix: "durable-control",
-            title: "Durable run control rejected",
-          });
+          runtimeEffectAlreadyApplied = this.probeAgenticRuntimeControlOutcome(task, input, controlId ?? input.action);
+          if (!runtimeEffectAlreadyApplied) {
+            return this.recordRejectedAgenticControl(task, input, {
+              controlId,
+              mutationClaim,
+              evidenceRef: durableRunId,
+              message: `Could not pause attached durable run: ${formatErrorMessage(error)}`,
+              now,
+              runtimeEffect: "state_only",
+              signalPrefix: "durable-control",
+              title: "Durable run control rejected",
+            });
+          }
         }
         runtimeEffect = "runtime_pause";
         responseStatus = "applied";
+        nextAgenticStatus = "paused";
       }
-      nextAgenticStatus = "paused";
     } else if (input.action === "cancel") {
       const durableRunId = task.agenticContext?.durableRunId?.trim();
       if (durableRunId && this.deps.cancelDurableRun) {
         try {
-          this.deps.cancelDurableRun(durableRunId, input.actorId ?? "operator");
+          if (!runtimeEffectAlreadyApplied) {
+            runtimeReportedStatus = this.deps.cancelDurableRun(durableRunId, input.actorId ?? "operator").status;
+          }
         } catch (error) {
-          return this.recordRejectedAgenticControl(task, input, {
-            controlId,
-            evidenceRef: durableRunId,
-            message: `Could not cancel attached durable run: ${formatErrorMessage(error)}`,
-            now,
-            runtimeEffect: "state_only",
-            signalPrefix: "durable-control",
-            title: "Durable run control rejected",
-          });
+          runtimeEffectAlreadyApplied = this.probeAgenticRuntimeControlOutcome(task, input, controlId ?? input.action);
+          if (!runtimeEffectAlreadyApplied) {
+            return this.recordRejectedAgenticControl(task, input, {
+              controlId,
+              mutationClaim,
+              evidenceRef: durableRunId,
+              message: `Could not cancel attached durable run: ${formatErrorMessage(error)}`,
+              now,
+              runtimeEffect: "state_only",
+              signalPrefix: "durable-control",
+              title: "Durable run control rejected",
+            });
+          }
         }
         runtimeEffect = "runtime_cancel";
         responseStatus = "applied";
+        nextStatus = "blocked";
+        nextAgenticStatus = "cancelled";
       }
-      nextStatus = "blocked";
-      nextAgenticStatus = "cancelled";
-    } else if (input.action === "retry") {
-      nextStatus = "in_progress";
-      nextAgenticStatus = "running";
     } else if (input.action === "kill_child") {
       if (!input.agentSessionId) {
+        this.failAgenticControlMutation(mutationClaim, now);
         throw new ValidationError({ field: "agentSessionId", message: "agentSessionId is required for kill_child." });
       }
       const subagent = this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
@@ -767,54 +971,148 @@ export class TaskLifecycleService {
       });
       const allowedTaskIds = new Set(runTasks.map((candidate) => candidate.taskId));
       if (!subagent || !allowedTaskIds.has(subagent.taskId)) {
+        this.failAgenticControlMutation(mutationClaim, now);
         throw new NotFoundError({ entity: "Sub-agent session", id: input.agentSessionId });
       }
-      this.deps.storage.taskSubagents.updateByAgentSessionId(input.agentSessionId, {
-        status: "killed",
-        endedAt: now,
-      });
     } else if (input.action === "open_child") {
       runtimeEffect = "navigation";
-    } else if (input.action === "approve" || input.action === "reject") {
-      runtimeEffect = "approval_resolution";
     }
 
-    if (nextStatus || nextAgenticStatus) {
-      this.deps.storage.tasks.update(task.taskId, {
-        ...(nextStatus ? { status: nextStatus } : {}),
-        agenticContext: mergeAgenticContext(task.agenticContext, {
-          ...(nextAgenticStatus ? { status: nextAgenticStatus } : {}),
-        }),
-      });
-    }
-
-    this.appendTaskActivity(task.taskId, {
-      activityType: "control",
-      message: `${input.action} control recorded: ${reason}`,
-      agentId: input.actorId,
-      metadata: buildAgenticControlActivityMetadata(input, {
-        controlId,
-        resultStatus: responseStatus,
-        runtimeEffect,
-        recordedAt: now,
-      }),
-    });
-
-    return {
-      action: input.action,
-      taskId: task.taskId,
-      runId: task.agenticContext?.runId,
-      status: responseStatus,
-      runtimeEffect,
-      controlId,
-      message:
-        runtimeEffect === "state_only"
+    const responseMessage =
+      (input.action === "approve" || input.action === "reject") && runtimeEffect === "state_only"
+        ? "No approval was resolved. Use the canonical approval-resolution endpoint to approve or reject the request."
+        : runtimeEffect === "state_only"
           ? "Control was recorded in the durable board. Live runtime effects are only applied where an executor is attached."
           : runtimeEffect === "runtime_pause"
             ? "Durable run pause was applied and mirrored into the Cowork board."
             : runtimeEffect === "runtime_cancel"
               ? "Durable run cancellation was applied and mirrored into the Cowork board."
-              : "Control was recorded with an operator-visible runtime effect.",
+              : "Control was recorded with an operator-visible runtime effect.";
+    try {
+      const committed = this.deps.storage.runImmediateTransaction(() => {
+        const current = this.deps.storage.tasks.getForUpdate(task.taskId);
+        const outcome = this.reconcileAgenticControlCommit(
+          current,
+          input,
+          {
+            nextStatus,
+            nextAgenticStatus,
+            responseStatus,
+            runtimeEffect,
+            responseMessage,
+          },
+          runtimeReportedStatus,
+          controlId,
+        );
+        if (outcome.nextStatus || outcome.nextAgenticStatus) {
+          this.deps.storage.tasks.update(task.taskId, {
+            ...(outcome.nextStatus ? { status: outcome.nextStatus } : {}),
+            agenticContext: mergeAgenticContext(current.agenticContext, {
+              ...(outcome.nextAgenticStatus ? { status: outcome.nextAgenticStatus } : {}),
+            }),
+          });
+        }
+        const persistedActivity = this.deps.storage.taskActivities.append(
+          task.taskId,
+          {
+            activityType: "control",
+            message: outcome.superseded
+              ? `${input.action} control superseded: ${outcome.responseMessage}`
+              : `${input.action} control recorded: ${reason}`,
+            agentId: input.actorId,
+            metadata: buildAgenticControlActivityMetadata(input, {
+              controlId,
+              responseMessage: outcome.responseMessage,
+              resultStatus: outcome.responseStatus,
+              runtimeEffect: outcome.runtimeEffect,
+              recordedAt: now,
+              canonicalDurableStatus: outcome.canonicalDurableStatus,
+              superseded: outcome.superseded,
+            }),
+          },
+          now,
+        );
+        this.completeAgenticControlMutation(mutationClaim, now);
+        const response: AgenticControlResponse = {
+          action: input.action,
+          taskId: task.taskId,
+          runId: current.agenticContext?.runId,
+          status: outcome.responseStatus,
+          runtimeEffect: outcome.runtimeEffect,
+          controlId,
+          message: outcome.responseMessage,
+        };
+        return { persistedActivity, response };
+      });
+      this.publishDelegationActivity(committed.persistedActivity);
+      return committed.response;
+    } catch (error) {
+      this.failAgenticControlMutation(mutationClaim, now);
+      throw error;
+    }
+  }
+
+  private reconcileAgenticControlCommit(
+    currentTask: TaskRecord,
+    input: AgenticControlRequest,
+    planned: AgenticControlCommitOutcome,
+    runtimeReportedStatus: string | undefined,
+    controlId: string,
+  ): AgenticControlCommitOutcome {
+    if (
+      (input.action !== "pause" && input.action !== "cancel") ||
+      (planned.runtimeEffect !== "runtime_pause" && planned.runtimeEffect !== "runtime_cancel")
+    ) {
+      return planned;
+    }
+    const durableRunId = currentTask.agenticContext?.durableRunId?.trim();
+    if (!durableRunId) {
+      return planned;
+    }
+
+    let canonicalDurableStatus = isDurableRunStatus(runtimeReportedStatus) ? runtimeReportedStatus : undefined;
+    if (this.deps.storage.durableRuns) {
+      try {
+        // The task row is already locked. This is intentionally a committed-state
+        // read, not a second row lock that would invert durable-run -> task order.
+        canonicalDurableStatus = this.deps.storage.durableRuns.getRun(durableRunId).status;
+      } catch (error) {
+        if (!(error instanceof NotFoundError) || !canonicalDurableStatus) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: `Agentic control ${controlId} could not reconcile canonical durable status: ${formatErrorMessage(error)}`,
+          });
+        }
+      }
+    }
+    if (!canonicalDurableStatus) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Agentic control ${controlId} could not reconcile canonical durable status.`,
+      });
+    }
+
+    const requestedDurableStatus: DurableRunStatus = input.action === "pause" ? "paused" : "cancelled";
+    if (canonicalDurableStatus === requestedDurableStatus) {
+      return { ...planned, canonicalDurableStatus };
+    }
+
+    const canonicalProjection = mapDurableStatusToTaskProjection(canonicalDurableStatus);
+    const effectiveRuntimeEffect: AgenticControlResponse["runtimeEffect"] =
+      canonicalDurableStatus === "cancelled"
+        ? "runtime_cancel"
+        : canonicalDurableStatus === "paused"
+          ? "runtime_pause"
+          : planned.runtimeEffect;
+    return {
+      ...planned,
+      ...canonicalProjection,
+      runtimeEffect: effectiveRuntimeEffect,
+      responseMessage: `Durable run ${input.action} was superseded by ${describeDurableSupersession(
+        canonicalDurableStatus,
+      )}; canonical ${canonicalDurableStatus} state was mirrored into the Cowork board.`,
+      canonicalDurableStatus,
+      superseded: true,
     };
   }
 
@@ -823,6 +1121,7 @@ export class TaskLifecycleService {
     input: AgenticControlRequest,
     options: {
       controlId: string | undefined;
+      mutationClaim?: AgenticControlMutationClaim;
       evidenceRef?: string;
       message: string;
       now: string;
@@ -831,7 +1130,7 @@ export class TaskLifecycleService {
       title: string;
     },
   ): AgenticControlResponse {
-    const diagnostic = this.appendTaskDiagnostic(task.taskId, {
+    const diagnostic: AgenticDiagnosticSignal = {
       signalId: `${options.signalPrefix}-${input.action}-${options.controlId ?? randomUUID()}`,
       code: "unsafe_status_transition",
       severity: "warning",
@@ -839,20 +1138,8 @@ export class TaskLifecycleService {
       summary: options.message,
       evidenceRef: options.evidenceRef,
       createdAt: options.now,
-    });
-    this.appendTaskActivity(task.taskId, {
-      activityType: "control",
-      message: `${input.action} control rejected: ${options.message}`,
-      agentId: input.actorId,
-      metadata: buildAgenticControlActivityMetadata(input, {
-        controlId: options.controlId,
-        diagnosticSignalId: diagnostic.signalId,
-        recordedAt: options.now,
-        resultStatus: "rejected",
-        runtimeEffect: options.runtimeEffect,
-      }),
-    });
-    return {
+    };
+    const response: AgenticControlResponse = {
       action: input.action,
       taskId: task.taskId,
       runId: task.agenticContext?.runId,
@@ -861,6 +1148,172 @@ export class TaskLifecycleService {
       controlId: options.controlId,
       message: options.message,
     };
+    try {
+      const committed = this.deps.storage.runImmediateTransaction(() => {
+        const current = this.deps.storage.tasks.getForUpdate(task.taskId);
+        const updatedTask = this.deps.storage.tasks.update(task.taskId, {
+          agenticContext: {
+            ...(current.agenticContext ?? {}),
+            diagnostics: [...(current.agenticContext?.diagnostics ?? []), diagnostic],
+            failureClass: current.agenticContext?.failureClass ?? mapDiagnosticToFailureClass(diagnostic.code),
+          },
+        });
+        const diagnosticActivity = this.deps.storage.taskActivities.append(
+          task.taskId,
+          {
+            activityType: "diagnostic",
+            message: diagnostic.summary,
+            metadata: diagnostic as unknown as Record<string, unknown>,
+          },
+          options.now,
+        );
+        const controlActivity = this.deps.storage.taskActivities.append(
+          task.taskId,
+          {
+            activityType: "control",
+            message: `${input.action} control rejected: ${options.message}`,
+            agentId: input.actorId,
+            metadata: buildAgenticControlActivityMetadata(input, {
+              controlId: options.controlId,
+              diagnosticSignalId: diagnostic.signalId,
+              responseMessage: options.message,
+              recordedAt: options.now,
+              resultStatus: "rejected",
+              runtimeEffect: options.runtimeEffect,
+            }),
+          },
+          options.now,
+        );
+        this.completeAgenticControlMutation(options.mutationClaim, options.now);
+        return { updatedTask, diagnosticActivity, controlActivity };
+      });
+      this.publishDelegationActivity(committed.diagnosticActivity);
+      this.publishDelegationActivity(committed.controlActivity);
+      this.mirrorAgenticControlDiagnostic(committed.updatedTask, diagnostic);
+      return response;
+    } catch (error) {
+      this.failAgenticControlMutation(options.mutationClaim, options.now);
+      throw error;
+    }
+  }
+
+  private completeAgenticControlMutation(claim: AgenticControlMutationClaim | undefined, updatedAt: string): void {
+    if (!claim) {
+      return;
+    }
+    const completed = this.deps.storage.mutationIdempotency.markCompleted({
+      ...claim.identity,
+      claimToken: claim.claimToken,
+      updatedAt,
+    });
+    if (!completed) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Agentic control ${claim.identity.idempotencyKey} lost idempotency ownership before commit.`,
+      });
+    }
+  }
+
+  private buildImplicitAgenticControlId(task: TaskRecord, runId: string, input: AgenticControlRequest): string {
+    const durableRunId = task.agenticContext?.durableRunId?.trim();
+    if ((input.action === "pause" || input.action === "cancel") && durableRunId) {
+      let generation: string = `task:${task.updatedAt}`;
+      try {
+        const durableRun = this.deps.storage.durableRuns?.getRun(durableRunId);
+        if (durableRun) {
+          const alreadyAtTarget =
+            (input.action === "pause" && durableRun.status === "paused") ||
+            (input.action === "cancel" && durableRun.status === "cancelled");
+          generation = `durable:${alreadyAtTarget ? Math.max(0, durableRun.version - 1) : durableRun.version}`;
+        }
+      } catch {
+        // Fallback: a missing projection still gets a same-task-generation reservation;
+        // runtime reconciliation will fail closed if the effect becomes ambiguous.
+      }
+      const digest = createHash("sha256")
+        .update(
+          canonicalJsonString({
+            domain: "agentic-control-implicit-v1",
+            runId: runId.trim(),
+            taskId: task.taskId,
+            durableRunId,
+            generation,
+            action: input.action,
+            actorId: normalizeControlPayloadString(input.actorId),
+            reason: normalizeControlPayloadString(input.reason),
+            instruction: normalizeControlPayloadString(input.instruction),
+            agentSessionId: normalizeControlPayloadString(input.agentSessionId),
+            approvalId: normalizeControlPayloadString(input.approvalId),
+          }),
+        )
+        .digest("hex")
+        .slice(0, 32);
+      return `implicit-agentic-control-${digest}`;
+    }
+    return `generated-agentic-control-${randomUUID()}`;
+  }
+
+  private failAgenticControlMutation(claim: AgenticControlMutationClaim | undefined, updatedAt: string): void {
+    if (!claim) {
+      return;
+    }
+    this.deps.storage.mutationIdempotency.markFailed({
+      ...claim.identity,
+      claimToken: claim.claimToken,
+      updatedAt,
+    });
+  }
+
+  private probeAgenticRuntimeControlOutcome(
+    task: TaskRecord,
+    input: AgenticControlRequest,
+    controlId: string,
+  ): boolean {
+    if (input.action !== "pause" && input.action !== "cancel") {
+      return false;
+    }
+    const durableRunId = task.agenticContext?.durableRunId?.trim();
+    if (!durableRunId) {
+      return false;
+    }
+    const durableRuns = this.deps.storage.durableRuns;
+    if (!durableRuns) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Agentic control ${controlId} has an ambiguous stale runtime claim; durable status is unavailable.`,
+      });
+    }
+    try {
+      const durableRun = durableRuns.getRun(durableRunId);
+      return input.action === "pause" ? durableRun.status === "paused" : durableRun.status === "cancelled";
+    } catch (error) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Agentic control ${controlId} has an ambiguous stale runtime claim; durable status could not be verified: ${formatErrorMessage(error)}`,
+      });
+    }
+  }
+
+  private mirrorAgenticControlDiagnostic(task: TaskRecord, diagnostic: AgenticDiagnosticSignal): void {
+    try {
+      this.deps.recordAgenticDiagnosticSignal?.({ task, diagnostic });
+    } catch (error) {
+      try {
+        this.appendTaskActivity(task.taskId, {
+          activityType: "diagnostic",
+          message: "Agentic diagnostic was saved, but improvement-ledger mirroring failed.",
+          metadata: {
+            code: "agentic_diagnostic_mirror_failed",
+            diagnosticSignalId: diagnostic.signalId,
+            error: formatErrorMessage(error),
+          },
+        });
+      } catch (activityError) {
+        process.stderr.write(
+          `[task-lifecycle] failed to record agentic diagnostic mirror failure: ${formatErrorMessage(activityError)}\n`,
+        );
+      }
+    }
   }
 
   public softDeleteTask(
@@ -1209,36 +1662,38 @@ function mergeAgenticContext(
 
 function buildAgenticControls(task: TaskRecord): AgenticRunTreeResponse["controls"] {
   const status = task.agenticContext?.status ?? task.status;
+  const hasDurableExecutor = Boolean(task.agenticContext?.durableRunId);
   return [
     {
       action: "pause",
-      label: task.agenticContext?.durableRunId ? "Pause durable run" : "Record pause intent",
-      enabled: status === "running" || status === "in_progress",
-      runtimeEffect: task.agenticContext?.durableRunId ? "runtime_pause" : "state_only",
-      reason: task.agenticContext?.durableRunId
+      label: hasDurableExecutor ? "Pause durable run" : "Pause unavailable",
+      enabled: hasDurableExecutor && (status === "running" || status === "in_progress"),
+      runtimeEffect: hasDurableExecutor ? "runtime_pause" : "state_only",
+      reason: hasDurableExecutor
         ? "Calls the attached durable run pause path and mirrors the result into Cowork state."
-        : "Records local Cowork intent only because no attached durable run is available.",
+        : "No executor is attached; a direct request records intent only and does not pause execution.",
     },
     {
       action: "cancel",
-      label: task.agenticContext?.durableRunId ? "Cancel durable run" : "Record cancel intent",
+      label: hasDurableExecutor ? "Cancel durable run" : "Cancel unavailable",
       enabled:
+        hasDurableExecutor &&
         status !== "completed" &&
         status !== "done" &&
         status !== "failed" &&
         status !== "cancelled" &&
         status !== "stopped_by_limit",
-      runtimeEffect: task.agenticContext?.durableRunId ? "runtime_cancel" : "state_only",
-      reason: task.agenticContext?.durableRunId
+      runtimeEffect: hasDurableExecutor ? "runtime_cancel" : "state_only",
+      reason: hasDurableExecutor
         ? "Calls the attached durable run cancel path and mirrors the result into Cowork state."
-        : "Records cancellation in Cowork board state because no attached durable run is available.",
+        : "No executor is attached; a direct request records intent only and does not cancel execution.",
     },
     {
       action: "retry",
-      label: "Retry task",
-      enabled: status === "failed" || status === "blocked" || status === "cancelled",
+      label: "Retry unavailable",
+      enabled: false,
       runtimeEffect: "state_only",
-      reason: "Moves the task back into a retryable state; command replay is not automatic.",
+      reason: "No retry executor is attached; a direct request records intent without restarting execution.",
     },
     {
       action: "steer",
@@ -1355,19 +1810,42 @@ function findControlActivityById(activities: TaskActivityRecord[], controlId: st
 function findAgenticControlReplayMismatch(
   input: AgenticControlRequest,
   existing: TaskActivityRecord,
-): "action" | "agentSessionId" | "approvalId" | "reason" | "instruction" | undefined {
+): "action" | "actorId" | "agentSessionId" | "approvalId" | "reason" | "instruction" | undefined {
   const existingAction = readActivityMetadataString(existing, "action");
   if (existingAction && existingAction !== input.action) {
     return "action";
   }
-  for (const field of ["agentSessionId", "approvalId", "reason", "instruction"] as const) {
-    const existingValue = readActivityMetadataString(existing, field);
+  for (const field of ["actorId", "agentSessionId", "approvalId", "reason", "instruction"] as const) {
+    const existingValue = normalizeControlPayloadString(
+      readActivityMetadataString(existing, field) ?? (field === "actorId" ? existing.agentId : undefined),
+    );
     const inputValue = normalizeControlPayloadString(input[field]);
     if (existingValue !== inputValue) {
       return field;
     }
   }
   return undefined;
+}
+
+function buildValidatedIdempotentControlReplay(
+  task: TaskRecord,
+  input: AgenticControlRequest,
+  existing: TaskActivityRecord,
+): AgenticControlResponse {
+  const mismatch = findAgenticControlReplayMismatch(input, existing);
+  if (mismatch === "action") {
+    throw new ValidationError({
+      field: "controlId",
+      message: "controlId has already been used for a different agentic control action.",
+    });
+  }
+  if (mismatch) {
+    throw new ValidationError({
+      field: "controlId",
+      message: "controlId has already been used for a different agentic control payload.",
+    });
+  }
+  return buildIdempotentControlReplay(task, input, existing);
 }
 
 function readActivityMetadataString(activity: TaskActivityRecord, field: string): string | undefined {
@@ -1395,10 +1873,29 @@ function buildIdempotentControlReplay(
     runId: task.agenticContext?.runId,
     status,
     runtimeEffect,
-    controlId: input.controlId,
+    controlId: input.controlId?.trim() || undefined,
     idempotentReplay: true,
-    message: "Control was already recorded; the duplicate request was treated as an idempotent replay.",
+    message:
+      readActivityMetadataString(existing, "responseMessage") ??
+      "Control was already recorded; the duplicate request was treated as an idempotent replay.",
   };
+}
+
+function hashAgenticControlPayload(runId: string, taskId: string, input: AgenticControlRequest): string {
+  return createHash("sha256")
+    .update(
+      canonicalJsonString({
+        runId: runId.trim(),
+        taskId,
+        action: input.action,
+        actorId: normalizeControlPayloadString(input.actorId),
+        agentSessionId: normalizeControlPayloadString(input.agentSessionId),
+        approvalId: normalizeControlPayloadString(input.approvalId),
+        reason: normalizeControlPayloadString(input.reason),
+        instruction: normalizeControlPayloadString(input.instruction),
+      }),
+    )
+    .digest("hex");
 }
 
 function isAgenticControlStatus(value: unknown): value is AgenticControlResponse["status"] {
@@ -1413,6 +1910,49 @@ function isAgenticRuntimeEffect(value: unknown): value is AgenticControlResponse
     value === "approval_resolution" ||
     value === "navigation"
   );
+}
+
+function mapDurableStatusToTaskProjection(
+  status: DurableRunStatus,
+): Pick<AgenticControlCommitOutcome, "nextStatus" | "nextAgenticStatus"> {
+  switch (status) {
+    case "queued":
+      return { nextStatus: "planning", nextAgenticStatus: "queued" };
+    case "running":
+      return { nextStatus: "in_progress", nextAgenticStatus: "running" };
+    case "waiting":
+      return { nextStatus: "blocked", nextAgenticStatus: "blocked" };
+    case "paused":
+      return { nextAgenticStatus: "paused" };
+    case "completed":
+      return { nextStatus: "done", nextAgenticStatus: "completed" };
+    case "failed":
+    case "dead_lettered":
+      return { nextStatus: "blocked", nextAgenticStatus: "failed" };
+    case "cancelled":
+      return { nextStatus: "blocked", nextAgenticStatus: "cancelled" };
+  }
+}
+
+function describeDurableSupersession(status: DurableRunStatus): string {
+  switch (status) {
+    case "cancelled":
+      return "cancellation";
+    case "completed":
+      return "completion";
+    case "failed":
+      return "failure";
+    case "dead_lettered":
+      return "dead-lettering";
+    case "paused":
+      return "a pause transition";
+    case "running":
+      return "a running-state transition";
+    case "queued":
+      return "a queued-state transition";
+    case "waiting":
+      return "a wait transition";
+  }
 }
 
 function validateAgenticControlTransition(
@@ -1489,22 +2029,29 @@ function buildAgenticControlActivityMetadata(
   input: AgenticControlRequest,
   extra: {
     controlId: string | undefined;
+    canonicalDurableStatus?: DurableRunStatus;
     diagnosticSignalId?: string;
+    responseMessage: string;
     recordedAt: string;
     resultStatus: AgenticControlResponse["status"];
     runtimeEffect: AgenticControlResponse["runtimeEffect"];
+    superseded?: boolean;
   },
 ): Record<string, unknown> {
   return compactRecord({
     action: input.action,
     controlId: extra.controlId,
+    actorId: input.actorId?.trim() || undefined,
     agentSessionId: input.agentSessionId,
     approvalId: input.approvalId,
     reason: input.reason?.trim() || undefined,
     instruction: input.instruction?.trim() || undefined,
     resultStatus: extra.resultStatus,
     runtimeEffect: extra.runtimeEffect,
+    canonicalDurableStatus: extra.canonicalDurableStatus,
+    superseded: extra.superseded,
     diagnosticSignalId: extra.diagnosticSignalId,
+    responseMessage: extra.responseMessage,
     recordedAt: extra.recordedAt,
   });
 }

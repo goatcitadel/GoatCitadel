@@ -32,6 +32,12 @@ function createRepoAtPath(dbPath: string): ApprovalRepository {
   return new ApprovalRepository(db);
 }
 
+function formatInstantWithOffset(instantMs: number, offsetHours: number): string {
+  const sign = offsetHours >= 0 ? "+" : "-";
+  const absoluteHours = Math.abs(offsetHours).toString().padStart(2, "0");
+  return new Date(instantMs + offsetHours * 60 * 60_000).toISOString().replace("Z", `${sign}${absoluteHours}:00`);
+}
+
 describe("ApprovalRepository", () => {
   it("scopes listed approvals to a workspace when a workspaceId filter is provided", () => {
     const repo = createRepo();
@@ -171,78 +177,96 @@ describe("ApprovalRepository", () => {
     assert.equal(repo.get(withExpiry.approvalId).expiresAt, "2026-03-22T16:15:00.000Z");
   });
 
+  it("issues fixed-duration approval expiry from database time under fast and slow host clocks", () => {
+    const repo = createRepo();
+    const originalDateNow = Date.now;
+
+    try {
+      for (const skewedNow of [0, Date.parse("2099-01-01T00:00:00.000Z")]) {
+        Date.now = () => skewedNow;
+        const approval = repo.createWithTtlDuration(
+          {
+            kind: "tool.invoke",
+            riskLevel: "danger",
+            payload: { skewedNow },
+            preview: {},
+          },
+          15 * 60_000,
+        );
+        assert.equal(Date.parse(approval.expiresAt!) - Date.parse(approval.createdAt), 15 * 60_000);
+        assert.ok(Math.abs(Date.parse(approval.createdAt) - originalDateNow()) < 5_000);
+      }
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   it("lists bounded expired pending approvals in deadline order", () => {
     const repo = createRepo();
+    const databaseNow = Date.now();
     const firstExpired = repo.create({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: { command: "first" },
       preview: { command: "first" },
-      expiresAt: "2026-03-20T09:00:00.000Z",
+      expiresAt: new Date(databaseNow - 60 * 60_000).toISOString(),
     });
     const secondExpired = repo.create({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: { command: "second" },
       preview: { command: "second" },
-      expiresAt: "2026-03-20T09:30:00.000Z",
+      expiresAt: new Date(databaseNow - 30 * 60_000).toISOString(),
     });
     const offsetExpired = repo.create({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: { command: "offset-expired" },
       preview: { command: "offset-expired" },
-      // 09:15Z: lexically later than the 10:00Z boundary, but chronologically expired.
-      expiresAt: "2026-03-20T11:15:00.000+02:00",
+      expiresAt: formatInstantWithOffset(databaseNow - 45 * 60_000, 2),
     });
     const excludedExpired = repo.create({
       kind: "auth.device_access",
       riskLevel: "danger",
       payload: { requestId: "device-request" },
       preview: { deviceLabel: "Tablet" },
-      expiresAt: "2026-03-20T08:45:00.000Z",
+      expiresAt: new Date(databaseNow - 75 * 60_000).toISOString(),
     });
     const alreadyResolved = repo.create({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: { command: "resolved" },
       preview: { command: "resolved" },
-      expiresAt: "2026-03-20T08:30:00.000Z",
     });
-    repo.resolve(
-      alreadyResolved.approvalId,
-      { decision: "reject", resolvedBy: "operator" },
-      { resolvedAt: "2026-03-20T08:00:00.000Z" },
-    );
+    repo.resolve(alreadyResolved.approvalId, { decision: "reject", resolvedBy: "operator" });
     repo.create({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: { command: "future" },
       preview: { command: "future" },
-      expiresAt: "2026-03-20T11:00:00.000Z",
+      expiresAt: new Date(databaseNow + 60 * 60_000).toISOString(),
     });
     repo.create({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: { command: "offset-future" },
       preview: { command: "offset-future" },
-      // 11:30Z: lexically earlier than the boundary, but chronologically still active.
-      expiresAt: "2026-03-20T09:30:00.000-02:00",
+      expiresAt: formatInstantWithOffset(databaseNow + 90 * 60_000, -2),
     });
 
     assert.deepEqual(
       repo
-        .listExpiredPending("2026-03-20T10:00:00.000Z", 1, "auth.device_access")
+        .listExpiredPending("2099-01-01T00:00:00.000Z", 1, "auth.device_access")
         .map((approval) => approval.approvalId),
       [firstExpired.approvalId],
     );
     assert.deepEqual(
-      repo.listExpiredPending("2026-03-20T10:00:00.000Z", 10).map((approval) => approval.approvalId),
+      repo.listExpiredPending("1900-01-01T00:00:00.000Z", 10).map((approval) => approval.approvalId),
       [excludedExpired.approvalId, firstExpired.approvalId, offsetExpired.approvalId, secondExpired.approvalId],
     );
     assert.deepEqual(
       repo
-        .listExpiredPending("2026-03-20T10:00:00.000Z", 10, "auth.device_access")
+        .listExpiredPending("2099-01-01T00:00:00.000Z", 10, "auth.device_access")
         .map((approval) => approval.approvalId),
       [firstExpired.approvalId, offsetExpired.approvalId, secondExpired.approvalId],
     );
@@ -276,14 +300,12 @@ describe("ApprovalRepository", () => {
          SELECT * FROM approvals
          WHERE status = 'pending'
            AND expires_at IS NOT NULL
-           AND julianday(expires_at) IS NOT NULL
-           AND julianday(expires_at) <= julianday(@now)
+           AND (julianday(expires_at) IS NULL OR julianday(expires_at) <= julianday('now'))
            AND (@excludedKind IS NULL OR kind <> @excludedKind)
          ORDER BY julianday(expires_at) ASC, approval_id ASC
          LIMIT @limit`,
       )
       .all({
-        now: "2026-03-20T00:10:00.000Z",
         excludedKind: "auth.device_access",
         limit: 100,
       }) as Array<{ detail?: string }>;
@@ -334,6 +356,20 @@ describe("ApprovalRepository", () => {
     });
   });
 
+  it("exposes a fail-closed pending row lock for transaction-owned dependent writes", () => {
+    const repo = createRepo();
+    const approval = repo.create({
+      kind: "approval.remote_token.create",
+      riskLevel: "danger",
+      payload: {},
+      preview: {},
+    });
+
+    assert.equal(repo.lockPendingForUpdate(approval.approvalId).status, "pending");
+    repo.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator" });
+    assert.throws(() => repo.lockPendingForUpdate(approval.approvalId), /already resolved/);
+  });
+
   it("rejects resolution at the approval expiry boundary", () => {
     const repo = createRepo();
     const created = repo.create({
@@ -357,6 +393,164 @@ describe("ApprovalRepository", () => {
       /expired/i,
     );
     assert.equal(repo.get(created.approvalId).status, "pending");
+  });
+
+  it("reserves expired-resolution bypass for system rejection only", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    for (const decision of ["approve", "edit"] as const) {
+      assert.throws(
+        () =>
+          repo.resolve(
+            created.approvalId,
+            { decision, resolvedBy: "system:approval-expiry", editedPayload: { command: "changed" } },
+            { allowExpired: true },
+          ),
+        /only be rejected/i,
+      );
+    }
+    assert.throws(
+      () => repo.resolve(created.approvalId, { decision: "reject", resolvedBy: "operator" }, { allowExpired: true }),
+      /system expiry reconciler/i,
+    );
+    assert.throws(
+      () =>
+        repo.resolve(
+          created.approvalId,
+          { decision: "reject", resolvedBy: "system:approval-expiry:spoof" },
+          { allowExpired: true },
+        ),
+      /system expiry reconciler/i,
+    );
+    assert.equal(
+      repo.resolve(
+        created.approvalId,
+        { decision: "reject", resolvedBy: "system:approval-expiry" },
+        { allowExpired: true },
+      ).status,
+      "rejected",
+    );
+  });
+
+  it("surfaces malformed non-null expiry as system-expirable instead of leaving it pending forever", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "legacy" },
+      preview: { command: "legacy" },
+      expiresAt: "not-a-timestamp",
+    });
+
+    assert.equal(repo.isExpiredPendingAtDatabaseNow(created.approvalId), true);
+    assert.deepEqual(
+      repo.listExpiredPending(undefined, 10).map((approval) => approval.approvalId),
+      [created.approvalId],
+    );
+    assert.throws(() => repo.resolve(created.approvalId, { decision: "approve", resolvedBy: "operator" }), /expired/i);
+    assert.equal(
+      repo.resolve(
+        created.approvalId,
+        { decision: "reject", resolvedBy: "system:approval-expiry" },
+        { allowExpired: true },
+      ).status,
+      "rejected",
+    );
+  });
+
+  it("uses database time for active pending lists and pages regardless of host-clock skew", () => {
+    const repo = createRepo();
+    const databaseNow = Date.now();
+    const expired = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "expired" },
+      preview: { command: "expired" },
+      expiresAt: new Date(databaseNow - 60_000).toISOString(),
+    });
+    const active = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "active" },
+      preview: { command: "active" },
+      expiresAt: new Date(databaseNow + 60_000).toISOString(),
+    });
+    const persistent = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "persistent" },
+      preview: { command: "persistent" },
+    });
+    const malformed = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "malformed" },
+      preview: { command: "malformed" },
+      expiresAt: "not-a-timestamp",
+    });
+    const expectedIds = new Set([active.approvalId, persistent.approvalId]);
+    const originalDateNow = Date.now;
+
+    try {
+      for (const skewedNow of [0, Date.parse("2099-01-01T00:00:00.000Z")]) {
+        Date.now = () => skewedNow;
+        assert.deepEqual(new Set(repo.list("pending", 100).map((approval) => approval.approvalId)), expectedIds);
+        assert.deepEqual(
+          new Set(repo.listPage({ status: "pending", limit: 100 }).items.map((approval) => approval.approvalId)),
+          expectedIds,
+        );
+      }
+    } finally {
+      Date.now = originalDateNow;
+    }
+
+    assert.equal(repo.isExpiredPendingAtDatabaseNow(expired.approvalId), true);
+    assert.equal(repo.isExpiredPendingAtDatabaseNow(malformed.approvalId), true);
+  });
+
+  it("compares approval expiry instants instead of timestamp text offsets", () => {
+    const repo = createRepo();
+    const databaseNow = Date.now();
+    const expired = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "expired-offset" },
+      preview: { command: "expired-offset" },
+      expiresAt: formatInstantWithOffset(databaseNow - 60_000, 2),
+    });
+    const active = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "active-offset" },
+      preview: { command: "active-offset" },
+      expiresAt: formatInstantWithOffset(databaseNow + 60_000, -2),
+    });
+
+    assert.throws(
+      () =>
+        repo.resolve(
+          expired.approvalId,
+          { decision: "approve", resolvedBy: "operator" },
+          { resolvedAt: "2000-01-01T00:00:00.000Z" },
+        ),
+      /expired/i,
+    );
+    assert.equal(repo.get(expired.approvalId).status, "pending");
+    assert.equal(
+      repo.resolve(
+        active.approvalId,
+        { decision: "approve", resolvedBy: "operator" },
+        { resolvedAt: "2099-01-01T00:00:00.000Z" },
+      ).status,
+      "approved",
+    );
   });
 
   it("allows only one concurrent resolver to win the same approval", async () => {
@@ -414,7 +608,7 @@ describe("ApprovalRepository", () => {
           created.approvalId,
           {
             decision: "reject",
-            resolvedBy: "system:approval-expiry:a",
+            resolvedBy: "system:approval-expiry",
           },
           { resolvedAt: "2026-03-20T10:00:01.000Z", allowExpired: true },
         ),
@@ -424,7 +618,7 @@ describe("ApprovalRepository", () => {
           created.approvalId,
           {
             decision: "reject",
-            resolvedBy: "system:approval-expiry:b",
+            resolvedBy: "system:approval-expiry",
           },
           { resolvedAt: "2026-03-20T10:00:01.000Z", allowExpired: true },
         ),
@@ -555,12 +749,14 @@ describe("ApprovalRepository", () => {
       getStmt: { get: (...args: unknown[]) => unknown };
       listStmt: { all: (...args: unknown[]) => unknown };
       listByStatusStmt: { all: (...args: unknown[]) => unknown };
+      listActivePendingStmt: { all: (...args: unknown[]) => unknown };
     };
     internal.getStmt = { get: () => ({ approval_id: "bad" }) };
     assert.throws(() => repo.get("bad-row"), /Unexpected approvals row shape/);
 
     internal.listStmt = { all: () => ({ not: "an array" }) };
     internal.listByStatusStmt = { all: () => [null] };
+    internal.listActivePendingStmt = { all: () => [null] };
     assert.throws(() => repo.list(undefined, 10), /Unexpected approvals row shape/);
     assert.throws(() => repo.list("pending", 10), /Unexpected approvals row shape/);
   });

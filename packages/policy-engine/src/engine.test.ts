@@ -10,7 +10,7 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import { Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
 
@@ -21,6 +21,21 @@ afterEach(async () => {
 });
 
 function createStorageStub(): Storage {
+  const findPendingApprovalAction = vi.fn((_approvalId?: string) => undefined as PendingApprovalAction | undefined);
+  const toolGrants = {
+    list: vi.fn(
+      (_scope?: Parameters<Storage["toolGrants"]["list"]>[0], _scopeRef?: string, _limit?: number) =>
+        [] as ReturnType<Storage["toolGrants"]["list"]>,
+    ),
+    listActive: vi.fn((scope: Parameters<Storage["toolGrants"]["list"]>[0], scopeRef?: string) =>
+      toolGrants
+        .list(scope, scopeRef, Number.MAX_SAFE_INTEGER)
+        .filter((grant) => !grant.revokedAt)
+        .filter((grant) => !grant.expiresAt || Date.parse(grant.expiresAt) > Date.now())
+        .filter((grant) => typeof grant.usesRemaining !== "number" || grant.usesRemaining > 0),
+    ),
+    consumeOne: vi.fn(() => true),
+  };
   return {
     runImmediateTransaction: vi.fn(<T>(work: () => T): T => work()),
     approvals: {
@@ -33,6 +48,17 @@ function createStorageStub(): Storage {
         preview: input.preview,
         createdAt: "2026-03-22T12:00:00.000Z",
         expiresAt: input.expiresAt ?? undefined,
+        explanationStatus: "not_requested",
+      })),
+      createWithTtlDuration: vi.fn((input, ttlMs) => ({
+        approvalId: "approval-1",
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        status: "pending",
+        payload: input.payload,
+        preview: input.preview,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + ttlMs).toISOString(),
         explanationStatus: "not_requested",
       })),
       get: vi.fn((approvalId: string) => createApprovalRequest({ approvalId, status: "approved" })),
@@ -48,13 +74,20 @@ function createStorageStub(): Storage {
       countToolCallsInLastHourInScope: vi.fn(() => 0),
       countWritesInLastHourInScope: vi.fn(() => 0),
     },
-    toolGrants: {
-      list: vi.fn(() => []),
-      consumeOne: vi.fn(() => true),
-    },
+    toolGrants,
     pendingApprovalActions: {
       upsertPending: vi.fn(),
-      find: vi.fn(() => undefined),
+      find: findPendingApprovalAction,
+      findFreshPending: vi.fn((approvalId: string, defaultTtlMs: number) => {
+        const pending = findPendingApprovalAction(approvalId);
+        if (!pending || pending.resolutionStatus !== "pending") {
+          return undefined;
+        }
+        const expiresAt = pending.expiresAt
+          ? Date.parse(pending.expiresAt)
+          : Date.parse(pending.createdAt) + defaultTtlMs;
+        return Number.isFinite(expiresAt) && expiresAt > Date.now() ? pending : undefined;
+      }),
       markResolved: vi.fn(),
     },
     db: {
@@ -1215,19 +1248,21 @@ describe("ToolPolicyEngine invocation coverage", () => {
       taskId: "task-shell",
     });
 
-    expect(storage.approvals.create).toHaveBeenCalledWith(
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
       expect.objectContaining({
         preview: expect.objectContaining({
           target: "https://example.com/api",
         }),
       }),
+      15 * 60_000,
     );
-    expect(storage.approvals.create).toHaveBeenCalledWith(
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
       expect.objectContaining({
         preview: expect.objectContaining({
           command: "echo hello",
         }),
       }),
+      15 * 60_000,
     );
   });
 });
@@ -2181,8 +2216,8 @@ describe("ToolPolicyEngine policy edge coverage", () => {
   it("persists only protected approval templates while channel.send waits for policy approval", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage);
-    const rawToken = `grat_${"z".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_policy_wait";
+    const signal = new AbortController().signal;
 
     const result = await engine.invoke({
       toolName: "channel.send",
@@ -2204,13 +2239,84 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       agentId: "operator",
       sessionId: "session-policy-wait",
       authContext: { boundary: "tool_host_boundary", secretRefs: [tokenRef] },
+      signal,
     });
 
     expect(result.outcome).toBe("approval_required");
-    expect(JSON.stringify(vi.mocked(storage.approvals.create).mock.calls)).not.toContain(rawToken);
-    expect(JSON.stringify(vi.mocked(storage.pendingApprovalActions.upsertPending).mock.calls)).not.toContain(rawToken);
-    expect(JSON.stringify(vi.mocked(storage.approvals.create).mock.calls)).toContain(tokenRef);
+    expect(JSON.stringify(vi.mocked(storage.approvals.createWithTtlDuration).mock.calls)).toContain(tokenRef);
     expect(JSON.stringify(vi.mocked(storage.pendingApprovalActions.upsertPending).mock.calls)).toContain(tokenRef);
+    expect(vi.mocked(storage.pendingApprovalActions.upsertPending).mock.calls[0]?.[0].request).not.toHaveProperty(
+      "signal",
+    );
+  });
+
+  it("rejects raw approval bearers anywhere in the pending-action request before policy approval persistence", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const rawToken = `grat_${"z".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_policy_wait";
+
+    await expect(
+      engine.invoke({
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-telegram",
+          target: "-1001234567890",
+          message: "Approval requested.",
+          interactiveActionTemplate: {
+            platform: "telegram",
+            tokenId: "rat_policy_wait",
+            tokenRef,
+            expiresAt: "2099-07-10T00:15:00.000Z",
+            buttons: [
+              { label: "Approve", decision: "a" },
+              { label: "Deny", decision: "r" },
+            ],
+          },
+        },
+        agentId: "operator",
+        sessionId: "session-policy-raw-token",
+        authContext: {
+          boundary: "tool_host_boundary",
+          secretRefs: [tokenRef, rawToken],
+        },
+      }),
+    ).rejects.toThrow(/raw remote approval bearers/i);
+    expect(storage.approvals.createWithTtlDuration).not.toHaveBeenCalled();
+    expect(storage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a legacy pending-action request contains a raw approval bearer outside args", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      const rawToken = `grat_${"l".repeat(43)}`;
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-legacy-raw-bearer",
+          expiresAt: "2026-03-21T00:10:00.000Z",
+          request: {
+            toolName: "session.status",
+            args: {},
+            agentId: "agent",
+            sessionId: "session",
+            authContext: {
+              boundary: "tool_host_boundary",
+              secretRefs: [rawToken],
+            },
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(policyConfig, storage);
+
+      await expect(engine.executeApprovedAction("apr-legacy-raw-bearer")).rejects.toThrow(
+        /raw remote approval bearers/i,
+      );
+      expect(storage.toolAccessDecisions.record).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("records runtime governance linkage on approval-gated tool requests", async () => {
@@ -2258,7 +2364,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     expect(result.audit?.localOperatorOverrideId).toBeUndefined();
     expect(result.audit?.reasonCodes).not.toContain("local_operator_override");
 
-    expect(storage.approvals.create).toHaveBeenCalledWith(
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
       expect.objectContaining({
         linkage: {
           workspaceId: "workspace-1",
@@ -2272,6 +2378,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
           localOperatorOverrideId: undefined,
         },
       }),
+      15 * 60_000,
     );
     expect(storage.audit.append).toHaveBeenCalledWith(
       "tool_invocations",
@@ -2461,31 +2568,32 @@ describe("ToolPolicyEngine policy edge coverage", () => {
 
   it("covers approval, read-candidate, and bypass-network defensive defaults", async () => {
     const approvalStorage = createStorageStub();
-    vi.mocked(approvalStorage.approvals.create).mockImplementation((input) => ({
-      approvalId: "approval-without-expiry",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      createdAt: "2026-03-22T12:00:00.000Z",
-      expiresAt: undefined,
-      explanationStatus: "not_requested",
-    }));
+    vi.mocked(approvalStorage.approvals.createWithTtlDuration).mockImplementation(
+      (input) =>
+        ({
+          approvalId: "approval-without-expiry",
+          kind: input.kind,
+          riskLevel: input.riskLevel,
+          status: "pending",
+          payload: input.payload,
+          preview: input.preview,
+          createdAt: "2026-03-22T12:00:00.000Z",
+          expiresAt: undefined,
+          explanationStatus: "not_requested",
+        }) as ApprovalRequest,
+    );
     const approvalEngine = new ToolPolicyEngine(policyConfig, approvalStorage);
 
-    await approvalEngine.invoke({
-      toolName: "shell.exec",
-      args: { command: "echo approval" },
-      agentId: "agent",
-      sessionId: "session",
-    });
-
-    expect(approvalStorage.pendingApprovalActions.upsertPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expiresAt: expect.any(String),
+    await expect(
+      approvalEngine.invoke({
+        toolName: "shell.exec",
+        args: { command: "echo approval" },
+        agentId: "agent",
+        sessionId: "session",
       }),
-    );
+    ).rejects.toThrow(/did not return an expiry timestamp/i);
+
+    expect(approvalStorage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
 
     const readCandidates = approvalEngine as unknown as {
       validateStructuralSafety: (request: {
@@ -2938,10 +3046,9 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
       expect(result.outcome).toBe("approval_required");
       expect(result.expiresAt).toBe("2026-03-22T12:15:00.000Z");
-      expect(vi.mocked(storage.approvals.create)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expiresAt: "2026-03-22T12:15:00.000Z",
-        }),
+      expect(vi.mocked(storage.approvals.createWithTtlDuration)).toHaveBeenCalledWith(
+        expect.not.objectContaining({ expiresAt: expect.anything() }),
+        15 * 60_000,
       );
       expect(vi.mocked(storage.pendingApprovalActions.upsertPending)).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3521,6 +3628,65 @@ describe("ToolPolicyEngine outside-root read access", () => {
     }
   });
 
+  it("rejects an expired approved-action bypass under a slow host clock using database time", async () => {
+    const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-approval-bypass-db-clock-"));
+    tempRoots.push(runtimeDir);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(runtimeDir, "transcripts"),
+      auditDir: path.join(runtimeDir, "audit"),
+    });
+    const databaseNow = Date.now();
+    const approval = storage.approvals.create({
+      kind: "file.read_range",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+      expiresAt: new Date(databaseNow + 60_000).toISOString(),
+    });
+    const request = {
+      toolName: "file.read_range",
+      args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+      agentId: "agent",
+      sessionId: "session",
+      consentContext: {
+        source: "ui" as const,
+        reason: `approval:${approval.approvalId}`,
+      },
+    };
+    storage.pendingApprovalActions.upsertPending({
+      approvalId: approval.approvalId,
+      actionType: "tool.invoke",
+      request,
+      expiresAt: new Date(databaseNow + 60_000).toISOString(),
+    });
+    storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator" });
+    storage.db
+      .prepare("UPDATE pending_approval_actions SET expires_at = ? WHERE approval_id = ?")
+      .run(new Date(databaseNow - 60_000).toISOString(), approval.approvalId);
+    const hostClock = vi.spyOn(Date, "now").mockReturnValue(0);
+
+    try {
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
+        storage,
+      );
+      const result = await engine.invoke(request);
+
+      expect(result.outcome).toBe("approval_required");
+      expect(result.policyReason).toMatch(/requires approval/i);
+    } finally {
+      hostClock.mockRestore();
+      storage.close();
+    }
+  });
+
   it("rejects outside-root approval bypasses after the pending action is resolved", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
@@ -3845,7 +4011,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
     }
   });
 
-  it("atomically records an approved external-runtime policy denial before any runtime call", async () => {
+  it("defers approved policy-denial terminal truth to the canonical side-effect owner", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
     try {
@@ -3913,19 +4079,60 @@ describe("ToolPolicyEngine outside-root read access", () => {
         outcome: "blocked",
         policyReason: expect.stringContaining("blocked"),
       });
-      expect(storage.runImmediateTransaction).toHaveBeenCalledTimes(1);
-      expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
-        "apr-external-runtime-denied",
-        "failed",
-        expect.objectContaining({ reason: expect.stringContaining("blocked") }),
+      expect(storage.runImmediateTransaction).not.toHaveBeenCalled();
+      expect(storage.pendingApprovalActions.markResolved).not.toHaveBeenCalled();
+      expect(storage.approvalEvents.append).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an approved policy denial terminal when JSONL audit delivery fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      let pendingAction: PendingApprovalAction = createPendingApprovalAction({
+        approvalId: "apr-blocked-audit-failure",
+        expiresAt: "2026-03-21T00:10:00.000Z",
+        request: {
+          toolName: "mcp.invoke",
+          args: { serverId: "srv-1", toolName: "tool.mutate", arguments: { value: "hello" } },
+          agentId: "agent",
+          sessionId: "session",
+          externalRuntime: true,
+        },
+      });
+      vi.mocked(storage.pendingApprovalActions.find).mockImplementation(() => pendingAction);
+      vi.mocked(storage.pendingApprovalActions.markResolved).mockImplementation((_approvalId, status, result) => {
+        pendingAction = { ...pendingAction, resolutionStatus: status, result };
+        return pendingAction;
+      });
+      vi.mocked(storage.audit.append).mockRejectedValue(new Error("audit sink unavailable"));
+      const insertPolicyBlock = vi.fn(() => ({ changes: 1 }));
+      vi.mocked(storage.db.prepare).mockReturnValue({ run: insertPolicyBlock } as never);
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          tools: { ...policyConfig.tools, deny: ["mcp.invoke"] },
+        },
+        storage,
       );
-      expect(storage.approvalEvents.append).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "apr-external-runtime-denied",
-          eventType: "approved_action_executed",
-          payload: expect.objectContaining({ outcome: "blocked" }),
+
+      await expect(
+        engine.executeApprovedAction("apr-blocked-audit-failure", undefined, {
+          deferResolution: true,
+          externalRuntimeReplay: true,
         }),
-      );
+      ).resolves.toMatchObject({ outcome: "blocked" });
+      await expect(engine.executeApprovedAction("apr-blocked-audit-failure")).resolves.toMatchObject({
+        outcome: "blocked",
+      });
+
+      expect(pendingAction.resolutionStatus).toBe("failed");
+      expect(insertPolicyBlock).toHaveBeenCalledTimes(2);
+      expect(storage.approvalEvents.append).toHaveBeenCalledTimes(1);
+      expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

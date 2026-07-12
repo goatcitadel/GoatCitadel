@@ -127,7 +127,9 @@ export function readTaskMaybe(tasks: Pick<TaskLifecycleService, "getTask">, task
 
 export function readDurableRunId(response: ChatSendMessageResponse): string | undefined {
   const candidate = response as unknown as Record<string, unknown>;
+  const trace = readObject(candidate.trace);
   return (
+    readString(readObject(trace?.durable)?.runId) ??
     readString(candidate.durableRunId) ??
     readString(candidate.agenticRunId) ??
     readString(readObject(candidate.durable)?.runId) ??

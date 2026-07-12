@@ -2859,8 +2859,6 @@ export class PromptPackService {
       workspaceRoot: resolvePromptPackWorkspaceRoot(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
       projectWorkspacePath: projectBinding?.workspacePath,
     });
-    const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
     const activeSessionGrants = listActivePromptPackToolGrants(this.ctx.storage, "session", sessionId);
     const activeAllowGrants = activeSessionGrants.filter((grant) => grant.decision === "allow");
     const activeDenyGrants = [
@@ -2889,18 +2887,16 @@ export class PromptPackService {
       } else if (activeAllowGrants.some((grant) => promptPackGrantPatternMatches(grant.toolPattern, toolName))) {
         continue;
       }
-      this.ctx.storage.toolGrants.create(
+      this.ctx.storage.toolGrants.createTtlForDuration(
         {
           toolPattern: toolName,
           decision: "allow",
           scope: "session",
           scopeRef: sessionId,
-          grantType: "ttl",
           constraints,
-          expiresAt,
           createdBy: "system-prompt-pack-bootstrap",
         },
-        now,
+        2 * 60 * 60 * 1000,
       );
     }
   }

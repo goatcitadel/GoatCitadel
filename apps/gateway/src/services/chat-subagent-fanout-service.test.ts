@@ -386,6 +386,20 @@ describe("createSubagentFanoutExecutor", () => {
     expect(String(result.results[1]!.error)).toMatch(/synthetic delegated failure/);
   });
 
+  it("rethrows a durable workflow timeout instead of reporting an ordinary failed subtask", async () => {
+    const timeout = Object.assign(new Error("durable workflow deadline expired"), {
+      name: "DurableWorkflowTimeoutError",
+    });
+    const runDelegatedStep = vi.fn(async () => {
+      throw timeout;
+    });
+    const executor = createSubagentFanoutExecutor({} as never, preparedFake(), {
+      runDelegatedStep: runDelegatedStep as never,
+    });
+
+    await expect(executor({ subtasks: [{ objective: "A" }] })).rejects.toBe(timeout);
+  });
+
   it("truncates oversized child outputs with an explicit marker", async () => {
     const longOutput = "y".repeat(SUBAGENT_FANOUT_OUTPUT_EXCERPT_LIMIT + 500);
     const runDelegatedStep = vi.fn(async (_host: unknown, _prepared: unknown, input: { stepIndex: number }) =>

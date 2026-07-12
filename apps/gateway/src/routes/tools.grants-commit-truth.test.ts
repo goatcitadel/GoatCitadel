@@ -118,6 +118,39 @@ describe("tool grant route commit truth", () => {
     expect(revokeToolGrant).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      label: "create",
+      mutationName: "createToolGrant",
+      url: "/api/v1/tools/grants",
+      payload: { toolPattern: "browser.*", decision: "allow", scope: "global" },
+    },
+    {
+      label: "revoke",
+      mutationName: "revokeToolGrant",
+      url: "/api/v1/tools/grants/a7bb54a8-b436-42e4-82f2-044b770be239/revoke",
+      payload: undefined,
+    },
+  ])("does not repeat a committed grant $label when the service reports a post-commit error", async (scenario) => {
+    const mutation = vi.fn(() => {
+      throw Object.assign(new Error(`${scenario.label} projection unavailable`), { mutationCommitted: true });
+    });
+    const app = await buildApp({ [scenario.mutationName]: mutation }, "/never-fail-on-send");
+    const request = {
+      method: "POST" as const,
+      url: scenario.url,
+      headers: { "idempotency-key": `tool-grant-${scenario.label}-tagged-commit-truth` },
+      ...(scenario.payload ? { payload: scenario.payload } : {}),
+    };
+
+    const first = await app.inject(request);
+    const retry = await app.inject(request);
+
+    expect(first.statusCode).toBe(500);
+    expect(retry.statusCode).toBe(409);
+    expect(mutation).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves idempotency claims for every committed permission and local-override mutation", async () => {
     const ownedProfile = {
       profileId: "profile-owned",

@@ -31,7 +31,7 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { OrchestrationEngine } from "@goatcitadel/orchestration";
-import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
+import type { OrchestrationCheckpoint, Storage } from "@goatcitadel/storage";
 import type { DurableWorkflowExecutionContext } from "./durable-execution-service.js";
 import {
   applyOrchestrationPhaseHookPatch,
@@ -124,6 +124,7 @@ export interface OrchestrationLifecycleHost {
   };
   readonly storage: {
     runImmediateTransaction<T>(callback: () => T): T;
+    durableRuns: Pick<Storage["durableRuns"], "lockFreshActiveLeaseForUpdate">;
     orchestration: {
       upsertPlan(plan: OrchestrationPlan, workspaceId?: string): void;
       getPlan(planId: string, workspaceId?: string): OrchestrationPlan;
@@ -240,18 +241,21 @@ function readDurableRecoveryInterruption(
   context?: DurableWorkflowExecutionContext,
   error?: unknown,
 ): Error | undefined {
-  const candidate = context?.signal?.aborted ? context.signal.reason : error;
-  if (!(candidate instanceof Error)) {
-    return undefined;
+  for (const candidate of [context?.signal?.aborted ? context.signal.reason : undefined, error]) {
+    if (
+      candidate instanceof Error &&
+      (candidate.name === "DurableWorkerInterruptionError" || candidate.name === "DurableRunPausedError")
+    ) {
+      return candidate;
+    }
   }
-  return candidate.name === "DurableWorkerInterruptionError" || candidate.name === "DurableRunPausedError"
-    ? candidate
-    : undefined;
+  return undefined;
 }
 
 function readDurableWorkflowTimeout(context?: DurableWorkflowExecutionContext, error?: unknown): Error | undefined {
-  const candidate = context?.signal?.aborted ? context.signal.reason : error;
-  return candidate instanceof Error && candidate.name === "DurableWorkflowTimeoutError" ? candidate : undefined;
+  return [context?.signal?.aborted ? context.signal.reason : undefined, error].find(
+    (candidate): candidate is Error => candidate instanceof Error && candidate.name === "DurableWorkflowTimeoutError",
+  );
 }
 
 function requireDurableExecutionLeaseOwner(run: DurableRunRecord): string {
@@ -262,6 +266,20 @@ function requireDurableExecutionLeaseOwner(run: DurableRunRecord): string {
     throw error;
   }
   return leaseOwnerId;
+}
+
+function lockFreshDurableExecutionLease(
+  host: OrchestrationLifecycleHost,
+  runId: string,
+  expectedLeaseOwnerId: string,
+): DurableRunRecord {
+  const locked = host.storage.durableRuns.lockFreshActiveLeaseForUpdate(runId, expectedLeaseOwnerId);
+  if (!locked) {
+    const error = new Error(`Durable orchestration run ${runId} lost its execution lease before commit.`);
+    error.name = "DurableWorkerInterruptionError";
+    throw error;
+  }
+  return locked;
 }
 
 async function markOrchestrationRunCancelled(
@@ -275,29 +293,21 @@ async function markOrchestrationRunCancelled(
   if (isOrchestrationRunTerminal(run)) {
     return run;
   }
-  const cancelled = host.storage.orchestration.updateRunIfCurrentState(
-    {
-      ...run,
-      status: "cancelled",
-      executionState: "cancelled",
-      endedAt: new Date().toISOString(),
-      lastError: reason,
-      pendingApprovalPhaseId: undefined,
-      pendingApprovedBy: undefined,
-      pendingCostIncrementUsd: undefined,
-    },
-    {
+  const storage = host.storage;
+  const commitRunCandidate = (candidate: OrchestrationRun): { run: OrchestrationRun; transitioned: boolean } => {
+    const updated = storage.orchestration.updateRunIfCurrentState(candidate, {
       status: run.status,
       executionState: run.executionState,
-    },
-  );
-  if (!cancelled) {
-    const current = host.storage.orchestration.getRun(run.runId);
+    });
+    if (updated) {
+      return { run: updated, transitioned: true };
+    }
+    const current = storage.orchestration.getRun(run.runId);
     if (isOrchestrationRunTerminal(current)) {
-      return current;
+      return { run: current, transitioned: false };
     }
     throw new ConflictError({
-      message: `Orchestration run ${run.runId} changed before cancellation could commit.`,
+      message: `Orchestration run ${run.runId} changed before its terminal state could commit.`,
       details: {
         runId: run.runId,
         expectedStatus: run.status,
@@ -306,41 +316,157 @@ async function markOrchestrationRunCancelled(
         actualExecutionState: current.executionState,
       },
     });
+  };
+  const commitLinkedDurableTerminalWinner = async (linked: DurableRunRecord): Promise<OrchestrationRun> => {
+    const durableOrchestration =
+      linked.metadata?.orchestration && typeof linked.metadata.orchestration === "object"
+        ? (linked.metadata.orchestration as Record<string, unknown>)
+        : undefined;
+    const stoppedByLimit = linked.status === "completed" && durableOrchestration?.executionState === "stopped_by_limit";
+    const winnerStatus: "stopped_by_limit" | "completed" | "failed" = stoppedByLimit
+      ? "stopped_by_limit"
+      : linked.status === "completed"
+        ? "completed"
+        : "failed";
+    const winnerExecutionState: "stopped_by_limit" | "completed" | "failed" = stoppedByLimit
+      ? "stopped_by_limit"
+      : winnerStatus === "completed"
+        ? "completed"
+        : "failed";
+    const winner: OrchestrationRun = {
+      ...run,
+      status: winnerStatus,
+      executionState: winnerExecutionState,
+      endedAt: linked.finishedAt ?? new Date().toISOString(),
+      lastError:
+        winnerStatus === "failed"
+          ? (linked.lastError ?? `Linked durable run ${linked.runId} finished as ${linked.status}.`)
+          : undefined,
+      pendingApprovalPhaseId: undefined,
+      pendingApprovedBy: undefined,
+      pendingCostIncrementUsd: undefined,
+    };
+    let terminal!: { run: OrchestrationRun; transitioned: boolean };
+    storage.runImmediateTransaction(() => {
+      terminal = commitRunCandidate(winner);
+      if (!terminal.transitioned) {
+        return;
+      }
+      persistCheckpoint(
+        host,
+        plan,
+        terminal.run,
+        winnerStatus === "stopped_by_limit"
+          ? "run_stopped"
+          : winnerStatus === "completed"
+            ? "run_completed"
+            : "run_failed",
+        buildCheckpointDetails(plan, terminal.run, linked.runId, {
+          actorId,
+          requestedCancellationReason: reason,
+          durableTerminalStatus: linked.status,
+          terminalWinner: "durable_run",
+        }),
+      );
+    });
+    if (!terminal.transitioned) {
+      return terminal.run;
+    }
+    const event =
+      winnerStatus === "stopped_by_limit"
+        ? "run.stopped"
+        : winnerStatus === "completed"
+          ? "run.completed"
+          : "run.failed";
+    persistRunEvent(host, terminal.run, event, {
+      actorId,
+      requestedCancellationReason: reason,
+      durableTerminalStatus: linked.status,
+      terminalWinner: "durable_run",
+    });
+    publishRunRealtime(host, plan, terminal.run, {
+      event: event.replace("run.", "run_"),
+      ...(winnerStatus === "failed" ? { error: terminal.run.lastError } : {}),
+    });
+    await releaseOrchestrationWorktreeIfAvailable(runtime, host, terminal.run, winnerStatus);
+    return terminal.run;
+  };
+  const linkedDurable = run.durableRunId ? host.getDurableRun(run.durableRunId) : undefined;
+  if (linkedDurable && isDurableRunTerminal(linkedDurable) && linkedDurable.status !== "cancelled") {
+    return commitLinkedDurableTerminalWinner(linkedDurable);
   }
-  if (cancelled.durableRunId) {
-    const durable = host.getDurableRun(cancelled.durableRunId);
-    if (!["completed", "failed", "cancelled", "dead_lettered"].includes(durable.status)) {
-      host.cancelDurableRun(cancelled.durableRunId, actorId);
-      host.updateDurableRunState({
-        runId: cancelled.durableRunId,
-        metadata: buildDurableMetadata(plan, cancelled, {
-          lifecycleState: "cancelled",
-        }),
-      });
-    } else {
-      host.updateDurableRunState({
-        runId: cancelled.durableRunId,
-        metadata: buildDurableMetadata(plan, cancelled, {
-          lifecycleState: "cancelled",
-        }),
-      });
-      host.recordDurableTimelineEvent(cancelled.durableRunId, "run_cancelled", {
+  const cancellationCandidate: OrchestrationRun = {
+    ...run,
+    status: "cancelled",
+    executionState: "cancelled",
+    endedAt: new Date().toISOString(),
+    lastError: reason,
+    pendingApprovalPhaseId: undefined,
+    pendingApprovedBy: undefined,
+    pendingCostIncrementUsd: undefined,
+  };
+  const persistCancellationCheckpoint = (cancelled: OrchestrationRun): void => {
+    persistCheckpoint(
+      host,
+      plan,
+      cancelled,
+      "run_cancelled",
+      buildCheckpointDetails(plan, cancelled, cancelled.durableRunId, {
         actorId,
         reason,
-        orchestrationRunId: cancelled.runId,
-      });
+      }),
+    );
+  };
+  let cancellation!: { run: OrchestrationRun; transitioned: boolean };
+  if (!linkedDurable || linkedDurable.status === "cancelled") {
+    storage.runImmediateTransaction(() => {
+      cancellation = commitRunCandidate(cancellationCandidate);
+      if (!cancellation.transitioned) {
+        return;
+      }
+      if (linkedDurable && cancellation.run.durableRunId) {
+        host.updateDurableRunState({
+          runId: cancellation.run.durableRunId,
+          metadata: buildDurableMetadata(plan, cancellation.run, {
+            lifecycleState: "cancelled",
+          }),
+        });
+        host.recordDurableTimelineEvent(cancellation.run.durableRunId, "run_cancelled", {
+          actorId,
+          reason,
+          orchestrationRunId: cancellation.run.runId,
+        });
+      }
+      persistCancellationCheckpoint(cancellation.run);
+    });
+  } else {
+    try {
+      host.cancelDurableRun(linkedDurable.runId, actorId);
+    } catch (error) {
+      const raced = host.getDurableRun(linkedDurable.runId);
+      if (isDurableRunTerminal(raced) && raced.status !== "cancelled") {
+        return commitLinkedDurableTerminalWinner(raced);
+      }
+      throw error;
     }
+    storage.runImmediateTransaction(() => {
+      cancellation = commitRunCandidate(cancellationCandidate);
+      if (!cancellation.transitioned || !cancellation.run.durableRunId) {
+        return;
+      }
+      host.updateDurableRunState({
+        runId: cancellation.run.durableRunId,
+        metadata: buildDurableMetadata(plan, cancellation.run, {
+          lifecycleState: "cancelled",
+        }),
+      });
+      persistCancellationCheckpoint(cancellation.run);
+    });
   }
-  persistCheckpoint(
-    host,
-    plan,
-    cancelled,
-    "run_cancelled",
-    buildCheckpointDetails(plan, cancelled, cancelled.durableRunId, {
-      actorId,
-      reason,
-    }),
-  );
+  if (!cancellation.transitioned) {
+    return cancellation.run;
+  }
+  const cancelled = cancellation.run;
   persistRunEvent(host, cancelled, "run.cancelled", {
     actorId,
     reason,
@@ -686,36 +812,39 @@ async function allocateOrchestrationOwnership(
     return linked;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to allocate orchestration worktree.";
-    const failed = host.storage.orchestration.updateRun({
-      ...linked,
-      status: "failed",
-      executionState: "failed",
-      worktreeStatus: "blocked",
-      lastError: message,
-      endedAt: new Date().toISOString(),
+    let failed!: OrchestrationRun;
+    host.storage.runImmediateTransaction(() => {
+      failed = host.storage.orchestration.updateRun({
+        ...linked,
+        status: "failed",
+        executionState: "failed",
+        worktreeStatus: "blocked",
+        lastError: message,
+        endedAt: new Date().toISOString(),
+      });
+      host.updateDurableRunState({
+        runId: durable.runId,
+        status: "failed",
+        metadata: buildDurableMetadata(plan, failed, {
+          lifecycleState: "worktree_failed",
+        }),
+        lastError: message,
+        finishedAt: failed.endedAt,
+      });
+      host.recordDurableTimelineEvent(durable.runId, "run_failed", {
+        reason: message,
+        phase: "worktree_allocation",
+      });
+      persistCheckpoint(
+        host,
+        plan,
+        failed,
+        "run_failed",
+        buildCheckpointDetails(plan, failed, durable.runId, {
+          error: message,
+        }),
+      );
     });
-    host.updateDurableRunState({
-      runId: durable.runId,
-      status: "failed",
-      metadata: buildDurableMetadata(plan, failed, {
-        lifecycleState: "worktree_failed",
-      }),
-      lastError: message,
-      finishedAt: failed.endedAt,
-    });
-    host.recordDurableTimelineEvent(durable.runId, "run_failed", {
-      reason: message,
-      phase: "worktree_allocation",
-    });
-    persistCheckpoint(
-      host,
-      plan,
-      failed,
-      "run_failed",
-      buildCheckpointDetails(plan, failed, durable.runId, {
-        error: message,
-      }),
-    );
     persistRunEvent(host, failed, "run.failed", {
       error: message,
       phase: "worktree_allocation",
@@ -1183,6 +1312,7 @@ export async function executeDurableOrchestrationRun(
   ): void => {
     let committedRun!: OrchestrationRun;
     host.storage.runImmediateTransaction(() => {
+      lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
       host.updateDurableRunState({
         runId: durableRun.runId,
         metadata: commitOptions.durableMetadata ?? {
@@ -1218,23 +1348,30 @@ export async function executeDurableOrchestrationRun(
     if (!run.pendingApprovalPhaseId || !run.pendingApprovedBy) {
       throw new Error(`Run ${run.runId} is missing pending approval state for durable resume.`);
     }
+    const resumedRun: OrchestrationRun = {
+      ...host.orchestrationEngine.approvePhase(plan, run, run.pendingApprovalPhaseId, {
+        costIncrementUsd: run.pendingCostIncrementUsd ?? 0,
+      }),
+      executionState: "running",
+      pendingApprovalPhaseId: undefined,
+      pendingApprovedBy: undefined,
+      pendingCostIncrementUsd: undefined,
+      lastError: undefined,
+    };
     recordUpdate(
-      {
-        ...host.orchestrationEngine.approvePhase(plan, run, run.pendingApprovalPhaseId, {
-          costIncrementUsd: run.pendingCostIncrementUsd ?? 0,
-        }),
-        executionState: "running",
-        pendingApprovalPhaseId: undefined,
-        pendingApprovedBy: undefined,
-        pendingCostIncrementUsd: undefined,
-        lastError: undefined,
-      },
+      resumedRun,
       "run_resumed",
+      {},
+      {
+        durableTimeline: {
+          eventType: "run_resumed",
+          payload: {
+            phaseId: resumedRun.currentPhaseId,
+            waveId: resumedRun.currentWaveId,
+          },
+        },
+      },
     );
-    host.recordDurableTimelineEvent(durableRun.runId, "run_resumed", {
-      phaseId: run.currentPhaseId,
-      waveId: run.currentWaveId,
-    });
     persistRunEvent(host, run, "run.resumed", {
       phaseId: run.currentPhaseId,
       waveId: run.currentWaveId,
@@ -1328,23 +1465,31 @@ export async function executeDurableOrchestrationRun(
       harvestedWaitingExecution = buildHarvestedWaitingExecution(recoverableChildPhase.payload, childRun);
     }
     const resumedFromChild = isApprovalResume || Boolean(recoverableChildPhase);
+    const resumedRun: OrchestrationRun = {
+      ...run,
+      executionState: "running",
+      lastError: undefined,
+    };
     recordUpdate(
-      {
-        ...run,
-        executionState: "running",
-        lastError: undefined,
-      },
+      resumedRun,
       resumedFromChild ? "run_resumed" : undefined,
       {
         resumedFrom,
       },
+      resumedFromChild
+        ? {
+            durableTimeline: {
+              eventType: "run_resumed",
+              payload: {
+                phaseId: resumedRun.currentPhaseId,
+                waveId: resumedRun.currentWaveId,
+                resumedFrom: "child_phase_wait",
+              },
+            },
+          }
+        : {},
     );
     if (resumedFromChild) {
-      host.recordDurableTimelineEvent(durableRun.runId, "run_resumed", {
-        phaseId: run.currentPhaseId,
-        waveId: run.currentWaveId,
-        resumedFrom: "child_phase_wait",
-      });
       persistRunEvent(host, run, "run.resumed", {
         phaseId: run.currentPhaseId,
         waveId: run.currentWaveId,
@@ -1353,18 +1498,25 @@ export async function executeDurableOrchestrationRun(
       publishRunRealtime(host, plan, run, { event: "run_resumed" });
     }
   } else {
+    const startedRun: OrchestrationRun = {
+      ...host.orchestrationEngine.startRun(plan, run),
+      executionState: "running",
+      lastError: undefined,
+    };
     recordUpdate(
-      {
-        ...host.orchestrationEngine.startRun(plan, run),
-        executionState: "running",
-        lastError: undefined,
-      },
+      startedRun,
       "run_started",
+      {},
+      {
+        durableTimeline: {
+          eventType: "run_started",
+          payload: {
+            phaseId: startedRun.currentPhaseId,
+            waveId: startedRun.currentWaveId,
+          },
+        },
+      },
     );
-    host.recordDurableTimelineEvent(durableRun.runId, "run_started", {
-      phaseId: run.currentPhaseId,
-      waveId: run.currentWaveId,
-    });
     persistRunEvent(host, run, "run.started", {
       phaseId: run.currentPhaseId,
       waveId: run.currentWaveId,
@@ -1584,11 +1736,16 @@ export async function executeDurableOrchestrationRun(
         {
           failedPhase: executionPayload,
         },
+        {
+          durableTimeline: {
+            eventType: "run_failed",
+            payload: {
+              phaseId: previousPhaseId,
+              error: phaseError,
+            },
+          },
+        },
       );
-      host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
-        phaseId: previousPhaseId,
-        error: phaseError,
-      });
       publishRunRealtime(host, plan, run, {
         event: "run_failed",
         error: phaseError,
@@ -1767,6 +1924,7 @@ function persistDispatchedChildPhase(
   };
   const expectedLeaseOwnerId = requireDurableExecutionLeaseOwner(durableRun);
   host.storage.runImmediateTransaction(() => {
+    lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
     host.updateDurableRunState({
       runId: durableRun.runId,
       expectedLeaseOwnerId,
@@ -1801,6 +1959,7 @@ async function failResumeWithoutChildLinkage(input: {
     next: OrchestrationRun,
     checkpointKind?: OrchestrationCheckpoint["checkpointKind"],
     checkpointExtras?: Record<string, unknown>,
+    commitOptions?: OrchestrationDurableCommitOptions,
   ) => void;
   phaseId: string;
   payload: Record<string, unknown>;
@@ -1824,14 +1983,23 @@ async function failResumeWithoutChildLinkage(input: {
     endedAt: new Date().toISOString(),
     lastError: input.error,
   };
-  input.recordUpdate(failedRun, "run_failed", { failedPhase });
-  host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
-    phaseId: input.phaseId,
-    waveId: failedRun.currentWaveId,
-    childRunId,
-    reason: input.timelineReason ?? "child_dispatch_unrecoverable",
-    error: input.error,
-  });
+  input.recordUpdate(
+    failedRun,
+    "run_failed",
+    { failedPhase },
+    {
+      durableTimeline: {
+        eventType: "run_failed",
+        payload: {
+          phaseId: input.phaseId,
+          waveId: failedRun.currentWaveId,
+          childRunId,
+          reason: input.timelineReason ?? "child_dispatch_unrecoverable",
+          error: input.error,
+        },
+      },
+    },
+  );
   persistRunEvent(host, failedRun, input.runEvent ?? "run.child_dispatch_unrecoverable", {
     phaseId: input.phaseId,
     waveId: failedRun.currentWaveId,
@@ -1914,6 +2082,7 @@ async function failDurableOrchestrationWorkspaceMismatch(input: {
   const expectedLeaseOwnerId = requireDurableExecutionLeaseOwner(input.durableRun);
   let failed!: OrchestrationRun;
   input.host.storage.runImmediateTransaction(() => {
+    lockFreshDurableExecutionLease(input.host, input.durableRun.runId, expectedLeaseOwnerId);
     input.host.updateDurableRunState({
       runId: input.durableRun.runId,
       expectedLeaseOwnerId,

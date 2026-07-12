@@ -11,6 +11,7 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 
@@ -29,7 +30,7 @@ export interface ChatTurnTranscriptIngress {
   ingestEvent(
     idempotencyKey: string,
     payload: GatewayEventInput,
-    options?: { onCommit?: () => void },
+    options?: { onCommit?: () => void; afterCommit?: () => void },
   ): Promise<unknown>;
 }
 
@@ -107,6 +108,7 @@ export interface ChatTurnDurableRunOwner {
     prepared: PreparedAgentChatTurn,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
   ): DurableRunRecord | undefined;
   finalizeDurableChatRun(
     runId: string,

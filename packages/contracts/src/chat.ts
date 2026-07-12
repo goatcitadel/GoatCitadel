@@ -1399,6 +1399,10 @@ export interface ChatDelegationStepRecord {
   label?: string;
   status: ChatDelegationStepStatus;
   index: number;
+  /** Persisted execution-plan truth used to resume dependency-gated delegation after a durable wait. */
+  parallelizable?: boolean;
+  /** Stable step identifiers that must reach a usable terminal state before this step can run. */
+  dependsOnStepIds?: string[];
   providerId?: string;
   model?: string;
   startedAt: string;

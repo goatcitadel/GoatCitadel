@@ -3,6 +3,8 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import crypto from "node:crypto";
 import ts from "typescript";
+import { mergeCoverageEntries } from "./coverage-merge.mjs";
+import { normalizeCoveragePathForLookup as normalizePathForLookup } from "./coverage-paths.mjs";
 import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
 const repoRoot = process.cwd();
@@ -86,6 +88,11 @@ const PRODUCTION_RISK_TIERS = [
 const sourceRunId = crypto.randomUUID();
 const runStartedAt = new Date().toISOString();
 const sourceFingerprint = await buildCoverageSourceFingerprint(repoRoot);
+const collector = {
+  platform: process.platform,
+  arch: process.arch,
+  nodeVersion: process.version,
+};
 
 const warnings = [];
 
@@ -97,6 +104,7 @@ await writeSummary({
   status: "running",
   sourceRunId,
   sourceFingerprint,
+  collector,
   runStartedAt,
   warnings,
 });
@@ -126,6 +134,7 @@ try {
     status: "failed",
     sourceRunId,
     sourceFingerprint,
+    collector,
     runStartedAt,
     runFinishedAt: failedAt,
     warnings,
@@ -282,6 +291,7 @@ const summary = {
   status: "success",
   sourceRunId,
   sourceFingerprint,
+  collector,
   runStartedAt,
   runFinishedAt: new Date().toISOString(),
   sourceFiles: includedSourceFiles.length,
@@ -422,59 +432,6 @@ async function loadCoverageMap(files, warningsList) {
     }
   }
   return map;
-}
-
-function mergeCoverageEntries(left, right) {
-  const merged = {
-    ...left,
-    ...right,
-    s: mergeHitMap(left.s, right.s),
-    l: mergeHitMap(left.l, right.l),
-    f: mergeHitMap(left.f, right.f),
-    b: mergeBranchMap(left.b, right.b),
-    statementMap: {
-      ...(left.statementMap ?? {}),
-      ...(right.statementMap ?? {}),
-    },
-    fnMap: {
-      ...(left.fnMap ?? {}),
-      ...(right.fnMap ?? {}),
-    },
-    branchMap: {
-      ...(left.branchMap ?? {}),
-      ...(right.branchMap ?? {}),
-    },
-  };
-  return merged;
-}
-
-function mergeHitMap(left = {}, right = {}) {
-  const merged = { ...left };
-  for (const [key, value] of Object.entries(right)) {
-    const previous = Number(merged[key] ?? 0);
-    const next = Number(value ?? 0);
-    merged[key] = Number.isFinite(previous) && Number.isFinite(next)
-      ? Math.max(previous, next)
-      : next;
-  }
-  return merged;
-}
-
-function mergeBranchMap(left = {}, right = {}) {
-  const merged = { ...left };
-  for (const [key, value] of Object.entries(right)) {
-    const existing = Array.isArray(merged[key]) ? merged[key] : [];
-    const incoming = Array.isArray(value) ? value : [];
-    const length = Math.max(existing.length, incoming.length);
-    const next = [];
-    for (let index = 0; index < length; index += 1) {
-      const previous = Number(existing[index] ?? 0);
-      const current = Number(incoming[index] ?? 0);
-      next.push(Number.isFinite(previous) && Number.isFinite(current) ? Math.max(previous, current) : current);
-    }
-    merged[key] = next;
-  }
-  return merged;
 }
 
 async function collectSourceFiles(root) {
@@ -966,11 +923,6 @@ function getNodeLineRange(node) {
   const start = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
   const end = source.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
   return { start, end };
-}
-
-function normalizePathForLookup(inputPath) {
-  const withoutFileScheme = inputPath.replace(/^file:\/\//i, "");
-  return path.resolve(withoutFileScheme).replaceAll("\\", "/").toLowerCase();
 }
 
 function resolveThresholds(warningsList) {

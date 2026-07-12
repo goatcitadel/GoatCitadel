@@ -55,9 +55,29 @@ export class ExternalSideEffectRunRepository {
   private readonly markCompletedStmt;
   private readonly markFailureStmt;
   private readonly markFailureIfStatusStmt;
+  private readonly isStatusStaleStmt;
+  private readonly markFailureIfStatusStaleStmt;
   private readonly attachEnvelopeStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const databaseNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
+    const updatedAtInstant =
+      db.dialect === "postgres" ? "gc_try_parse_timestamptz(updated_at)" : "julianday(updated_at)";
+    const databaseNowText =
+      db.dialect === "postgres"
+        ? `to_char(statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+    const staleStatusPredicate =
+      db.dialect === "postgres"
+        ? `(
+            ${updatedAtInstant} IS NULL OR
+            ${updatedAtInstant} <= ${databaseNowInstant} -
+              (CAST(@staleAfterMs AS DOUBLE PRECISION) * INTERVAL '1 millisecond')
+          )`
+        : `(
+            ${updatedAtInstant} IS NULL OR
+            (${databaseNowInstant} - ${updatedAtInstant}) * 86400000.0 >= @staleAfterMs
+          )`;
     this.insertStmt = db.prepare(`
       INSERT INTO external_side_effect_runs (
         run_id, workspace_id, boundary, route_path, catalog_id, connection_id, action_id, actor_scope,
@@ -68,7 +88,7 @@ export class ExternalSideEffectRunRepository {
         @runId, @workspaceId, @boundary, @routePath, @catalogId, @connectionId, @actionId, @actorScope,
         @idempotencyKey, @payloadHash, @status, @replayPolicy, @replayOutcome, @replayAttempt, @resumeState,
         @requestPayloadJson, @responsePayloadJson, @externalReferenceId, @envelopeId, @errorText,
-        @attemptCount, @externalCallStartedAt, @completedAt, @createdAt, @updatedAt
+        @attemptCount, @externalCallStartedAt, @completedAt, @createdAt, ${databaseNowText}
       )
     `);
     this.getStmt = db.prepare("SELECT * FROM external_side_effect_runs WHERE run_id = ?");
@@ -100,7 +120,7 @@ export class ExternalSideEffectRunRepository {
       SET status = 'external_call_started',
           attempt_count = @attemptCount,
           external_call_started_at = @externalCallStartedAt,
-          updated_at = @updatedAt
+          updated_at = ${databaseNowText}
       WHERE run_id = @runId
         AND status IN ('claimed_not_sent', 'failed_before_boundary')
     `);
@@ -114,7 +134,7 @@ export class ExternalSideEffectRunRepository {
           envelope_id = @envelopeId,
           error_text = NULL,
           completed_at = @completedAt,
-          updated_at = @updatedAt
+          updated_at = ${databaseNowText}
       WHERE run_id = @runId
     `);
     this.markFailureStmt = db.prepare(`
@@ -124,7 +144,7 @@ export class ExternalSideEffectRunRepository {
           response_payload_json = @responsePayloadJson,
           error_text = @errorText,
           completed_at = @completedAt,
-          updated_at = @updatedAt
+          updated_at = ${databaseNowText}
       WHERE run_id = @runId
     `);
     this.markFailureIfStatusStmt = db.prepare(`
@@ -134,14 +154,34 @@ export class ExternalSideEffectRunRepository {
           response_payload_json = @responsePayloadJson,
           error_text = @errorText,
           completed_at = @completedAt,
-          updated_at = @updatedAt
+          updated_at = ${databaseNowText}
       WHERE run_id = @runId
         AND status = @expectedStatus
+    `);
+    this.isStatusStaleStmt = db.prepare(`
+      SELECT run_id
+      FROM external_side_effect_runs
+      WHERE run_id = @runId
+        AND status = @expectedStatus
+        AND ${staleStatusPredicate}
+      LIMIT 1
+    `);
+    this.markFailureIfStatusStaleStmt = db.prepare(`
+      UPDATE external_side_effect_runs
+      SET status = @status,
+          resume_state = @resumeState,
+          response_payload_json = @responsePayloadJson,
+          error_text = @errorText,
+          completed_at = ${databaseNowText},
+          updated_at = ${databaseNowText}
+      WHERE run_id = @runId
+        AND status = @expectedStatus
+        AND ${staleStatusPredicate}
     `);
     this.attachEnvelopeStmt = db.prepare(`
       UPDATE external_side_effect_runs
       SET envelope_id = @envelopeId,
-          updated_at = @updatedAt
+          updated_at = ${databaseNowText}
       WHERE run_id = @runId
     `);
   }
@@ -195,7 +235,6 @@ export class ExternalSideEffectRunRepository {
       externalCallStartedAt: null,
       completedAt: null,
       createdAt: now,
-      updatedAt: now,
     });
     return this.get(runId);
   }
@@ -257,7 +296,6 @@ export class ExternalSideEffectRunRepository {
       runId,
       attemptCount: input.attemptCount ?? current.attemptCount + 1,
       externalCallStartedAt: now,
-      updatedAt: now,
     });
     if (updated.changes !== 1) {
       throw new ExternalSideEffectBoundaryClaimLostError(runId, current.status);
@@ -282,7 +320,6 @@ export class ExternalSideEffectRunRepository {
       externalReferenceId: input.externalReferenceId ?? null,
       envelopeId: input.envelopeId ?? null,
       completedAt: now,
-      updatedAt: now,
     });
     return this.get(runId);
   }
@@ -303,7 +340,6 @@ export class ExternalSideEffectRunRepository {
       responsePayloadJson: serializeJson(input.responsePayload),
       errorText: input.errorText,
       completedAt: now,
-      updatedAt: now,
     });
     return this.get(runId);
   }
@@ -330,7 +366,45 @@ export class ExternalSideEffectRunRepository {
       responsePayloadJson: serializeJson(input.responsePayload),
       errorText: input.errorText,
       completedAt: now,
-      updatedAt: now,
+    });
+    return this.get(runId);
+  }
+
+  /**
+   * Evaluates status age against the database clock. Host timestamps are never
+   * authoritative for replay or reconciliation ownership.
+   */
+  public isStatusStale(runId: string, expectedStatus: ExternalSideEffectRunStatus, staleAfterMs: number): boolean {
+    const row = this.isStatusStaleStmt.get({
+      runId,
+      expectedStatus,
+      staleAfterMs: normalizeStaleAfterMs(staleAfterMs),
+    }) as { run_id?: unknown } | undefined;
+    return typeof row?.run_id === "string";
+  }
+
+  /**
+   * Atomically terminalizes only the still-matching status whose database-owned
+   * activity timestamp is stale. The returned row reflects any concurrent winner.
+   */
+  public markFailureIfStatusStale(
+    runId: string,
+    expectedStatus: ExternalSideEffectRunStatus,
+    staleAfterMs: number,
+    input: {
+      status: "failed_before_boundary" | "unknown_external_outcome";
+      errorText: string;
+      responsePayload?: Record<string, unknown>;
+    },
+  ): ExternalSideEffectRunRecord {
+    this.markFailureIfStatusStaleStmt.run({
+      runId,
+      expectedStatus,
+      staleAfterMs: normalizeStaleAfterMs(staleAfterMs),
+      status: input.status,
+      resumeState: resumeStateForStatus(input.status),
+      responsePayloadJson: serializeJson(input.responsePayload),
+      errorText: input.errorText,
     });
     return this.get(runId);
   }
@@ -340,10 +414,10 @@ export class ExternalSideEffectRunRepository {
     envelopeId: string,
     now = new Date().toISOString(),
   ): ExternalSideEffectRunRecord {
+    void now;
     this.attachEnvelopeStmt.run({
       runId,
       envelopeId,
-      updatedAt: now,
     });
     return this.get(runId);
   }
@@ -447,6 +521,13 @@ function resumeStateForStatus(status: ExternalSideEffectRunStatus): ExternalSide
 
 function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
+}
+
+function normalizeStaleAfterMs(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("External side-effect stale threshold must be a non-negative finite duration.");
+  }
+  return Math.floor(value);
 }
 
 function clampLimit(value: number): number {

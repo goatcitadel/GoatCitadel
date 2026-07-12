@@ -86,7 +86,7 @@ describe("approval remote token request claims", () => {
 
     expect(first.state).toBe("consumed");
     expect(resumed).toEqual(first);
-    expect(resumed.consumedAt).toBe(NOW);
+    expect(resumed.consumedAt).toBe(first.consumedAt);
     expect(resumed.mutation).toEqual({
       approvalId: "approval-1",
       __remoteActionClaimFingerprint: "sha256:approve-request",
@@ -248,5 +248,46 @@ describe("approval remote token request claims", () => {
     ).toThrow(/has expired/i);
     expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("expired");
     expect(harness.deleteRemoteActionTokenSecretById).toHaveBeenCalledTimes(2);
+  });
+
+  it("consumes a database-fresh token even when the host clock is far ahead", () => {
+    const harness = createHarness();
+    harnesses.push(harness);
+    const token = issueApprovalToken(harness, "grat_fast_host_clock");
+    harness.storage.gatewaySql
+      .prepare(
+        "UPDATE remote_action_tokens SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 minute') WHERE token_id = ?",
+      )
+      .run(token.tokenId);
+    vi.setSystemTime(new Date("2100-07-10T12:00:00.000Z"));
+
+    const consumed = consumeRemoteActionToken(harness.host, "grat_fast_host_clock", "approval.resolve", {
+      claimFingerprint: "sha256:fast-host",
+      expectedConnectorId: "mission-control",
+    });
+
+    expect(consumed.state).toBe("consumed");
+    expect(harness.deleteRemoteActionTokenSecretById).not.toHaveBeenCalled();
+  });
+
+  it("rejects and expires a database-expired token even when the host clock is far behind", () => {
+    const harness = createHarness();
+    harnesses.push(harness);
+    const token = issueApprovalToken(harness, "grat_slow_host_clock");
+    harness.storage.gatewaySql
+      .prepare(
+        "UPDATE remote_action_tokens SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minute') WHERE token_id = ?",
+      )
+      .run(token.tokenId);
+    vi.setSystemTime(new Date("2000-07-10T12:00:00.000Z"));
+
+    expect(() =>
+      consumeRemoteActionToken(harness.host, "grat_slow_host_clock", "approval.resolve", {
+        claimFingerprint: "sha256:slow-host",
+        expectedConnectorId: "mission-control",
+      }),
+    ).toThrow(/has expired/);
+    expect(harness.storage.remoteActionTokens.get(token.tokenId).state).toBe("expired");
+    expect(harness.deleteRemoteActionTokenSecretById).toHaveBeenCalledWith(token.tokenId);
   });
 });

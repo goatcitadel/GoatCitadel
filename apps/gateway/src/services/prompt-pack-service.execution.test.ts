@@ -71,6 +71,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
 
   it("does not bootstrap prompt-pack session allows over an inherited active deny grant", () => {
     const createGrant = vi.fn();
+    const createTtlGrant = vi.fn();
     const listActive = vi.fn((scope?: string, scopeRef?: string) =>
       scope === "workspace" && scopeRef === "workspace-a"
         ? [
@@ -94,6 +95,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
             list: vi.fn(() => []),
             listActive,
             create: createGrant,
+            createTtlForDuration: createTtlGrant,
           },
           chatSessionMeta: {
             get: () => ({ workspaceId: "workspace-a" }),
@@ -157,12 +159,14 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     expect(listActive).toHaveBeenCalledWith("global", "global");
     expect(listActive).toHaveBeenCalledWith("agent", "assistant");
     expect(listActive).toHaveBeenCalledWith("workspace", "workspace-a");
-    const grantedPatterns = createGrant.mock.calls.map((call) => (call[0] as { toolPattern: string }).toolPattern);
+    const grantedPatterns = createTtlGrant.mock.calls.map((call) => (call[0] as { toolPattern: string }).toolPattern);
     expect(grantedPatterns.some((pattern) => pattern.startsWith("browser."))).toBe(false);
+    expect(createGrant).not.toHaveBeenCalled();
   });
 
   it("inherits default-workspace denies when prompt-pack session metadata is missing", () => {
     const createGrant = vi.fn();
+    const createTtlGrant = vi.fn();
     const listActive = vi.fn((scope?: string, scopeRef?: string) =>
       scope === "workspace" && scopeRef === "default"
         ? [
@@ -186,6 +190,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
             list: vi.fn(() => []),
             listActive,
             create: createGrant,
+            createTtlForDuration: createTtlGrant,
           },
           chatSessionMeta: {
             get: () => undefined,
@@ -246,8 +251,9 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
 
     expect(listActive).toHaveBeenCalledWith("workspace", "default");
-    const grantedPatterns = createGrant.mock.calls.map((call) => (call[0] as { toolPattern: string }).toolPattern);
+    const grantedPatterns = createTtlGrant.mock.calls.map((call) => (call[0] as { toolPattern: string }).toolPattern);
     expect(grantedPatterns.some((pattern) => pattern.startsWith("browser."))).toBe(false);
+    expect(createGrant).not.toHaveBeenCalled();
   });
 
   it("blocks prompt-pack test execution before creating run rows when durable preflight fails", async () => {
@@ -1288,6 +1294,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
   it("binds an existing prompt-pack session to the resolved project before tool execution", async () => {
     const assignProject = vi.fn();
     const createGrant = vi.fn();
+    const createTtlGrant = vi.fn();
     const createProject = vi.fn(() => ({
       projectId: "prompt-pack-project",
       workspaceId: "default",
@@ -1378,7 +1385,27 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
                 expiresAt: "2099-01-01T00:00:00.000Z",
               },
             ],
+            listActive: (scope?: string, scopeRef?: string) =>
+              scope === "session" && scopeRef === "sess-existing-project"
+                ? [
+                    {
+                      grantId: "grant-stale-read",
+                      toolPattern: "fs.read",
+                      decision: "allow",
+                      scope: "session",
+                      scopeRef: "sess-existing-project",
+                      grantType: "ttl",
+                      constraints: {
+                        allowedPaths: ["F:\\code\\personal-ai\\workspace\\old-prompt-pack-root"],
+                      },
+                      createdBy: "test",
+                      createdAt: "2026-03-14T00:00:00.000Z",
+                      expiresAt: "2099-01-01T00:00:00.000Z",
+                    },
+                  ]
+                : [],
             create: createGrant,
+            createTtlForDuration: createTtlGrant,
           },
           chatProjects: {
             list: () => [],
@@ -1427,15 +1454,16 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
 
     expect(createProject).toHaveBeenCalled();
     expect(assignProject).toHaveBeenCalledWith("sess-existing-project", "prompt-pack-project");
-    expect(createGrant).toHaveBeenCalledWith(
+    expect(createTtlGrant).toHaveBeenCalledWith(
       expect.objectContaining({
         toolPattern: "fs.read",
         constraints: expect.objectContaining({
           allowedPaths: expect.arrayContaining(["F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace"]),
         }),
       }),
-      expect.any(String),
+      2 * 60 * 60 * 1000,
     );
+    expect(createGrant).not.toHaveBeenCalled();
     expect(agentSendChatMessage).toHaveBeenCalledWith("sess-existing-project", expect.any(Object));
   });
 
@@ -1473,7 +1501,9 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
           },
           toolGrants: {
             list: () => [],
+            listActive: () => [],
             create: vi.fn(),
+            createTtlForDuration: vi.fn(),
           },
         },
         gatewaySql: {

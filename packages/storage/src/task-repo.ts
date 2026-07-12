@@ -58,6 +58,7 @@ export interface TaskRepositoryOptions {
 export class TaskRepository {
   private readonly insertStmt;
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly updateStmt;
   private readonly hardDeleteStmt;
   private readonly softDeleteStmt;
@@ -82,6 +83,11 @@ export class TaskRepository {
     `);
 
     this.getStmt = db.prepare("SELECT * FROM tasks WHERE task_id = ?");
+    this.getForUpdateStmt = db.prepare(`
+      SELECT * FROM tasks
+      WHERE task_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.updateStmt = db.prepare(`
       UPDATE tasks
       SET
@@ -123,10 +129,13 @@ export class TaskRepository {
     `);
   }
 
-  public create(input: TaskCreateInput, now = new Date().toISOString()): TaskRecord {
-    const taskId = randomUUID();
+  public create(input: TaskCreateInput, now = new Date().toISOString(), options: { taskId?: string } = {}): TaskRecord {
+    const normalizedTaskId = (options.taskId ?? randomUUID()).trim();
+    if (!normalizedTaskId) {
+      throw new ValidationError({ message: "taskId is required" });
+    }
     this.insertStmt.run({
-      taskId,
+      taskId: normalizedTaskId,
       workspaceId: sanitizeWorkspaceId(input.workspaceId ?? "default"),
       title: input.title,
       description: input.description ?? null,
@@ -143,11 +152,20 @@ export class TaskRepository {
       updatedAt: now,
     });
 
-    return this.get(taskId);
+    return this.get(normalizedTaskId);
   }
 
   public get(taskId: string): TaskRecord {
     const row = toTaskRow(this.getStmt.get(taskId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Task", id: taskId });
+    }
+    return this.mapTaskRow(row);
+  }
+
+  /** Locks a task for a cross-repository state transition. */
+  public getForUpdate(taskId: string): TaskRecord {
+    const row = toTaskRow(this.getForUpdateStmt.get(taskId));
     if (!row) {
       throw new NotFoundError({ entity: "Task", id: taskId });
     }
@@ -199,55 +217,57 @@ export class TaskRepository {
   }
 
   public update(taskId: string, input: TaskUpdateInput, now = new Date().toISOString()): TaskRecord {
-    const current = this.get(taskId);
-    const nextAssignedAgentId =
-      input.assignedAgentId === undefined ? (current.assignedAgentId ?? null) : input.assignedAgentId;
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(taskId);
+      const nextAssignedAgentId =
+        input.assignedAgentId === undefined ? (current.assignedAgentId ?? null) : input.assignedAgentId;
 
-    this.updateStmt.run({
-      taskId,
-      title: input.title ?? current.title,
-      description: input.description ?? current.description ?? null,
-      status: input.status ?? current.status,
-      priority: input.priority ?? current.priority,
-      assignedAgentId: nextAssignedAgentId,
-      dueAt: input.dueAt ?? current.dueAt ?? null,
-      metadataJson:
-        input.proactiveContext === undefined && input.agenticContext === undefined
-          ? serializeTaskMetadata(current.proactiveContext, current.agenticContext)
-          : serializeTaskMetadata(
-              input.proactiveContext === undefined ? current.proactiveContext : (input.proactiveContext ?? undefined),
-              input.agenticContext === undefined ? current.agenticContext : (input.agenticContext ?? undefined),
-            ),
-      distressSignalsJson:
-        input.distressSignals === undefined
-          ? current.distressSignals
-            ? JSON.stringify(current.distressSignals)
-            : null
-          : input.distressSignals === null
-            ? null
-            : JSON.stringify(input.distressSignals),
-      retryBudgetJson:
-        input.retryBudget === undefined
-          ? current.retryBudget
-            ? JSON.stringify(current.retryBudget)
-            : null
-          : input.retryBudget === null
-            ? null
-            : JSON.stringify(input.retryBudget),
-      artifactVerificationJson:
-        input.artifactVerification === undefined
-          ? current.artifactVerification
-            ? JSON.stringify(current.artifactVerification)
-            : null
-          : input.artifactVerification === null
-            ? null
-            : JSON.stringify(input.artifactVerification),
-      deletedAt: current.deletedAt ?? null,
-      deletedBy: current.deletedBy ?? null,
-      deleteReason: current.deleteReason ?? null,
-      updatedAt: now,
+      this.updateStmt.run({
+        taskId,
+        title: input.title ?? current.title,
+        description: input.description ?? current.description ?? null,
+        status: input.status ?? current.status,
+        priority: input.priority ?? current.priority,
+        assignedAgentId: nextAssignedAgentId,
+        dueAt: input.dueAt ?? current.dueAt ?? null,
+        metadataJson:
+          input.proactiveContext === undefined && input.agenticContext === undefined
+            ? serializeTaskMetadata(current.proactiveContext, current.agenticContext)
+            : serializeTaskMetadata(
+                input.proactiveContext === undefined ? current.proactiveContext : (input.proactiveContext ?? undefined),
+                input.agenticContext === undefined ? current.agenticContext : (input.agenticContext ?? undefined),
+              ),
+        distressSignalsJson:
+          input.distressSignals === undefined
+            ? current.distressSignals
+              ? JSON.stringify(current.distressSignals)
+              : null
+            : input.distressSignals === null
+              ? null
+              : JSON.stringify(input.distressSignals),
+        retryBudgetJson:
+          input.retryBudget === undefined
+            ? current.retryBudget
+              ? JSON.stringify(current.retryBudget)
+              : null
+            : input.retryBudget === null
+              ? null
+              : JSON.stringify(input.retryBudget),
+        artifactVerificationJson:
+          input.artifactVerification === undefined
+            ? current.artifactVerification
+              ? JSON.stringify(current.artifactVerification)
+              : null
+            : input.artifactVerification === null
+              ? null
+              : JSON.stringify(input.artifactVerification),
+        deletedAt: current.deletedAt ?? null,
+        deletedBy: current.deletedBy ?? null,
+        deleteReason: current.deleteReason ?? null,
+        updatedAt: now,
+      });
+      return this.get(taskId);
     });
-    return this.get(taskId);
   }
 
   public softDelete(

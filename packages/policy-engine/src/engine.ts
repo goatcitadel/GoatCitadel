@@ -25,7 +25,8 @@ import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { ApprovalGate, type ApprovalCreateCommitPort } from "./approval-gate.js";
+import { ApprovalGate, type ApprovalCreateAuthority, type ApprovalCreateCommitPort } from "./approval-gate.js";
+import { assertNoRawRemoteApprovalBearer } from "./approval-action-secrets.js";
 import { getVerifiedApprovalBypassId, hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import {
   parseIngestionBackend,
@@ -193,10 +194,6 @@ interface GrantDecision {
   constraintsError?: string;
 }
 
-type ActiveToolGrantRepository = Storage["toolGrants"] & {
-  listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
-};
-
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   /**
    * Canonical approval creation boundary owned by the Gateway runtime. When
@@ -204,7 +201,11 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
    * storage directly, so wait-run, event, and observability truth commit as one
    * lifecycle operation.
    */
-  createApproval?: (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort) => Promise<ApprovalRequest>;
+  createApproval?: (
+    input: ApprovalCreateInput,
+    onCreated?: ApprovalCreateCommitPort,
+    authority?: ApprovalCreateAuthority,
+  ) => Promise<ApprovalRequest>;
 }
 
 /**
@@ -215,6 +216,10 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
  */
 export interface ToolPolicyInvokeOptions {
   beforeExecute?: () => void;
+  externalSideEffect?: {
+    markStarted(): void;
+    markNotRequired(): void;
+  };
 }
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
@@ -239,6 +244,10 @@ export class ToolPolicyEngine {
 
   public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.storage.toolGrants.list(scope, scopeRef, limit);
+  }
+
+  public listActiveGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
+    return this.storage.toolGrants.listActive(scope, scopeRef).slice(0, limit);
   }
 
   public createGrant(input: ToolGrantCreateInput): ToolGrantRecord {
@@ -285,11 +294,14 @@ export class ToolPolicyEngine {
   }
 
   public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {
+    const pendingActionRequest = toPendingApprovalRequestRecord(request);
+    assertNoRawRemoteApprovalBearer(pendingActionRequest);
     const directApprovalBypassId = getVerifiedApprovalBypassId(request, this.storage);
     if (directApprovalBypassId) {
       const result = await this.executeApprovedAction(directApprovalBypassId, request.signal, {
         ...(request.externalRuntime === true ? { deferResolution: true } : {}),
         beforeExecute: options.beforeExecute,
+        externalSideEffect: options.externalSideEffect,
       });
       if (result) {
         return result;
@@ -374,7 +386,6 @@ export class ToolPolicyEngine {
     // regardless of dryRun.
 
     if (evaluation.requiresApproval) {
-      const expiresAt = new Date(Date.now() + DEFAULT_APPROVAL_TTL_MS).toISOString();
       let invocationAuditPayload: Record<string, unknown> | undefined;
       let invocationOutcome: "approval_required" | "blocked" = "approval_required";
       let invocationPolicyReason = evaluation.policyReason;
@@ -385,7 +396,6 @@ export class ToolPolicyEngine {
           payload: request.args,
           preview: this.buildApprovalPreview(request),
           linkage: buildToolApprovalLinkage(request, evaluation),
-          expiresAt,
         },
         (createdApproval) => {
           if (!isDeepStrictEqual(createdApproval.payload, request.args)) {
@@ -393,11 +403,14 @@ export class ToolPolicyEngine {
               "approval.create.before cannot mutate executable tool arguments; reject and submit a new tool request instead.",
             );
           }
+          if (!createdApproval.expiresAt) {
+            throw new Error("Database-owned approval creation did not return an expiry timestamp.");
+          }
           this.storage.pendingApprovalActions.upsertPending({
             approvalId: createdApproval.approvalId,
             actionType: "tool.invoke",
-            request: toPlainRecord(request),
-            expiresAt: createdApproval.expiresAt ?? expiresAt,
+            request: pendingActionRequest,
+            expiresAt: createdApproval.expiresAt,
           });
 
           this.storage.approvalEvents.append({
@@ -443,7 +456,12 @@ export class ToolPolicyEngine {
             },
           };
         },
+        { ttlMs: DEFAULT_APPROVAL_TTL_MS },
       );
+      const approvalExpiresAt = approval.expiresAt;
+      if (!approvalExpiresAt) {
+        throw new Error("Database-owned approval creation did not return an expiry timestamp.");
+      }
 
       if (!this.runtimeHooks.createApproval && invocationAuditPayload) {
         try {
@@ -461,7 +479,7 @@ export class ToolPolicyEngine {
         return {
           outcome: "blocked",
           approvalId: approval.approvalId,
-          expiresAt: approval.expiresAt ?? expiresAt,
+          expiresAt: approvalExpiresAt,
           policyReason: invocationPolicyReason,
           auditEventId,
           internalCall,
@@ -492,7 +510,7 @@ export class ToolPolicyEngine {
       return {
         outcome: "approval_required",
         approvalId: approval.approvalId,
-        expiresAt: approval.expiresAt ?? expiresAt,
+        expiresAt: approvalExpiresAt,
         policyReason: evaluation.policyReason,
         auditEventId,
         internalCall,
@@ -609,7 +627,12 @@ export class ToolPolicyEngine {
   public async executeApprovedAction(
     approvalId: string,
     signal?: AbortSignal,
-    options?: { deferResolution?: boolean; externalRuntimeReplay?: boolean; beforeExecute?: () => void },
+    options?: {
+      deferResolution?: boolean;
+      externalRuntimeReplay?: boolean;
+      beforeExecute?: () => void;
+      externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
+    },
   ): Promise<ToolInvokeResult | undefined> {
     const pending = this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending") {
@@ -617,12 +640,15 @@ export class ToolPolicyEngine {
     }
 
     if (pending.actionType !== "tool.invoke") {
-      this.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
-        error: `unsupported pending action type ${pending.actionType}`,
-      });
+      if (options?.deferResolution !== true) {
+        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
+          error: `unsupported pending action type ${pending.actionType}`,
+        });
+      }
       return undefined;
     }
 
+    assertNoRawRemoteApprovalBearer(pending.request);
     const request = asToolInvokeRequest(pending.request);
     const approvedRequest: ToolInvokeRequest = {
       ...request,
@@ -635,15 +661,17 @@ export class ToolPolicyEngine {
     };
     if (!hasVerifiedApprovalBypass(approvedRequest, this.storage)) {
       const reason = "pending approval action is expired, resolved, or no longer matches the stored request";
-      this.storage.runImmediateTransaction(() => {
-        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-        this.storage.approvalEvents.append({
-          approvalId,
-          eventType: "approved_action_executed",
-          actorId: "system",
-          payload: { outcome: "blocked", reason },
+      if (options?.deferResolution !== true) {
+        this.storage.runImmediateTransaction(() => {
+          this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+          this.storage.approvalEvents.append({
+            approvalId,
+            eventType: "approved_action_executed",
+            actorId: "system",
+            payload: { outcome: "blocked", reason },
+          });
         });
-      });
+      }
       return undefined;
     }
     const executionRequest: ToolInvokeRequest =
@@ -680,24 +708,36 @@ export class ToolPolicyEngine {
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
-      await this.recordBlocked(auditEventId, executionRequest, reason, {
-        reasonCodes: evaluation.reasonCodes,
-        riskLevel: evaluation.riskLevel,
-        matchedGrantId: evaluation.matchedGrantId,
-        permissionProfileId: evaluation.permissionProfileId,
-        localOperatorOverrideId: evaluation.localOperatorOverrideId,
-        approvalMode: evaluation.approvalMode,
-        approvalId,
-      });
-      this.storage.runImmediateTransaction(() => {
-        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-        this.storage.approvalEvents.append({
+      await this.recordBlocked(
+        auditEventId,
+        executionRequest,
+        reason,
+        {
+          reasonCodes: evaluation.reasonCodes,
+          riskLevel: evaluation.riskLevel,
+          matchedGrantId: evaluation.matchedGrantId,
+          permissionProfileId: evaluation.permissionProfileId,
+          localOperatorOverrideId: evaluation.localOperatorOverrideId,
+          approvalMode: evaluation.approvalMode,
           approvalId,
-          eventType: "approved_action_executed",
-          actorId: "system",
-          payload: { outcome: "blocked", reason, auditEventId },
-        });
-      });
+        },
+        {
+          ...(options?.deferResolution !== true
+            ? {
+                commitAlongsideBlock: () => {
+                  this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+                  this.storage.approvalEvents.append({
+                    approvalId,
+                    eventType: "approved_action_executed",
+                    actorId: "system",
+                    payload: { outcome: "blocked", reason, auditEventId },
+                  });
+                },
+              }
+            : {}),
+          tolerateAuditDeliveryFailure: true,
+        },
+      );
       const completedAt = new Date().toISOString();
       return {
         outcome: "blocked",
@@ -738,7 +778,7 @@ export class ToolPolicyEngine {
       approvalId,
       evaluation,
       internalCall,
-      { beforeExecute: options?.beforeExecute },
+      { beforeExecute: options?.beforeExecute, externalSideEffect: options?.externalSideEffect },
     );
 
     if (options?.deferResolution !== true) {
@@ -1121,19 +1161,14 @@ export class ToolPolicyEngine {
     const scoped = buildScopeCandidates(request);
     const matchingGrants: ToolGrantRecord[] = [];
     for (const candidate of scoped) {
-      const grantRepo = this.storage.toolGrants as ActiveToolGrantRepository;
-      const grants = (
-        grantRepo.listActive
-          ? grantRepo.listActive(candidate.scope, candidate.scopeRef)
-          : grantRepo
-              .list(candidate.scope, candidate.scopeRef, Number.MAX_SAFE_INTEGER)
-              .filter((grant) => isGrantActive(grant))
-      ).filter(
-        (grant) =>
-          grant.scope === candidate.scope &&
-          grant.scopeRef === candidate.scopeRef &&
-          matchesToolPattern(grant.toolPattern, request.toolName),
-      );
+      const grants = this.storage.toolGrants
+        .listActive(candidate.scope, candidate.scopeRef)
+        .filter(
+          (grant) =>
+            grant.scope === candidate.scope &&
+            grant.scopeRef === candidate.scopeRef &&
+            matchesToolPattern(grant.toolPattern, request.toolName),
+        );
 
       if (grants.length === 0) {
         continue;
@@ -1606,8 +1641,38 @@ export class ToolPolicyEngine {
     // interrupts the stale worker instead of being normalized into an ordinary
     // tool failure that could let the turn continue.
     options.beforeExecute?.();
+    let externalSideEffectStarted = false;
+    const markExternalSideEffectStarted = () => {
+      if (externalSideEffectStarted) {
+        return;
+      }
+      options.externalSideEffect?.markStarted();
+      externalSideEffectStarted = true;
+    };
+    const executorRuntimeHooks = options.externalSideEffect
+      ? {
+          ...this.runtimeHooks,
+          beforeExternalSideEffect: () => {
+            this.runtimeHooks.beforeExternalSideEffect?.();
+            markExternalSideEffectStarted();
+          },
+        }
+      : this.runtimeHooks;
+    if (
+      options.externalSideEffect &&
+      isMutationTool(this.registry.get(executionRequest.toolName)) &&
+      !executorReportsConcreteExternalSideEffectBoundary(executionRequest.toolName)
+    ) {
+      // Executors without a deeper provider adapter remain conservative. This
+      // preserves non-replayability for local mutations while comms/http can
+      // report their exact dispatch boundary after validation.
+      markExternalSideEffectStarted();
+    }
     try {
-      const result = await executeTool(executionRequest, this.config, this.storage, this.runtimeHooks);
+      const result = await executeTool(executionRequest, this.config, this.storage, executorRuntimeHooks);
+      if (options.externalSideEffect && !externalSideEffectStarted) {
+        options.externalSideEffect.markNotRequired();
+      }
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
       const completedAt = new Date().toISOString();
       return {
@@ -1639,6 +1704,9 @@ export class ToolPolicyEngine {
         }),
       };
     } catch (error) {
+      if (options.externalSideEffect && !externalSideEffectStarted) {
+        options.externalSideEffect.markNotRequired();
+      }
       if (error instanceof HttpMutationOutcomeUnknownError) {
         const reason = `execution outcome unknown: ${error.message}`;
         const result = {
@@ -1725,6 +1793,10 @@ export class ToolPolicyEngine {
     request: ToolInvokeRequest,
     reason: string,
     details: Record<string, unknown>,
+    options?: {
+      commitAlongsideBlock?: () => void;
+      tolerateAuditDeliveryFailure?: boolean;
+    },
   ): Promise<void> {
     const now = new Date().toISOString();
     const matchedGrantId = readNonEmptyString(details.matchedGrantId);
@@ -1732,47 +1804,65 @@ export class ToolPolicyEngine {
     const localOperatorOverrideId = readNonEmptyString(details.localOperatorOverrideId);
     const approvalMode = readApprovalMode(details.approvalMode);
     const reasonCodes = readReasonCodes(details.reasonCodes);
-    this.storage.db
-      .prepare(
-        `
+    const insertBlock = () => {
+      this.storage.db
+        .prepare(
+          `
       INSERT INTO policy_blocks (
         audit_event_id, timestamp, agent_id, session_id, task_id, run_id, tool_name, reason, details_json,
         matched_grant_id, permission_profile_id, local_operator_override_id, approval_mode, reason_codes_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-      )
-      .run(
-        auditEventId,
-        now,
-        request.agentId,
-        request.sessionId,
-        request.taskId ?? null,
-        request.runId ?? null,
-        request.toolName,
-        reason,
-        JSON.stringify(details),
-        matchedGrantId ?? null,
-        permissionProfileId ?? null,
-        localOperatorOverrideId ?? null,
-        approvalMode ?? null,
-        reasonCodes ? JSON.stringify(reasonCodes) : null,
-      );
+        )
+        .run(
+          auditEventId,
+          now,
+          request.agentId,
+          request.sessionId,
+          request.taskId ?? null,
+          request.runId ?? null,
+          request.toolName,
+          reason,
+          JSON.stringify(details),
+          matchedGrantId ?? null,
+          permissionProfileId ?? null,
+          localOperatorOverrideId ?? null,
+          approvalMode ?? null,
+          reasonCodes ? JSON.stringify(reasonCodes) : null,
+        );
+    };
+    if (options?.commitAlongsideBlock) {
+      this.storage.runImmediateTransaction(() => {
+        insertBlock();
+        options.commitAlongsideBlock?.();
+      });
+    } else {
+      insertBlock();
+    }
 
-    await this.storage.audit.append("policy_blocks", {
-      auditEventId,
-      agentId: request.agentId,
-      sessionId: request.sessionId,
-      taskId: request.taskId,
-      runId: request.runId,
-      toolName: request.toolName,
-      reason,
-      details,
-      matchedGrantId,
-      permissionProfileId,
-      localOperatorOverrideId,
-      approvalMode,
-      reasonCodes,
-    });
+    try {
+      await this.storage.audit.append("policy_blocks", {
+        auditEventId,
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        taskId: request.taskId,
+        runId: request.runId,
+        toolName: request.toolName,
+        reason,
+        details,
+        matchedGrantId,
+        permissionProfileId,
+        localOperatorOverrideId,
+        approvalMode,
+        reasonCodes,
+      });
+    } catch (error) {
+      if (!options?.tolerateAuditDeliveryFailure) {
+        throw error;
+      }
+      // The relational block row and approval terminal truth are authoritative.
+      // A retry must not repeat the approved action merely to redeliver JSONL audit.
+    }
   }
 
   private async recordInvocation(
@@ -2057,19 +2147,6 @@ function stringTargets(...values: unknown[]): string[] {
     .filter(Boolean);
 }
 
-function isGrantActive(grant: ToolGrantRecord): boolean {
-  if (grant.revokedAt) {
-    return false;
-  }
-  if (grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now()) {
-    return false;
-  }
-  if (typeof grant.usesRemaining === "number" && grant.usesRemaining <= 0) {
-    return false;
-  }
-  return true;
-}
-
 function getAllowedGrantHosts(constraints: ToolGrantConstraints | undefined): string[] | undefined {
   const allowedHosts = constraints?.allowedHosts?.map((host) => host.trim()).filter(Boolean);
   return allowedHosts && allowedHosts.length > 0 ? allowedHosts : undefined;
@@ -2088,6 +2165,15 @@ function isKnownMutatingToolName(toolName: string): boolean {
     /\.(send|react|unsend)$/u.test(toolName) ||
     toolName === "webhook.send" ||
     toolName === "calendar.create_event"
+  );
+}
+
+function executorReportsConcreteExternalSideEffectBoundary(toolName: string): boolean {
+  return (
+    toolName === "http.post" ||
+    toolName === "webhook.send" ||
+    toolName === "calendar.create_event" ||
+    /\.(send|react|unsend)$/u.test(toolName)
   );
 }
 
@@ -2453,9 +2539,10 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
   };
 }
 
-function toPlainRecord(value: unknown): Record<string, unknown> {
+function toPendingApprovalRequestRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
-  return { ...value };
+  const { signal: _signal, ...persistable } = value as Record<string, unknown>;
+  return persistable;
 }

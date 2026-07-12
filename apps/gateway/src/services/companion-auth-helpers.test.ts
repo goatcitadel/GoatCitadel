@@ -67,6 +67,8 @@ describe("companion auth helpers", () => {
     expect(mapCompanionSessionRow({ metadata_json: "not json", signature_algorithm: "other" })).toEqual(
       expect.objectContaining({
         sessionId: "",
+        accessTokenExpiresAt: "",
+        refreshTokenExpiresAt: "",
         metadata: {},
         deviceLabel: "New device",
         deviceType: "unknown",
@@ -91,17 +93,29 @@ describe("companion auth helpers", () => {
 
     expect(isCompanionSessionCurrentlyActive(session({ revokedAt: "2026-05-14T11:00:00.000Z" }), now)).toBe(false);
     expect(isCompanionSessionCurrentlyActive(session({ grantRevokedAt: "2026-05-14T11:00:00.000Z" }), now)).toBe(false);
+    expect(isCompanionSessionCurrentlyActive(session({ revokedAt: "" }), now)).toBe(false);
+    expect(isCompanionSessionCurrentlyActive(session({ grantRevokedAt: "" }), now)).toBe(false);
     expect(isCompanionSessionCurrentlyActive(session({ accessTokenExpiresAt: "not a date" }), now)).toBe(false);
     expect(isCompanionSessionCurrentlyActive(session({ accessTokenExpiresAt: now }), now)).toBe(false);
     expect(isCompanionSessionCurrentlyActive(session({ grantExpiresAt: now }), now)).toBe(false);
-    expect(isCompanionSessionCurrentlyActive(session({ grantExpiresAt: "not a date" }), now)).toBe(true);
+    expect(isCompanionSessionCurrentlyActive(session({ grantExpiresAt: "not a date" }), now)).toBe(false);
+    expect(isCompanionSessionCurrentlyActive(session({ grantExpiresAt: "" }), now)).toBe(false);
+    expect(isCompanionSessionCurrentlyActive(active, "not a date")).toBe(false);
 
     expect(isCompanionSessionRefreshable(session({ refreshTokenExpiresAt: "not a date" }), now)).toBe(false);
+    expect(isCompanionSessionRefreshable(session({ revokedAt: "" }), now)).toBe(false);
+    expect(isCompanionSessionRefreshable(session({ grantRevokedAt: "" }), now)).toBe(false);
     expect(isCompanionSessionRefreshable(session({ refreshTokenExpiresAt: now }), now)).toBe(false);
     expect(isCompanionSessionRefreshable(session({ grantExpiresAt: now }), now)).toBe(false);
+    expect(isCompanionSessionRefreshable(session({ grantExpiresAt: "not a date" }), now)).toBe(false);
+    expect(isCompanionSessionRefreshable(session({ grantExpiresAt: "" }), now)).toBe(false);
     expect(isCompanionSessionOperatorActive(session({ refreshTokenExpiresAt: "not a date" }), now)).toBe(false);
+    expect(isCompanionSessionOperatorActive(session({ revokedAt: "" }), now)).toBe(false);
+    expect(isCompanionSessionOperatorActive(session({ grantRevokedAt: "" }), now)).toBe(false);
     expect(isCompanionSessionOperatorActive(session({ refreshTokenExpiresAt: now }), now)).toBe(false);
     expect(isCompanionSessionOperatorActive(session({ grantExpiresAt: now }), now)).toBe(false);
+    expect(isCompanionSessionOperatorActive(session({ grantExpiresAt: "not a date" }), now)).toBe(false);
+    expect(isCompanionSessionOperatorActive(session({ grantExpiresAt: "" }), now)).toBe(false);
   });
 
   it("normalizes audit event, record, nonce, signature, and request path inputs", () => {

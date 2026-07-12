@@ -228,4 +228,28 @@ describe("ExternalSideEffectRunRepository", () => {
     assert.equal(run.reversibility?.status, "irreversible");
     assert.equal(run.reversibility?.label, "Cannot undo");
   });
+
+  it("uses database time for stale status eligibility and transition", () => {
+    const repo = createRepo();
+    const run = repo.createOrGet(
+      {
+        workspaceId: "workspace-clock",
+        boundary: "approved_external_runtime",
+        routePath: "external_side_effect:approved_external_runtime:plugin.mutate:unknown_connection:approval-clock",
+        catalogId: "plugin.mutate",
+        actionId: "approval-clock",
+        actorScope: "workspace-clock",
+        idempotencyKey: "approved-external-runtime:approval-clock",
+        payloadHash: "payload-hash-clock",
+      },
+      "1900-01-01T00:00:00.000Z",
+    );
+
+    assert.equal(repo.isStatusStale(run.runId, "claimed_not_sent", 5 * 60 * 1000), false);
+    const fresh = repo.markFailureIfStatusStale(run.runId, "claimed_not_sent", 5 * 60 * 1000, {
+      status: "unknown_external_outcome",
+      errorText: "must remain fresh",
+    });
+    assert.equal(fresh.status, "claimed_not_sent");
+  });
 });

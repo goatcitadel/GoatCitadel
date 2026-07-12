@@ -4393,7 +4393,10 @@ export class ImprovementService {
             failure_reason = @failureReason,
             updated_at = @updatedAt
         WHERE activation_id = @activationId
-          AND (@expectedStatus IS NULL OR status = @expectedStatus)
+          AND (
+            CAST(@expectedStatus AS TEXT) IS NULL
+            OR status = CAST(@expectedStatus AS TEXT)
+          )
       `,
       )
       .run({
