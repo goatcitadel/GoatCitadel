@@ -26,7 +26,7 @@ export interface PostgresSyncWorkerQueryExecutor {
 }
 
 export interface PostgresSyncWorkerTransactionClient extends PostgresSyncWorkerQueryExecutor {
-  release(): void;
+  release(destroy?: boolean): void;
 }
 
 export interface PostgresSyncWorkerPool extends PostgresSyncWorkerQueryExecutor {
@@ -37,6 +37,8 @@ export interface PostgresSyncWorkerPool extends PostgresSyncWorkerQueryExecutor 
 export interface PostgresSyncWorkerRuntime {
   pool: PostgresSyncWorkerPool;
   transactions: Map<string, PostgresSyncWorkerTransactionClient>;
+  transactionSessionIds: Map<string, string>;
+  sessions: Map<string, PostgresSyncWorkerTransactionClient>;
   serverEncodingPromise?: Promise<string | undefined>;
 }
 
@@ -49,6 +51,8 @@ export function createPostgresSyncWorkerRuntime(
   return {
     pool: input.pool ?? (new Pool(buildPostgresSyncWorkerPoolConfig(options)) as unknown as PostgresSyncWorkerPool),
     transactions: new Map(),
+    transactionSessionIds: new Map(),
+    sessions: new Map(),
   };
 }
 
@@ -60,8 +64,15 @@ export function registerPostgresSyncWorkerMessageHandler(
   workerPort: PostgresSyncWorkerMessageSource,
   runtime: PostgresSyncWorkerRuntime,
 ): void {
+  let responseTail = Promise.resolve();
   workerPort.on("message", (message) => {
-    void respondToPostgresSyncWorkerMessage(runtime, message as PostgresSyncWorkerMessage);
+    // The host protocol is synchronous, but a timed-out host request can send
+    // cleanup while the original worker operation is still settling. Preserve
+    // message order so BEGIN/COMMIT cannot overlap session_end, rollback, or
+    // close on the same client. A failed response port must not poison the tail.
+    responseTail = responseTail
+      .then(() => respondToPostgresSyncWorkerMessage(runtime, message as PostgresSyncWorkerMessage))
+      .catch(() => undefined);
   });
 }
 
@@ -103,10 +114,10 @@ export async function handlePostgresSyncWorkerRequest(
 ): Promise<unknown> {
   switch (request.kind) {
     case "query": {
-      const executor = request.txId ? getTransactionClient(runtime, request.txId) : runtime.pool;
+      const executor = getRequestExecutor(runtime, request.txId, request.sessionId);
       const result = await executor.query(
         request.sql,
-        sanitizeParamsForServerEncoding(request.params, await getServerEncoding(runtime), request.sql),
+        sanitizeParamsForServerEncoding(request.params, await getServerEncoding(runtime, executor), request.sql),
       );
       if (request.mode === "run") {
         return {
@@ -120,25 +131,54 @@ export async function handlePostgresSyncWorkerRequest(
       return result.rows;
     }
     case "exec": {
-      const executor = request.txId ? getTransactionClient(runtime, request.txId) : runtime.pool;
+      const executor = getRequestExecutor(runtime, request.txId, request.sessionId);
       const result = await executor.query(request.sql);
       return {
         changes: result.rowCount ?? 0,
         lastInsertRowid: undefined,
       };
     }
-    case "tx_begin": {
-      if (runtime.transactions.has(request.txId)) {
-        throw new Error(`Postgres transaction ${request.txId} is already active`);
+    case "session_begin": {
+      if (runtime.sessions.has(request.sessionId)) {
+        throw new Error(`Postgres pinned session ${request.sessionId} is already active`);
       }
       const client = await runtime.pool.connect();
+      runtime.sessions.set(request.sessionId, client);
+      return true;
+    }
+    case "session_end": {
+      const client = getPinnedSessionClient(runtime, request.sessionId);
+      if (Array.from(runtime.transactionSessionIds.values()).includes(request.sessionId)) {
+        throw new Error(`Postgres pinned session ${request.sessionId} still owns an active transaction`);
+      }
+      runtime.sessions.delete(request.sessionId);
+      client.release(request.destroy);
+      return true;
+    }
+    case "tx_begin": {
+      if (runtime.transactions.has(request.txId) || runtime.transactionSessionIds.has(request.txId)) {
+        throw new Error(`Postgres transaction ${request.txId} is already active`);
+      }
+      const client = request.sessionId
+        ? getPinnedSessionClient(runtime, request.sessionId)
+        : await runtime.pool.connect();
+      if (request.sessionId) {
+        // Reserve ownership before BEGIN yields. Otherwise session_end can run
+        // concurrently, release the pinned client, and leave a late BEGIN as an
+        // orphan transaction on that released connection.
+        runtime.transactionSessionIds.set(request.txId, request.sessionId);
+      }
       try {
         await client.query("BEGIN");
       } catch (error) {
         // Release the checked-out client so a failed BEGIN does not leak it from the pool.
         // Repeated failures would otherwise exhaust the pool and block all DB access for the
         // worker, not just transactions.
-        client.release();
+        if (request.sessionId) {
+          runtime.transactionSessionIds.delete(request.txId);
+        } else {
+          client.release();
+        }
         throw error;
       }
       runtime.transactions.set(request.txId, client);
@@ -149,8 +189,11 @@ export async function handlePostgresSyncWorkerRequest(
       try {
         await client.query("COMMIT");
       } finally {
+        const isPinnedSessionTransaction = runtime.transactionSessionIds.delete(request.txId);
         runtime.transactions.delete(request.txId);
-        client.release();
+        if (!isPinnedSessionTransaction) {
+          client.release();
+        }
       }
       return true;
     }
@@ -159,8 +202,11 @@ export async function handlePostgresSyncWorkerRequest(
       try {
         await client.query("ROLLBACK");
       } finally {
+        const isPinnedSessionTransaction = runtime.transactionSessionIds.delete(request.txId);
         runtime.transactions.delete(request.txId);
-        client.release();
+        if (!isPinnedSessionTransaction) {
+          client.release();
+        }
       }
       return true;
     }
@@ -169,9 +215,16 @@ export async function handlePostgresSyncWorkerRequest(
         try {
           await client.query("ROLLBACK");
         } finally {
+          const isPinnedSessionTransaction = runtime.transactionSessionIds.delete(txId);
           runtime.transactions.delete(txId);
-          client.release();
+          if (!isPinnedSessionTransaction) {
+            client.release();
+          }
         }
+      }
+      for (const [sessionId, client] of runtime.sessions.entries()) {
+        runtime.sessions.delete(sessionId);
+        client.release(true);
       }
       await runtime.pool.end();
       return true;
@@ -179,10 +232,35 @@ export async function handlePostgresSyncWorkerRequest(
   }
 }
 
+function getRequestExecutor(
+  runtime: PostgresSyncWorkerRuntime,
+  txId: string | undefined,
+  sessionId: string | undefined,
+): PostgresSyncWorkerQueryExecutor {
+  if (txId) {
+    return getTransactionClient(runtime, txId);
+  }
+  if (sessionId) {
+    return getPinnedSessionClient(runtime, sessionId);
+  }
+  return runtime.pool;
+}
+
 function getTransactionClient(runtime: PostgresSyncWorkerRuntime, txId: string): PostgresSyncWorkerTransactionClient {
   const client = runtime.transactions.get(txId);
   if (!client) {
     throw new Error(`Missing active Postgres transaction ${txId}`);
+  }
+  return client;
+}
+
+function getPinnedSessionClient(
+  runtime: PostgresSyncWorkerRuntime,
+  sessionId: string,
+): PostgresSyncWorkerTransactionClient {
+  const client = runtime.sessions.get(sessionId);
+  if (!client) {
+    throw new Error(`Missing active Postgres pinned session ${sessionId}`);
   }
   return client;
 }
@@ -217,9 +295,12 @@ export function buildPostgresSyncWorkerPoolConfig(options: PostgresConnectionOpt
   };
 }
 
-async function getServerEncoding(runtime: PostgresSyncWorkerRuntime): Promise<string | undefined> {
+async function getServerEncoding(
+  runtime: PostgresSyncWorkerRuntime,
+  executor: PostgresSyncWorkerQueryExecutor = runtime.pool,
+): Promise<string | undefined> {
   if (!runtime.serverEncodingPromise) {
-    runtime.serverEncodingPromise = runtime.pool
+    runtime.serverEncodingPromise = executor
       .query<{ server_encoding: string }>("SELECT current_setting('server_encoding') AS server_encoding")
       .then((result) => result.rows[0]?.server_encoding)
       .catch(() => undefined);

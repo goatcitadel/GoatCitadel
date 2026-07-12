@@ -41,6 +41,7 @@ type SyncHarnessInternals = {
   closed: boolean;
   fatalError?: Error;
   activeTransactionId?: string;
+  activeSessionId?: string;
   nestedTransactionDepth: number;
 };
 
@@ -181,6 +182,92 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     const fatal = createSyncHarness(() => ({ ok: true, result: undefined }));
     fatal.internals.fatalError = new Error("worker failed");
     assert.throws(() => fatal.client.exec("SELECT fatal"), /worker failed/);
+  });
+
+  it("pins queries and independent transactions to one worker session and can retire it", () => {
+    const { client, requests } = createSyncHarness(() => ({ ok: true, result: undefined }));
+
+    const result = client.withPinnedSession((controls) => {
+      client.exec("SELECT pinned");
+      client.transaction("immediate", () => {
+        client.exec("SELECT pinned transaction");
+      });
+      controls.destroyOnRelease();
+      return "done";
+    });
+
+    assert.equal(result, "done");
+    const typedRequests = requests as Array<{
+      kind: string;
+      sessionId?: string;
+      txId?: string;
+      destroy?: boolean;
+    }>;
+    assert.deepEqual(
+      typedRequests.map((request) => request.kind),
+      ["session_begin", "exec", "tx_begin", "exec", "tx_commit", "session_end"],
+    );
+    const sessionId = typedRequests[0]?.sessionId;
+    assert.equal(typeof sessionId, "string");
+    assert.equal(typedRequests[1]?.sessionId, sessionId);
+    assert.equal(typedRequests[2]?.sessionId, sessionId);
+    assert.equal(typedRequests[3]?.sessionId, sessionId);
+    assert.equal(typedRequests.at(-1)?.sessionId, sessionId);
+    assert.equal(typedRequests.at(-1)?.destroy, true);
+  });
+
+  it("retires the worker when pinned-session initialization fails ambiguously", () => {
+    const timedOut = createSyncHarness(() => ({ ok: true, result: true }));
+    const waitMock = mock.method(Atomics, "wait", () => "timed-out");
+
+    try {
+      assert.throws(
+        () => timedOut.client.withPinnedSession(() => "must not run"),
+        /Timed out waiting for Postgres response \(session_begin\)/,
+      );
+    } finally {
+      waitMock.mock.restore();
+    }
+
+    assert.deepEqual(timedOut.requests, [
+      {
+        kind: "session_begin",
+        sessionId: (timedOut.requests[0] as { sessionId: string }).sessionId,
+      },
+    ]);
+    assert.equal(timedOut.internals.closed, true);
+    assert.equal(timedOut.internals.worker.terminate.mock.callCount(), 1);
+    assert.match(timedOut.internals.fatalError?.message ?? "", /session_begin/);
+    assert.throws(() => timedOut.client.exec("SELECT after ambiguous begin"), /already closed/);
+
+    const rejected = createSyncHarness(() => ({
+      ok: false,
+      error: { name: "ConnectionError", message: "session checkout failed" },
+    }));
+    assert.throws(() => rejected.client.withPinnedSession(() => "must not run"), /session checkout failed/);
+    assert.equal(rejected.internals.closed, true);
+    assert.equal(rejected.internals.worker.terminate.mock.callCount(), 1);
+    assert.match(rejected.internals.fatalError?.message ?? "", /session checkout failed/);
+  });
+
+  it("preserves a pinned-session primary error and retires the worker when session cleanup fails", () => {
+    const { client, internals } = createSyncHarness((request) => {
+      if ((request as { kind?: string }).kind === "session_end") {
+        return { ok: false, error: { name: "CleanupError", message: "session cleanup failed" } };
+      }
+      return { ok: true, result: undefined };
+    });
+
+    assert.throws(
+      () =>
+        client.withPinnedSession(() => {
+          throw new Error("migration failed");
+        }),
+      /migration failed/,
+    );
+    assert.equal(internals.closed, true);
+    assert.equal(internals.worker.terminate.mock.callCount(), 1);
+    assert.match(internals.fatalError?.message ?? "", /session cleanup failed/);
   });
 
   it("reports timed out and missing worker responses", () => {
@@ -399,6 +486,8 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
         end: mock.fn(async () => undefined),
       },
       transactions: new Map([["tx-existing", transactionClient]]),
+      transactionSessionIds: new Map(),
+      sessions: new Map(),
     };
 
     assert.deepEqual(

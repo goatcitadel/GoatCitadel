@@ -13,10 +13,16 @@ import type { PostgresWorkerRequest, PostgresWorkerResponse, SerializedWorkerErr
 
 const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
 
+export interface PostgresPinnedSessionControls {
+  destroyOnRelease(): void;
+}
+
 export class PostgresSyncDatabaseClient implements DatabaseClient {
   public readonly dialect = "postgres" as const;
   private readonly worker: Worker;
   private activeTransactionId?: string;
+  private activeSessionId?: string;
+  private activeSessionMustBeDestroyed = false;
   private nestedTransactionDepth = 0;
   private fatalError?: Error;
   private closed = false;
@@ -47,6 +53,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       kind: "exec",
       sql,
       txId: this.activeTransactionId,
+      sessionId: this.activeSessionId,
     });
   }
 
@@ -74,6 +81,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
         kind: "tx_begin",
         txId,
         mode,
+        sessionId: this.activeSessionId,
       });
       this.activeTransactionId = txId;
       try {
@@ -85,10 +93,16 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
         });
         return result;
       } catch (error) {
-        this.requestSync({
-          kind: "tx_rollback",
-          txId,
-        });
+        try {
+          this.requestSync({
+            kind: "tx_rollback",
+            txId,
+          });
+        } catch {
+          if (this.activeSessionId) {
+            this.activeSessionMustBeDestroyed = true;
+          }
+        }
         throw error;
       } finally {
         this.activeTransactionId = undefined;
@@ -111,6 +125,61 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     }
   }
 
+  public withPinnedSession<T>(callback: (controls: PostgresPinnedSessionControls) => T): T {
+    if (this.activeSessionId || this.activeTransactionId) {
+      throw new Error("Postgres pinned sessions cannot be nested or opened inside a transaction.");
+    }
+    const sessionId = randomUUID();
+    try {
+      this.requestSync({ kind: "session_begin", sessionId });
+    } catch (error) {
+      // A host timeout cannot prove whether the worker checked out and retained
+      // the client before its response was lost. Do not race session_end against
+      // an in-flight begin; retire the worker so the server releases any socket.
+      this.closed = true;
+      this.fatalError = error instanceof Error ? error : new Error(String(error));
+      void this.worker.terminate();
+      throw error;
+    }
+    this.activeSessionId = sessionId;
+    this.activeSessionMustBeDestroyed = false;
+    let result: T | undefined;
+    let primaryError: unknown;
+    let hasPrimaryError = false;
+
+    try {
+      result = callback({
+        destroyOnRelease: () => {
+          this.activeSessionMustBeDestroyed = true;
+        },
+      });
+      assertSynchronousTransactionResult(result);
+    } catch (error) {
+      primaryError = error;
+      hasPrimaryError = true;
+    } finally {
+      this.activeSessionId = undefined;
+    }
+
+    try {
+      this.requestSync({ kind: "session_end", sessionId, destroy: this.activeSessionMustBeDestroyed });
+    } catch (error) {
+      this.closed = true;
+      this.fatalError = error instanceof Error ? error : new Error(String(error));
+      void this.worker.terminate();
+      if (!hasPrimaryError) {
+        primaryError = error;
+        hasPrimaryError = true;
+      }
+    }
+    this.activeSessionMustBeDestroyed = false;
+
+    if (hasPrimaryError) {
+      throw primaryError;
+    }
+    return result as T;
+  }
+
   public executeRun(sql: string, params: unknown[]): DbRunResult {
     return this.requestSync({
       kind: "query",
@@ -118,6 +187,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       params,
       mode: "run",
       txId: this.activeTransactionId,
+      sessionId: this.activeSessionId,
     }) as DbRunResult;
   }
 
@@ -128,6 +198,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       params,
       mode: "one",
       txId: this.activeTransactionId,
+      sessionId: this.activeSessionId,
     }) as T | undefined;
   }
 
@@ -138,6 +209,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       params,
       mode: "all",
       txId: this.activeTransactionId,
+      sessionId: this.activeSessionId,
     }) as T[];
   }
 

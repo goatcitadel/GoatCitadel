@@ -13,16 +13,28 @@ export type PostgresWorkerRequest =
       params: unknown[];
       mode: "run" | "one" | "all";
       txId?: string;
+      sessionId?: string;
     }
   | {
       kind: "exec";
       sql: string;
       txId?: string;
+      sessionId?: string;
+    }
+  | {
+      kind: "session_begin";
+      sessionId: string;
+    }
+  | {
+      kind: "session_end";
+      sessionId: string;
+      destroy: boolean;
     }
   | {
       kind: "tx_begin";
       txId: string;
       mode: DbTransactionMode;
+      sessionId?: string;
     }
   | {
       kind: "tx_commit";

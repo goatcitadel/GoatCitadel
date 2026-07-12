@@ -1,0 +1,1551 @@
+{
+  "manifestVersion": 1,
+  "hashAlgorithm": "sha256-typescript-ast-token-closure-and-runtime-payload-v4",
+  "sources": {
+    "sqlite": {
+      "path": "packages/storage/src/sqlite.ts",
+      "registryName": "SCHEMA_MIGRATION_GROUPS",
+      "expectedCount": 143,
+      "expectedFirstVersion": 1,
+      "expectedLastVersion": 143,
+      "migrations": [
+        {
+          "version": 1,
+          "name": "base_schema",
+          "groupName": "canonical",
+          "definitionSha256": "def17e40485d72f9731e36aec335edb67e6df84f0866c25516a1b818e28717f4",
+          "implementationSha256": "ab7ec2c55f28ad467764493ea54c9c373bc47353a7bec2841ca840677bece863"
+        },
+        {
+          "version": 2,
+          "name": "approval_explainer_columns",
+          "groupName": "canonical",
+          "definitionSha256": "6b51168e62337872286f48a2ae61a5b6d70888905082c63b3691a22aa8867014",
+          "implementationSha256": "03c18420b2806cc4d9229967b6bc8504b8b51acf633f6b86e306189975bb9045"
+        },
+        {
+          "version": 3,
+          "name": "task_subagent_agent_session_rename",
+          "groupName": "canonical",
+          "definitionSha256": "dcecf7597e07c5fcd2e30dacc73e102e6a55af11b1b3a6204644e540fa9b0381",
+          "implementationSha256": "f6a2e008dee5bb13f2d8c887ec69aaa64854348a6ef2deef3ddd99fb00ca478d"
+        },
+        {
+          "version": 4,
+          "name": "drop_legacy_integration_index",
+          "groupName": "canonical",
+          "definitionSha256": "615f0cf617a9f6c85273a3f8fe44ac0de466c079886105203fc6477b509d83b0",
+          "implementationSha256": "e4abc3246239c94f4a33f00304603e25967469cd93bf948eef13b3f3ca7d329f"
+        },
+        {
+          "version": 5,
+          "name": "mesh_schema",
+          "groupName": "canonical",
+          "definitionSha256": "c61794c50fc9a0392dca6cd7ffa06d14cbcfe4c20ebae15ec2a679949fd150af",
+          "implementationSha256": "7fb1d21e26c8f704f906df81e688ea2ecf2ca50b7fc2c45e7f6d8df551725231"
+        },
+        {
+          "version": 6,
+          "name": "memory_qmd_schema",
+          "groupName": "canonical",
+          "definitionSha256": "b3c920035eac3d49a34e846ac93b2d881a2b9597d5e3b1c34164476779289fc1",
+          "implementationSha256": "38db7c9cf9f575bbaeb4c2036e5b8130f3d48dd8f18b4ec30ac8a1a71c2dc93c"
+        },
+        {
+          "version": 7,
+          "name": "task_soft_delete_columns",
+          "groupName": "canonical",
+          "definitionSha256": "b264bb0ff6946285ee3bc6ef91d01c18c05565c97cc32ee840d8caf237fabd6e",
+          "implementationSha256": "f3179b1ef65516b3f2ae7f1e27b66fe6ed6e7066cf3720bcf1f324c7f07e8034"
+        },
+        {
+          "version": 8,
+          "name": "agent_profiles_schema",
+          "groupName": "canonical",
+          "definitionSha256": "e1625af5262d636e77d0cf45f6e78d9729316d496df84f941b44faf7ef2b7a94",
+          "implementationSha256": "a25ca9fceaf05062a80625d845de865f4a26d71e8a8906b0fe888c1d9eb0b936"
+        },
+        {
+          "version": 9,
+          "name": "native_tools_expansion_schema",
+          "groupName": "canonical",
+          "definitionSha256": "43e7d697b3a74ab94c5bf1f6d66439f414e25c2262991c683ae8ba37e418175d",
+          "implementationSha256": "75dd982f08cef54ab9c60d8dfc518188c804061869aee7395d8891274f80b83f"
+        },
+        {
+          "version": 10,
+          "name": "chat_workspace_schema",
+          "groupName": "canonical",
+          "definitionSha256": "219e5d45db7e918e411541bb0cc1ac4c13515d24cc682bed89f87ed38571dd88",
+          "implementationSha256": "62bbf5ddea242c7b18db8c434eab6818ef1b8a94ebfb1f7f4345f1a4f152d4b0"
+        },
+        {
+          "version": 11,
+          "name": "system_settings_schema",
+          "groupName": "canonical",
+          "definitionSha256": "1e76f7b01e53c6f49d5f49365299a4b3e5ffbc329a4d0e584f851d3b417a7a20",
+          "implementationSha256": "48c8f9eafd069965f625b4eb772ab9f631a6d2a4a02b612f41ee91b116a682be"
+        },
+        {
+          "version": 12,
+          "name": "v11_expansion_schema",
+          "groupName": "canonical",
+          "definitionSha256": "c36b1603989c883f1a27a4b8c7174951b7ec2ffe1dee67c7f48b388819095655",
+          "implementationSha256": "366d29dbec6b65cf693c4750577554a8266d679ae3deb0c1b0e545c516badff9"
+        },
+        {
+          "version": 13,
+          "name": "agentic_chat_schema",
+          "groupName": "canonical",
+          "definitionSha256": "f3e6eb947008a69c1e433cbc0f566fda0532bce80e7ff70ba8cd44b3f1082c46",
+          "implementationSha256": "8e953b6bab99df0bbc5cef3058465429b38f1d102889256596571f7ca0f1cc5b"
+        },
+        {
+          "version": 14,
+          "name": "prompt_pack_readiness_schema",
+          "groupName": "canonical",
+          "definitionSha256": "e78c93d70356aaf2576d62ba8e804e4f4ec2905d80c6e271c53769d3d7b83532",
+          "implementationSha256": "119e967bb14ba39022c058bfceaf01b732d5323eac0c70865a6425bc75fb4bc6"
+        },
+        {
+          "version": 15,
+          "name": "skill_runtime_state_schema",
+          "groupName": "canonical",
+          "definitionSha256": "5b06434be131cc1964fed08bd96d8ed3fe8d56d3c8bfde17e43be2351e42d75b",
+          "implementationSha256": "38fb2dc0a8cd4e2166350bc2761aab09431613ad05647fd78f1d61a474a1c380"
+        },
+        {
+          "version": 16,
+          "name": "deprecated_placeholder_v16",
+          "groupName": "canonical",
+          "definitionSha256": "c389b646fe3efd8bf5af685f6e9095074d255dbf98df41324b6f7237aa091441",
+          "implementationSha256": "000b4bc951abc408802d05ecb5025a6b00d41f2efa4abc64672fddee3145062c"
+        },
+        {
+          "version": 17,
+          "name": "agentic_depth_schema",
+          "groupName": "canonical",
+          "definitionSha256": "e9e9b16a20262e0643041d9e8eb1e980109c309c538710333b6a67c4abb9f0f7",
+          "implementationSha256": "79a6570df00d2c9afa4739a37ebc6f98faf07011a3eba7333f377948ce1379c8"
+        },
+        {
+          "version": 18,
+          "name": "weekly_decision_replay_schema",
+          "groupName": "canonical",
+          "definitionSha256": "d630e3170c2a87ba40bea5453c813cb58e50f1e45fa76412a0f9d32f69055b51",
+          "implementationSha256": "f4f59d462280290857d597d367d66922940cefcf57ac637e8420743bd30cb6aa"
+        },
+        {
+          "version": 19,
+          "name": "prompt_pack_benchmark_schema",
+          "groupName": "canonical",
+          "definitionSha256": "bbbb0c1ae4d01425e82bd9ae178c4649bb28201912c7f5df2048278a41406590",
+          "implementationSha256": "adfb9f868fd8f675ad919de68ba44c9f717506b8dfa0d922402f5caf2ae62e70"
+        },
+        {
+          "version": 20,
+          "name": "workspace_isolation_schema",
+          "groupName": "canonical",
+          "definitionSha256": "6e5b75bc954a4dc82075279ee17bfbb207cae0539a376a8f32a4ffd7cfba928e",
+          "implementationSha256": "63a1b6953698268456e619c1916ce71f46572ad05d6bc20942b50d4a8beb289b"
+        },
+        {
+          "version": 21,
+          "name": "durable_run_foundation_schema",
+          "groupName": "canonical",
+          "definitionSha256": "30a5eb0a47bd98cc0fca886c7b697f8dd403f8d79b17473da6a2014db1d7fe05",
+          "implementationSha256": "4ec42f63532f3ffb2c25259ee3ba7fc5cd733703a6d5e1a44b6825f07d54c90d"
+        },
+        {
+          "version": 22,
+          "name": "gap_closure_extension_schema",
+          "groupName": "canonical",
+          "definitionSha256": "ed622fd82e07f634f06f841a59f8660b847624afe8d3a8ea2fa35a09c2062bdc",
+          "implementationSha256": "4f1c07e18535fbafe59159797bd2d69df8a00969ea82a9903566b5422d93bad2"
+        },
+        {
+          "version": 23,
+          "name": "operational_hot_path_schema",
+          "groupName": "canonical",
+          "definitionSha256": "dc9a5ce11d758c85b1a9a3050c8351b80cbbdb6ecb0a8aed4241ec518afe52d6",
+          "implementationSha256": "3da395f0c52a80d6a24ffc597f30a65a8c6cf3abde2d7ba93af5a28c0d77e4e0"
+        },
+        {
+          "version": 24,
+          "name": "sessions_operator_summary_index",
+          "groupName": "canonical",
+          "definitionSha256": "bb8c7c82a3d0fe4a95c29c26f3ed8dc1ad24142f67bf0c233d5631dedd7e9835",
+          "implementationSha256": "d1325aeb8a72bda6a0510993ff7ab8e1c3ee50b7d5fdb5d6f4fc1efb2d13e7ff"
+        },
+        {
+          "version": 25,
+          "name": "chat_branching_and_planning_mode",
+          "groupName": "canonical",
+          "definitionSha256": "06f063b87300ac286df623bd379c377e3a0011ac66fbaf3775ab0fd82b2664f2",
+          "implementationSha256": "5f7a4d685c569661d159d34e7432681acd83e5785888834289e02c46afdf5627"
+        },
+        {
+          "version": 26,
+          "name": "chat_mode_orchestration_foundation",
+          "groupName": "canonical",
+          "definitionSha256": "da11879d80beeab4f1cced6ba3de6ad4965a93706b875808abaf4a857377a6f3",
+          "implementationSha256": "097c603e7678d3d6eb3dc232efa767588e3386ca825de34115b05ad6209b9590"
+        },
+        {
+          "version": 27,
+          "name": "auth_device_requests_and_grants",
+          "groupName": "canonical",
+          "definitionSha256": "4e77056a83d54ba021e83d39950156ff82a5e663cbb29b3522171f99211d9bb2",
+          "implementationSha256": "e10c65ae683c28ee3b3171a818e9f8b05d33e64e062f560c14b4fa94bf973b88"
+        },
+        {
+          "version": 28,
+          "name": "chat_specialist_candidates",
+          "groupName": "canonical",
+          "definitionSha256": "f78a5ea37caa89df7cc737331bd1647ab6fa0148c0bd857e246a18c624cf80cc",
+          "implementationSha256": "38e1599215fcca940caa507a41199fc84cb6853e6fb0cfe52bdf3e689e72bb7c"
+        },
+        {
+          "version": 29,
+          "name": "chat_turn_trace_shape_repair",
+          "groupName": "canonical",
+          "definitionSha256": "0839e89c14bb26f4f37ee3fcead6120eeeecec22145a7c28014ba28e8ad5fd6f",
+          "implementationSha256": "9818b954f86c0d7fbf6f8d4da4474ca459af98fd44ad7e5eecf5c6b2bb3612e4"
+        },
+        {
+          "version": 30,
+          "name": "chat_plans_and_summaries",
+          "groupName": "canonical",
+          "definitionSha256": "f6c9fd8c9070e3e781714bdfc9b681ba4fc35d5173b8d6230193c7df632ea43e",
+          "implementationSha256": "b8a39911e4046b0285171640d79654db817b4f7686b0bd06ce04104352dd70d4"
+        },
+        {
+          "version": 31,
+          "name": "robust_agent_execution_schema",
+          "groupName": "canonical",
+          "definitionSha256": "a8c13ff222a1c725aa21a679c76336852ac9a18776f5e68a4f0a58ddc36d8433",
+          "implementationSha256": "d7e616d178f87d52eb06879111b459074955ed5d7e42b6069801daaf4f5fc977"
+        },
+        {
+          "version": 32,
+          "name": "hot_path_covering_indexes",
+          "groupName": "canonical",
+          "definitionSha256": "ce0c5370f30fa09985a6078b475af258af0d3f1211eaa80e992f75f0d47bd603",
+          "implementationSha256": "c1fafa584f6f77d76f11569776caf5e23f0e9fdb09d906a4172fc281f5e0b4dd"
+        },
+        {
+          "version": 33,
+          "name": "prompt_pack_test_mode_and_tool_tier",
+          "groupName": "canonical",
+          "definitionSha256": "e05997de804e638f62b3ac21bffb8d4631640c8dff82ddd5b546fdbe99e02715",
+          "implementationSha256": "7f43e508084e7c84cb0042e183a82f25a1f16400fb416c9fc0ac03eeef849b57"
+        },
+        {
+          "version": 34,
+          "name": "prompt_pack_run_execution_profile",
+          "groupName": "canonical",
+          "definitionSha256": "80b1ce71520aac2f3918d1a31e1b9067309e328c4aab2fc614de93f5c2e2bf9e",
+          "implementationSha256": "f23480413c191c9eb9d2049f08019d7755fd653a38a835487694b59bf7b4842b"
+        },
+        {
+          "version": 35,
+          "name": "assembly_of_minds_schema",
+          "groupName": "canonical",
+          "definitionSha256": "6c9cb57f5e8ce3153c65fb3e4944e76997532856d3d63fe7a0f5b6fc9a5e8e30",
+          "implementationSha256": "ff4f5b1c02ff3da54a91868ddc650760551f5a741b2aef605e634b1248c64b1a"
+        },
+        {
+          "version": 36,
+          "name": "realtime_event_sequence_cursor",
+          "groupName": "canonical",
+          "definitionSha256": "94f7aa3fab319661074d4d83f1c50e77c82601a59aa1649ae0d30a14cccb9dc1",
+          "implementationSha256": "93c751203bae58bbb08a371848921a8f8efcba4b007ff26c9144e7906a4a2d6d"
+        },
+        {
+          "version": 37,
+          "name": "phase2_approval_runtime_schema",
+          "groupName": "canonical",
+          "definitionSha256": "908ed4f20041abec5a5c46aae2dc173203d6e40ccf989153b29b22e327a6825e",
+          "implementationSha256": "e2ab771e536e099c207b1151c1a83e923f52c65e21f3e6a15cf0862b5c29b0ed"
+        },
+        {
+          "version": 38,
+          "name": "approval_inbox_schema",
+          "groupName": "canonical",
+          "definitionSha256": "921ea137f282d3125b8a63ddb21d432323dea76ca59b77bbad95fe248f79c80c",
+          "implementationSha256": "aa6d43c143b74649e581ab41521799091062cc2dbcba6d481cee86a04bc155ad"
+        },
+        {
+          "version": 39,
+          "name": "approval_expiry_runtime_schema",
+          "groupName": "canonical",
+          "definitionSha256": "63993cc3d0ebd2c5ea1478e040448561232124688c63ad616d1d7496d1120b1a",
+          "implementationSha256": "488170a9b3bd30fbe946a7a40fe4f96afaf0947b7b37ad764cd1b4033668fc15"
+        },
+        {
+          "version": 40,
+          "name": "realtime_event_sequence_state",
+          "groupName": "canonical",
+          "definitionSha256": "1573af6e8c4e803dcb8302e85acd8bc9c1c3adc0eb398f27526a27b7179cced6",
+          "implementationSha256": "70545ea2a57c9485377a6d5c7605d104bb37c599e4d91e6178b06fca009a615f"
+        },
+        {
+          "version": 41,
+          "name": "tool_access_decision_hot_path_indexes",
+          "groupName": "canonical",
+          "definitionSha256": "0025ce20ed5c005092f23da78a2e1482fb4a7c5b59d9b360c08d0f07bef2c98c",
+          "implementationSha256": "0e829b640da359090f126989b8ad5f174ce805e759e0e6b2bfbc4a603ee1b064"
+        },
+        {
+          "version": 42,
+          "name": "workspace_hook_runtime_schema",
+          "groupName": "canonical",
+          "definitionSha256": "be2515bdde121d9334e8064e66765e8711d5fe4a5f934b64692b9ff2d070b164",
+          "implementationSha256": "2d8a198a9d3ef3390a2966c92a8d2510cd3b3689e894485c9d8eba2e74cf734e"
+        },
+        {
+          "version": 43,
+          "name": "chat_session_history_visibility",
+          "groupName": "canonical",
+          "definitionSha256": "2e7514925ce7f91613d93962b973dfc6a411ea4251604c36a89d8d5cd818e0d0",
+          "implementationSha256": "e461920d33e312be95c8ae6470ce1963987af83363241c4f4db17c51798e6ff7"
+        },
+        {
+          "version": 44,
+          "name": "channel_setup_drafts",
+          "groupName": "canonical",
+          "definitionSha256": "f4ba61dbdb1ca7ae5b6787f564d6018bd431aea5d7576b3917ac837c9bc64003",
+          "implementationSha256": "6748720a3b4c97b1e4ee96ee30892e25bf4a12822754214f8898de06e41676f1"
+        },
+        {
+          "version": 45,
+          "name": "companion_session_runtime_schema",
+          "groupName": "canonical",
+          "definitionSha256": "3ce39d960ef2dfebe6b8de6f5f49691328039e1791b10091d8a10b03587f0dcf",
+          "implementationSha256": "710d63d53892daf6109e8841836d90279b931e19245a49de59d8d59d6dd19aeb"
+        },
+        {
+          "version": 46,
+          "name": "memory_maintenance_schema",
+          "groupName": "canonical",
+          "definitionSha256": "5965f1db64e40647f09badb0491450119ef752464a6ced1c5f02c5b4c2515afd",
+          "implementationSha256": "a0263cbc311a36bb4012b7e8095e7c89102ecc78b5614fe4e8631051567b2476"
+        },
+        {
+          "version": 47,
+          "name": "context_manifest_schema",
+          "groupName": "canonical",
+          "definitionSha256": "7ee783fd412985921ef5f166cd3a67c8e7d060a4af78597514a5682bf753d82c",
+          "implementationSha256": "dcb2e4851e3e0bcb26d92794b292f1d0cf1e4d71a196509f11de8c277375adaf"
+        },
+        {
+          "version": 48,
+          "name": "transcript_outbox_schema",
+          "groupName": "canonical",
+          "definitionSha256": "36e35d802ed60195151b10c59dd589378970609bae8b3beb6e0d6830bcec1697",
+          "implementationSha256": "1f9b12af19d5dc092db2ea669fe6d10966f19eef0bc0b7409c913e7e952d9069"
+        },
+        {
+          "version": 49,
+          "name": "realtime_stream_lease_schema",
+          "groupName": "canonical",
+          "definitionSha256": "12f4b7d65d65eb2410d4771326d82e1ad2025b05a8af9339fab8bec705513ee4",
+          "implementationSha256": "8a8ba8d690e735802765896bbef02a38b30485078463eac88c60c986f0856bd7"
+        },
+        {
+          "version": 50,
+          "name": "approval_linkage_json_schema",
+          "groupName": "canonical",
+          "definitionSha256": "bb0cb84c3105c23d0171a7e81bc6ab1ae1a4adf1a3527fe9e5367061d79d88af",
+          "implementationSha256": "53fb22cf7e8bd3a4d6edaefe98587bca34855518b4aa4727737918ceba6b2b51"
+        },
+        {
+          "version": 51,
+          "name": "proactive_orchestration_linkage_schema",
+          "groupName": "canonical",
+          "definitionSha256": "f89a8fa257f23af4d6bc4b0b62999b02a342437325af974677183312b18434d7",
+          "implementationSha256": "d1aab0fc0db28c0836ae2bc07661a9b8fe3fd1052bf1110a708ac246566657aa"
+        },
+        {
+          "version": 52,
+          "name": "prompt_pack_integrity_and_judge_schema",
+          "groupName": "canonical",
+          "definitionSha256": "c2958f619c305d3f7c4a79ccaeb999e169c82e3de0ed690e1c5bf8a957b0a7ad",
+          "implementationSha256": "23da6b5fdc114a9a84ab764f63237ec1be921111aaaab273c590b3afea0ba252"
+        },
+        {
+          "version": 53,
+          "name": "prompt_pack_scoring_v2_schema",
+          "groupName": "canonical",
+          "definitionSha256": "4df5328d82d98f3e366fff1533fbc2a7f7cb1d4205ae2ae17d63be42d5877ef4",
+          "implementationSha256": "e360a45b00de7f3c5d620df34e952c6e8ca7656f388958b19a9a97c447c6b555"
+        },
+        {
+          "version": 54,
+          "name": "capability_system_v1_schema",
+          "groupName": "canonical",
+          "definitionSha256": "719ca9fd6416c0b951bcbda8764343323918ffcd2bb18b319084bdf7391bc489",
+          "implementationSha256": "19c1615b11fef6bee9ade187aa91d230f0e83310e6b5546b8b7731cb1557a375"
+        },
+        {
+          "version": 55,
+          "name": "chat_session_workbench_schema",
+          "groupName": "canonical",
+          "definitionSha256": "254da0adaf7d3e3f7d84d2bff021a0eaecde684dfd5924c2b5452413f55bdbe0",
+          "implementationSha256": "09377c060948b59ecbecc087419c2f2aaf5a31e57f4b32ebb9e0a8ccb3261ee1"
+        },
+        {
+          "version": 56,
+          "name": "code_mode_sandbox_metadata_schema",
+          "groupName": "canonical",
+          "definitionSha256": "4113f1cbed4510d89d4ee992c6415c3b754022b2fec293a93a4249e7c6a84f90",
+          "implementationSha256": "ef8f10248aa70ecbcbf4dd8bebee8f494b946110e70b112d2687aa398fe52451"
+        },
+        {
+          "version": 57,
+          "name": "improvement_ledger_v1_schema",
+          "groupName": "canonical",
+          "definitionSha256": "b867329b4c79fbe7b1ffd5a1f4cd530fe8a14f2c3979373c66f3b4b70a0d7dff",
+          "implementationSha256": "8ac5100ea9b99f0881fcb565180a932cdbfeb1ab1bf82d803be7cedc6f460664"
+        },
+        {
+          "version": 58,
+          "name": "durable_lease_and_approval_effects_schema",
+          "groupName": "canonical",
+          "definitionSha256": "a1b97f1a632898bbb2a18a56fcc1a0c0ff105fcc163df86addde5ab79b281a9f",
+          "implementationSha256": "6755aeb62847cfe302be69808cd50c62c793ce7f7f1d021d2985e45a8d413e8f"
+        },
+        {
+          "version": 59,
+          "name": "approval_effects_pipeline_schema",
+          "groupName": "canonical",
+          "definitionSha256": "bf603a58c959eb4e2016822e7282d7475a74586f87fc608b308e941caa726d65",
+          "implementationSha256": "be3a281c6d208f4b12e8e5f52669f129ee2d667d6bad9bfb057d9c15fe4518f3"
+        },
+        {
+          "version": 60,
+          "name": "prompt_pack_benchmark_dedup_audit_schema",
+          "groupName": "canonical",
+          "definitionSha256": "fb037edba357e76321a479d40bb1157f2a72d1fd0f2b555aca793695bb16582c",
+          "implementationSha256": "2ee8f8f13d85d29b3007f7a91245477f09c3b5ce7566b307f11f0bad742af698"
+        },
+        {
+          "version": 61,
+          "name": "prompt_pack_benchmark_dedup_repair_schema",
+          "groupName": "canonical",
+          "definitionSha256": "58c3ed63612df969217fcbbfe9563d38a50eca5f6ac81d0c3cd81eb830dba8dc",
+          "implementationSha256": "1924cb747e097c6e0a167fcd771b2e39a454440209e7de54c96bb31e219cc729"
+        },
+        {
+          "version": 62,
+          "name": "prompt_pack_run_derived_response_fields",
+          "groupName": "canonical",
+          "definitionSha256": "faa09daea62458b9259338b1eab2ecdc8b0c3aba32e78373294e8e4515ab70e1",
+          "implementationSha256": "a14b560ab3a3ab358f80a0bc5a8c208d6114548221b77ecb1d315c5fafb90188"
+        },
+        {
+          "version": 63,
+          "name": "orchestration_execution_ownership_schema",
+          "groupName": "canonical",
+          "definitionSha256": "f85294f1931aa84a40948539c55362a45f65946095d8129b824fb5cf70e8a3e0",
+          "implementationSha256": "3256e86f294339f2b84acc2b49f174891a649461f4b5aca6ea260e39427b28c5"
+        },
+        {
+          "version": 64,
+          "name": "imported_agent_catalog_schema",
+          "groupName": "canonical",
+          "definitionSha256": "8cbb13c1c7238f1fe0d4b1ba3777effa58b4d38911e72c6633ac17eac113a969",
+          "implementationSha256": "4d7ed90ef63104011c628d6b492400182baa2fcf19bf25bfd113edaa8e884548"
+        },
+        {
+          "version": 65,
+          "name": "cron_jobs_action_description_end_at",
+          "groupName": "canonical",
+          "definitionSha256": "0bff5eed941d9ed61e83cf40107430f3fbfb0e024aebde5dc7f488dee068580a",
+          "implementationSha256": "e26e8f95c7c0f7739a069340935b9f5faa3a0f049e274169422a24fad324b3c7"
+        },
+        {
+          "version": 66,
+          "name": "chat_session_organization",
+          "groupName": "canonical",
+          "definitionSha256": "f84a1e2785800f65330b8dbff7d34d1b6bcae4a9e224d170bb70a4d00497526f",
+          "implementationSha256": "68f9dc447b56d6df24563b692a455b9008cbb1681dfec9cc1a8ffbd380016a72"
+        },
+        {
+          "version": 67,
+          "name": "agent_profile_preset_defaults",
+          "groupName": "canonical",
+          "definitionSha256": "9c399dc43667e64de6915bad89e42a9c5b82b4d8b33a226d807cdcbe00a0eebe",
+          "implementationSha256": "0b9c765cba87568066ec3c1e30edf89b67017d3bafbd2928defdce37e4e69857"
+        },
+        {
+          "version": 68,
+          "name": "chat_generated_artifacts_and_thread_knowledge",
+          "groupName": "canonical",
+          "definitionSha256": "0cc5c5dec1ba95c569475302dbe8b1ff9e5df7f24ae46d13a81010f1e8aa978e",
+          "implementationSha256": "ad000a0fce5e7e37e99a13606a3cc151e2cdb8fd77b53ff0f9cbcf64dd860d1c"
+        },
+        {
+          "version": 69,
+          "name": "mutation_idempotency_runtime_repairs",
+          "groupName": "canonical",
+          "definitionSha256": "c57d621126fba86c448fd2ce0f24c41b03658e2959531843a75e6b97fe1ef380",
+          "implementationSha256": "259b9624ff5027938764aaa267fbb30f36f958399c6fcb47085b166777c71634"
+        },
+        {
+          "version": 70,
+          "name": "generated_artifact_provenance_repairs",
+          "groupName": "canonical",
+          "definitionSha256": "c67c3097c45555993eea8d327baccac1ba80ae3d5b60d63eab611a21c04adbec",
+          "implementationSha256": "5b9b276a39f0333412d5bd72ac96f6904dacc97ffd7d6c32af2964cca9f6da4e"
+        },
+        {
+          "version": 71,
+          "name": "chat_image_route_preferences",
+          "groupName": "canonical",
+          "definitionSha256": "44db8881e436976280f74236772d6ee8a7a5879152cd43dd2b316694f66ec588",
+          "implementationSha256": "ed651be90dea09eaec8f46b7ffbf7493403ea5de1fb6f654db2191a1cc15f41e"
+        },
+        {
+          "version": 72,
+          "name": "prompt_pack_agentic_diagnostics",
+          "groupName": "canonical",
+          "definitionSha256": "49ec1f3fcb3bdba8a98de0ec54278eb0fbc30323c99e750a1fad0ba318a1f892",
+          "implementationSha256": "f3708c4817c8e2a12a59b7d4eb63e2d0d3d0fc0c0d7b3d20f37944af979d8fc7"
+        },
+        {
+          "version": 73,
+          "name": "pending_approval_action_expiry_and_trace_index_parity",
+          "groupName": "canonical",
+          "definitionSha256": "8c64d6f856e44d7debc3dc237bdbf4f6725245562e6bfbc00dfe25914f1034e7",
+          "implementationSha256": "b686fb552848ae48ea3e28906ed8666c9e09523d74be2d4053f587d1f835c1ed"
+        },
+        {
+          "version": 74,
+          "name": "runtime_evidence_envelopes",
+          "groupName": "canonical",
+          "definitionSha256": "eb3597e30c76376da7d3e6ca9bd937a04917231ab1a0cd1cef488bca21237626",
+          "implementationSha256": "159c108d4bbd02e8a64c5c44d6d0eb56fc7a69665ea234d4ed3a573c898b90e6"
+        },
+        {
+          "version": 75,
+          "name": "skill_evaluation_runs",
+          "groupName": "canonical",
+          "definitionSha256": "be84fec3e86203a4e608da28da6f2a6f0e5bcf3c626efb4532687d127505ac9f",
+          "implementationSha256": "0bd7338a2057cacdbb7720497b4ec8956eb960d8f059baab23258ec6272d1101"
+        },
+        {
+          "version": 76,
+          "name": "agentic_runtime_task_metadata",
+          "groupName": "canonical",
+          "definitionSha256": "1e503d07efa3ef08839d00ecf3c8ed52756ef6bc0efa63b28487c94115a36b8d",
+          "implementationSha256": "8176682cea2bdea3846a3cac29d1929f3b89690e77d43d76441cb7317241010b"
+        },
+        {
+          "version": 77,
+          "name": "comms_delivery_runtime_metadata",
+          "groupName": "canonical",
+          "definitionSha256": "966397daa0021a3f70d9bcb62e3a91d267d09c33c52a66e730ed4356d2501677",
+          "implementationSha256": "d8572f29a7b4f0dc49daf7d83bcd9b756ae254d34b4d463a6840dca95644fb01"
+        },
+        {
+          "version": 78,
+          "name": "cron_jobs_action_config",
+          "groupName": "canonical",
+          "definitionSha256": "76bb91b452d50e88484c518e10df311397ca5258f18d5a59c1c20329e2ef1c54",
+          "implementationSha256": "56c68f8242b38b29a3e730dc70718ffe90bfef4e9ae8756e8c44fa8af7926236"
+        },
+        {
+          "version": 79,
+          "name": "state_validation_quarantine",
+          "groupName": "canonical",
+          "definitionSha256": "0006d53ccdf86fa2c772d00e96581b106c3ba6586cc7bd4c9eea93692c3ee04c",
+          "implementationSha256": "8d35aca74254f187fe9c12e35a3f3205510d24fb05e19244e88742af93fb5309"
+        },
+        {
+          "version": 80,
+          "name": "chat_session_meta_goal",
+          "groupName": "canonical",
+          "definitionSha256": "cbbde26c3aa907f83e3ca412746a495e2edd0d7ec7753cd06d895478e7e293e9",
+          "implementationSha256": "90f42b102bacde3bb59d276c9f3b0e20d3720165a1035f28f3bb46a6afad53fe"
+        },
+        {
+          "version": 81,
+          "name": "chat_messages_steer_audit",
+          "groupName": "canonical",
+          "definitionSha256": "e4a9ccbbb3493cd3524e74abb814a13f9dbb604802141198bb803fecb814dd65",
+          "implementationSha256": "d47aeb72a96ccf34d1b0b8da05a36323a403d29ac34ca6d3a218c70aa1f5d10f"
+        },
+        {
+          "version": 82,
+          "name": "task_kanban_columns",
+          "groupName": "canonical",
+          "definitionSha256": "eadcc5972d27bc2c46726f8fb85a82b3dfc418a56f592f0c88ec64cc5192e1ff",
+          "implementationSha256": "170aec729c7e7eec1d74466fae8b2979cfc691fdda038bfa804776992a794a77"
+        },
+        {
+          "version": 83,
+          "name": "approvals_shell_explanations",
+          "groupName": "canonical",
+          "definitionSha256": "349759a5aa3ba8e9dc7808fc54bb2ae8d36e82e84e6af142f47e30f3f608cc1a",
+          "implementationSha256": "8f5a6e55b436386ed4ad3191edcc14b9985195c846a1c2dcb8f4911133a9e692"
+        },
+        {
+          "version": 84,
+          "name": "permission_profiles_and_override_context",
+          "groupName": "canonical",
+          "definitionSha256": "8f97cf8dfc310dba73fbebf2280de13a7bde1695ceeaff90ea3eabade98f08f1",
+          "implementationSha256": "30767f60709d2b004e06f51c7348cfed8ee3632740633fd32e5590e7228ce239"
+        },
+        {
+          "version": 85,
+          "name": "permission_revocation_actor",
+          "groupName": "canonical",
+          "definitionSha256": "67a5829dba6fe3cdc9fd1528576ddf006b45f6308d53c4fc21e9b7edbf20adbd",
+          "implementationSha256": "50c06371299d9a21cc5e59df050a84e4de4ce2c9021cab61b6bbe12db890a1a1"
+        },
+        {
+          "version": 86,
+          "name": "tool_access_decision_run_lineage",
+          "groupName": "canonical",
+          "definitionSha256": "ef4c14822149bb15cec4e11942d01597678ccb624b4e5b9d2b777cad17e0687d",
+          "implementationSha256": "fe7a834ce3bd2a9e7db173e17a1c30dc4f672cc5d7403fb1e3bf1e22d0b0daee"
+        },
+        {
+          "version": 87,
+          "name": "tool_access_decision_countable_usage",
+          "groupName": "canonical",
+          "definitionSha256": "a7e5056503e7925b0310cc2fe7d1f5ddadcdfd1d4b88dbc7ae933ee752550510",
+          "implementationSha256": "937e6d20ae4cb3835c15c24ad582c55498ef1a6b184c59134399ecf97b25acc9"
+        },
+        {
+          "version": 88,
+          "name": "tool_invocation_permission_evidence",
+          "groupName": "canonical",
+          "definitionSha256": "13b476165b9b009c148de1d916c9c34aca58995926f2002f0a8f903314206fe2",
+          "implementationSha256": "521e8b1ab2ddc7209193bdcc27b10fc4cf3f8b7f30510d9ca15d02d4bbf49b41"
+        },
+        {
+          "version": 89,
+          "name": "code_mode_structured_error_evidence",
+          "groupName": "canonical",
+          "definitionSha256": "b1a4ae1f410c4b457a726e67151a5dc9b5944414f6858e00311963e328316454",
+          "implementationSha256": "6133425e1bd937e088d812f32debc50224a56a4530a155a804f6e3f4bfe97745"
+        },
+        {
+          "version": 90,
+          "name": "code_mode_run_sandbox_schema_parity",
+          "groupName": "canonical",
+          "definitionSha256": "8e0b87dce51da0c9fe7124ff3dc66f0e288bf97196837ee8748e682893af4f68",
+          "implementationSha256": "8571046e54d7f9e48886be038c75daf2f6c57a71f40659d0cef6909d32c9c918"
+        },
+        {
+          "version": 91,
+          "name": "orchestration_run_policy_context",
+          "groupName": "canonical",
+          "definitionSha256": "ec3a73993c8ad86caa5eddb3b0b8f5bf9664f151c2e3caa88b5d35652fdb1260",
+          "implementationSha256": "487c634fa068250338b1142f4234f98d1973928c8f4d3603992ca9c848b3f4a0"
+        },
+        {
+          "version": 92,
+          "name": "drop_bankr_safety_schema",
+          "groupName": "canonical",
+          "definitionSha256": "545baa5548e15facfe0d81cafc2a1157cd7954d9a798d8a6fbe1c082bd36d587",
+          "implementationSha256": "df1051ed5a2f789115956d0ab50c0c5eecfd8a214152acdb778e24f5d550bfc9"
+        },
+        {
+          "version": 93,
+          "name": "orchestration_plan_workspace_scope",
+          "groupName": "canonical",
+          "definitionSha256": "2f3a667a8dd4a182d89377c4489d750db6a9873ed089d4f01344cd37aa5a1075",
+          "implementationSha256": "976f8e1f63af519abd174e0c496dd55e7c4ad5ca7111b513a3082c504279522d"
+        },
+        {
+          "version": 94,
+          "name": "code_mode_run_status_listing_indexes",
+          "groupName": "canonical",
+          "definitionSha256": "0c10f4f12216f0421e90b94287650893a4040964a71cce0a10d56d2dcdbb9044",
+          "implementationSha256": "bb85310b43d910310a31c10e8c8656d9f29e9f6193a30ad15695b7543d1f9c2e"
+        },
+        {
+          "version": 95,
+          "name": "structured_memory_decision_journal_schema",
+          "groupName": "canonical",
+          "definitionSha256": "9a6524ac6683d2d6fd00d2c795bffaf6e51d799390f33efb29677dd1822d8cd8",
+          "implementationSha256": "449b687d72ecbd218cb379a93258fda76b4a0fbeb948f58089a8c38a18c32425"
+        },
+        {
+          "version": 96,
+          "name": "chat_session_workbench_package_manager",
+          "groupName": "canonical",
+          "definitionSha256": "8fe4107c701f0b355a4acc90427e5b19c9a145dc821f531adba6b2dc231d6e2b",
+          "implementationSha256": "78747af4d18c72252589b99b5034cf3a2320fc5cf39b7bb8a13080f21d5a117f"
+        },
+        {
+          "version": 97,
+          "name": "chat_generated_artifacts_project_scope",
+          "groupName": "canonical",
+          "definitionSha256": "0b77eb998bfbf2dae78d85eb3a0d4a8cfea9a928157e423cb12a272782e126b8",
+          "implementationSha256": "7026dbe28d5b5646835815d41e8478680acfd55cdbe2be98c0ab4e3d2e407d77"
+        },
+        {
+          "version": 98,
+          "name": "chat_generated_artifacts_project_scope_backfill",
+          "groupName": "canonical",
+          "definitionSha256": "a767aa77a8469691ceeafdc32d31bacbd8282f5bfebd6ee9ac1c1c4cdc24e0ba",
+          "implementationSha256": "80ccef18af7d176d5fcdf75ca07d567d42fc1085c925ab014735a9faec00b265"
+        },
+        {
+          "version": 99,
+          "name": "orchestration_runs_wave_budget_accumulator",
+          "groupName": "canonical",
+          "definitionSha256": "fee799b9aad92ff1ac0a3f359303b661432764cef7d7ff4d216f95dd89c4b0e1",
+          "implementationSha256": "fa6c3dc9c8dee1491a6f80d6e95e9ce9a5d074a50736879c16f787f9374c5a24"
+        },
+        {
+          "version": 100,
+          "name": "llm_runtime_measurement_and_eval_proof",
+          "groupName": "canonical",
+          "definitionSha256": "aa217c16911a12e60a29583c5e678323fe16bfc86a0a7c68738ac30c4873c829",
+          "implementationSha256": "d5847f28fb9b8eae612b73b0e97cd1b56b64d2fba3e8be3a777bdaa1db16598d"
+        },
+        {
+          "version": 101,
+          "name": "chat_side_chats",
+          "groupName": "canonical",
+          "definitionSha256": "d7026df31aebd7ef154be564f57f6a5e305074f2a5ea0cd656c56e713cfdacb5",
+          "implementationSha256": "c4c88eefbbf567bfbf85ee5b457afe70636dd1e2c8404fb0d520b6e4897adb37"
+        },
+        {
+          "version": 102,
+          "name": "cost_ledger_provider_timeseries",
+          "groupName": "canonical",
+          "definitionSha256": "e8140d330f1a44bd511b65eac20e3ad88d80ccbbcb73764b7648f7fe639fac64",
+          "implementationSha256": "9c8722269af1e2f6215e586475ca35753454c8e12ae1376363f70f7e863e3b47"
+        },
+        {
+          "version": 103,
+          "name": "code_mode_execution_backend_identity",
+          "groupName": "canonical",
+          "definitionSha256": "9998613140757fe300255cf92c63d7956a42b2aad6df1567fc297f3ed3fa0739",
+          "implementationSha256": "c548919ccd0b2d73043c07ca0b33555ae478ae4ab1a7ecd8f60c5f20a4f101c2"
+        },
+        {
+          "version": 104,
+          "name": "external_side_effect_run_ledger",
+          "groupName": "canonical",
+          "definitionSha256": "dcdc400fbc43a02dea891411c2ea1f43bd9ec9c61e9783897630539c42060c86",
+          "implementationSha256": "f41eea6da154416cb53397ad296919659b11efea3d46f76101850a1370c161ff"
+        },
+        {
+          "version": 105,
+          "name": "memory_quality_issues",
+          "groupName": "canonical",
+          "definitionSha256": "eecd9cd4ee0482e8b0ef93d35dd56ce1e662ee4c2d386d431656d13140229e94",
+          "implementationSha256": "01e33964f0bbe2e599ed441a2ad43bae4288159232c7205fccd7878087297a99"
+        },
+        {
+          "version": 106,
+          "name": "a2a_task_bindings",
+          "groupName": "canonical",
+          "definitionSha256": "0f72c5e2074beb2f8580eb65ef88bf309bca36972e1432e7296f76f0bfdba581",
+          "implementationSha256": "79117490ba265944938c9eeb229494202e1072192064551be3c8cbe08bbc9c92"
+        },
+        {
+          "version": 107,
+          "name": "a2a_task_push_configs",
+          "groupName": "canonical",
+          "definitionSha256": "99bd326986e9e55a39c21c82cca16b62b0202c06dec4c625f4d1c6404c018efc",
+          "implementationSha256": "8cdda8727b911cf9d2d662528efa20693a61f886468a53e07d1930f32fdace19"
+        },
+        {
+          "version": 108,
+          "name": "prompt_pack_run_score_facing_response_fields",
+          "groupName": "canonical",
+          "definitionSha256": "92aab02bfd988936e2ffc9dda7f2f8b3978bcf6cfce3e6729a6b90039593f69d",
+          "implementationSha256": "ca6836510d5139fd0bd1edbab12f1224fd14df82f25311fe0aa584b70f7f6f5d"
+        },
+        {
+          "version": 109,
+          "name": "knowledge_chunk_embedding_metadata",
+          "groupName": "canonical",
+          "definitionSha256": "f7f7758d0d945801688f07b057fd578ae7d0177c99ed377dc51865180ba46509",
+          "implementationSha256": "872efbf4f920438ee9ff08676d19c1bb21e6ce380a4c60fec53da3d9c075f70c"
+        },
+        {
+          "version": 110,
+          "name": "memory_items_workspace_scope",
+          "groupName": "canonical",
+          "definitionSha256": "0de8a916e6c87201ab554532ba8edfe98ac2c72f71f88c1351ba2a010c73d4ea",
+          "implementationSha256": "c55205058911fbd9a92cc8169f81af4d3e17e0398ee525807634c32794b26f16"
+        },
+        {
+          "version": 111,
+          "name": "citadel_core_schema",
+          "groupName": "canonical",
+          "definitionSha256": "38f17dbff4bfd2d162f29e6aa2ede62a9eacffd3324ea7e11ef71e12090dddcf",
+          "implementationSha256": "3a69106182c43f9e4871ef8763988678f36729f617890375567b2631d6acbfff"
+        },
+        {
+          "version": 112,
+          "name": "cron_jobs_citadel_scope",
+          "groupName": "canonical",
+          "definitionSha256": "e48b972bdb8ac9a5f3c1d80609307850715bad811e8c5d72f7e6846da466e598",
+          "implementationSha256": "b7eeafdc6b7393113c97c48f193086bd2443eefa59def9f4ffd85a69a9bcab88"
+        },
+        {
+          "version": 113,
+          "name": "citadel_agent_assignments_schema",
+          "groupName": "canonical",
+          "definitionSha256": "817f8cf427813327687bf3f30e095505cd16e7a7a7d7fbd6bcbf4d4835d71602",
+          "implementationSha256": "198b6c3be9be9a0f40ed684561c84502e1b66d393358a3f56823e6bc5105f875"
+        },
+        {
+          "version": 114,
+          "name": "citadel_wards_schema",
+          "groupName": "canonical",
+          "definitionSha256": "2f894a183ad386b422313f1293804a783606a889a2fae1ef735072a65b00d1fd",
+          "implementationSha256": "9cb9e92a841c57ef62d79ece293262a8df91faebe9559e25d57540b5a63ab0d7"
+        },
+        {
+          "version": 115,
+          "name": "citadel_passages_schema",
+          "groupName": "canonical",
+          "definitionSha256": "435bf0ed3168b72047e3a9f332d0b257049ef38e4a81955d3568f4cb24f6f9d8",
+          "implementationSha256": "fca52c812e0977481af6430490602719a6f8f8da69b7288eb9b2b2dd812ebfe1"
+        },
+        {
+          "version": 116,
+          "name": "citadel_members_schema",
+          "groupName": "canonical",
+          "definitionSha256": "b50986e533d7c2670e67b21f2c58e761fc4ff076d1aca3f15dc2190dde244ee5",
+          "implementationSha256": "cf513f497edf90a5adb602b2e704ae2e5825bfa141a330e6e44d9bb61a2cb99f"
+        },
+        {
+          "version": 117,
+          "name": "mason_sessions_schema",
+          "groupName": "canonical",
+          "definitionSha256": "70951e66fa560575a845974ae0e840bf9173a7459edb86f4b94259a0246e51a2",
+          "implementationSha256": "c0dad6693f74b39c4eab5e764d3258e07cee25bb687e8d667ff7d97a440965f5"
+        },
+        {
+          "version": 118,
+          "name": "citadel_integration_grants_schema",
+          "groupName": "canonical",
+          "definitionSha256": "693ba72eab19393cc1051723c76023e07498ff95d051f8280c1780be5a9f4833",
+          "implementationSha256": "833b2313c7986886051582e00bc177c4956a8809e1ffe56db024bc96842cef92"
+        },
+        {
+          "version": 119,
+          "name": "citadel_vault_secrets_schema",
+          "groupName": "canonical",
+          "definitionSha256": "0848fd4a563eab198f4e8a057ab2e0eeb40a7be5ad73ba1f78ed274155320322",
+          "implementationSha256": "9685ac942a0e62933fd1eea56fc25d5a30ba89a468c95f5217b56172b363f669"
+        },
+        {
+          "version": 120,
+          "name": "runtime_decision_traces_schema",
+          "groupName": "canonical",
+          "definitionSha256": "ae9c1202685c52aa84c2b29d2be64138fe0b33aad3bb68b81775e98096bb291d",
+          "implementationSha256": "d8f610102ab782d7acd4d2bc67fac685f2b44d79df139d18872f0e0794799c47"
+        },
+        {
+          "version": 121,
+          "name": "citadel_operating_model_parent_scope",
+          "groupName": "canonical",
+          "definitionSha256": "baa9704a3cbd2eadf0a5a15161e3e60b627016fc253cc34e937f80883fd58f61",
+          "implementationSha256": "416a465c8967d087ab38cfe7ae64805ecfb2a824b4293da0c39d78498358e729"
+        },
+        {
+          "version": 122,
+          "name": "external_connector_review_states",
+          "groupName": "canonical",
+          "definitionSha256": "ca77dddff7d846b93cb2ef30e09dd24835748f7d4ce7d047771523ef9a73a959",
+          "implementationSha256": "7cc0a22a8538282063b477374c97950fbad0c02f987769a8a81e6e76cc4b9d4e"
+        },
+        {
+          "version": 123,
+          "name": "agent_commitments_schema",
+          "groupName": "canonical",
+          "definitionSha256": "03db0bea400eb7a91c2225165a39f35a60be0f2803a59d0714c4c7d5f8236a74",
+          "implementationSha256": "fc2c0c0fabc80447768016dc601c650529ba2be5cdc31a56c0f14815959d1c7a"
+        },
+        {
+          "version": 124,
+          "name": "session_autonomy_heartbeat_columns",
+          "groupName": "canonical",
+          "definitionSha256": "82e2c6207a4e3c0e82b94e9286028316e0b0f98ef72ae0530469d8d043f302f5",
+          "implementationSha256": "676b9767a33fe7b96ddc61cf57b43fcf635eeea6d9649db9af8420f12cd919e5"
+        },
+        {
+          "version": 125,
+          "name": "chat_messages_fts_recall_schema",
+          "groupName": "canonical",
+          "definitionSha256": "016811e9d80e003225343683cf2b4e0c16862b9c3cea1077d3f58114b6cd7886",
+          "implementationSha256": "ce210832e38adc6e21b0e6520a7ab5d0fc6293bfe74d0afa3215457088cca0d7"
+        },
+        {
+          "version": 126,
+          "name": "operator_profiles_schema",
+          "groupName": "canonical",
+          "definitionSha256": "7eb478b5da2647637021fc9aa0e57a291948c9e0321c509c92c58e9852055c3a",
+          "implementationSha256": "709ea8798a78ee3032e866317c7fe06cc214bc332d109e403535fc658e84cf42"
+        },
+        {
+          "version": 127,
+          "name": "autonomy_audit_schema",
+          "groupName": "canonical",
+          "definitionSha256": "fa8f6783aa4d110ccb53a3423b1b2a4a98557afd284b4b7044773d021adb15ea",
+          "implementationSha256": "d268345dacad6789edd1053661ac43b12af94acdf8a3af9c28f68cdf703ddc1d"
+        },
+        {
+          "version": 128,
+          "name": "cost_ledger_credential_pool",
+          "groupName": "canonical",
+          "definitionSha256": "de7fa286e9f6e019a234675c9527986de054ae84ada2c3b677d122fd28b7dc21",
+          "implementationSha256": "2779e00457334437f8fbc1f1349d44695597294c35adf4075b9119be7b2b6ff2"
+        },
+        {
+          "version": 129,
+          "name": "runtime_evidence_workspace_scope",
+          "groupName": "canonical",
+          "definitionSha256": "2fd12a1d7fe82d3b00a465131aad0c4946a25378764a9b3c31ce7cbef196346d",
+          "implementationSha256": "9cc4b6c55998b93e8f9bc8245a465ec774c2100015bd73499905b4c6cd943875"
+        },
+        {
+          "version": 130,
+          "name": "chat_delegation_parent_run_id",
+          "groupName": "canonical",
+          "definitionSha256": "81e64a04cdad7a4898b0bd5cb7783a7c0b392112f98409242e75b1d4192e057a",
+          "implementationSha256": "1d0e878ddf331bfbcafd13014f163493c4e975653720b1cd64b1f402debbd2dc"
+        },
+        {
+          "version": 131,
+          "name": "cost_ledger_created_at_index",
+          "groupName": "canonical",
+          "definitionSha256": "634814d92bb84f2bb3340a4666b3b29dfc55d20ed9eac8ed67ae0b4ca92f8c9b",
+          "implementationSha256": "75b9e70d943963a5cee47aa8b9e8bc0ccb2006f9ab25b819333e5df16a2b1abd"
+        },
+        {
+          "version": 132,
+          "name": "capability_scope_assignments",
+          "groupName": "canonical",
+          "definitionSha256": "1be75d13fb7bad7c9a90dd8b19dffaa23b3c8d1078cc8104624bf050e5ee972d",
+          "implementationSha256": "feb051ba2000bf2e1307ffff92ff629dd98e80d1b530044fe4b0ce521977963d"
+        },
+        {
+          "version": 133,
+          "name": "cron_jobs_run_evidence_state",
+          "groupName": "canonical",
+          "definitionSha256": "c94ed0066fc7d49b98abe849c4d83438ca71805c8d90e2038397e5cd5ad8bd06",
+          "implementationSha256": "09adb97b98ac36d24b86dd4448b5cf89849604227a4574eb4dbd5e9b49bb7afc"
+        },
+        {
+          "version": 134,
+          "name": "integration_connections_workspace_scope_parity",
+          "groupName": "canonical",
+          "definitionSha256": "050f97fc935d85a33cf5a337d54b84311a0566a699bea8ce0c4f531fad0a3df4",
+          "implementationSha256": "b5310f38994c8ea7d14745c0960eebb26edba459f5989d046b99d1e0ac11be59"
+        },
+        {
+          "version": 135,
+          "name": "dry_run_commits_ledger_parity",
+          "groupName": "canonical",
+          "definitionSha256": "283bdbfe8d63b5773c5d319aa63bdfb7be00edf92a138ab7bb167e7d1ccda3db",
+          "implementationSha256": "ccd7d8eb21462ab2cdd5f2a663055fe3ab1281ac8c7abb739754fd70e540571e"
+        },
+        {
+          "version": 136,
+          "name": "prompt_packs_content_sha256",
+          "groupName": "canonical",
+          "definitionSha256": "dbdd6eebf20e242257ee7dea50469101f719addb4d1d3ce1fb941a0ee82afa30",
+          "implementationSha256": "cde0d3fe60db3bbe08d060db7ee6b4e73f23919d18c0cdb6d9a8e1f441b048a8"
+        },
+        {
+          "version": 137,
+          "name": "scrub_legacy_device_token_plaintext",
+          "groupName": "canonical",
+          "definitionSha256": "eca47a47cc0fe9f6d52f932aa20f388681518b75e3b54df64da4e4da3f95f9b4",
+          "implementationSha256": "c0f79751f64c6fbfc492039a6be734827b48941a47a0d60530085e2614d020ef"
+        },
+        {
+          "version": 138,
+          "name": "approval_expiry_sweep_index_parity",
+          "groupName": "canonical",
+          "definitionSha256": "b05ce8d62fd087bb470a532759f29ce37c76504b06d955a9e36af53dab2db779",
+          "implementationSha256": "05bfa43f1b440983155c69e099203d0322e22bd7ea7157f4ebc0bd064d4b80ce"
+        },
+        {
+          "version": 139,
+          "name": "scrub_legacy_remote_approval_bearers",
+          "groupName": "canonical",
+          "definitionSha256": "56d9e48999c3db264f3d336d8585d9e45a90f0598572370e1dd661a8d0330f5e",
+          "implementationSha256": "2c1a6fc0d59122a45189139fd924374f197e77e494b9fbfc421b386ff54d8d2e"
+        },
+        {
+          "version": 140,
+          "name": "mutation_idempotency_claim_lease_parity",
+          "groupName": "canonical",
+          "definitionSha256": "e9568f6e650de3773c6140bf712294c9d3e79a3432e6345f10e7a4158c7c4873",
+          "implementationSha256": "e5e0c52dda2cc7ded308e1323ab7830a34c06a5580974c5d5db0726f007fb960"
+        },
+        {
+          "version": 141,
+          "name": "chat_delegation_step_plan_truth",
+          "groupName": "canonical",
+          "definitionSha256": "20213dec99ecfd360b206787a12ef87a6e7f7c08a739d5488e541a417fd235e0",
+          "implementationSha256": "74ffbc84c4219b176bf726393061d08f5045e401f3a95831830dbbf57cad213d"
+        },
+        {
+          "version": 142,
+          "name": "chat_delegation_dispatch_claim_lease",
+          "groupName": "canonical",
+          "definitionSha256": "22cd1a0599250d3461580091fa0ca08a2d7f8a79138a804b8ed4c6e1b36fd051",
+          "implementationSha256": "1b912a0fa5f35c17c9450af9e97b4f8605a90bab1421f918aa3bc0fa864f4606"
+        },
+        {
+          "version": 143,
+          "name": "scrub_legacy_remote_approval_bearers_from_effect_results",
+          "groupName": "canonical",
+          "definitionSha256": "f67fdc913a3eba41d21aa93b39233d955a087bb4d387bb5b35f6c23b946bfa0c",
+          "implementationSha256": "9002dc6f66210ae6a8b8e751182b515cc019d78d500c5a29f76efd72b0565a8e"
+        }
+      ]
+    },
+    "postgres": {
+      "path": "packages/storage/src/postgres/migrations.ts",
+      "registryName": "POSTGRES_MIGRATIONS",
+      "expectedCount": 85,
+      "expectedFirstVersion": 1,
+      "expectedLastVersion": 85,
+      "migrations": [
+        {
+          "version": 1,
+          "name": "runtime_event_and_cutover_tables",
+          "definitionSha256": "f0c1204864274571cd086a063ba41fe070e74c3aa570ad4399d658eb5f76ef3c",
+          "sqlPayloadSha256": "535af43f676b08d543a9f4dd0e2de41c332ce7971d4e664f3cef39f42eb97053"
+        },
+        {
+          "version": 2,
+          "name": "canonical_runtime_schema",
+          "definitionSha256": "affbb20a84d71e19fb8b6e1c8432537fe95a762a6c3f82bd5ee83507b4e07d8b"
+        },
+        {
+          "version": 3,
+          "name": "runtime_schema_hardening",
+          "definitionSha256": "193a7f07d0a358286505bbbaaf6e250ef3584b792738e82226e566059ceb14b1",
+          "sqlPayloadSha256": "7800a39aab049a9bc1317755e14f05c57ddc683fab00eec561d3593bbf254311"
+        },
+        {
+          "version": 4,
+          "name": "chat_session_workbench_schema",
+          "definitionSha256": "c8165f0dd056d5819723d634eb45e07cef30f67c1c01cca283792bb50e2ec3b0",
+          "sqlPayloadSha256": "a0eaa088cd3a361e209dfe97ccb301ce141b919b459608ec6d370c8478540be4"
+        },
+        {
+          "version": 5,
+          "name": "sessions_session_key_unique_index",
+          "definitionSha256": "7d36d5c9e4256d5dcec8a46bebd1bd031649eb5617e5ad17aeef91250b2ae0c8",
+          "sqlPayloadSha256": "f3f0e7650b458f71962c0d2e779539e84f4a70aabb1604b98a9a9e049a036a05"
+        },
+        {
+          "version": 6,
+          "name": "runtime_inline_unique_indexes",
+          "definitionSha256": "93ade4e1ca2a53706830c7394ef397d78c549594e917437e43a7461f94a1850b",
+          "sqlPayloadSha256": "b00da2bce2652333e7ea9ae01d8ca2dbec79592287a4b0025ba6d5c2d8df6def"
+        },
+        {
+          "version": 7,
+          "name": "canonical_runtime_schema_repairs",
+          "definitionSha256": "2205ab3acece68478d05f842e0278539943a218b89fdba373f0e6e3fbd358eaa",
+          "sqlPayloadSha256": "2de1d3f5453b30f2ce113ac6639d7d092714f437418e6feafffa813be21d9b6f"
+        },
+        {
+          "version": 8,
+          "name": "prompt_pack_benchmark_claim_repairs",
+          "definitionSha256": "8aa0e9f342570565c57263786e20da6d0ddd9df739c60c8f6fe9391c038df87c",
+          "sqlPayloadSha256": "ec3663b1a296ba254f97eff911aa50a547fc044ed4d3cf8f93d0422f4bd7fcff"
+        },
+        {
+          "version": 9,
+          "name": "orchestration_execution_ownership_schema",
+          "definitionSha256": "81faa4f22a3937817d13868bf916293bb2d0065b34668156c1e4db2997940600",
+          "sqlPayloadSha256": "bb3c36e95d8270f758da27d7f9a08b5e77daa771d7ae63bbc73ec608322744b5"
+        },
+        {
+          "version": 10,
+          "name": "chat_user_input_prompt_repairs",
+          "definitionSha256": "97d557704d3ed45814fef37bbcf3c09911b540e9c31e9a892eb87d79d58bc04a",
+          "sqlPayloadSha256": "5ebb3f2d45ec24fabf460d7e1a5acee5fdeb9759635c22e279ab89c57250f3e1"
+        },
+        {
+          "version": 11,
+          "name": "mutation_idempotency_runtime_repairs",
+          "definitionSha256": "b4927bfe9c0fdc15a8ee5a5e0a6956b496dbac4a0d922c19ab05d5ffcaae7eb9",
+          "sqlPayloadSha256": "d3b5affc23cea6c45266828cbb9096fcc1aa47fc6c84e0eefece493bfb769567"
+        },
+        {
+          "version": 12,
+          "name": "prompt_pack_runs_shape_repairs",
+          "definitionSha256": "7ec291aff10fedd4dc6cab8adfb8f04c5ddf3f0409882599e20190114042249c",
+          "sqlPayloadSha256": "87c89699bd431d86827cfe35811f91d5668fea98ea1e7895e20999414b4b1af3"
+        },
+        {
+          "version": 13,
+          "name": "chat_turn_trace_shape_repairs",
+          "definitionSha256": "951f5d951e5467dc3e4e7699040c74c6eafc64a3ce9784d3523034b4f067d22c",
+          "sqlPayloadSha256": "f1642bba860a7582e1c522ac3d3199b84521a186066ffe61c4daa1c0dd6ca1aa"
+        },
+        {
+          "version": 14,
+          "name": "chat_tool_and_delegation_shape_repairs",
+          "definitionSha256": "e44efe8fcbbbbc65ab62ea13300883adaff826169b82e51620b6e442533e26c6",
+          "sqlPayloadSha256": "8b4a2b063b79e08747920282872dfa5bd79fe34558c757482f62d53c9f4f99f0"
+        },
+        {
+          "version": 15,
+          "name": "chat_execution_plan_step_shape_repairs",
+          "definitionSha256": "0a12078cee317672d01d1c482800e7904e376638a21f2392e8c45a6ec94d70c9",
+          "sqlPayloadSha256": "4a8aaed4baf26df21e1fac84854f414fdd1f3c486db06479ed58daeaaeba09c7"
+        },
+        {
+          "version": 16,
+          "name": "cron_jobs_action_description_end_at",
+          "definitionSha256": "43017ca2973a8552f46606db5260aaad54b0008e51d3789c5b1dfa369674191c",
+          "sqlPayloadSha256": "6d474b7156517142336df689a65efdeb3e83ecb4be47ac542aa35f0dc60f5add"
+        },
+        {
+          "version": 17,
+          "name": "chat_session_and_agent_refresh_repairs",
+          "definitionSha256": "0a40d61bdaf2fcf5b0886c2eacd46fe1d7ec7fc358bdcdf27c97e79cc6c55f6a",
+          "sqlPayloadSha256": "ef145a76369010c4df9e3fa4936593b3ba7e31cd0f0006f6929d24906bfca493"
+        },
+        {
+          "version": 18,
+          "name": "generated_artifact_provenance_repairs",
+          "definitionSha256": "84a15aef06c649b8368faafc9e306bd1673fecf3dade1f06f31bfe23ebccfccc",
+          "sqlPayloadSha256": "d2a70d34bab818333a9d94a5a8d03f0cae96a24cbb434e296b7d4886b05ca197"
+        },
+        {
+          "version": 19,
+          "name": "imported_agent_catalog_schema_repairs",
+          "definitionSha256": "a5abc88f836952b232abcecc2ac4bc1f2adff98c69a7c94c283645ddf473e2d6",
+          "sqlPayloadSha256": "3084b41d9597a5b12cda9bc7dfef1d8824ed7d778d6290ded3185a31b617622a"
+        },
+        {
+          "version": 20,
+          "name": "chat_image_route_preference_repairs",
+          "definitionSha256": "9684870b0405f6358b316032df3af655216fd7952fee49acd6fbaa85c37dbf6d",
+          "sqlPayloadSha256": "c83e3f23a67e5a23ec783513fa6ee1110c857f0ce5c54469fba5d2d7eb32ccf3"
+        },
+        {
+          "version": 21,
+          "name": "prompt_pack_agentic_diagnostics_repairs",
+          "definitionSha256": "280509d094d3d47254d9d9c983a92233be5186087d9affb8af90ec73b7e4c093",
+          "sqlPayloadSha256": "6c78de94a6762f9de0ee123c553faa77b8bec2074d44a6671bc86d3fe8ec9510"
+        },
+        {
+          "version": 22,
+          "name": "prompt_pack_benchmark_item_unique_repairs",
+          "definitionSha256": "c00ee35406bd29aa18807c793ca4db5031e470ea34b260ba8e864c14fc95a655",
+          "sqlPayloadSha256": "3f8c7bfad30e794a862e84e4681445bea7d6f30154fdffa982b771e291826f2b"
+        },
+        {
+          "version": 23,
+          "name": "pending_approval_action_expiry_and_trace_index_parity",
+          "definitionSha256": "85da3b3eca0f8bc2d33e95ed50eb9c8796fe563bfc48eeff4df968bad9a1a880",
+          "sqlPayloadSha256": "5cb8b2f2846fb1ef218be0438562dc96c497e61f117cc9ebcbdcff7b8830a57d"
+        },
+        {
+          "version": 24,
+          "name": "chat_delegation_step_current_shape_repairs",
+          "definitionSha256": "b68313f2f4b6c15b3248292667de6661be8dbd2f5aef1b545b4e098d6886c1d2",
+          "sqlPayloadSha256": "f84ee1b6194b7a0d0ac5cf186ea0712348409bcfb1d07ea0a73af18436e633d4"
+        },
+        {
+          "version": 25,
+          "name": "runtime_evidence_envelopes",
+          "definitionSha256": "9c18c27f6ee58208cb4157e3fc4a5b19f97154d5e12a95c70dc4ee8ba71037ee",
+          "sqlPayloadSha256": "e16f8929fd42f1c71c3e532a21bd828049ee0bcbaddedeb4af6c8c26ddd6e5c3"
+        },
+        {
+          "version": 26,
+          "name": "skill_evaluation_runs",
+          "definitionSha256": "83ce6c193cffd5f9a0f2d7b1642fa16f5f2be1ad0afd3f81fc832a9e28f9bc3f",
+          "sqlPayloadSha256": "1be3ddd9a51d14ff09e376f1d81a90f17f136cee5849e6e4748b83406addd937"
+        },
+        {
+          "version": 27,
+          "name": "skill_evaluation_runs",
+          "definitionSha256": "c853e120142d31349ef6c559e33cf6cba9fb9cb43f39112261f9feacf431e718",
+          "sqlPayloadSha256": "1be3ddd9a51d14ff09e376f1d81a90f17f136cee5849e6e4748b83406addd937"
+        },
+        {
+          "version": 28,
+          "name": "chat_operator_control_prefs",
+          "definitionSha256": "3182ee08268f18048eee5cafeaa9de97c7cf4cd7abd331d6259a476842948bcd",
+          "sqlPayloadSha256": "d7dc04346bc1206f56a72c663a55c7b1f81181257a4cca3a791028f2f4187127"
+        },
+        {
+          "version": 29,
+          "name": "agentic_runtime_task_metadata",
+          "definitionSha256": "7cd07b65cdf7a6a0f05b68c9fda1ffdbfebb6854b48401f39b711783b237e892",
+          "sqlPayloadSha256": "0985a4b6437c9093ce9d01a7376bd290bcb6f1883f9d57d7f017c5226c8c0409"
+        },
+        {
+          "version": 30,
+          "name": "comms_delivery_runtime_metadata",
+          "definitionSha256": "09fc391fa2d3eafee2a2fcb889f4b33144a59425eb2647ee02747bf59017a2dd",
+          "sqlPayloadSha256": "04e4d376923ebca8798c2b7ae1b9cc69b20b484ffaa69ac6f5a6b46f727c64d0"
+        },
+        {
+          "version": 31,
+          "name": "cron_jobs_action_config",
+          "definitionSha256": "28e404bbf29811d9e10594c8e2c6aa88a85862ba5bf497739c49c16692a1fdd8",
+          "sqlPayloadSha256": "9560857f7ce64c1859400c591b46eec823ab06edb827eb0cb6210468032d4a6b"
+        },
+        {
+          "version": 32,
+          "name": "state_validation_quarantine",
+          "definitionSha256": "abe6d2be32879f263909b0aba67edc61ea4ed0083e8a1e1626d425fecc93fd4b",
+          "sqlPayloadSha256": "5c98412a6be0c9e0795b66cc5c5d7513e12e737288904c07a481e04afa339339"
+        },
+        {
+          "version": 33,
+          "name": "cron_jobs_workdir_context_from_run_output_run_id",
+          "definitionSha256": "d0544ef201d932b61c7f515a3abe89a2f1062afa39d1b74caa47f7d22c00971b",
+          "sqlPayloadSha256": "d5c942569f4195f88bf4ab9148307252caa586278b23727d64131fafae2cb6a1"
+        },
+        {
+          "version": 34,
+          "name": "chat_session_meta_goal",
+          "definitionSha256": "01f6d03fe84278c2301019f44e574010ad3bf091b2b91e937c7cf057ec7549ab",
+          "sqlPayloadSha256": "ee026639f3565d6652875e593c8386ddda3903ad445105c3975d8476b9c90ca3"
+        },
+        {
+          "version": 35,
+          "name": "chat_messages_steer_audit",
+          "definitionSha256": "6025632295ec17dba36b8f02b67bd3d4190a3d480d2fda20e2e624f726c251ce",
+          "sqlPayloadSha256": "3afb4f17f466b35651700346ce4f44b48ffec10b720b19043265e425be7580dc"
+        },
+        {
+          "version": 36,
+          "name": "task_kanban_columns",
+          "definitionSha256": "6445b5b0d473d98ceb3b90aed83b926c0efbbb70743303202d090de152602c53",
+          "sqlPayloadSha256": "3a5c71229b1061ee8f46b78344770e4af47675ad80152bf5b94a9024f6440343"
+        },
+        {
+          "version": 37,
+          "name": "approval_shell_explanations",
+          "definitionSha256": "6ac09be154c9e9f6e321fe6da83560124a9d04b8c6a86372eee2cd0a6ee8a576",
+          "sqlPayloadSha256": "841289f07fc5c11f40d27aa7054509c60b7c29ef05c4f06dae4879d8e36b8da2"
+        },
+        {
+          "version": 38,
+          "name": "permission_profiles_and_override_context",
+          "definitionSha256": "c31d6b1a013119c578460740f169d81706b29eeffcf09da81cd8b348418061d3",
+          "sqlPayloadSha256": "98e9efee61cf43ed2f62e60bf1cd60e5882a0f5b5f38e90128932a1b9186705a"
+        },
+        {
+          "version": 39,
+          "name": "permission_actor_and_code_mode_run_ledger_repairs",
+          "definitionSha256": "b3c5200736b174002cc09316fc47da6fb13fc5d6ac1651753adaafc3985f160e",
+          "sqlPayloadSha256": "fe40677c02aee9d761dab72bc3750ae1c9cfb22f32138109718e64959c83c8e2"
+        },
+        {
+          "version": 40,
+          "name": "tool_access_decision_run_lineage",
+          "definitionSha256": "8e4b453710807fd4efaadc8a8cd640a8d12779c3a611d714028ca7983bd3fc3a",
+          "sqlPayloadSha256": "23d739dda327283c837fd82061c0acfd20d717a1dc4cfa064cfd0aca71afa4b9"
+        },
+        {
+          "version": 41,
+          "name": "tool_access_decision_countable_usage",
+          "definitionSha256": "9cbfdb195f4a0edfeda5daf2fea3f34ceb2c0686bf8cb0b33b327ad8644a5344",
+          "sqlPayloadSha256": "7139eea537e90108f58a146c871d55ab6b8d10e9244c92424305937be89fb32a"
+        },
+        {
+          "version": 42,
+          "name": "tool_invocation_permission_evidence",
+          "definitionSha256": "d8f340bd94b1e5b16d35f0842648163bc6d50940d78c642f49de5791bae6dd9c",
+          "sqlPayloadSha256": "b28bcda6a6b1c03b829585f02028e7f86db37b0283f1c1122baea123e02773c9"
+        },
+        {
+          "version": 43,
+          "name": "code_mode_structured_error_evidence",
+          "definitionSha256": "9b2526455f04a01d043b14bf3c3858f89dc066a4c4b025b4f76acc4720edd59a",
+          "sqlPayloadSha256": "53f501cde5628622a2218abd28d0df77fbf3946f35bb22840735948b0a66a595"
+        },
+        {
+          "version": 44,
+          "name": "code_mode_run_sandbox_schema_parity",
+          "definitionSha256": "e15d31c616c1ec3ad435dad625e9eb12e2f7a31c62d421b9658d033d6ef5b5f1",
+          "sqlPayloadSha256": "b134e803c51dcc7084bdd6f7fc6ddbc364bd73d2f824a4351aaa288582a46a0e"
+        },
+        {
+          "version": 45,
+          "name": "orchestration_run_policy_context",
+          "definitionSha256": "298c59645c54c0669d0b116bc4a01c982b34b1b81e2c169e0398ca01272b4c9c",
+          "sqlPayloadSha256": "1e12c6f1bab12f8887ff8d6a48aa9693515ebd75d9e249c168176f2597a6d8b4"
+        },
+        {
+          "version": 46,
+          "name": "orchestration_plan_workspace_scope",
+          "definitionSha256": "b3cd8946fd46b7bef617490f56bf5a99c1dbb508ab408af29956ab24cde15a65",
+          "sqlPayloadSha256": "371d89e9e1da216a06b82d9ac9155c9de81ee76f54c0ca1e31803362ef3c430c"
+        },
+        {
+          "version": 47,
+          "name": "state_validation_quarantine_history_repair",
+          "definitionSha256": "18728ed132a39fced8e4efcb771d4e942973c1a79204efa4ed2b18398b07933e",
+          "sqlPayloadSha256": "1050a0b132ae1c313772ca78634af98219e102170157375f6e7095aca330de72"
+        },
+        {
+          "version": 48,
+          "name": "code_mode_run_status_listing_indexes",
+          "definitionSha256": "bad2e1611d104cf57d9e53ab5ad3ee648fd81d5dfe00368cea53a04829fbbda6",
+          "sqlPayloadSha256": "b7927d1500a5fc56094fedba01adc7d42d0ef2cfaecc97ab337ed8820e701830"
+        },
+        {
+          "version": 49,
+          "name": "structured_memory_decision_journal_schema",
+          "definitionSha256": "f7d41aa89e8436b9f65a73cb74de3f303b878b294f404e4d66a44d097cef77dc",
+          "sqlPayloadSha256": "0584158df8eafa64de2649dda1b132ad29a55cf95be0d0e9027b34701e35be4d"
+        },
+        {
+          "version": 50,
+          "name": "chat_session_workbench_package_manager",
+          "definitionSha256": "c157a36696c13b33a02ff5cb151a445829e8e616c3af10a580526e76ac082274",
+          "sqlPayloadSha256": "539fbaea400bbebe1574619c3dbbfe5f9d6f829c60d52b91f45f01a9095fc0f7"
+        },
+        {
+          "version": 51,
+          "name": "chat_generated_artifacts_project_scope",
+          "definitionSha256": "2ae5199ac66d01cb301017956a79d17b5b7d6e5336d39d93da212ec2e3927846",
+          "sqlPayloadSha256": "5ec09d4f86b5f1b6963e90c16e2efcf9f294c45b8211cf5288432a478a6df9c6"
+        },
+        {
+          "version": 52,
+          "name": "chat_generated_artifacts_project_scope_backfill",
+          "definitionSha256": "66fb6e7a10373251b60c13daa4b9a6065c414506d616960998fef032156a46a8",
+          "sqlPayloadSha256": "a2a87b327bd5a30adab22886afa5485a7fb44c5290091c9c327055d468af3052"
+        },
+        {
+          "version": 53,
+          "name": "orchestration_runs_wave_budget_accumulator",
+          "definitionSha256": "a86cfbdb61a57eb229978d2f29b4f6bf1a3ff35dd36ac3d38b00f264c531356d",
+          "sqlPayloadSha256": "a2c3feb6ddd19c5c2196bac04546702547363b274ff47172941f3359eff2448a"
+        },
+        {
+          "version": 54,
+          "name": "llm_runtime_measurement_and_eval_proof",
+          "definitionSha256": "eae5c72b57c81f806c61f8a6812973321d64640da86d8707e2c8b5c2d16be43d",
+          "sqlPayloadSha256": "cb706e77493608d5b3f6ea625ee92b3eb3a7d48aabfa65db5b5b6ca4f8980a6f"
+        },
+        {
+          "version": 55,
+          "name": "chat_side_chats",
+          "definitionSha256": "f0e3a73a6f1f6b57480652321f2aad61187b2a66e9e45769bc6d16b7b3dca09a",
+          "sqlPayloadSha256": "caf89b19cb98172637c7d7f5b4e2815621cfa6b635a47f57413fcb3b8a28fda0"
+        },
+        {
+          "version": 56,
+          "name": "code_mode_execution_backend_identity",
+          "definitionSha256": "2e62736d659c2bc39263182e84cb9f783854d1392285906992654115a654530b",
+          "sqlPayloadSha256": "5cbb18f18a2b6f1511aed0f82ecc14956438cd7808244c9b325609b42681efbb"
+        },
+        {
+          "version": 57,
+          "name": "external_side_effect_run_ledger",
+          "definitionSha256": "3712a8d9c48bf937ec2369436c38e24a1af8fa534f158cc6e591ed9427ca47d2",
+          "sqlPayloadSha256": "22d9b6d60dac28e2bdc11f49c4520704fda1832e83a6252e621cd35020967ca2"
+        },
+        {
+          "version": 58,
+          "name": "memory_quality_issues",
+          "definitionSha256": "866a8e9bc77561ec0cf3ea226965c96c34dee294503b36212cbede053c5b0ef0",
+          "sqlPayloadSha256": "bd6ada223046caab3c066efe299b09bb373ef01a286be4928b50728c33b523e5"
+        },
+        {
+          "version": 59,
+          "name": "a2a_task_bindings",
+          "definitionSha256": "7f1c704daf4b67a18358a141ae249517b6858f0819514086d7178667b7216a6d",
+          "sqlPayloadSha256": "133959b3fbf436a4e31332adfbf7ad0b621ae903b89456add24f3a464bc72969"
+        },
+        {
+          "version": 60,
+          "name": "a2a_task_push_configs",
+          "definitionSha256": "144abe2aedfd9e3c971b3bc33761a9e5f1e34c17ba94e3a1e5f8ee44aa347c12",
+          "sqlPayloadSha256": "348bdbc7610f7fbf42d64dcdcf1a2e4a253a96b7b109cd7fb3515ce6ee29e5dc"
+        },
+        {
+          "version": 61,
+          "name": "prompt_pack_run_score_facing_response_fields",
+          "definitionSha256": "1597307f038d3493b108356e0794e03977a39b7c2c62c05ef0219546dbfe1b78",
+          "sqlPayloadSha256": "793a4cddd7b0a9b4d01fdeb2dd8ef922edccbfe1e1d21d99aeed891443a57131"
+        },
+        {
+          "version": 62,
+          "name": "chat_delegation_step_degraded_handoff_repairs",
+          "definitionSha256": "2e31f485139f62d2ec0d1d8a97b3a2abb10bf02ca3a9dc170ed0a37c577023eb",
+          "sqlPayloadSha256": "18f4ea1b9650fc2e926175d68b12610d2b978997a51771fa8fb4593e58243186"
+        },
+        {
+          "version": 63,
+          "name": "citadel_tables_backfill",
+          "definitionSha256": "9e500b97a0293e39bf891d537994f14a348ec9ec9207fa1827842caa6982b7ec",
+          "sqlPayloadSha256": "dd5aa82d210b00e6169811d92ae465c1b5aa87945e58bce2e05de5dbc24fb803"
+        },
+        {
+          "version": 64,
+          "name": "runtime_decision_traces_schema",
+          "definitionSha256": "0a1bf6b305a70564fb72894a41f1c84ee006ef61677e399d9de99ee00826c196",
+          "sqlPayloadSha256": "bfa43746c4e4fa618bbacb64cc07154d948ad9b988bcd1a0ddf60ea263afce57"
+        },
+        {
+          "version": 65,
+          "name": "citadel_operating_model_parent_scope",
+          "definitionSha256": "ac56deec089f4bb8de28c84c739943609b7258d8cf7687aceca711fe2cd12367",
+          "sqlPayloadSha256": "4d193dc38b7332f93def4e8beaa55e5204c4483b33cf9148f3c81c6495680620"
+        },
+        {
+          "version": 66,
+          "name": "external_connector_review_states",
+          "definitionSha256": "7a49fb25fc9d8025580f6bb2976cf6f8f67bf6d05697dce691a859c0a55116d4",
+          "sqlPayloadSha256": "b6f61ab8d1aed699b1bdadaa17269cb56672b0738dc024c38a9e4210825b38e2"
+        },
+        {
+          "version": 67,
+          "name": "cost_ledger_credential_pool",
+          "definitionSha256": "a001cb8326d0c192e35c55e9c7d0adb26fc4cfd8ebdfaba7e6ce9566c56110a9",
+          "sqlPayloadSha256": "0110c5a10d8b2c009cee895899c7c3ebec3b07f41457a8c0bd7ff7704ac075cd"
+        },
+        {
+          "version": 68,
+          "name": "runtime_evidence_workspace_scope",
+          "definitionSha256": "63119534164884f7fc2e036956e36f2d23addce035c1204e71800457acc9ae4e",
+          "sqlPayloadSha256": "93fc08407e5f44ff674623993b9549d268e3e826183624f2e5a315262d8f41ab"
+        },
+        {
+          "version": 69,
+          "name": "autonomy_audit_schema",
+          "definitionSha256": "06360d4274888ab800fa9cb11e2ad09d2704ee5f072defe35021a607b8c3047b",
+          "sqlPayloadSha256": "c8f25d70dd3440816b06fd4bcf3fd3055c24a9cd0ee13588a357df6a96efeafd"
+        },
+        {
+          "version": 70,
+          "name": "chat_delegation_parent_run_id",
+          "definitionSha256": "0635895ef59eaacf8bd4471f91e402ad86b4282afdb203614cb02659eb99f735",
+          "sqlPayloadSha256": "b55996e80cb2c7d276295506f877d75f6d765e3ee7fd087b37de20a49a510e23"
+        },
+        {
+          "version": 71,
+          "name": "session_autonomy_heartbeat_prefs",
+          "definitionSha256": "ad89882c95afbcdd0607d5c756b2c7b8d5e92fd0428cc751344fd9efb56174f7",
+          "sqlPayloadSha256": "e2d6cde80f8e7f1249ec4acd626c77a5029fd4035fe414f39d4eb633bbf46110"
+        },
+        {
+          "version": 72,
+          "name": "operator_memory_commitment_runtime_backfill",
+          "definitionSha256": "f7bf5d530ab67bd03ae89ca68ac148110a16a8954554528a4dfce53651aa4b49",
+          "sqlPayloadSha256": "52ed65fa224fc0f54a28ca765da52c610e6ce0f1dfe710bce0d64274fe2cebb9"
+        },
+        {
+          "version": 73,
+          "name": "capability_scope_assignments",
+          "definitionSha256": "542b2e54faa6a783967787e8a468ec44d8dfbbacab06aa15698788cd52d1efa6",
+          "sqlPayloadSha256": "252574b188f502de8384731396dffe06fca422b11af69f2ee859b9aba14a33bf"
+        },
+        {
+          "version": 74,
+          "name": "chat_messages_content_search_vector",
+          "definitionSha256": "9614dbecee3eb4c52a5870e01f70556055ffb57b05ed99eb04838008420e061c",
+          "sqlPayloadSha256": "e108483fc5769d2538feb763cda6105124ed35aa8c6c451388669cd045b329a8"
+        },
+        {
+          "version": 75,
+          "name": "cron_jobs_run_evidence_state",
+          "definitionSha256": "60b3a15ffbc1205529e83532d395c778afe3b93ad3519ddf647dd0677fdba482",
+          "sqlPayloadSha256": "fc95b81cbe5b57da7d6dd7ca249dc1f9841ede68ae8e712acb9af878544a3761"
+        },
+        {
+          "version": 76,
+          "name": "integration_connections_workspace_scope_parity",
+          "definitionSha256": "2f7980f0f76c1b4fc84275a57620e9ae46ee958c2916fbae8127f7a4c7a230fc",
+          "sqlPayloadSha256": "c9fa0c0614c879921166b3194ce6056b980538b7f04f6dbb45ed7b9e443888fe"
+        },
+        {
+          "version": 77,
+          "name": "dry_run_commits_ledger_parity",
+          "definitionSha256": "2997db8038d2581a1cc6ecdbae757b414a2457f9fef2d273bc26234afa0302a4",
+          "sqlPayloadSha256": "f78714a5b4f7d563f378256b814ab5a027bdda54e2ad081f3e66b345f9e28069"
+        },
+        {
+          "version": 78,
+          "name": "prompt_packs_content_sha256",
+          "definitionSha256": "f1c96ad695e5b0e7caa85b41e9c941af45d5328c1bff1e6b96adbe74fe9a0117",
+          "sqlPayloadSha256": "da6fdf83753103869bffb8422b646360f4b8ed0e1786a0f4025ca7f8195cac9f"
+        },
+        {
+          "version": 79,
+          "name": "scrub_legacy_device_token_plaintext",
+          "definitionSha256": "b1664c94f7ff8876d310c065bea8c473e126a6c02e1bdda6a0d6104f86823e6d",
+          "sqlPayloadSha256": "76f2d3cc2fec60da0f0baac846ea00e7353aa4d97cbe104b9bd3530d9a531059"
+        },
+        {
+          "version": 80,
+          "name": "approval_expiry_sweep_index_parity",
+          "definitionSha256": "604a2253d9d62a7672466dbbb5be0b37ad9a9a64cd5235dd16e649ad4662482c",
+          "sqlPayloadSha256": "1fc3b9f3229dd24981f8ea8c3c38c281ea2f05f0c4c42de98757f6873a47d08e"
+        },
+        {
+          "version": 81,
+          "name": "scrub_legacy_remote_approval_bearers",
+          "definitionSha256": "9ae1faae72a79dbd0e14f87c6f2e5a89e9d120ceef42ef93825e9cc631bca652",
+          "sqlPayloadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "runtimeIntegritySha256": "4187b1a0cc73330480192ee66650990775c53c35fe2c54a01559ab4af6631b0a"
+        },
+        {
+          "version": 82,
+          "name": "mutation_idempotency_claim_lease_parity",
+          "definitionSha256": "f3456f2b02483c315714580e5aadb162b9558b73606cd96679bc6b5f47b2175f",
+          "sqlPayloadSha256": "eef651b2e3e997bde95865826ed27a9eb3ae8a4b709cbd624f9055e691dcad75"
+        },
+        {
+          "version": 83,
+          "name": "chat_delegation_step_plan_truth",
+          "definitionSha256": "a408159a0c9d8406df9d77911c53bbcf01086cb6503c455f41e635f25c7ccff2",
+          "sqlPayloadSha256": "bfed94b348594d012bc7f4b0476e8ac4193b6aeef99f798b3107381a7e64e00f"
+        },
+        {
+          "version": 84,
+          "name": "chat_delegation_dispatch_claim_lease",
+          "definitionSha256": "0eb3e7ff12a3080301f2e1d2e39791c6a48da1e51b981d5592acfb5df3f74dda",
+          "sqlPayloadSha256": "02d8d7b83f58c12dbe88c9805cf7fb2599b2cbb0fc03d5cc863869ed8122e8d0"
+        },
+        {
+          "version": 85,
+          "name": "scrub_legacy_remote_approval_bearers_from_effect_results",
+          "definitionSha256": "bb861d02394defbb716fff5f756f9e64007f8a5348a0759afad891f0f9b8ed85",
+          "sqlPayloadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "runtimeIntegritySha256": "ef8cc376dbcba14eb6dd496d5cf14be19183096bafcab2ae57395dedae76df74"
+        }
+      ]
+    }
+  },
+  "exceptions": [
+    {
+      "dialect": "postgres",
+      "version": 2,
+      "kind": "dynamic-bootstrap-sql",
+      "protection": "definition-and-owner-only",
+      "reason": "Migration SQL remains generated dynamically from the append-only SQLite migration registry and blueprint. This manifest locks the direct v2 definition, runtime renderer modules, the direct SQLite blueprint wrapper, and the transitive local/relative database-extraction source closure through registry execution while treating the independently manifested SCHEMA_MIGRATION_GROUPS array as data; it does not claim generated SQL byte immutability.",
+      "ownerProvenance": {
+        "runtimeSchemaModuleSha256": "18815bb11b88ba4475d9a504e37192a0eb2e9b041201839cc0abe33fa4231ff0",
+        "runtimeSchemaInternalModuleSha256": "07edf8bae0d9e7f2229af31c06cd6be72bb098984e3fcce0df349d0143c6bf3f",
+        "createSqliteSchemaBlueprintSha256": "9df9936c0cfb010e3d2a8d072d1c7210dba7fff0bb97d5f452636a99b3c88d8a",
+        "createSqliteSchemaBlueprintFromDatabaseClosureSha256": "0fd51842a0333ad080a96cb779a467718e9f9d5c32fe05e856db9a0857127e8f"
+      }
+    }
+  ]
+}
