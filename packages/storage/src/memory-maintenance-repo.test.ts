@@ -204,6 +204,25 @@ describe("MemoryMaintenanceRepository", () => {
       activeRunId: undefined,
       lastRecommendationAt: undefined,
     });
+    assert.equal(repo.lockStateForUpdate({ ...state, changedSessionCount: 99 }).changedSessionCount, 2);
+    assert.deepEqual(
+      repo.lockStateForUpdate({
+        workspaceId: "workspace-lock-created",
+        changedSessionCount: 0,
+        createdAt: "2026-03-20T10:00:00.000Z",
+        updatedAt: "2026-03-20T10:00:00.000Z",
+      }),
+      {
+        workspaceId: "workspace-lock-created",
+        changedSessionCount: 0,
+        createdAt: "2026-03-20T10:00:00.000Z",
+        updatedAt: "2026-03-20T10:00:00.000Z",
+        lastEligibilityAt: undefined,
+        lastSuccessfulRunAt: undefined,
+        activeRunId: undefined,
+        lastRecommendationAt: undefined,
+      },
+    );
     assert.deepEqual(
       repo.upsertState({
         ...state,
@@ -657,11 +676,7 @@ describe("MemoryMaintenanceRepository", () => {
 });
 
 describe("MemoryMaintenanceRepository workspace scoping", () => {
-  function seedMemoryItem(
-    db: ReturnType<typeof createDatabase>,
-    itemId: string,
-    workspaceId: string | null,
-  ): void {
+  function seedMemoryItem(db: ReturnType<typeof createDatabase>, itemId: string, workspaceId: string | null): void {
     const now = new Date().toISOString();
     db.prepare(
       `
@@ -683,10 +698,7 @@ describe("MemoryMaintenanceRepository workspace scoping", () => {
     seedMemoryItem(db, "mem-global", null);
 
     const scoped = repo.listActiveMemoryItems(999, "workspace-a");
-    assert.deepEqual(
-      scoped.map((item) => item.itemId).sort(),
-      ["mem-a", "mem-global"],
-    );
+    assert.deepEqual(scoped.map((item) => item.itemId).sort(), ["mem-a", "mem-global"]);
 
     const unscoped = repo.listActiveMemoryItems(999);
     assert.equal(unscoped.length, 3);

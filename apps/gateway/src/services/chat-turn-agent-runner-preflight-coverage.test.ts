@@ -190,6 +190,26 @@ describe("ChatTurnAgentRunner tool preflight coverage", () => {
     });
   });
 
+  it("rethrows durable control errors from tool invocation instead of persisting an ordinary tool failure", async () => {
+    const timeout = Object.assign(new Error("durable workflow deadline expired"), {
+      name: "DurableWorkflowTimeoutError",
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockRejectedValueOnce(timeout);
+    const executeToolCall = createExecuteToolCall({ invokeTool });
+
+    await expect(
+      executeToolCall({
+        input: turnInput({
+          content: "Search memory for the release decision.",
+          memoryMode: "on",
+        }),
+        turnId: "turn-durable-control-error",
+        toolName: "memory.search",
+        rawArgs: { query: "release decision" },
+      }),
+    ).rejects.toBe(timeout);
+  });
+
   it("strengthens blocked-tool guidance when the self-improvement tuner raises blocker strictness (P2-W3)", async () => {
     // Baseline (no tune applied): the blocked web tool gets the historical
     // generic guidance — nothing extra. This is the safe-default regression.

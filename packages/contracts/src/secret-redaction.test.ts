@@ -510,25 +510,51 @@ describe("redactSecretText", () => {
   it("keeps repeated assignment redaction bounded on single-line provider output", () => {
     const small = "password: safevalue ".repeat(2_500);
     const large = small.repeat(2);
-    const startedSmall = performance.now();
-    const smallResult = redactSecretText(small);
-    const smallMs = Math.max(1, performance.now() - startedSmall);
-    const startedLarge = performance.now();
-    const largeResult = redactSecretText(large);
-    const largeMs = performance.now() - startedLarge;
+    const measure = (input: string): { elapsedMs: number; redactionCount: number } => {
+      const startedAt = performance.now();
+      const result = redactSecretText(input);
+      return {
+        elapsedMs: performance.now() - startedAt,
+        redactionCount: result.redactionCount,
+      };
+    };
+    const median = (samples: number[]): number =>
+      [...samples].sort((left, right) => left - right)[Math.floor(samples.length / 2)] ?? Number.POSITIVE_INFINITY;
 
-    expect(smallResult.redactionCount).toBe(2_500);
-    expect(largeResult.redactionCount).toBe(5_000);
+    // Warm both input sizes before sampling so JIT compilation is not charged to
+    // only one side of the scaling comparison. Alternating order and using a
+    // median keeps a scheduler pause or GC cycle from becoming the measurement.
+    const warmedSmall = measure(small);
+    const warmedLarge = measure(large);
+    const smallSamples: number[] = [];
+    const largeSamples: number[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const orderedInputs = index % 2 === 0 ? ([small, large] as const) : ([large, small] as const);
+      const first = measure(orderedInputs[0]);
+      const second = measure(orderedInputs[1]);
+      if (orderedInputs[0] === small) {
+        smallSamples.push(first.elapsedMs);
+        largeSamples.push(second.elapsedMs);
+      } else {
+        largeSamples.push(first.elapsedMs);
+        smallSamples.push(second.elapsedMs);
+      }
+    }
+    const smallMs = Math.max(1, median(smallSamples));
+    const largeMs = median(largeSamples);
+
+    expect(warmedSmall.redactionCount).toBe(2_500);
+    expect(warmedLarge.redactionCount).toBe(5_000);
     expect(largeMs).toBeLessThan(2_000);
     expect(largeMs / smallMs).toBeLessThan(3.5);
   });
 
   it("redacts remote approval capability tokens inside callback data and free text", () => {
     const token = `grat_${"a".repeat(43)}`;
-    const result = redactSecretText(`callback=gca:${token}:a raw=${token}`);
+    const result = redactSecretText(`callback=gca:${token}:a raw=${token} prefixed=x${token} suffixed=${token}x`);
 
-    expect(result.value).toBe("callback=gca:[REDACTED]:a raw=[REDACTED]");
-    expect(result.redactionCount).toBe(2);
+    expect(result.value).toBe("callback=gca:[REDACTED]:a raw=[REDACTED] prefixed=x[REDACTED] suffixed=[REDACTED]x");
+    expect(result.redactionCount).toBe(4);
     expect(
       redactStructuredSecrets({
         callbackData: `gca:${token}:r`,
@@ -540,6 +566,12 @@ describe("redactSecretText", () => {
       note: "Use [REDACTED] once",
       tokenId: "remote-action-token-id",
     });
+  });
+
+  it("does not redact benign token-like identifiers that are not canonical remote approval tokens", () => {
+    const value = "Keep grat_community_discount_code and grat_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF visible.";
+
+    expect(redactSecretText(value)).toEqual({ value, redactionCount: 0 });
   });
 
   it("does not reinterpret repeated authorization labels as credential values", () => {

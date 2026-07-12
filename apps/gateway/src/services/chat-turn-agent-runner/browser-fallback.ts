@@ -19,8 +19,8 @@ import {
 } from "../chat-agent-browser-results.js";
 
 export interface BrowserFallbackExecutorDeps {
-  invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
-  invokeMcpTool?: (request: McpInvokeRequest) => Promise<McpInvokeResponse>;
+  invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
+  invokeMcpTool?: (request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => McpBrowserFallbackTarget[];
   buildPolicyContext: (input: Partial<ChatTurnAgentRunnerInput>) => ToolPolicyActorContext;
   listPriorToolRuns: (turnId: string) => ChatToolRunRecord[];
@@ -30,6 +30,37 @@ export interface BrowserFallbackExecutorDeps {
     minimumScore: number,
     limit: number,
   ) => string[];
+}
+
+function buildTurnExecutionOptions(turnInput: ChatTurnAgentRunnerInput): { executionFence: () => void } | undefined {
+  const canonicalWriteFence = turnInput.canonicalWriteFence;
+  return canonicalWriteFence
+    ? {
+        executionFence: () => canonicalWriteFence(() => undefined),
+      }
+    : undefined;
+}
+
+function invokeTurnTool(
+  deps: BrowserFallbackExecutorDeps,
+  turnInput: ChatTurnAgentRunnerInput,
+  request: ToolInvokeRequest,
+): Promise<ToolInvokeResult> {
+  const options = buildTurnExecutionOptions(turnInput);
+  return options ? deps.invokeTool(request, options) : deps.invokeTool(request);
+}
+
+function invokeTurnMcpTool(
+  deps: BrowserFallbackExecutorDeps,
+  turnInput: ChatTurnAgentRunnerInput,
+  request: McpInvokeRequest,
+): Promise<McpInvokeResponse> | undefined {
+  const invokeMcpTool = deps.invokeMcpTool;
+  if (!invokeMcpTool) {
+    return undefined;
+  }
+  const options = buildTurnExecutionOptions(turnInput);
+  return options ? invokeMcpTool(request, options) : invokeMcpTool(request);
 }
 
 export interface AlternateBuiltinBrowserFallbackInput {
@@ -95,7 +126,7 @@ export async function tryAlternateBuiltinBrowserResult(
     }
     const alternateArgs = { ...input.args, url };
     try {
-      const result = await deps.invokeTool({
+      const result = await invokeTurnTool(deps, input.turnInput, {
         toolName: input.toolName,
         args: alternateArgs,
         agentId: "assistant",
@@ -190,7 +221,7 @@ async function tryAlternateBuiltinSearchEngines(
     }
     const alternateArgs = { ...input.args, engine };
     try {
-      const result = await deps.invokeTool({
+      const result = await invokeTurnTool(deps, input.turnInput, {
         toolName: "browser.search",
         args: alternateArgs,
         agentId: "assistant",
@@ -282,7 +313,7 @@ export async function tryBrowserFallbackAcrossMcpTiers(
     }
     let response: McpInvokeResponse | undefined;
     try {
-      response = await deps.invokeMcpTool?.({
+      response = await invokeTurnMcpTool(deps, input.turnInput, {
         serverId: target.serverId,
         toolName: resolvedToolName,
         arguments: buildBrowserFallbackArguments(input.toolName, input.args),

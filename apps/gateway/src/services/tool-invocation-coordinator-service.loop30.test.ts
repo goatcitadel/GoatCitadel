@@ -21,6 +21,7 @@ describe("ToolInvocationCoordinatorService loop30 coverage", () => {
       receiverId: "srv-1",
       state: "pending",
       tokenId: "token-1",
+      connectorId: "mcp:srv-1",
       approvalStatus: "pending",
       expiresAt: "2099-05-15T18:00:00.000Z",
     };
@@ -73,6 +74,7 @@ describe("ToolInvocationCoordinatorService loop30 coverage", () => {
     });
     expect(resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith({
       tokenId: "token-1",
+      connectorId: "mcp:srv-1",
       decision: "edit",
       editedPayload: { command: "echo approved" },
       resolutionNote: "Approved with a safer command.",

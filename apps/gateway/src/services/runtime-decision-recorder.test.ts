@@ -62,6 +62,28 @@ describe("RuntimeDecisionRecorder", () => {
     );
   });
 
+  it("does not revive a committed mutation when both decision storage and diagnostics fail", () => {
+    const recorder = new RuntimeDecisionRecorder({
+      runtimeDecisionTraces: {
+        append: vi.fn(() => {
+          throw new Error("decision store unavailable");
+        }),
+      },
+      recordDevDiagnostic: vi.fn(() => {
+        throw new Error("diagnostic store unavailable");
+      }),
+    });
+
+    expect(() =>
+      recorder.record({
+        kind: "approval_requested",
+        scope: { approvalId: "approval-1" },
+        selected: "Requested shell.exec approval",
+        rationale: "The canonical approval transaction already committed.",
+      }),
+    ).not.toThrow();
+  });
+
   it("records 100 compact decisions within a small local threshold", () => {
     const append = vi.fn((input: RuntimeDecisionTraceAppendInput) => createRecord(input));
     const host: RuntimeDecisionRecorderHost = {

@@ -1,13 +1,191 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest, ConnectorRecord } from "@goatcitadel/contracts";
-import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import {
+  buildApprovalRemoteTokenConnectorDeliveryPayload,
+  enqueueApprovalRemoteTokenConnectorDelivery,
+} from "./approval-connector-delivery.js";
+import { DurableOperatorPostCommitError } from "./durable-operator-service.js";
 
 describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
+  it("never serializes the raw bearer into any connector delivery payload", () => {
+    const rawToken = `grat_${"s".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_123";
+    const connectors = [
+      createConnector("browser", "active", ["approvals", "interactive_actions"]),
+      createConnector("integration_connection", "active", ["approvals", "outbound_messages", "interactive_actions"], {
+        approvalDeliveryTarget: "#ops-approvals",
+        key: "telegram",
+        approvalInlineActionsReady: true,
+      }),
+      createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
+    ];
+
+    for (const connector of connectors) {
+      const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector,
+        tokenRef,
+        tokenId: "rat_123",
+        expiresAt: "2099-03-20T12:00:00.000Z",
+      });
+
+      expect(payload).toBeDefined();
+      expect(JSON.stringify(payload)).not.toContain(rawToken);
+    }
+  });
+
+  it("stores the bearer before enqueueing an opaque durable delivery", () => {
+    const rawToken = `grat_${"q".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_123";
+    const createDurableRun = vi.fn(() => ({ runId: "delivery-run-1" }));
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(),
+    };
+
+    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets,
+        requestAttribution: { traceId: "trace-1", originSurface: "chat" },
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
+        tokenRecord: { token: rawToken, tokenId: "rat_123", expiresAt: "2099-03-20T12:00:00.000Z" },
+      },
+    );
+
+    expect(run).toEqual({ runId: "delivery-run-1" });
+    expect(tokenSecrets.store).toHaveBeenCalledWith("rat_123", rawToken);
+    expect(JSON.stringify(createDurableRun.mock.calls)).not.toContain(rawToken);
+    expect(createDurableRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowKey: "connector.delivery",
+        payload: expect.objectContaining({
+          traceId: "trace-1",
+          secretRefs: { approvalActionToken: tokenRef },
+        }),
+      }),
+    );
+  });
+
+  it("returns committed durable truth and preserves its secret when post-commit publication fails", () => {
+    const rawToken = `grat_${"c".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_committed";
+    const committedRun = { runId: "delivery-run-committed", status: "queued" } as never;
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(),
+    };
+    const createDurableRun = vi.fn((input) => {
+      expect(input).toMatchObject({
+        workflowKey: "connector.delivery",
+        payload: expect.objectContaining({ secretRefs: { approvalActionToken: tokenRef } }),
+      });
+      throw new DurableOperatorPostCommitError(
+        "Durable run creation",
+        committedRun,
+        new Error("processing request unavailable"),
+      );
+    });
+
+    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets,
+        requestAttribution: {},
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
+        tokenRecord: {
+          token: rawToken,
+          tokenId: "rat_committed",
+          expiresAt: "2099-03-20T12:00:00.000Z",
+        },
+      },
+    );
+
+    expect(run).toBe(committedRun);
+    expect(tokenSecrets.delete).not.toHaveBeenCalled();
+  });
+
+  it("deletes an uncommitted secret when durable creation fails before commit", () => {
+    const rawToken = `grat_${"f".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_uncommitted";
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(),
+    };
+    const createDurableRun = vi.fn(() => {
+      throw new Error("checkpoint write unavailable");
+    });
+
+    expect(() =>
+      enqueueApprovalRemoteTokenConnectorDelivery(
+        {
+          tokenSecrets,
+          requestAttribution: {},
+          createDurableRun: createDurableRun as never,
+        },
+        {
+          approval: createApproval(),
+          connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
+          tokenRecord: {
+            token: rawToken,
+            tokenId: "rat_uncommitted",
+            expiresAt: "2099-03-20T12:00:00.000Z",
+          },
+        },
+      ),
+    ).toThrow("checkpoint write unavailable");
+    expect(tokenSecrets.delete).toHaveBeenCalledWith(tokenRef);
+  });
+
+  it("does not fail token issuance when cleanup of an undeliverable connector secret is deferred", () => {
+    const rawToken = `grat_${"z".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_deferred_cleanup";
+    const tokenSecrets = {
+      store: vi.fn(() => tokenRef),
+      delete: vi.fn(() => {
+        throw new Error("keychain cleanup unavailable");
+      }),
+    };
+    const createDurableRun = vi.fn();
+    let run: ReturnType<typeof enqueueApprovalRemoteTokenConnectorDelivery>;
+
+    expect(() => {
+      run = enqueueApprovalRemoteTokenConnectorDelivery(
+        {
+          tokenSecrets,
+          requestAttribution: {},
+          createDurableRun: createDurableRun as never,
+        },
+        {
+          approval: createApproval(),
+          connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
+          tokenRecord: {
+            token: rawToken,
+            tokenId: "rat_deferred_cleanup",
+            expiresAt: "2099-03-20T12:00:00.000Z",
+          },
+        },
+      );
+    }).not.toThrow();
+
+    expect(run!).toBeUndefined();
+    expect(tokenSecrets.store).toHaveBeenCalledWith("rat_deferred_cleanup", rawToken);
+    expect(tokenSecrets.delete).toHaveBeenCalledTimes(1);
+    expect(tokenSecrets.delete).toHaveBeenCalledWith(tokenRef);
+    expect(createDurableRun).not.toHaveBeenCalled();
+  });
+
   it("builds browser delivery payloads for active approval-capable mission control connectors", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),
       connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
-      token: "grat_token",
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -18,13 +196,15 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       connectorType: "browser",
       action: "realtime.emit",
       correlationId: "apr_123",
+      secretRefs: {
+        approvalActionToken: "keychain:goatcitadel:approval-remote-action:rat_123",
+      },
       payload: {
         eventType: "approval_remote_action_ready",
         source: "approvals",
         payload: {
           approvalId: "apr_123",
           tokenId: "rat_123",
-          token: "grat_token",
           actionType: "approval.resolve",
           expiresAt: "2026-03-20T12:00:00.000Z",
         },
@@ -38,7 +218,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
         approvalDeliveryTarget: "#ops-approvals",
       }),
-      token: "grat_token",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -74,7 +253,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
         approvalDeliveryTarget: "#ops-approvals",
       }),
-      token: "grat_token",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -98,7 +276,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     const browser = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval,
       connector: createConnector("browser", "active", ["approvals", "interactive_actions"]),
-      token: "grat_token",
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -107,7 +285,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
         approvalDeliveryTarget: "#ops-approvals",
       }),
-      token: "grat_token",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -120,13 +297,13 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       expect(serialized).not.toContain("rollback-secret");
       expect(serialized).toContain("rat_123");
     }
-    expect(JSON.stringify(browser)).toContain("grat_token");
+    expect(JSON.stringify(browser)).not.toContain("grat_token");
     expect(JSON.stringify(channel)).not.toContain("grat_token");
     expect(JSON.stringify(approval)).toContain("preview-secret");
     expect(JSON.stringify(approval)).toContain("rollback-secret");
   });
 
-  it("adds integration approval buttons only when interactive actions are enabled", () => {
+  it("adds integration approval buttons only when the provider has authenticated inline-action support", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),
       connector: createConnector(
@@ -135,29 +312,71 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         ["approvals", "outbound_messages", "interactive_actions"],
         {
           approvalDeliveryTarget: "#ops-approvals",
-          key: "discord",
+          key: "telegram",
+          approvalInlineActionsReady: true,
         },
       ),
-      token: "grat_token",
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
 
-    expect(payload?.payload?.interactiveActions).toMatchObject({
-      platform: "discord",
+    expect(payload?.payload?.interactiveActionTemplate).toMatchObject({
+      platform: "telegram",
       tokenId: "rat_123",
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       buttons: [
-        { label: "Approve", callbackData: "gca:grat_token:a" },
-        { label: "Deny", callbackData: "gca:grat_token:r" },
+        { label: "Approve", decision: "a" },
+        { label: "Deny", decision: "r" },
       ],
     });
+  });
+
+  it("keeps unsupported integration providers on Mission Control resolution without storing a bearer", () => {
+    const rawToken = `grat_${"u".repeat(43)}`;
+    const createDurableRun = vi.fn(() => ({ runId: "delivery-run-unsupported" }));
+    const tokenSecrets = {
+      store: vi.fn(() => "keychain:goatcitadel:approval-remote-action:rat_unsupported"),
+      delete: vi.fn(),
+    };
+    const connector = createConnector(
+      "integration_connection",
+      "active",
+      ["approvals", "outbound_messages", "interactive_actions"],
+      {
+        approvalDeliveryTarget: "#ops-approvals",
+        key: "discord",
+        approvalInlineActionsReady: false,
+      },
+    );
+
+    const run = enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets,
+        requestAttribution: {},
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector,
+        tokenRecord: { token: rawToken, tokenId: "rat_unsupported", expiresAt: "2099-07-10T00:15:00.000Z" },
+      },
+    );
+
+    expect(run).toEqual({ runId: "delivery-run-unsupported" });
+    expect(tokenSecrets.store).not.toHaveBeenCalled();
+    const durableInput = createDurableRun.mock.calls[0]?.[0] as { payload?: Record<string, unknown> };
+    expect(durableInput.payload?.secretRefs).toBeUndefined();
+    expect((durableInput.payload?.payload as Record<string, unknown>)?.interactiveActionTemplate).toBeUndefined();
+    expect(String((durableInput.payload?.payload as Record<string, unknown>)?.message)).toContain(
+      "Resolve this approval from Mission Control.",
+    );
   });
 
   it("builds MCP invoke payloads for approval-capable MCP connectors", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),
       connector: createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
-      token: "grat_token",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -192,7 +411,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         arguments: {
           approvalId: "apr_123",
           tokenId: "rat_123",
-          token: "grat_token",
           actionType: "approval.resolve",
           expiresAt: "2026-03-20T12:00:00.000Z",
           governance: {
@@ -234,7 +452,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         },
       }),
       connector: createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
-      token: "grat_token",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
     });
@@ -264,7 +481,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       buildApprovalRemoteTokenConnectorDeliveryPayload({
         approval: createApproval(),
         connector: createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
-        token: "grat_token",
         tokenId: "rat_123",
         expiresAt: "2026-03-20T12:00:00.000Z",
       }),
@@ -274,7 +490,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       buildApprovalRemoteTokenConnectorDeliveryPayload({
         approval: createApproval(),
         connector: createConnector("browser", "active", ["approvals"]),
-        token: "grat_token",
         tokenId: "rat_123",
         expiresAt: "2026-03-20T12:00:00.000Z",
       }),
@@ -284,7 +499,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       buildApprovalRemoteTokenConnectorDeliveryPayload({
         approval: createApproval(),
         connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"]),
-        token: "grat_token",
         tokenId: "rat_123",
         expiresAt: "2026-03-20T12:00:00.000Z",
       }),
@@ -294,7 +508,6 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       buildApprovalRemoteTokenConnectorDeliveryPayload({
         approval: createApproval(),
         connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
-        token: "grat_token",
         tokenId: "rat_123",
         expiresAt: "2026-03-20T12:00:00.000Z",
       }),

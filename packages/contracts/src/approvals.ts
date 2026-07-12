@@ -1,5 +1,7 @@
 import type { McpElicitationRequest } from "./mcp.js";
 
+export const APPROVAL_EXPIRY_ACTOR_ID = "system:approval-expiry" as const;
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "edited";
 export type ApprovalExplanationStatus = "not_requested" | "pending" | "completed" | "failed";
 
@@ -116,13 +118,61 @@ export interface ApprovalCreateInput {
 }
 
 export type ApprovalEffectKind =
+  | "approval_wait_materialize"
   | "approval_wait_wake"
   | "proactive_run_wake"
   | "orchestration_parent_wake"
   | "linked_chat_turn_wake"
   | "pending_action_execute"
   | "approval_inbox_follow_up"
-  | "approval_after_hooks";
+  | "approval_after_hooks"
+  | "approval_resolution_signals"
+  | "approval_observability";
+
+export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
+
+export type ApprovalObservabilityDelivery =
+  | {
+      kind: "audit";
+      stream: ApprovalObservabilityAuditStream;
+      payload: Record<string, unknown>;
+    }
+  | {
+      kind: "realtime";
+      eventType: string;
+      source: string;
+      payload: Record<string, unknown>;
+      options?: Pick<
+        import("./monitoring.js").RealtimeEvent,
+        "eventClass" | "eventAuthority" | "links" | "correlationId"
+      >;
+    };
+
+export interface ApprovalObservabilityEffectInput {
+  operationId: string;
+  delivery: ApprovalObservabilityDelivery;
+}
+
+export interface ApprovalObservabilityAttribution {
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
+  actorId?: string;
+  deviceId?: string;
+  grantId?: string;
+  companionSessionId?: string;
+}
+
+export interface ApprovalObservabilityEnvelope {
+  schemaVersion: "approval_observability.v1";
+  deliveryId: string;
+  operationId: string;
+  occurredAt: string;
+  orderIndex: number;
+  predecessorDeliveryId?: string;
+  attribution?: ApprovalObservabilityAttribution;
+  delivery: ApprovalObservabilityDelivery;
+}
 
 export type ApprovalEffectStatus = "pending" | "running" | "completed" | "skipped" | "failed";
 

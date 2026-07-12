@@ -16,6 +16,10 @@ export function runWithRequestAttribution<T>(attribution: RequestAttribution, ca
   return requestAttributionStorage.run(mergeAttribution(attribution), callback);
 }
 
+export function runWithIsolatedRequestAttribution<T>(attribution: RequestAttribution, callback: () => T): T {
+  return requestAttributionStorage.run(normalizeAttribution(attribution), callback);
+}
+
 export function enterRequestAttribution(attribution: RequestAttribution): void {
   requestAttributionStorage.enterWith(mergeAttribution(attribution));
 }
@@ -28,8 +32,12 @@ function mergeAttribution(next: RequestAttribution): RequestAttribution {
   const current = requestAttributionStorage.getStore() ?? {};
   return {
     ...current,
-    ...Object.fromEntries(
-      Object.entries(next).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
-    ),
+    ...normalizeAttribution(next),
   };
+}
+
+function normalizeAttribution(attribution: RequestAttribution): RequestAttribution {
+  return Object.fromEntries(
+    Object.entries(attribution).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+  );
 }

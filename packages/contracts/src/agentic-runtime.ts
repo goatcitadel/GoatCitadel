@@ -262,6 +262,15 @@ export interface AgenticSubagentMetadata {
   tokenTotal?: number;
   filesTouched?: string[];
   handoffEvidence?: AgenticHandoffEvidence;
+  waiting?: AgenticSubagentWaitingProjection;
+}
+
+export interface AgenticSubagentWaitingProjection {
+  status: "queued" | "running" | "waiting_for_tool" | "waiting_for_approval" | "waiting_for_user_input";
+  reason: string;
+  childTurnId: string;
+  durableRunId?: string;
+  observedAt: string;
 }
 
 export interface AgenticRunTreeNode {

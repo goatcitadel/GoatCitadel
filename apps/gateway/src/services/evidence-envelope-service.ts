@@ -89,15 +89,21 @@ export class EvidenceEnvelopeService {
       metadata,
       createdAt,
     });
-    this.deps.publishRealtime?.("evidence_envelope_recorded", "runtime", {
-      envelopeId: envelope.envelopeId,
-      eventKind: envelope.eventKind,
-      workspaceId: envelope.workspaceId,
-      sessionId: envelope.sessionId,
-      turnId: envelope.turnId,
-      runId: envelope.runId,
-      signatureStatus: envelope.signatureStatus,
-    });
+    try {
+      this.deps.publishRealtime?.("evidence_envelope_recorded", "runtime", {
+        envelopeId: envelope.envelopeId,
+        eventKind: envelope.eventKind,
+        workspaceId: envelope.workspaceId,
+        sessionId: envelope.sessionId,
+        turnId: envelope.turnId,
+        runId: envelope.runId,
+        signatureStatus: envelope.signatureStatus,
+      });
+    } catch {
+      // The envelope is canonical evidence; retained realtime is a projection
+      // and cannot turn a committed insert into a misleading failure.
+      return envelope;
+    }
     return envelope;
   }
 

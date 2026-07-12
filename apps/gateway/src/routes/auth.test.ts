@@ -627,6 +627,8 @@ describe("auth routes", () => {
       },
     });
     expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.headers.vary).toBe("x-goatcitadel-device-request-secret");
     expect(response.json()).toMatchObject({
       requestId: "request-device-1",
       status: "approved",

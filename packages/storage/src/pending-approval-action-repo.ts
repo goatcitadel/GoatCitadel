@@ -1,5 +1,5 @@
 import type { PendingApprovalAction } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
@@ -23,7 +23,9 @@ interface PendingActionRow {
 export class PendingApprovalActionRepository {
   private readonly upsertStmt;
   private readonly getStmt;
+  private readonly findFreshPendingStmt;
   private readonly resolveStmt;
+  private readonly reclassifyExecutedAsFailedStmt;
   private readonly options: PendingApprovalActionRepositoryOptions;
 
   public constructor(
@@ -39,19 +41,50 @@ export class PendingApprovalActionRepository {
         action_type = excluded.action_type,
         request_json = excluded.request_json,
         created_at = excluded.created_at,
-        expires_at = excluded.expires_at,
-        resolved_at = NULL,
-        resolution_status = 'pending',
-        result_json = NULL
+        expires_at = excluded.expires_at
+      WHERE pending_approval_actions.resolution_status = 'pending'
     `);
 
     this.getStmt = db.prepare("SELECT * FROM pending_approval_actions WHERE approval_id = ?");
+    const explicitExpiry = db.dialect === "postgres" ? "gc_try_parse_timestamptz(expires_at)" : "julianday(expires_at)";
+    const createdAt = db.dialect === "postgres" ? "gc_try_parse_timestamptz(created_at)" : "julianday(created_at)";
+    const databaseNow = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
+    const defaultExpiry =
+      db.dialect === "postgres"
+        ? `(${createdAt} + (CAST(@defaultTtlMs AS DOUBLE PRECISION) * INTERVAL '1 millisecond'))`
+        : `(${createdAt} + (CAST(@defaultTtlMs AS REAL) / 86400000.0))`;
+    this.findFreshPendingStmt = db.prepare(`
+      SELECT *
+      FROM pending_approval_actions
+      WHERE approval_id = @approvalId
+        AND resolution_status = 'pending'
+        AND (
+          (
+            expires_at IS NOT NULL
+            AND ${explicitExpiry} IS NOT NULL
+            AND ${explicitExpiry} > ${databaseNow}
+          )
+          OR (
+            expires_at IS NULL
+            AND ${createdAt} IS NOT NULL
+            AND ${defaultExpiry} > ${databaseNow}
+          )
+        )
+      LIMIT 1
+    `);
 
     this.resolveStmt = db.prepare(`
       UPDATE pending_approval_actions
       SET resolved_at = @resolvedAt, resolution_status = @resolutionStatus, result_json = @resultJson
       WHERE approval_id = @approvalId
         AND resolution_status = 'pending'
+    `);
+    this.reclassifyExecutedAsFailedStmt = db.prepare(`
+      UPDATE pending_approval_actions
+      SET resolution_status = 'failed', result_json = @nextResultJson
+      WHERE approval_id = @approvalId
+        AND resolution_status = 'executed'
+        AND result_json = @expectedResultJson
     `);
   }
 
@@ -89,6 +122,15 @@ export class PendingApprovalActionRepository {
     return this.mapRow(row);
   }
 
+  public findFreshPending(approvalId: string, defaultTtlMs: number): PendingApprovalAction | undefined {
+    const normalizedDefaultTtlMs = Math.max(0, Math.floor(defaultTtlMs));
+    const row = this.findFreshPendingStmt.get({
+      approvalId,
+      defaultTtlMs: normalizedDefaultTtlMs,
+    }) as PendingActionRow | undefined;
+    return row ? this.mapRow(row) : undefined;
+  }
+
   public markResolved(
     approvalId: string,
     resolutionStatus: NonNullable<PendingApprovalAction["resolutionStatus"]>,
@@ -110,6 +152,33 @@ export class PendingApprovalActionRepository {
     }
 
     return this.get(approvalId);
+  }
+
+  public reclassifyExecutedAsFailed(
+    approvalId: string,
+    expectedResult: Record<string, unknown>,
+    nextResult: Record<string, unknown>,
+  ): PendingApprovalAction {
+    const update = this.reclassifyExecutedAsFailedStmt.run({
+      approvalId,
+      expectedResultJson: JSON.stringify(expectedResult),
+      nextResultJson: JSON.stringify(nextResult),
+    });
+    if (update.changes > 0) {
+      return this.get(approvalId);
+    }
+    const existing = this.find(approvalId);
+    if (!existing) {
+      throw new NotFoundError({ entity: "pending approval action", id: approvalId });
+    }
+    if (existing.resolutionStatus === "failed") {
+      return existing;
+    }
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Pending approval action ${approvalId} changed before its executed result could be reclassified as failed.`,
+      details: { approvalId, resolutionStatus: existing.resolutionStatus },
+    });
   }
 
   private mapRow(row: PendingActionRow): PendingApprovalAction {

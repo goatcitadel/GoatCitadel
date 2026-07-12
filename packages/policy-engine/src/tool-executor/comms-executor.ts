@@ -6,6 +6,8 @@ import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@g
 import type { Storage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
+import { sanitizeForAudit } from "../tool-security.js";
+import { assertNoRawRemoteApprovalBearer } from "../approval-action-secrets.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -15,16 +17,32 @@ const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const commsRequestBoundaryContext = new AsyncLocalStorage<{
   mutationRequestStarted: boolean;
   mutationResponseReceived: boolean;
+  externalBoundaryReported: boolean;
+  beforeExternalSideEffect?: () => void;
 }>();
+
+interface ApprovalActionSecretRuntime {
+  resolveApprovalActionTokenSecret?: (secretRef: string) => string;
+  deleteApprovalActionTokenSecret?: (secretRef: string) => void;
+  isApprovalActionConnectorReady?: (connectionId: string) => boolean;
+  beforeExternalSideEffect?: () => void;
+}
 
 export async function executeCommsTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
   storage: Storage,
   grantAllowlist?: string[],
+  approvalActionSecrets: ApprovalActionSecretRuntime = {},
 ): Promise<Record<string, unknown>> {
-  return commsRequestBoundaryContext.run({ mutationRequestStarted: false, mutationResponseReceived: false }, () =>
-    executeCommsToolWithBoundaryTracking(request, config, storage, grantAllowlist),
+  return commsRequestBoundaryContext.run(
+    {
+      mutationRequestStarted: false,
+      mutationResponseReceived: false,
+      externalBoundaryReported: false,
+      beforeExternalSideEffect: approvalActionSecrets.beforeExternalSideEffect,
+    },
+    () => executeCommsToolWithBoundaryTracking(request, config, storage, grantAllowlist, approvalActionSecrets),
   );
 }
 
@@ -33,9 +51,11 @@ async function executeCommsToolWithBoundaryTracking(
   config: ToolPolicyConfig,
   storage: Storage,
   grantAllowlist?: string[],
+  approvalActionSecrets: ApprovalActionSecretRuntime = {},
 ): Promise<Record<string, unknown>> {
   const toolName = request.toolName;
   const args = request.args;
+  assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = storage.integrationConnections.get(connectionId);
   const connectionConfig = record(connection.config);
@@ -46,10 +66,14 @@ async function executeCommsToolWithBoundaryTracking(
     connectionId,
     channelKey: connection.key,
     target,
-    payload: { toolName, args },
+    // Provider execution keeps the raw in-memory arguments, but the delivery
+    // ledger must never retain bearer material embedded in interactive actions.
+    payload: sanitizeForAudit({ toolName, args }),
   });
   let providerMessageId: string | undefined;
+  let protectedApprovalTokenRef: string | undefined;
   try {
+    assertIntegrationConnectionAvailable(connection);
     if (toolName === "gmail.read") {
       const records = await gmailRead(connectionConfig, args, config.sandbox.networkAllowlist, grantAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
@@ -60,17 +84,26 @@ async function executeCommsToolWithBoundaryTracking(
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
+    const providerRequest = hydrateProtectedApprovalActionAtProviderBoundary(
+      request,
+      connection.connectionId,
+      connection.key,
+      storage,
+      approvalActionSecrets,
+    );
+    protectedApprovalTokenRef = providerRequest.secretRef;
     providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,
       connectionConfig,
-      args,
+      providerRequest.args,
       config.sandbox.networkAllowlist,
       grantAllowlist,
       target,
       message,
     );
     storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
+    deleteApprovalActionTokenBestEffort(approvalActionSecrets, protectedApprovalTokenRef);
     return {
       ...queued,
       status: "sent",
@@ -101,6 +134,9 @@ async function executeCommsToolWithBoundaryTracking(
       !isReadOnlyCommsTool(toolName) && !boundaryState?.mutationRequestStarted && classifiedStatus === "degraded"
         ? "not_available"
         : classifiedStatus;
+    if (protectedApprovalTokenRef && (providerMessageId || deliveryStatus === "manual_reconciliation_required")) {
+      deleteApprovalActionTokenBestEffort(approvalActionSecrets, protectedApprovalTokenRef);
+    }
     try {
       if (providerMessageId) {
         storage.commsDeliveries.markFailed(
@@ -127,6 +163,124 @@ async function executeCommsToolWithBoundaryTracking(
       fallbackReason: errorMessage,
       updatedAt: new Date().toISOString(),
     };
+  }
+}
+
+function hydrateProtectedApprovalActionAtProviderBoundary(
+  request: ToolInvokeRequest,
+  connectionId: string,
+  connectionKey: string,
+  storage: Storage,
+  runtime: ApprovalActionSecretRuntime,
+): { args: Record<string, unknown>; secretRef?: string } {
+  const templateValue = request.args.interactiveActionTemplate;
+  if (templateValue === undefined) {
+    assertNoRawRemoteApprovalBearer(request.args);
+    return { args: request.args };
+  }
+  if (request.args.interactiveActions !== undefined) {
+    throw new Error("blocked: Protected approval actions cannot include pre-hydrated callback data.");
+  }
+  if (request.toolName !== "channel.send" && request.toolName !== "telegram.send") {
+    throw new Error("Protected approval actions are only supported for channel sends.");
+  }
+  if (connectionKey !== "telegram") {
+    throw new Error(`Inline approval actions are not supported by ${connectionKey}.`);
+  }
+  if (!templateValue || typeof templateValue !== "object" || Array.isArray(templateValue)) {
+    throw new Error("blocked: Protected approval action template is invalid.");
+  }
+  const template = templateValue as Record<string, unknown>;
+  const platform = asString(template.platform);
+  const tokenId = asString(template.tokenId);
+  const tokenRef = asString(template.tokenRef);
+  const expiresAt = asString(template.expiresAt);
+  const expectedPrefix = "keychain:goatcitadel:approval-remote-action:";
+  if (
+    platform !== "telegram" ||
+    !tokenId ||
+    !tokenRef?.startsWith(expectedPrefix) ||
+    tokenRef.slice(expectedPrefix.length) !== tokenId ||
+    !expiresAt ||
+    !Number.isFinite(Date.parse(expiresAt)) ||
+    request.authContext?.boundary !== "tool_host_boundary" ||
+    request.authContext.secretRefs?.includes(tokenRef) !== true ||
+    !hasCanonicalApprovalButtons(template.buttons)
+  ) {
+    throw new Error("blocked: Protected approval action template is invalid or mismatched.");
+  }
+  if (runtime.isApprovalActionConnectorReady?.(connectionId) !== true) {
+    throw new Error("blocked: Authenticated Telegram approval callback ingress is not currently ready.");
+  }
+  const tokenRecord = storage.remoteActionTokens.get(tokenId);
+  if (
+    tokenRecord.actionType !== "approval.resolve" ||
+    tokenRecord.connectorId !== `integration:${connectionId}` ||
+    tokenRecord.expiresAt !== expiresAt
+  ) {
+    throw new Error("blocked: Protected approval action token binding is invalid or mismatched.");
+  }
+  if (tokenRecord.state !== "pending") {
+    deleteApprovalActionTokenBestEffort(runtime, tokenRef);
+    throw new Error(`blocked: Protected approval action token is ${tokenRecord.state}.`);
+  }
+  if (Date.parse(expiresAt) <= Date.now()) {
+    deleteApprovalActionTokenBestEffort(runtime, tokenRef);
+    throw new Error("blocked: Approval interactive-action token expired before provider dispatch.");
+  }
+  const rawToken = runtime.resolveApprovalActionTokenSecret?.(tokenRef)?.trim();
+  if (!rawToken || !/^grat_[A-Za-z0-9_-]{43}$/.test(rawToken)) {
+    throw new Error("Approval interactive-action token is unavailable or invalid.");
+  }
+  return {
+    secretRef: tokenRef,
+    args: {
+      ...request.args,
+      interactiveActionTemplate: undefined,
+      interactiveActions: {
+        platform: "telegram",
+        tokenId,
+        buttons: [
+          { label: "Approve", callbackData: `gca:${rawToken}:a` },
+          { label: "Deny", callbackData: `gca:${rawToken}:r` },
+        ],
+      },
+    },
+  };
+}
+
+function hasCanonicalApprovalButtons(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== 2) {
+    return false;
+  }
+  const expected = [
+    { label: "Approve", decision: "a" },
+    { label: "Deny", decision: "r" },
+  ];
+  return value.every((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return false;
+    }
+    const recordValue = item as Record<string, unknown>;
+    return recordValue.label === expected[index]?.label && recordValue.decision === expected[index]?.decision;
+  });
+}
+
+function assertIntegrationConnectionAvailable(connection: { enabled?: boolean; status?: string }): void {
+  if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
+    throw new Error("blocked: Integration connection is disabled or disconnected.");
+  }
+}
+
+function deleteApprovalActionTokenBestEffort(runtime: ApprovalActionSecretRuntime, secretRef?: string): void {
+  if (!secretRef) {
+    return;
+  }
+  try {
+    runtime.deleteApprovalActionTokenSecret?.(secretRef);
+  } catch {
+    // Provider delivery is already terminal. Cleanup failure must not trigger a
+    // duplicate external send; the expiry reconciler will retry removal.
   }
 }
 
@@ -2959,6 +3113,7 @@ async function queryBlueBubblesChats(
     allowlist,
     undefined,
     grantAllowlist,
+    { crossesExternalSideEffect: false },
   );
   if (!res.response.ok) {
     return [];
@@ -4132,7 +4287,9 @@ async function fetchAllowlisted(
   allowlist: string[],
   signal?: AbortSignal,
   grantAllowlist?: string[],
+  boundaryOptions: { crossesExternalSideEffect?: boolean } = {},
 ): Promise<{ response: Response; finalUrl: string }> {
+  const crossesExternalSideEffect = boundaryOptions.crossesExternalSideEffect ?? !isHttpRequestSafeToRetry(init);
   let current = url;
   for (let hop = 0; hop <= MAX_HTTP_REDIRECTS; hop += 1) {
     assertHostAllowed(current, allowlist);
@@ -4142,7 +4299,11 @@ async function fetchAllowlisted(
     let response: Response;
     for (let attempt = 0; ; attempt += 1) {
       const boundaryState = commsRequestBoundaryContext.getStore();
-      if (boundaryState && !isHttpRequestSafeToRetry(init)) {
+      if (boundaryState && crossesExternalSideEffect) {
+        if (!boundaryState.externalBoundaryReported) {
+          boundaryState.beforeExternalSideEffect?.();
+          boundaryState.externalBoundaryReported = true;
+        }
         boundaryState.mutationRequestStarted = true;
       }
       response = await fetchAllowlistedOnce(current, {
@@ -4153,7 +4314,7 @@ async function fetchAllowlisted(
           signal: composeAbortSignal(20000, signal),
         },
       });
-      if (boundaryState && !isHttpRequestSafeToRetry(init)) {
+      if (boundaryState && crossesExternalSideEffect) {
         boundaryState.mutationResponseReceived = true;
       }
       if (

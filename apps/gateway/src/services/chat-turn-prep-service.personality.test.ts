@@ -403,6 +403,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
           ],
         }),
       }),
+      undefined,
     );
   });
 
@@ -438,6 +439,69 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(prepared.assistantMessageId).toBe("assistant-fixed");
     expect(harness.host.ingestEvent).not.toHaveBeenCalled();
     expect(harness.host.maybeAutoTitleChatSession).not.toHaveBeenCalled();
+  });
+
+  it("uses the caller-owned deterministic user message identity for fresh internal turns", async () => {
+    const harness = createHost("chat");
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      "session-1",
+      { content: "Dispatch deterministic child work" },
+      {
+        branchKind: "append",
+        userMessageId: "user-deterministic",
+        turnId: "turn-deterministic",
+        assistantMessageId: "assistant-deterministic",
+      },
+    );
+
+    expect(prepared.userEventId).toBe("user-deterministic");
+    expect(prepared.userMessage.messageId).toBe("user-deterministic");
+    expect(prepared.turnId).toBe("turn-deterministic");
+    expect(prepared.assistantMessageId).toBe("assistant-deterministic");
+    expect(harness.host.ingestEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ eventId: "user-deterministic" }),
+      undefined,
+    );
+  });
+
+  it("reuses a persisted deterministic user message when the trace was not created before a crash", async () => {
+    const harness = createHost("chat");
+    const existingUserMessage = {
+      messageId: "user-deterministic",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Dispatch deterministic child work",
+      timestamp: "2026-07-11T00:00:00.000Z",
+    } as ChatMessageRecord;
+    vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+      traces: [],
+      tracesById: new Map(),
+      messages: [existingUserMessage],
+      messagesById: new Map([[existingUserMessage.messageId, existingUserMessage]]),
+      childrenByTurnId: new Map(),
+      turnLineageById: new Map(),
+    });
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      "session-1",
+      { content: "Dispatch deterministic child work" },
+      {
+        branchKind: "append",
+        userMessageId: existingUserMessage.messageId,
+        turnId: "turn-deterministic",
+        assistantMessageId: "assistant-deterministic",
+      },
+    );
+
+    expect(prepared.userMessage).toBe(existingUserMessage);
+    expect(prepared.userEventId).toBe(existingUserMessage.messageId);
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
   });
 
   it("builds conversation context from the active branch and rejects empty content", async () => {

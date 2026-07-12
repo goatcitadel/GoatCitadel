@@ -16,6 +16,7 @@ export interface ApprovalWaitRunRecord {
 
 export class ApprovalWaitRunRepository {
   private readonly getStmt;
+  private readonly createOrGetStmt;
   private readonly upsertStmt;
   private readonly markResolvedStmt;
 
@@ -25,6 +26,11 @@ export class ApprovalWaitRunRepository {
       FROM approval_wait_runs
       WHERE approval_id = ?
       LIMIT 1
+    `);
+    this.createOrGetStmt = db.prepare(`
+      INSERT INTO approval_wait_runs (approval_id, run_id, created_at, resolved_at)
+      VALUES (?, ?, ?, NULL)
+      ON CONFLICT(approval_id) DO NOTHING
     `);
     this.upsertStmt = db.prepare(`
       INSERT INTO approval_wait_runs (approval_id, run_id, created_at, resolved_at)
@@ -48,6 +54,12 @@ export class ApprovalWaitRunRepository {
 
   public getRunId(approvalId: string): string | undefined {
     return this.get(approvalId)?.runId;
+  }
+
+  /** Reserves the first durable run id without allowing a racing writer to replace it. */
+  public createOrGet(input: { approvalId: string; runId: string; createdAt?: string }): ApprovalWaitRunRecord {
+    this.createOrGetStmt.run(input.approvalId, input.runId, input.createdAt ?? new Date().toISOString());
+    return this.get(input.approvalId) as ApprovalWaitRunRecord;
   }
 
   public upsert(input: {

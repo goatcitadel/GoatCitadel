@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyGoalToGuidanceSystemInstruction,
   advanceGoalForTurn,
   DEFAULT_GOAL_TURN_BUDGET,
+  prepareAgentChatTurn,
 } from "./chat-turn-prep-service.js";
 
 describe("applyGoalToGuidanceSystemInstruction", () => {
@@ -38,5 +39,128 @@ describe("advanceGoalForTurn", () => {
       cleared: false,
     });
     expect(advanceGoalForTurn({ turnsUsed: DEFAULT_GOAL_TURN_BUDGET, turnBudget: null })).toEqual({ cleared: true });
+  });
+});
+
+describe("prepareAgentChatTurn stream mutation commit truth", () => {
+  it("signals commit only after user-event ingestion commits before a post-commit projection failure escapes", async () => {
+    const markCommitted = vi.fn();
+    const commitAlongsideCanonicalWrite = vi.fn();
+    const ingestEvent = vi.fn(async (_key, _payload, options?: { onCommit?: () => void; afterCommit?: () => void }) => {
+      options?.onCommit?.();
+      options?.afterCommit?.();
+      throw new Error("transcript projection failed after commit");
+    });
+    const host = {
+      storage: {
+        chatSessionMeta: {
+          ensure: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
+        },
+        workspaces: {
+          find: vi.fn(() => ({ workspaceId: "default", citadelId: "personal" })),
+        },
+        chatAttachments: {
+          listByIds: vi.fn(() => []),
+        },
+      },
+      getSession: vi.fn(() => ({
+        sessionId: "session-1",
+        sessionKey: "mission:operator",
+        kind: "mission",
+        channel: "mission",
+        account: "operator",
+      })),
+      ensureChatSessionRuntimeGrants: vi.fn(),
+      normalizeWorkspaceId: vi.fn(() => "default"),
+      maybeAutoTitleChatSession: vi.fn(),
+      routeFromSession: vi.fn(() => ({ channel: "mission", account: "operator" })),
+      loadChatTurnSessionState: vi.fn(async () => ({
+        traces: [],
+        tracesById: new Map(),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        turnLineageById: new Map(),
+      })),
+      ingestEvent,
+    } as never;
+
+    await expect(
+      prepareAgentChatTurn(
+        host,
+        "session-1",
+        { content: "hello" },
+        {
+          mutationLifecycle: { commitAlongsideCanonicalWrite, markCommitted },
+        },
+      ),
+    ).rejects.toThrow("transcript projection failed after commit");
+
+    expect(commitAlongsideCanonicalWrite).toHaveBeenCalledTimes(1);
+    expect(markCommitted).toHaveBeenCalledTimes(1);
+    expect(ingestEvent).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
+      onCommit: expect.any(Function),
+      afterCommit: expect.any(Function),
+    });
+  });
+
+  it("does not signal commit when user-event ingestion rolls back", async () => {
+    const markCommitted = vi.fn();
+    const commitAlongsideCanonicalWrite = vi.fn();
+    const ingestEvent = vi.fn(async (_key, _payload, options?: { onCommit?: () => void; afterCommit?: () => void }) => {
+      options?.onCommit?.();
+      throw new Error("usage write failed inside ingest transaction");
+    });
+    const host = {
+      storage: {
+        chatSessionMeta: {
+          ensure: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
+        },
+        workspaces: {
+          find: vi.fn(() => ({ workspaceId: "default", citadelId: "personal" })),
+        },
+        chatAttachments: {
+          listByIds: vi.fn(() => []),
+        },
+      },
+      getSession: vi.fn(() => ({
+        sessionId: "session-1",
+        sessionKey: "mission:operator",
+        kind: "mission",
+        channel: "mission",
+        account: "operator",
+      })),
+      ensureChatSessionRuntimeGrants: vi.fn(),
+      normalizeWorkspaceId: vi.fn(() => "default"),
+      maybeAutoTitleChatSession: vi.fn(),
+      routeFromSession: vi.fn(() => ({ channel: "mission", account: "operator" })),
+      loadChatTurnSessionState: vi.fn(async () => ({
+        traces: [],
+        tracesById: new Map(),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        turnLineageById: new Map(),
+      })),
+      ingestEvent,
+    } as never;
+
+    await expect(
+      prepareAgentChatTurn(
+        host,
+        "session-1",
+        { content: "hello" },
+        {
+          mutationLifecycle: { commitAlongsideCanonicalWrite, markCommitted },
+        },
+      ),
+    ).rejects.toThrow("usage write failed inside ingest transaction");
+
+    expect(commitAlongsideCanonicalWrite).toHaveBeenCalledTimes(1);
+    expect(markCommitted).not.toHaveBeenCalled();
+    expect(ingestEvent).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
+      onCommit: expect.any(Function),
+      afterCommit: expect.any(Function),
+    });
   });
 });

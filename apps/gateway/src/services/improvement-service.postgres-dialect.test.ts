@@ -100,4 +100,21 @@ describe("ImprovementService on the postgres dialect", () => {
 
     expect(result.run.status).toBe("completed");
   });
+
+  it("types the optional expected-status predicate before binding a null on the postgres dialect", () => {
+    const harness = createHarness();
+    const prepare = vi.spyOn(harness.storage.gatewaySql, "prepare");
+    const markActivationFailed = (
+      harness.service as unknown as {
+        markActivationFailed: (activationId: string, reason: string) => unknown;
+      }
+    ).markActivationFailed.bind(harness.service);
+
+    expect(() => markActivationFailed("missing-activation", "probe")).toThrow(/not found/i);
+    const transitionSql = prepare.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.includes("UPDATE improvement_activations") && sql.includes("expectedStatus"));
+    expect(transitionSql).toMatch(/CAST\(@expectedStatus AS TEXT\) IS NULL/);
+    expect(transitionSql).toMatch(/status = CAST\(@expectedStatus AS TEXT\)/);
+  });
 });

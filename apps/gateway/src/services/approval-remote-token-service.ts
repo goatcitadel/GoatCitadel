@@ -14,6 +14,7 @@
 
 import { type RemoteActionTokenRecord, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 
 /**
@@ -23,6 +24,14 @@ import { hashSensitiveToken } from "./device-access-helpers.js";
  */
 export interface ApprovalRemoteTokenHost {
   readonly storage: Pick<Storage, "remoteActionTokens">;
+  readonly approvalRemoteTokenSecrets?: Pick<ApprovalRemoteTokenSecretService, "deleteById">;
+}
+
+export interface RemoteActionTokenClaimOptions {
+  /** Stable digest of the canonical approval-resolution request. */
+  claimFingerprint?: string;
+  /** Optional authenticated connector binding for opaque-id resolution. */
+  expectedConnectorId?: string;
 }
 
 /**
@@ -34,6 +43,7 @@ export function consumeRemoteActionToken(
   host: ApprovalRemoteTokenHost,
   token: string,
   expectedActionType: RemoteActionTokenRecord["actionType"],
+  options?: RemoteActionTokenClaimOptions,
 ): RemoteActionTokenRecord {
   const normalizedToken = token.trim();
   if (!normalizedToken) {
@@ -48,33 +58,7 @@ export function consumeRemoteActionToken(
       id: "unknown",
     });
   }
-  if (current.actionType !== expectedActionType) {
-    throw new ConflictError({
-      message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
-    });
-  }
-  if (current.state !== "pending") {
-    throw new ConflictError({
-      message: "Remote action token has already been consumed.",
-    });
-  }
-  const expiresAt = Date.parse(current.expiresAt);
-  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    host.storage.remoteActionTokens.updateState(current.tokenId, "expired");
-    throw new ConflictError({
-      message: "Remote action token has expired.",
-    });
-  }
-  const consumed = host.storage.remoteActionTokens.consumePending(current.tokenId, {
-    consumedAt: new Date().toISOString(),
-    consumedBy: `connector:${current.connectorId}`,
-  });
-  if (!consumed) {
-    throw new ConflictError({
-      message: "Remote action token has already been consumed.",
-    });
-  }
-  return consumed;
+  return consumeResolvedRemoteActionToken(host, current, expectedActionType, options);
 }
 
 /**
@@ -86,6 +70,7 @@ export function consumeRemoteActionTokenById(
   host: ApprovalRemoteTokenHost,
   tokenId: string,
   expectedActionType: RemoteActionTokenRecord["actionType"],
+  options?: RemoteActionTokenClaimOptions,
 ): RemoteActionTokenRecord {
   const normalizedTokenId = tokenId.trim();
   if (!normalizedTokenId) {
@@ -94,31 +79,128 @@ export function consumeRemoteActionTokenById(
     });
   }
   const current = host.storage.remoteActionTokens.get(normalizedTokenId);
+  return consumeResolvedRemoteActionToken(host, current, expectedActionType, options);
+}
+
+function consumeResolvedRemoteActionToken(
+  host: ApprovalRemoteTokenHost,
+  current: RemoteActionTokenRecord,
+  expectedActionType: RemoteActionTokenRecord["actionType"],
+  options: RemoteActionTokenClaimOptions | undefined,
+): RemoteActionTokenRecord {
   if (current.actionType !== expectedActionType) {
     throw new ConflictError({
       message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
     });
   }
-  if (current.state !== "pending") {
+  const expectedConnectorId = options?.expectedConnectorId?.trim();
+  const boundConnectorId = current.connectorId.trim();
+  if (boundConnectorId && !expectedConnectorId) {
     throw new ConflictError({
-      message: "Remote action token has already been consumed.",
+      message: `Remote action token is bound to connector ${boundConnectorId}; connector binding is required.`,
     });
   }
-  const expiresAt = Date.parse(current.expiresAt);
-  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    host.storage.remoteActionTokens.updateState(current.tokenId, "expired");
+  if (boundConnectorId && boundConnectorId !== expectedConnectorId) {
     throw new ConflictError({
-      message: "Remote action token has expired.",
+      message: `Remote action token is bound to connector ${boundConnectorId}, not ${expectedConnectorId}.`,
     });
   }
+
+  const claimFingerprint = normalizeClaimFingerprint(options?.claimFingerprint);
+  if (current.state === "expired") {
+    host.approvalRemoteTokenSecrets?.deleteById(current.tokenId);
+    throwExpiredTokenConflict();
+  }
+  if (current.state === "consumed") {
+    if (!claimFingerprint) {
+      throwConsumedTokenConflict();
+    }
+    return resolveClaimResult(host, current.tokenId, {
+      consumedAt: new Date().toISOString(),
+      consumedBy: `connector:${current.connectorId}`,
+      claimFingerprint,
+    });
+  }
+
+  const consumedAt = new Date().toISOString();
+  const consumedBy = `connector:${current.connectorId}`;
+  if (claimFingerprint) {
+    return resolveClaimResult(host, current.tokenId, {
+      consumedAt,
+      consumedBy,
+      claimFingerprint,
+    });
+  }
+
   const consumed = host.storage.remoteActionTokens.consumePending(current.tokenId, {
-    consumedAt: new Date().toISOString(),
-    consumedBy: `connector:${current.connectorId}`,
+    consumedAt,
+    consumedBy,
   });
   if (!consumed) {
-    throw new ConflictError({
-      message: "Remote action token has already been consumed.",
-    });
+    expireTokenAfterLostBoundaryRace(host, current.tokenId);
+    throwConsumedTokenConflict();
   }
   return consumed;
+}
+
+function resolveClaimResult(
+  host: ApprovalRemoteTokenHost,
+  tokenId: string,
+  input: {
+    consumedAt: string;
+    consumedBy: string;
+    claimFingerprint: string;
+  },
+): RemoteActionTokenRecord {
+  const result = host.storage.remoteActionTokens.claimPending(tokenId, input);
+  if ((result.outcome === "claimed" || result.outcome === "resumed") && result.record) {
+    return result.record;
+  }
+  if (result.outcome === "fingerprint_mismatch") {
+    throw new ConflictError({
+      message: "Remote action token was claimed by a different request.",
+    });
+  }
+  if (result.record?.state === "expired") {
+    throwExpiredTokenConflict();
+  }
+  if (result.record?.state === "pending") {
+    expireTokenAfterLostBoundaryRace(host, tokenId);
+  }
+  throwConsumedTokenConflict();
+}
+
+function expireTokenAfterLostBoundaryRace(host: ApprovalRemoteTokenHost, tokenId: string): void {
+  const latest = expirePendingTokenAfterSecretCleanup(host, tokenId);
+  if (latest.state === "expired") {
+    throwExpiredTokenConflict();
+  }
+}
+
+function expirePendingTokenAfterSecretCleanup(host: ApprovalRemoteTokenHost, tokenId: string): RemoteActionTokenRecord {
+  host.approvalRemoteTokenSecrets?.deleteById(tokenId);
+  return host.storage.remoteActionTokens.expirePendingIfExpired(tokenId);
+}
+
+function normalizeClaimFingerprint(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "claimFingerprint" });
+  }
+  return normalized;
+}
+
+function throwConsumedTokenConflict(): never {
+  throw new ConflictError({
+    message: "Remote action token has already been consumed.",
+  });
+}
+
+function throwExpiredTokenConflict(): never {
+  throw new ConflictError({
+    message: "Remote action token has expired.",
+  });
 }

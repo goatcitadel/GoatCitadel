@@ -136,6 +136,7 @@ vi.mock("./chat-turn-trace-hydration.js", () => ({
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { ChatTurnExecutionRegistry, ChatTurnWriteConflictError } from "./chat-turn-execution-registry.js";
 import { GatewayService } from "./gateway-service.js";
+import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatSessionService from "./chat-session-service.js";
@@ -151,6 +152,7 @@ import * as settingsAuthService from "./settings-auth-service.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const systemSettingsStore = new Map<string, unknown>();
+  const secretStoreValues = new Map<string, string>();
   const systemSettings = {
     get: vi.fn((key: string) => (systemSettingsStore.has(key) ? { value: systemSettingsStore.get(key) } : undefined)),
     set: vi.fn((key: string, value: unknown) => {
@@ -160,6 +162,11 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   Object.assign(gateway, {
     runtimeDecisionRecorder: { record: vi.fn() },
+    secretStore: {
+      setSecret: vi.fn((account: string, value: string) => secretStoreValues.set(account, value)),
+      getSecret: vi.fn((account: string) => secretStoreValues.get(account)),
+      deleteSecret: vi.fn((account: string) => secretStoreValues.delete(account)),
+    },
     backgroundTasks: new Set<Promise<unknown>>(),
     chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
     syntheticPermissionProfiles: new Map(),
@@ -270,6 +277,8 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
           state: "consumed",
           ...patch,
         })),
+        expirePendingAtOrBefore: vi.fn((tokenId: string) => ({ tokenId, state: "expired" })),
+        expirePendingIfExpired: vi.fn((tokenId: string) => ({ tokenId, state: "expired" })),
         updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
           tokenId,
           state,
@@ -296,6 +305,10 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     },
   });
   Object.assign(gateway, overrides);
+  gateway.approvalRemoteTokenSecrets = new ApprovalRemoteTokenSecretService(
+    gateway.secretStore,
+    gateway.storage.remoteActionTokens,
+  );
   return { gateway, systemSettings, systemSettingsStore };
 }
 
@@ -558,12 +571,14 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteToken.call(gateway, {
         token: "token",
+        connectorId: "browser:mission-control",
         decision: "approved",
       } as never),
     ).resolves.toMatchObject({ remote: true });
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteTokenId.call(gateway, {
         tokenId: "token-id",
+        connectorId: "mcp:srv-1",
         decision: "approved",
       } as never),
     ).resolves.toMatchObject({ remoteId: true });
@@ -621,34 +636,41 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
 
   it("creates internal grants only when deny-wins and existing allow checks pass", () => {
     const publishRealtime = vi.fn();
-    const createGrant = vi.fn();
+    const createGrant = vi.fn((input, ttlMs) => ({
+      ...input,
+      grantId: "grant-internal",
+      grantType: "ttl",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      expiresAt: "2026-07-11T00:05:00.000Z",
+      ttlMs,
+    }));
+    const listActive = vi.fn();
     const { gateway } = createGatewayHarness({
       listToolGrants: vi.fn(),
-      policyEngine: { createGrant },
       publishRealtime,
     });
+    gateway.storage = {
+      toolGrants: { listActive, createTtlForDuration: createGrant },
+      chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+    };
 
-    gateway.listToolGrants = vi
-      .fn()
-      .mockReturnValueOnce([])
-      .mockReturnValueOnce([{ decision: "deny", toolPattern: "browser.*", scope: "global", scopeRef: "global" }])
-      .mockReturnValueOnce([]);
+    listActive.mockImplementation((scope: string) =>
+      scope === "global" ? [{ decision: "deny", toolPattern: "browser.*", scope: "global", scopeRef: "global" }] : [],
+    );
     expect(() =>
       GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "test"),
     ).toThrow(/blocked by an active deny/i);
     expect(createGrant).not.toHaveBeenCalled();
 
-    gateway.listToolGrants = vi
-      .fn()
-      .mockReturnValueOnce([
-        { decision: "allow", toolPattern: "browser.search", scope: "session", scopeRef: "session-1" },
-      ])
-      .mockReturnValueOnce([])
-      .mockReturnValueOnce([]);
+    listActive.mockImplementation((scope: string) =>
+      scope === "session"
+        ? [{ decision: "allow", toolPattern: "browser.search", scope: "session", scopeRef: "session-1" }]
+        : [],
+    );
     GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "test");
     expect(createGrant).not.toHaveBeenCalled();
 
-    gateway.listToolGrants = vi.fn().mockReturnValueOnce([]).mockReturnValueOnce([]).mockReturnValueOnce([]);
+    listActive.mockReturnValue([]);
     GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "test");
     expect(createGrant).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -656,8 +678,8 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
         decision: "allow",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "ttl",
       }),
+      5 * 60 * 1000,
     );
     expect(publishRealtime).toHaveBeenLastCalledWith(
       "system",
@@ -763,21 +785,35 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     gateway.storage.remoteActionTokens.get = vi.fn(() => currentToken);
 
     expect(
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " secret ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " secret ", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
     ).toMatchObject({ tokenId: "token-1", state: "consumed" });
     expect(
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-1 ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-1 ", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
     ).toMatchObject({ tokenId: "token-1", state: "consumed" });
 
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({ ...currentToken, actionType: "other.action" }));
-    expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
-      ConflictError,
-    );
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
+    ).toThrow(ConflictError);
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => ({ ...currentToken, expiresAt: expired }));
-    expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
-      ConflictError,
-    );
-    expect(gateway.storage.remoteActionTokens.updateState).toHaveBeenCalledWith("token-1", "expired");
+    gateway.storage.remoteActionTokens.consumePending = vi.fn(() => undefined);
+    gateway.storage.remoteActionTokens.expirePendingIfExpired = vi.fn(() => ({
+      ...currentToken,
+      expiresAt: expired,
+      state: "expired",
+    }));
+    expect(() =>
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve", {
+        expectedConnectorId: "connector-1",
+      }),
+    ).toThrow(ConflictError);
+    expect(gateway.storage.remoteActionTokens.expirePendingIfExpired).toHaveBeenCalledWith("token-1");
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => undefined);
     expect(() => GatewayService.prototype.consumeRemoteActionToken.call(gateway, "secret", "approval.resolve")).toThrow(
       NotFoundError,
@@ -820,10 +856,15 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
           originSurface: "cowork",
           runId: "run-approval-1",
           permissionProfileId: "safe",
+          secretRefs: expect.objectContaining({
+            approvalActionToken: "keychain:goatcitadel:approval-remote-action:token-2",
+          }),
         }),
         metadata: expect.objectContaining({ approvalId: "approval-1", connectorId: "browser-1" }),
       }),
     );
+    expect(JSON.stringify(createDurableRun.mock.calls[0]?.[0])).not.toContain("remote-token");
+    expect(gateway.secretStore.setSecret).toHaveBeenCalledWith("approval-remote-action:token-2", "remote-token");
 
     gateway.isFeatureEnabled = vi.fn(() => false);
     expect(
@@ -1214,20 +1255,29 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       eventIngestService: { ingest },
       publishRealtime,
     });
+    const onCommit = vi.fn();
+    const afterCommit = vi.fn();
 
     await expect(
-      GatewayService.prototype.ingestEvent.call(gateway, "idem-1", {
-        eventId: "event-1",
-        route: { channel: "sms", account: "acct", peer: "peer" },
-        actor: { type: "user", id: "user-1" },
-        message: { role: "user", content: "hello" },
-        taskId: "task-1",
-      } as never),
+      GatewayService.prototype.ingestEvent.call(
+        gateway,
+        "idem-1",
+        {
+          eventId: "event-1",
+          route: { channel: "sms", account: "acct", peer: "peer" },
+          actor: { type: "user", id: "user-1" },
+          message: { role: "user", content: "hello" },
+          taskId: "task-1",
+        } as never,
+        { onCommit, afterCommit },
+      ),
     ).resolves.toMatchObject({ session: { sessionId: "session-1" } });
     expect(ingest).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/api/v1/gateway/events",
         idempotencyKey: "idem-1",
+        onCommit,
+        afterCommit,
       }),
     );
     expect(gateway.operatorSummaryCache.invalidate).toHaveBeenCalledTimes(1);

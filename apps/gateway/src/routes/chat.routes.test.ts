@@ -679,6 +679,7 @@ describe("chat routes additional coverage", () => {
       "sess-1",
       expect.objectContaining({ content: "Hello" }),
       expect.any(AbortSignal),
+      expect.objectContaining({ markCommitted: expect.any(Function) }),
     );
   });
 

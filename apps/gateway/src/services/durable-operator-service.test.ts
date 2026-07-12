@@ -124,6 +124,41 @@ describe("DurableOperatorService", () => {
       },
     });
   });
+
+  it("preserves retry commit truth when a post-commit hook enqueue fails", () => {
+    const deps = fakeDeps();
+    deps.hooksService.enqueueAfterHooks.mockImplementationOnce(() => {
+      throw new Error("hook queue unavailable");
+    });
+    const service = new DurableOperatorService(deps);
+
+    expect(() => service.retryRun("run-1")).toThrow(
+      expect.objectContaining({
+        name: "DurableOperatorPostCommitError",
+        mutationCommitted: true,
+        canonicalResult: expect.objectContaining({ runId: "run-1", status: "queued" }),
+      }),
+    );
+    expect(deps.durableRunService.retryDurableRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("attempts every retry post-commit consumer before reporting committed failure", () => {
+    const deps = fakeDeps();
+    deps.memoryLifecycleService.syncMaintenanceFromDurableRun.mockImplementationOnce(() => {
+      throw new Error("maintenance sync unavailable");
+    });
+    const service = new DurableOperatorService(deps);
+
+    expect(() => service.retryRun("run-1")).toThrow(
+      expect.objectContaining({
+        name: "DurableOperatorPostCommitError",
+        mutationCommitted: true,
+        canonicalResult: expect.objectContaining({ runId: "run-1", status: "queued" }),
+      }),
+    );
+    expect(deps.durableRunService.requestRunProcessing).toHaveBeenCalledWith("run-1");
+    expect(deps.hooksService.enqueueAfterHooks).toHaveBeenCalledTimes(1);
+  });
 });
 
 function run(status: DurableRunRecord["status"]): DurableRunRecord {

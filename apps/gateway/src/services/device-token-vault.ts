@@ -15,7 +15,7 @@
 
 export interface DeviceTokenVaultEntry {
   readonly token: string;
-  /** Epoch milliseconds. The entry is invalid once `Date.now()` passes this. */
+  /** Epoch milliseconds. The entry is invalid once the authoritative clock passes this. */
   readonly expiresAt: number;
   /** Original ISO expiry, surfaced to the device in the status response. */
   readonly expiresAtIso?: string;
@@ -44,10 +44,18 @@ export class DeviceTokenVault {
    * prior entry for the same request id (re-approval is not expected, but a
    * later approval should win).
    */
-  public store(requestId: string, token: string, expiresAtIso?: string): void {
+  public store(requestId: string, token: string, expiresAtIso?: string, authoritativeNowMs = this.now()): void {
     const expiresAt = parseExpiry(expiresAtIso);
+    if (!Number.isFinite(authoritativeNowMs)) {
+      this.entries.delete(requestId);
+      return;
+    }
     // Opportunistic cleanup so a never-polled approval cannot leak forever.
-    this.sweep();
+    this.sweep(authoritativeNowMs);
+    if (expiresAt === undefined || authoritativeNowMs >= expiresAt) {
+      this.entries.delete(requestId);
+      return;
+    }
     this.entries.set(requestId, { token, expiresAt, expiresAtIso });
   }
 
@@ -56,25 +64,25 @@ export class DeviceTokenVault {
    * when the entry is absent (already delivered, never stored, or gateway
    * restarted) or expired. Single-use by construction.
    */
-  public claim(requestId: string): DeviceTokenClaim | undefined {
+  public claim(requestId: string, authoritativeNowMs = this.now()): DeviceTokenClaim | undefined {
     const entry = this.entries.get(requestId);
     if (!entry) {
       return undefined;
     }
     this.entries.delete(requestId);
-    if (this.now() >= entry.expiresAt) {
+    if (!Number.isFinite(authoritativeNowMs) || authoritativeNowMs >= entry.expiresAt) {
       return undefined;
     }
     return { token: entry.token, deviceTokenExpiresAt: entry.expiresAtIso };
   }
 
   /** Whether a (non-expired) token is currently held for the request id. */
-  public has(requestId: string): boolean {
+  public has(requestId: string, authoritativeNowMs = this.now()): boolean {
     const entry = this.entries.get(requestId);
     if (!entry) {
       return false;
     }
-    if (this.now() >= entry.expiresAt) {
+    if (!Number.isFinite(authoritativeNowMs) || authoritativeNowMs >= entry.expiresAt) {
       this.entries.delete(requestId);
       return false;
     }
@@ -87,10 +95,13 @@ export class DeviceTokenVault {
   }
 
   /** Drop every entry whose TTL has elapsed. Safe to call frequently. */
-  public sweep(): void {
-    const nowMs = this.now();
+  public sweep(authoritativeNowMs = this.now()): void {
+    if (!Number.isFinite(authoritativeNowMs)) {
+      this.entries.clear();
+      return;
+    }
     for (const [requestId, entry] of this.entries) {
-      if (nowMs >= entry.expiresAt) {
+      if (authoritativeNowMs >= entry.expiresAt) {
         this.entries.delete(requestId);
       }
     }
@@ -102,13 +113,13 @@ export class DeviceTokenVault {
   }
 }
 
-function parseExpiry(expiresAtIso?: string): number {
+function parseExpiry(expiresAtIso?: string): number | undefined {
   if (expiresAtIso) {
     const parsed = Date.parse(expiresAtIso);
     if (Number.isFinite(parsed)) {
       return parsed;
     }
   }
-  // No/invalid expiry: never expire on its own. Single-use claim still bounds it.
-  return Number.POSITIVE_INFINITY;
+  // An operator-equivalent credential without a valid TTL must never be held.
+  return undefined;
 }

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Durable run state and its dialect-specific transactional lease SQL stay co-located. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
@@ -7,10 +8,21 @@ import type {
   DurableRunRecord,
   DurableRunStatus,
 } from "@goatcitadel/contracts";
-import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
+import {
+  toCountRow,
+  toDurableCheckpointRows,
+  toDurableDeadLetterRow,
+  toDurableDeadLetterRows,
+  toDurableRetryRows,
+  toDurableRunRow,
+  toDurableRunRows,
+  type DurableDeadLetterRow,
+  type DurableRunRow,
+} from "./durable-run-row-codec.js";
 
 export interface PruneCheckpointsResult {
   prunedOrphans: number;
@@ -19,70 +31,35 @@ export interface PruneCheckpointsResult {
   diskBudgetBytes: number;
 }
 
-interface DurableRunRow {
-  run_id: string;
-  workflow_key: string;
-  status: DurableRunStatus;
-  attempt_count: number;
-  max_attempts: number;
-  payload_json: string;
-  metadata_json: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  last_error: string | null;
-  lease_owner_id: string | null;
-  lease_expires_at: string | null;
-  lease_heartbeat_at: string | null;
-  version: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DurableCheckpointRow {
-  checkpoint_id: string;
-  run_id: string;
-  checkpoint_kind: DurableCheckpointRecord["checkpointKind"];
-  state_json: string;
-  created_at: string;
-}
-
-interface DurableRetryRow {
-  retry_id: string;
-  run_id: string;
-  attempt_no: number;
-  reason: string;
-  next_retry_at: string | null;
-  created_at: string;
-}
-
-interface DurableDeadLetterRow {
-  dead_letter_id: string;
-  run_id: string;
-  reason: string;
-  payload_json: string;
-  created_at: string;
-  resolved_at: string | null;
-  resolution_note: string | null;
-}
-
 export interface DurableRunRepositoryOptions {
   quarantine?: { record: (entry: QuarantineEntry) => unknown };
   logger?: { warn: (data: unknown, msg: string) => void };
 }
 
 export class DurableRunRepository {
+  private readonly databaseNowStmt;
   private readonly insertRunStmt;
   private readonly getRunStmt;
+  private readonly getRunForUpdateStmt;
+  private readonly lockActiveLeaseForUpdateStmt;
+  private readonly lockFreshActiveLeaseForUpdateStmt;
+  private readonly lockExpiredLeaseForUpdateStmt;
+  private readonly claimQueuedRunWithDatabaseClockStmt;
+  private readonly renewLeaseWithDatabaseClockStmt;
   private readonly getRunsByIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly updateRunStmt;
   private readonly listRunsStmt;
   private readonly listRunIdsByStatusStmt;
+  private readonly listPendingLinkedFinalizationRunIdsStmt;
+  private readonly listPendingAutonomousChatPostCommitRunIdsStmt;
+  private readonly listPendingGeneralChatPostCommitRunIdsStmt;
   private readonly listExpiredRunningRunIdsStmt;
   private readonly countRunsStmt;
   private readonly statusCountsStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly upsertRetryStmt;
+  private readonly upsertRetryWithDatabaseClockStmt;
   private readonly listRetriesStmt;
   private readonly upsertDeadLetterStmt;
   private readonly listDeadLettersStmt;
@@ -94,6 +71,17 @@ export class DurableRunRepository {
     private readonly db: DatabaseClient,
     private readonly options: DurableRunRepositoryOptions = {},
   ) {
+    const optionalAfterRunId = db.dialect === "postgres" ? "CAST(@afterRunId AS TEXT)" : "@afterRunId";
+    this.databaseNowStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          SELECT to_char(
+            clock_timestamp() AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          ) AS now_iso
+        `
+        : `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now_iso`,
+    );
     this.insertRunStmt = db.prepare(`
       INSERT INTO durable_runs (
         run_id, workflow_key, status, attempt_count, max_attempts,
@@ -106,6 +94,188 @@ export class DurableRunRepository {
       )
     `);
     this.getRunStmt = db.prepare("SELECT * FROM durable_runs WHERE run_id = ?");
+    this.getRunForUpdateStmt = db.prepare(`
+      SELECT *
+      FROM durable_runs
+      WHERE run_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
+    this.lockActiveLeaseForUpdateStmt = db.prepare(`
+      SELECT *
+      FROM durable_runs
+      WHERE run_id = @runId
+        AND status = 'running'
+        AND lease_owner_id = @expectedLeaseOwnerId
+        AND lease_expires_at IS NOT NULL
+        AND lease_expires_at > @now
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
+    this.lockFreshActiveLeaseForUpdateStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH locked AS MATERIALIZED (
+            SELECT *
+            FROM durable_runs
+            WHERE run_id = @runId
+            FOR UPDATE
+          )
+          SELECT *
+          FROM locked
+          WHERE status = 'running'
+            AND lease_owner_id = @expectedLeaseOwnerId
+            AND lease_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(lease_expires_at) > clock_timestamp()
+        `
+        : `
+          SELECT *
+          FROM durable_runs
+          WHERE run_id = @runId
+            AND status = 'running'
+            AND lease_owner_id = @expectedLeaseOwnerId
+            AND lease_expires_at IS NOT NULL
+            AND julianday(lease_expires_at) > julianday('now')
+        `,
+    );
+    this.lockExpiredLeaseForUpdateStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH locked AS MATERIALIZED (
+            SELECT *
+            FROM durable_runs
+            WHERE run_id = @runId
+            FOR UPDATE
+          )
+          SELECT *
+          FROM locked
+          WHERE status = 'running'
+            AND (
+              lease_owner_id = CAST(@expectedLeaseOwnerId AS TEXT)
+              OR (lease_owner_id IS NULL AND CAST(@expectedLeaseOwnerId AS TEXT) IS NULL)
+            )
+            AND lease_expires_at = @expectedLeaseExpiresAt
+            AND gc_try_parse_timestamptz(lease_expires_at) <= clock_timestamp()
+        `
+        : `
+          SELECT *
+          FROM durable_runs
+          WHERE run_id = @runId
+            AND status = 'running'
+            AND (
+              lease_owner_id = @expectedLeaseOwnerId
+              OR (lease_owner_id IS NULL AND @expectedLeaseOwnerId IS NULL)
+            )
+            AND lease_expires_at = @expectedLeaseExpiresAt
+            AND julianday(lease_expires_at) <= julianday('now')
+        `,
+    );
+    this.claimQueuedRunWithDatabaseClockStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
+          )
+          UPDATE durable_runs AS target
+          SET status = 'running',
+              started_at = COALESCE(target.started_at, to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+              finished_at = NULL,
+              last_error = NULL,
+              lease_owner_id = @workerId,
+              lease_heartbeat_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              lease_expires_at = to_char(
+                (database_clock.now_instant + (CAST(@leaseDurationMs AS DOUBLE PRECISION) * interval '1 millisecond')) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              ),
+              version = target.version + 1,
+              updated_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          FROM database_clock
+          WHERE target.run_id = @runId
+            AND target.status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM durable_retries AS retry
+              WHERE retry.run_id = target.run_id
+                AND retry.attempt_no = (
+                  SELECT MAX(latest.attempt_no)
+                  FROM durable_retries AS latest
+                  WHERE latest.run_id = target.run_id
+                )
+                AND retry.next_retry_at IS NOT NULL
+                AND gc_try_parse_timestamptz(retry.next_retry_at) > database_clock.now_instant
+            )
+        `
+        : `
+          WITH database_clock AS (
+            SELECT julianday('now') AS now_instant
+          )
+          UPDATE durable_runs
+          SET status = 'running',
+              started_at = COALESCE(started_at, strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))),
+              finished_at = NULL,
+              last_error = NULL,
+              lease_owner_id = @workerId,
+              lease_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock)),
+              lease_expires_at = strftime(
+                '%Y-%m-%dT%H:%M:%fZ',
+                (SELECT now_instant FROM database_clock) + (CAST(@leaseDurationMs AS REAL) / 86400000.0)
+              ),
+              version = version + 1,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))
+          WHERE run_id = @runId
+            AND status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM durable_retries AS retry
+              WHERE retry.run_id = durable_runs.run_id
+                AND retry.attempt_no = (
+                  SELECT MAX(latest.attempt_no)
+                  FROM durable_retries AS latest
+                  WHERE latest.run_id = durable_runs.run_id
+                )
+                AND retry.next_retry_at IS NOT NULL
+                AND julianday(retry.next_retry_at) > (SELECT now_instant FROM database_clock)
+            )
+        `,
+    );
+    this.renewLeaseWithDatabaseClockStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
+          )
+          UPDATE durable_runs AS target
+          SET lease_heartbeat_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              lease_expires_at = to_char(
+                (database_clock.now_instant + (CAST(@leaseDurationMs AS DOUBLE PRECISION) * interval '1 millisecond')) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              ),
+              version = target.version + 1,
+              updated_at = to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          FROM database_clock
+          WHERE target.run_id = @runId
+            AND target.status = 'running'
+            AND target.lease_owner_id = @workerId
+            AND target.lease_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(target.lease_expires_at) > database_clock.now_instant
+        `
+        : `
+          WITH database_clock AS (
+            SELECT julianday('now') AS now_instant
+          )
+          UPDATE durable_runs
+          SET lease_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock)),
+              lease_expires_at = strftime(
+                '%Y-%m-%dT%H:%M:%fZ',
+                (SELECT now_instant FROM database_clock) + (CAST(@leaseDurationMs AS REAL) / 86400000.0)
+              ),
+              version = version + 1,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', (SELECT now_instant FROM database_clock))
+          WHERE run_id = @runId
+            AND status = 'running'
+            AND lease_owner_id = @workerId
+            AND lease_expires_at IS NOT NULL
+            AND julianday(lease_expires_at) > (SELECT now_instant FROM database_clock)
+        `,
+    );
     this.updateRunStmt = db.prepare(`
       UPDATE durable_runs
       SET
@@ -137,15 +307,56 @@ export class DurableRunRepository {
       ORDER BY created_at ASC
       LIMIT ?
     `);
-    this.listExpiredRunningRunIdsStmt = db.prepare(`
+    this.listPendingLinkedFinalizationRunIdsStmt = db.prepare(`
       SELECT run_id
       FROM durable_runs
-      WHERE status = 'running'
-        AND lease_expires_at IS NOT NULL
-        AND lease_expires_at <= ?
-      ORDER BY updated_at ASC, run_id ASC
-      LIMIT ?
+      WHERE status = 'failed'
+        AND metadata_json LIKE '%"linkedFinalizationPending":%'
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
+      ORDER BY run_id ASC
+      LIMIT @limit
     `);
+    this.listPendingAutonomousChatPostCommitRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status = 'completed'
+        AND workflow_key = 'chat.turn.execute'
+        AND metadata_json LIKE '%"autonomousChatPostCommitPending":%'
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
+    this.listPendingGeneralChatPostCommitRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status IN ('completed', 'failed', 'cancelled', 'waiting')
+        AND workflow_key = 'chat.turn.execute'
+        AND metadata_json LIKE '%"generalChatPostCommitPending":%'
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
+    this.listExpiredRunningRunIdsStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          SELECT run_id
+          FROM durable_runs
+          WHERE status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND gc_try_parse_timestamptz(lease_expires_at) <= clock_timestamp()
+          ORDER BY updated_at ASC, run_id ASC
+          LIMIT @limit
+        `
+        : `
+          SELECT run_id
+          FROM durable_runs
+          WHERE status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND julianday(lease_expires_at) <= julianday('now')
+          ORDER BY updated_at ASC, run_id ASC
+          LIMIT @limit
+        `,
+    );
     this.countRunsStmt = db.prepare("SELECT COUNT(1) AS count FROM durable_runs");
     this.statusCountsStmt = db.prepare(`
       SELECT status, COUNT(1) AS count
@@ -175,6 +386,47 @@ export class DurableRunRepository {
         reason = excluded.reason,
         next_retry_at = excluded.next_retry_at
     `);
+    this.upsertRetryWithDatabaseClockStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
+          )
+          INSERT INTO durable_retries (
+            retry_id, run_id, attempt_no, reason, next_retry_at, created_at
+          )
+          SELECT
+            @retryId,
+            @runId,
+            @attemptNo,
+            @reason,
+            to_char(
+              (database_clock.now_instant + (CAST(@delayMs AS DOUBLE PRECISION) * interval '1 millisecond'))
+                AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            ),
+            to_char(database_clock.now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          FROM database_clock
+          ON CONFLICT(run_id, attempt_no) DO UPDATE SET
+            reason = excluded.reason,
+            next_retry_at = excluded.next_retry_at
+        `
+        : `
+          INSERT INTO durable_retries (
+            retry_id, run_id, attempt_no, reason, next_retry_at, created_at
+          ) VALUES (
+            @retryId,
+            @runId,
+            @attemptNo,
+            @reason,
+            strftime('%Y-%m-%dT%H:%M:%fZ', julianday('now') + (CAST(@delayMs AS REAL) / 86400000.0)),
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          )
+          ON CONFLICT(run_id, attempt_no) DO UPDATE SET
+            reason = excluded.reason,
+            next_retry_at = excluded.next_retry_at
+        `,
+    );
     this.listRetriesStmt = db.prepare(`
       SELECT * FROM durable_retries
       WHERE run_id = ?
@@ -213,6 +465,7 @@ export class DurableRunRepository {
       SET resolved_at = @resolvedAt,
           resolution_note = @resolutionNote
       WHERE dead_letter_id = @deadLetterId
+        AND resolved_at IS NULL
     `);
   }
 
@@ -284,8 +537,86 @@ export class DurableRunRepository {
     return this.mapRunRow(row);
   }
 
+  public readDatabaseNow(): string {
+    const row = this.databaseNowStmt.get<{ now_iso?: unknown }>();
+    if (typeof row?.now_iso !== "string" || !Number.isFinite(Date.parse(row.now_iso))) {
+      throw new Error("Database did not return a valid durable-run clock.");
+    }
+    return row.now_iso;
+  }
+
+  /**
+   * Locks and returns a run for a multi-repository state transition. Callers
+   * must invoke this inside a storage transaction before locking linked rows.
+   */
+  public getRunForUpdate(runId: string): DurableRunRecord {
+    const row = toDurableRunRow(this.getRunForUpdateStmt.get(runId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Durable run", id: runId });
+    }
+    return this.mapRunRow(row);
+  }
+
+  /**
+   * Locks and returns a run only while the caller still owns its active lease.
+   * Callers must invoke this method inside a storage transaction. PostgreSQL
+   * takes an explicit row lock; SQLite's BEGIN IMMEDIATE transaction provides
+   * the corresponding write serialization before this predicate is evaluated.
+   */
+  public lockActiveLeaseForUpdate(
+    runId: string,
+    expectedLeaseOwnerId: string,
+    now: string,
+  ): DurableRunRecord | undefined {
+    const row = toDurableRunRow(
+      this.lockActiveLeaseForUpdateStmt.get({
+        runId,
+        expectedLeaseOwnerId,
+        now,
+      }),
+    );
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
+  /**
+   * Locks a run only while the database clock says the expected lease is live.
+   * This is the commit fence: callers must invoke it inside the same storage
+   * transaction as the state transition protected by the lease.
+   */
+  public lockFreshActiveLeaseForUpdate(runId: string, expectedLeaseOwnerId: string): DurableRunRecord | undefined {
+    const row = toDurableRunRow(
+      this.lockFreshActiveLeaseForUpdateStmt.get({
+        runId,
+        expectedLeaseOwnerId,
+      }),
+    );
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
+  /**
+   * Locks an observed running lease only when the exact owner/expiry pair is
+   * unchanged and the database clock says it has expired. Callers must invoke
+   * this inside the same storage transaction as the recovery transition.
+   */
+  public lockExpiredLeaseForUpdate(input: {
+    runId: string;
+    expectedLeaseOwnerId?: string;
+    expectedLeaseExpiresAt: string;
+  }): DurableRunRecord | undefined {
+    const row = toDurableRunRow(
+      this.lockExpiredLeaseForUpdateStmt.get({
+        runId: input.runId,
+        expectedLeaseOwnerId: input.expectedLeaseOwnerId ?? null,
+        expectedLeaseExpiresAt: input.expectedLeaseExpiresAt,
+      }),
+    );
+    return row ? this.mapRunRow(row) : undefined;
+  }
+
   public getRunsByIds(runIds: Array<string | undefined>): Map<string, DurableRunRecord> {
-    const uniqueRunIds = [...new Set(runIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+    const uniqueRunIds = [
+      ...new Set(runIds.map((item) => item?.trim()).filter((item): item is string => Boolean(item))),
+    ];
     const byRunId = new Map<string, DurableRunRecord>();
     if (uniqueRunIds.length === 0) {
       return byRunId;
@@ -336,6 +667,7 @@ export class DurableRunRepository {
   }): DurableRunRecord {
     const current = this.getRun(input.runId);
     const next = this.buildNextRun(current, input);
+    const expectedVersion = input.expectedVersion ?? current.version;
     const result = this.updateRunStmt.run({
       runId: next.runId,
       status: next.status,
@@ -350,11 +682,18 @@ export class DurableRunRepository {
       leaseExpiresAt: next.leaseExpiresAt ?? null,
       leaseHeartbeatAt: next.leaseHeartbeatAt ?? null,
       nextVersion: next.version,
-      expectedVersion: input.expectedVersion ?? current.version,
+      expectedVersion,
       updatedAt: next.updatedAt,
     });
     if ((result.changes ?? 0) < 1) {
-      throw new Error(`Durable run ${input.runId} update conflict`);
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Durable run ${input.runId} update conflict`,
+        details: {
+          runId: input.runId,
+          expectedVersion,
+        },
+      });
     }
     return this.getRun(next.runId);
   }
@@ -401,6 +740,19 @@ export class DurableRunRepository {
     return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
   }
 
+  public tryClaimQueuedRunWithDatabaseClock(input: {
+    runId: string;
+    workerId: string;
+    leaseDurationMs: number;
+  }): DurableRunRecord | undefined {
+    const result = this.claimQueuedRunWithDatabaseClockStmt.run({
+      runId: input.runId,
+      workerId: input.workerId,
+      leaseDurationMs: normalizeLeaseDurationMs(input.leaseDurationMs),
+    });
+    return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
+  }
+
   public renewLease(input: {
     runId: string;
     workerId: string;
@@ -421,6 +773,19 @@ export class DurableRunRepository {
       updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
       expectedVersion: current.version,
     });
+  }
+
+  public renewLeaseWithDatabaseClock(input: {
+    runId: string;
+    workerId: string;
+    leaseDurationMs: number;
+  }): DurableRunRecord | undefined {
+    const result = this.renewLeaseWithDatabaseClockStmt.run({
+      runId: input.runId,
+      workerId: input.workerId,
+      leaseDurationMs: normalizeLeaseDurationMs(input.leaseDurationMs),
+    });
+    return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
   }
 
   public releaseLease(runId: string, workerId: string, updatedAt?: string): DurableRunRecord | undefined {
@@ -449,9 +814,36 @@ export class DurableRunRepository {
     return rows.map((row) => row.run_id);
   }
 
-  public listExpiredRunningRunIds(nowIso: string, limit = 500): string[] {
+  public listPendingLinkedFinalizationRunIds(limit = 500, afterRunId?: string): string[] {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
-    const rows = this.listExpiredRunningRunIdsStmt.all(nowIso, safeLimit) as Array<{ run_id: string }>;
+    const rows = this.listPendingLinkedFinalizationRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listPendingAutonomousChatPostCommitRunIds(limit = 500, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listPendingAutonomousChatPostCommitRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listPendingGeneralChatPostCommitRunIds(limit = 500, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listPendingGeneralChatPostCommitRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listExpiredRunningRunIds(_nowIso: string, limit = 500): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listExpiredRunningRunIdsStmt.all({ limit: safeLimit }) as Array<{ run_id: string }>;
     return rows.map((row) => row.run_id);
   }
 
@@ -546,6 +938,33 @@ export class DurableRunRepository {
     return rows[rows.length - 1] ?? record;
   }
 
+  /** Creates retry readiness relative to the database clock. */
+  public upsertRetryWithDatabaseClock(input: {
+    retryId?: string;
+    runId: string;
+    attemptNo: number;
+    reason: string;
+    delayMs: number;
+  }): DurableRetryRecord {
+    const record = {
+      retryId: input.retryId ?? randomUUID(),
+      runId: input.runId,
+      attemptNo: Math.max(1, Math.floor(input.attemptNo)),
+      reason: input.reason.trim(),
+      delayMs: normalizeRetryDelayMs(input.delayMs),
+    };
+    if (!record.reason) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "reason" });
+    }
+    this.upsertRetryWithDatabaseClockStmt.run(record);
+    const rows = this.listRetries(record.runId);
+    const inserted = rows.find((item) => item.attemptNo === record.attemptNo);
+    if (!inserted) {
+      throw new Error(`Durable retry ${record.runId}/${record.attemptNo} was not persisted.`);
+    }
+    return inserted;
+  }
+
   public listRetries(runId: string, limit = 100): DurableRetryRecord[] {
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
     const rows = toDurableRetryRows(this.listRetriesStmt.all(runId, safeLimit));
@@ -631,11 +1050,17 @@ export class DurableRunRepository {
     } = {},
   ): DurableDeadLetterRecord {
     const existing = this.getDeadLetterById(deadLetterId);
-    this.resolveDeadLetterStmt.run({
+    const result = this.resolveDeadLetterStmt.run({
       deadLetterId,
       resolvedAt: input.resolvedAt ?? new Date().toISOString(),
       resolutionNote: input.resolutionNote?.trim() || null,
     });
+    if (Number(result.changes ?? 0) !== 1) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Durable dead letter ${deadLetterId} is already resolved`,
+      });
+    }
     return this.getDeadLetterById(existing.deadLetterId);
   }
 
@@ -854,111 +1279,22 @@ function mapDeadLetterRow(row: DurableDeadLetterRow): DurableDeadLetterRecord {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isDurableRunRow(value: unknown): value is DurableRunRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.run_id === "string" &&
-    typeof value.workflow_key === "string" &&
-    typeof value.status === "string" &&
-    typeof value.attempt_count === "number" &&
-    typeof value.max_attempts === "number" &&
-    typeof value.payload_json === "string" &&
-    (typeof value.metadata_json === "string" || value.metadata_json === null) &&
-    (typeof value.started_at === "string" || value.started_at === null) &&
-    (typeof value.finished_at === "string" || value.finished_at === null) &&
-    (typeof value.last_error === "string" || value.last_error === null) &&
-    (typeof value.lease_owner_id === "string" || value.lease_owner_id === null) &&
-    (typeof value.lease_expires_at === "string" || value.lease_expires_at === null) &&
-    (typeof value.lease_heartbeat_at === "string" || value.lease_heartbeat_at === null) &&
-    typeof value.version === "number" &&
-    typeof value.created_at === "string" &&
-    typeof value.updated_at === "string"
-  );
-}
-
-function isDurableCheckpointRow(value: unknown): value is DurableCheckpointRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.checkpoint_id === "string" &&
-    typeof value.run_id === "string" &&
-    typeof value.checkpoint_kind === "string" &&
-    typeof value.state_json === "string" &&
-    typeof value.created_at === "string"
-  );
-}
-
-function isDurableRetryRow(value: unknown): value is DurableRetryRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.retry_id === "string" &&
-    typeof value.run_id === "string" &&
-    typeof value.attempt_no === "number" &&
-    typeof value.reason === "string" &&
-    (typeof value.next_retry_at === "string" || value.next_retry_at === null) &&
-    typeof value.created_at === "string"
-  );
-}
-
-function isDurableDeadLetterRow(value: unknown): value is DurableDeadLetterRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.dead_letter_id === "string" &&
-    typeof value.run_id === "string" &&
-    typeof value.reason === "string" &&
-    typeof value.payload_json === "string" &&
-    typeof value.created_at === "string" &&
-    (typeof value.resolved_at === "string" || value.resolved_at === null) &&
-    (typeof value.resolution_note === "string" || value.resolution_note === null)
-  );
-}
-
-function toDurableRunRow(value: unknown): DurableRunRow | undefined {
-  return isDurableRunRow(value) ? value : undefined;
-}
-
-function toDurableRunRows(value: unknown): DurableRunRow[] {
-  return Array.isArray(value) ? value.filter(isDurableRunRow) : [];
-}
-
-function toDurableCheckpointRows(value: unknown): DurableCheckpointRow[] {
-  return Array.isArray(value) ? value.filter(isDurableCheckpointRow) : [];
-}
-
-function toDurableRetryRows(value: unknown): DurableRetryRow[] {
-  return Array.isArray(value) ? value.filter(isDurableRetryRow) : [];
-}
-
-function toDurableDeadLetterRow(value: unknown): DurableDeadLetterRow | undefined {
-  return isDurableDeadLetterRow(value) ? value : undefined;
-}
-
-function toDurableDeadLetterRows(value: unknown): DurableDeadLetterRow[] {
-  return Array.isArray(value) ? value.filter(isDurableDeadLetterRow) : [];
-}
-
-function toCountRow(value: unknown): { count?: number } | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return typeof value.count === "number" || value.count === undefined
-    ? { count: value.count as number | undefined }
-    : undefined;
-}
-
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
+}
+
+function normalizeLeaseDurationMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new ValidationError({ message: "Durable lease duration must be a positive number of milliseconds." });
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeRetryDelayMs(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ValidationError({ message: "Durable retry delay must be a non-negative number of milliseconds." });
+  }
+  return Math.max(0, Math.floor(value));
 }
 
 function normalizeObject(value: Record<string, unknown> | undefined): Record<string, unknown> {

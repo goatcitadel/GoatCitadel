@@ -76,7 +76,7 @@ import {
   shouldBypassOrchestrationWithModelRouter,
   withModelRouterOrchestrationDecision,
 } from "./model-router-decision-service.js";
-import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
+import type { ChatStreamMutationLifecycle, PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import type { LlmService } from "./llm-service.js";
 import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
 
@@ -130,7 +130,11 @@ export interface ChatTurnPrepHost {
   maybeAutoTitleChatSession(sessionId: string, content: string): void;
   normalizeWorkspaceId(workspaceId?: string): string;
   routeFromSession(session: SessionMeta): ChatTurnRoute;
-  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
+  ingestEvent(
+    idempotencyKey: string,
+    payload: GatewayEventInput,
+    options?: { onCommit?: () => void; afterCommit?: () => void },
+  ): Promise<unknown>;
   patchSessionAutonomyPrefs(
     sessionId: string,
     input: Partial<
@@ -205,6 +209,8 @@ export interface PreparedAgentChatTurn {
   turnId: string;
   assistantMessageId: string;
   parentTurnId?: string;
+  /** Canonical delegation lineage. Unlike parentTurnId, this is absent on normal branch appends. */
+  parentDelegationStepId?: string;
   branchKind: ChatTurnBranchKind;
   sourceTurnId?: string;
   effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"];
@@ -252,8 +258,10 @@ export async function prepareAgentChatTurn(
     existingUserMessage?: ChatMessageRecord;
     ingestUserMessage?: boolean;
     extraSystemInstruction?: string;
+    userMessageId?: string;
     turnId?: string;
     assistantMessageId?: string;
+    mutationLifecycle?: ChatStreamMutationLifecycle;
   },
 ): Promise<PreparedAgentChatTurn> {
   const session = host.getSession(sessionId);
@@ -263,7 +271,22 @@ export async function prepareAgentChatTurn(
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
   const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
   const branchKind = options?.branchKind ?? "append";
-  const content = (options?.existingUserMessage?.content ?? input.content).trim();
+  const sessionStatePromise = host.loadChatTurnSessionState(sessionId);
+  let existingUserMessage = options?.existingUserMessage;
+  if (!existingUserMessage && options?.userMessageId) {
+    const candidate = (await sessionStatePromise).messagesById.get(options.userMessageId);
+    if (candidate) {
+      if (
+        candidate.sessionId !== sessionId ||
+        candidate.role !== "user" ||
+        candidate.content.trim() !== input.content.trim()
+      ) {
+        throw new Error(`Deterministic user message ${options.userMessageId} conflicts with the requested turn.`);
+      }
+      existingUserMessage = candidate;
+    }
+  }
+  const content = (existingUserMessage?.content ?? input.content).trim();
   if (!content) {
     throw new Error("content is required");
   }
@@ -275,37 +298,46 @@ export async function prepareAgentChatTurn(
   }
 
   const route = host.routeFromSession(session);
-  const ingestUserMessage = options?.ingestUserMessage ?? !options?.existingUserMessage;
-  let userEventId = options?.existingUserMessage?.messageId ?? "";
+  const ingestUserMessage = options?.ingestUserMessage ?? !existingUserMessage;
+  let userEventId = existingUserMessage?.messageId ?? "";
   let userMessage: ChatMessageRecord;
-  if (ingestUserMessage || !options?.existingUserMessage) {
+  if (ingestUserMessage || !existingUserMessage) {
     const uploadAttachments = host.storage.chatAttachments.listByIds(input.attachments ?? [], workspaceId);
     const inputParts = appendMobileContextParts(
       normalizeChatInputParts(content, input.parts, uploadAttachments),
       input.mobileContext,
     );
-    userEventId = randomUUID();
+    userEventId = options?.userMessageId ?? randomUUID();
     await recordMobileContextTurnProvenance(host, sessionId, userEventId, input.mobileContext);
-    await host.ingestEvent(randomUUID(), {
-      eventId: userEventId,
-      route,
-      actor: {
-        type: "user",
-        id: "operator",
+    await host.ingestEvent(
+      randomUUID(),
+      {
+        eventId: userEventId,
+        route,
+        actor: {
+          type: "user",
+          id: "operator",
+        },
+        message: {
+          role: "user",
+          content,
+          parts: inputParts,
+          attachments: uploadAttachments.map((item) => ({
+            attachmentId: item.attachmentId,
+            fileName: item.fileName,
+            mimeType: item.mimeType,
+            sizeBytes: item.sizeBytes,
+          })),
+          parentDelegationStepId: input.parentDelegationStepId,
+        },
       },
-      message: {
-        role: "user",
-        content,
-        parts: inputParts,
-        attachments: uploadAttachments.map((item) => ({
-          attachmentId: item.attachmentId,
-          fileName: item.fileName,
-          mimeType: item.mimeType,
-          sizeBytes: item.sizeBytes,
-        })),
-        parentDelegationStepId: input.parentDelegationStepId,
-      },
-    });
+      options?.mutationLifecycle
+        ? {
+            onCommit: () => options.mutationLifecycle?.commitAlongsideCanonicalWrite?.(),
+            afterCommit: () => options.mutationLifecycle?.markCommitted(),
+          }
+        : undefined,
+    );
     const attachments = uploadAttachments.map((item) => ({
       attachmentId: item.attachmentId,
       fileName: item.fileName,
@@ -325,7 +357,7 @@ export async function prepareAgentChatTurn(
       parentDelegationStepId: input.parentDelegationStepId,
     };
   } else {
-    userMessage = options.existingUserMessage;
+    userMessage = existingUserMessage;
   }
 
   const resolvedGuidancePromise = quickWebTurn
@@ -342,7 +374,6 @@ export async function prepareAgentChatTurn(
   const sideChatSystemInstructionPromise = input.sideChatContext
     ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
     : Promise.resolve(undefined);
-  const sessionStatePromise = host.loadChatTurnSessionState(sessionId);
 
   const prefsOverride = applyChatModePresetToPatch({
     ...(input.prefsOverride ?? {}),
@@ -536,6 +567,7 @@ export async function prepareAgentChatTurn(
     turnId: options?.turnId ?? randomUUID(),
     assistantMessageId: options?.assistantMessageId ?? `assistant-${randomUUID()}`,
     parentTurnId,
+    parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
     branchKind,
     sourceTurnId: options?.sourceTurnId,
     effectiveToolAutonomy,

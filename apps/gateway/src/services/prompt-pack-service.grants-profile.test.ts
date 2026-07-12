@@ -1414,7 +1414,7 @@ describe("prompt-pack grants, profiles, and allowlists", () => {
                 ]
               : [],
           ),
-          create: createGrant,
+          createTtlForDuration: createGrant,
         },
         chatSessionMeta: { get: vi.fn(() => undefined) },
       },

@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import type {
   ApprovalEffectRecord,
   ApprovalInboxItemState,
+  ApprovalObservabilityAttribution,
+  ApprovalObservabilityDelivery,
+  ApprovalObservabilityEnvelope,
+  ApprovalObservabilityEffectInput as ApprovalObservabilityEffectInputContract,
   ApprovalRequest,
   RealtimeEvent,
   ApprovalResolveInput,
@@ -14,15 +18,66 @@ import type {
   ChatTurnTraceRecord,
   PendingApprovalAction,
   DurableWakeResult,
+  DurableRunRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import { ConflictError, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
+import { getRequestAttribution, runWithIsolatedRequestAttribution, type Storage } from "@goatcitadel/storage";
+import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
+import { markTerminalChatPostCommitPending } from "./chat-durable-run-service.js";
+import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
+
+export type ApprovalObservabilityEffectInput = ApprovalObservabilityEffectInputContract;
+
+export interface ApprovalResolutionEffectEnqueueOptions {
+  /**
+   * Expiry reconciliation resolves the canonical approval as a system
+   * rejection after its deadline. Those terminal transitions still need to
+   * release durable waiters and linked Chat work even though resolvedAt is
+   * necessarily later than expiresAt.
+   */
+  allowExpired?: boolean;
+}
 
 const APPROVAL_EFFECT_LEASE_TTL_MS = 15_000;
 const APPROVAL_EFFECT_HEARTBEAT_MS = 5_000;
 const APPROVAL_EFFECT_POLL_MIN_MS = 1_000;
 const APPROVAL_EFFECT_POLL_JITTER_MS = 500;
 const APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS = 2_000;
+const APPROVAL_OBSERVABILITY_RETRY_BASE_MS = 1_000;
+const APPROVAL_OBSERVABILITY_RETRY_MAX_MS = 5 * 60_000;
+const APPROVAL_OBSERVABILITY_PREDECESSOR_RETRY_MS = 250;
+const APPROVAL_WAIT_MATERIALIZE_RETRY_MS = 1_000;
+const APPROVAL_EXPIRY_SWEEP_INTERVAL_MS = 1_000;
+const APPROVAL_EFFECT_RESPONSE_SETTLE_MS = 500;
+const APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY = "approvalMaterializedPostCommit";
+
+interface ApprovalMaterializationPostCommitInput {
+  approvalId: string;
+  turnId: string;
+  traceStatus: ChatTurnTraceRecord["status"];
+  materializationKey?: string;
+}
+
+interface ApprovalMaterializedPostCommitReceipt {
+  approvalId: string;
+  turnId: string;
+  traceStatus?: ChatTurnTraceRecord["status"];
+  materializationKey?: string;
+}
+
+interface DelegationParentMaterialization {
+  trace: ChatTurnTraceRecord;
+  runId: string;
+}
+
+interface ChatMaterializationProjection {
+  operationId: string;
+  occurredAt: string;
+  payload: Record<string, unknown>;
+  options: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
+}
 
 export interface ApprovalChatTurnResumeResult {
   resumed: boolean;
@@ -55,6 +110,16 @@ export interface ApprovalEffectsServiceDeps {
     payload: Record<string, unknown>;
   }): void;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
+  recordDurableTimelineEvent?(
+    runId: string,
+    eventType: "run_completed" | "run_failed",
+    payload?: Record<string, unknown>,
+  ): void;
+  recordApprovalResolutionSignals?(approval: ApprovalRequest): void;
+  materializeApprovalWaitRun?(approvalId: string): DurableRunRecord | undefined;
+  reconcileExpiredApprovals?(limit: number): number;
+  reconcileExpiredDeviceAccessRequests?(limit: number): Promise<number> | number;
+  readonly approvalRemoteTokenSecrets?: Pick<ApprovalRemoteTokenSecretService, "reconcileExpired" | "deleteById">;
 }
 
 export interface ApprovalEffectsServiceContext {
@@ -65,6 +130,7 @@ export interface ApprovalEffectsServiceContext {
     | "approvalWaitRuns"
     | "pendingApprovalActions"
     | "approvalInbox"
+    | "remoteActionTokens"
     | "chatInlineApprovals"
     | "chatMessages"
     | "chatToolRuns"
@@ -73,7 +139,9 @@ export interface ApprovalEffectsServiceContext {
     | "chatExecutionPlans"
     | "chatTurnTraces"
     | "durableRuns"
+    | "runImmediateTransaction"
     | "orchestration"
+    | "audit"
   >;
   publishRealtime(
     channel: string,
@@ -85,11 +153,16 @@ export interface ApprovalEffectsServiceContext {
 
 export class ApprovalEffectsService {
   private workerActive = false;
+  private observabilityWorkerActive = false;
   private workerRequested = false;
+  private observabilityWorkerRequested = false;
   private workerStopped = false;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly workerId = randomUUID();
+  private readonly observabilityWorkerId = randomUUID();
   private readonly activeEffectAbortControllers = new Map<string, AbortController>();
+  private actionWorkerTask: Promise<void> | undefined;
+  private lastExpirySweepAtMs = Number.NEGATIVE_INFINITY;
 
   public constructor(
     private readonly ctx: ApprovalEffectsServiceContext,
@@ -105,6 +178,7 @@ export class ApprovalEffectsService {
   public stopWorker(): void {
     this.workerStopped = true;
     this.workerRequested = false;
+    this.observabilityWorkerRequested = false;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -118,6 +192,11 @@ export class ApprovalEffectsService {
   }
 
   public requestEffectProcessing(): void {
+    this.requestActionEffectProcessing();
+    this.requestObservabilityEffectProcessing();
+  }
+
+  private requestActionEffectProcessing(): void {
     if (this.workerStopped) {
       return;
     }
@@ -125,36 +204,141 @@ export class ApprovalEffectsService {
     if (this.workerActive) {
       return;
     }
+    this.workerActive = true;
     const backgroundTasks = this.deps.backgroundTasks;
-    const task = Promise.resolve().then(async () => {
-      this.workerActive = true;
-      try {
-        do {
-          this.workerRequested = false;
-          await this.drainPendingEffects();
-        } while (this.workerRequested && !this.workerStopped);
-      } catch (error) {
-        this.ctx.publishRealtime("approval_effect_worker_failed", "approvals", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        this.workerActive = false;
-        backgroundTasks.delete(task);
-      }
-    });
+    const task = runWithIsolatedRequestAttribution({}, () =>
+      Promise.resolve().then(async () => {
+        try {
+          do {
+            this.workerRequested = false;
+            await this.drainPendingEffects();
+          } while (this.workerRequested && !this.workerStopped);
+        } catch (error) {
+          this.publishWorkerFailure("action", error);
+        } finally {
+          this.workerActive = false;
+          backgroundTasks.delete(task);
+          if (this.actionWorkerTask === task) {
+            this.actionWorkerTask = undefined;
+          }
+        }
+      }),
+    );
+    this.actionWorkerTask = task;
     backgroundTasks.add(task);
+  }
+
+  private requestObservabilityEffectProcessing(): void {
+    if (this.workerStopped) {
+      return;
+    }
+    this.observabilityWorkerRequested = true;
+    if (this.observabilityWorkerActive) {
+      return;
+    }
+    this.observabilityWorkerActive = true;
+    const backgroundTasks = this.deps.backgroundTasks;
+    const task = runWithIsolatedRequestAttribution({}, () =>
+      Promise.resolve().then(async () => {
+        try {
+          do {
+            this.observabilityWorkerRequested = false;
+            await this.drainPendingObservabilityEffects();
+          } while (this.observabilityWorkerRequested && !this.workerStopped);
+        } catch (error) {
+          this.publishWorkerFailure("observability", error);
+        } finally {
+          this.observabilityWorkerActive = false;
+          backgroundTasks.delete(task);
+        }
+      }),
+    );
+    backgroundTasks.add(task);
+  }
+
+  private publishWorkerFailure(lane: "action" | "observability", error: unknown): void {
+    try {
+      this.ctx.publishRealtime("approval_effect_worker_failed", "approvals", {
+        lane,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch (diagnosticError) {
+      void diagnosticError;
+      // The durable effect row and its lease remain the recovery authority when
+      // the realtime diagnostic sink is unavailable too.
+    }
   }
 
   public listByApproval(approvalId: string): ApprovalEffectRecord[] {
     return this.ctx.storage.approvalEffects.listByApproval(approvalId);
   }
 
-  public enqueueResolutionEffects(approval: ApprovalRequest, input: ApprovalResolveInput): ApprovalEffectRecord[] {
-    if (isExpiredApprovalRequest(approval)) {
+  public async awaitResolutionEffects(
+    approvalId: string,
+    timeoutMs = APPROVAL_EFFECT_RESPONSE_SETTLE_MS,
+  ): Promise<ApprovalEffectRecord[]> {
+    this.requestActionEffectProcessing();
+    const task = this.actionWorkerTask;
+    if (task && timeoutMs > 0) {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          task,
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+      }
+    }
+    return this.listByApproval(approvalId);
+  }
+
+  public enqueueObservabilityEffects(
+    approvalIdInput: string,
+    items: readonly ApprovalObservabilityEffectInput[],
+  ): ApprovalEffectRecord[] {
+    const approvalId = requireObservabilityIdentifier(approvalIdInput, "approvalId");
+    const effects = this.ctx.storage.approvalEffects.upsertObservabilityBatch({
+      approvalId,
+      occurredAt: new Date().toISOString(),
+      attribution: captureApprovalObservabilityAttribution(),
+      items: items.map((input) => ({
+        operationId: requireObservabilityIdentifier(input.operationId, "operationId"),
+        delivery: input.delivery,
+      })),
+    });
+    if (effects.length > 0) {
+      this.requestEffectProcessing();
+    }
+    return effects;
+  }
+
+  public enqueueResolutionEffects(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    options: ApprovalResolutionEffectEnqueueOptions = {},
+  ): ApprovalEffectRecord[] {
+    if (isExpiredApprovalRequest(approval) && !options.allowExpired) {
       return [];
     }
     const enqueued: ApprovalEffectRecord[] = [];
     const wakePayload = buildWakePayload(approval, input);
+    enqueued.push(
+      this.ctx.storage.approvalEffects.upsert({
+        approvalId: approval.approvalId,
+        effectKind: "approval_resolution_signals",
+        targetKind: "approval",
+        targetId: approval.approvalId,
+        payload: {
+          decision: input.decision,
+          resolvedBy: input.resolvedBy,
+        },
+      }),
+    );
     const pendingAction = this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
     if (
       (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") ||
@@ -253,23 +437,28 @@ export class ApprovalEffectsService {
         }),
       );
     }
-    if (approval.linkage?.tokenId) {
-      const inboxItem = this.ctx.storage.approvalInbox.findByApprovalAndToken(
-        approval.approvalId,
-        approval.linkage.tokenId,
-      );
+    const remoteTokenTargets = new Map<string, { connectorId?: string }>();
+    for (const token of this.ctx.storage.remoteActionTokens?.listByApprovalId?.(approval.approvalId) ?? []) {
+      remoteTokenTargets.set(token.tokenId, { connectorId: token.connectorId });
+    }
+    if (approval.linkage?.tokenId && !remoteTokenTargets.has(approval.linkage.tokenId)) {
+      remoteTokenTargets.set(approval.linkage.tokenId, { connectorId: approval.linkage.connectorId });
+    }
+    for (const [tokenId, token] of remoteTokenTargets) {
+      const inboxItem = this.ctx.storage.approvalInbox.findByApprovalAndToken(approval.approvalId, tokenId);
       enqueued.push(
         this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
           effectKind: "approval_inbox_follow_up",
           targetKind: "remote_token",
-          targetId: approval.linkage.tokenId,
+          targetId: tokenId,
           payload: {
-            connectorId: approval.linkage.connectorId,
+            connectorId: token.connectorId,
             inboxItemId: inboxItem?.inboxItemId,
             decision: input.decision,
             approvalStatus: approval.status,
             resolvedBy: input.resolvedBy,
+            inboxState: options.allowExpired ? "expired" : undefined,
           },
         }),
       );
@@ -294,7 +483,27 @@ export class ApprovalEffectsService {
     return enqueued;
   }
 
+  public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
+    const runId = asOptionalString(approval.linkage?.durableRunId);
+    if (!runId) {
+      return undefined;
+    }
+    const effect = this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: "approval_wait_materialize",
+      targetKind: "durable_run",
+      targetId: runId,
+      payload: {
+        approvalId: approval.approvalId,
+        runId,
+      },
+    });
+    this.requestEffectProcessing();
+    return effect;
+  }
+
   private async drainPendingEffects(): Promise<void> {
+    await this.reconcileExpiredApprovalsIfDue();
     while (true) {
       const now = new Date().toISOString();
       const effect = this.ctx.storage.approvalEffects.claimNextPendingEffect(
@@ -321,6 +530,76 @@ export class ApprovalEffectsService {
     }
   }
 
+  private async reconcileExpiredApprovalsIfDue(): Promise<void> {
+    const reconcile = this.deps.reconcileExpiredApprovals;
+    const reconcileDeviceAccess = this.deps.reconcileExpiredDeviceAccessRequests;
+    const remoteTokenSecrets = this.deps.approvalRemoteTokenSecrets;
+    if (!reconcile && !reconcileDeviceAccess && !remoteTokenSecrets) {
+      return;
+    }
+    const now = Date.now();
+    if (now >= this.lastExpirySweepAtMs && now - this.lastExpirySweepAtMs < APPROVAL_EXPIRY_SWEEP_INTERVAL_MS) {
+      return;
+    }
+    this.lastExpirySweepAtMs = now;
+    if (reconcile) {
+      try {
+        reconcile(100);
+      } catch (error) {
+        this.publishWorkerFailure("action", error);
+      }
+    }
+    if (reconcileDeviceAccess) {
+      try {
+        await reconcileDeviceAccess(100);
+      } catch (error) {
+        this.publishWorkerFailure("action", error);
+      }
+    }
+    if (remoteTokenSecrets) {
+      try {
+        await remoteTokenSecrets.reconcileExpired(100);
+      } catch (error) {
+        this.publishWorkerFailure("action", error);
+      }
+    }
+  }
+
+  private async drainPendingObservabilityEffects(): Promise<void> {
+    const claim = (
+      this.ctx.storage.approvalEffects as Storage["approvalEffects"] & {
+        claimNextPendingObservabilityEffect?: Storage["approvalEffects"]["claimNextPendingObservabilityEffect"];
+      }
+    ).claimNextPendingObservabilityEffect;
+    if (typeof claim !== "function") {
+      return;
+    }
+    while (true) {
+      const now = new Date().toISOString();
+      const effect = claim.call(
+        this.ctx.storage.approvalEffects,
+        this.observabilityWorkerId,
+        now,
+        new Date(Date.now() + APPROVAL_EFFECT_LEASE_TTL_MS).toISOString(),
+      );
+      if (!effect) {
+        return;
+      }
+      try {
+        await this.executeWithLeaseHeartbeat(effect, (signal) => this.executeClaimedEffect(effect.effectId, signal));
+      } catch (error) {
+        const current = this.ctx.storage.approvalEffects.get(effect.effectId);
+        if (current.status === "running" && current.claimedBy === this.observabilityWorkerId) {
+          this.deferClaimedEffectForRetry(current, this.observabilityWorkerId, error, {
+            deliveryState: "retry_scheduled",
+            deliveryKind: "unknown",
+            operationId: asOptionalString(current.payload.operationId) ?? current.targetId,
+          });
+        }
+      }
+    }
+  }
+
   private async executeWithLeaseHeartbeat<T>(
     effect: ApprovalEffectRecord,
     execute: (signal: AbortSignal) => Promise<T>,
@@ -329,6 +608,7 @@ export class ApprovalEffectsService {
     let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
     let rejectHeartbeatFailure!: (error: Error) => void;
     const controller = new AbortController();
+    const workerId = this.workerIdForEffect(effect);
     this.activeEffectAbortControllers.set(effect.effectId, controller);
     const heartbeatFailure = new Promise<never>((_, reject) => {
       rejectHeartbeatFailure = reject;
@@ -358,7 +638,7 @@ export class ApprovalEffectsService {
         rejectHeartbeatFailure(failure);
         return;
       }
-      if (current.status !== "running" || current.claimedBy !== this.workerId) {
+      if (current.status !== "running" || current.claimedBy !== workerId) {
         active = false;
         const failure = new Error(`Approval effect ${current.effectId} lease ownership moved to another worker.`);
         if (!controller.signal.aborted) {
@@ -371,7 +651,7 @@ export class ApprovalEffectsService {
       try {
         const renewed = this.ctx.storage.approvalEffects.renewEffectLease(
           current.effectId,
-          this.workerId,
+          workerId,
           current.version,
           now,
           new Date(Date.now() + APPROVAL_EFFECT_LEASE_TTL_MS).toISOString(),
@@ -407,7 +687,7 @@ export class ApprovalEffectsService {
   private isEffectStillClaimed(effectId: string): boolean {
     try {
       const current = this.ctx.storage.approvalEffects.get(effectId);
-      return current.status === "running" && current.claimedBy === this.workerId;
+      return current.status === "running" && current.claimedBy === this.workerIdForEffect(current);
     } catch {
       return false;
     }
@@ -416,6 +696,9 @@ export class ApprovalEffectsService {
   private async executeClaimedEffect(effectId: string, signal?: AbortSignal): Promise<void> {
     const effect = this.ctx.storage.approvalEffects.get(effectId);
     switch (effect.effectKind) {
+      case "approval_wait_materialize":
+        await this.handleApprovalWaitMaterialization(effect);
+        return;
       case "approval_wait_wake":
         await this.handleWakeEffect(effect, true);
         return;
@@ -437,8 +720,14 @@ export class ApprovalEffectsService {
       case "approval_after_hooks":
         await this.handleApprovalAfterHooks(effect);
         return;
+      case "approval_resolution_signals":
+        await this.handleApprovalResolutionSignals(effect);
+        return;
+      case "approval_observability":
+        await this.handleApprovalObservability(effect);
+        return;
       default:
-        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerIdForEffect(effect), effect.version, {
           lastError: `Unsupported approval effect kind ${(effect as { effectKind: string }).effectKind}`,
           result: {
             unsupportedEffectKind: (effect as { effectKind: string }).effectKind,
@@ -447,50 +736,76 @@ export class ApprovalEffectsService {
     }
   }
 
+  private workerIdForEffect(effect: ApprovalEffectRecord): string {
+    return effect.effectKind === "approval_observability" ? this.observabilityWorkerId : this.workerId;
+  }
+
   private async handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void> {
+    if (resolveApprovalWait && this.deferApprovalWaitWakeUntilMaterialized(effect)) {
+      return;
+    }
     if (this.deferOrchestrationParentWakeUntilChildTerminal(effect)) {
       return;
     }
 
     const payload = effect.payload;
-    const result = this.deps.wakeDurableRun(effect.targetId, {
-      eventKey: "approval.resolved",
-      correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
-      payload: asRecord(payload.payload),
-    });
-    const resultRecord = buildWakeResultRecord(result, effect);
-    if (result.outcome === "woke") {
-      if (resolveApprovalWait) {
+    const wake = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+      const wakeResult = this.deps.wakeDurableRun(effect.targetId, {
+        eventKey: "approval.resolved",
+        correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
+        payload: asRecord(payload.payload),
+      });
+      if (
+        resolveApprovalWait &&
+        (wakeResult.outcome === "woke" ||
+          buildRecoveredWakeResult(wakeResult, buildWakeResultRecord(wakeResult, effect)))
+      ) {
         this.ctx.storage.approvalWaitRuns.markResolved(effect.approvalId, new Date().toISOString());
       }
+      const wakeResultRecord = buildWakeResultRecord(wakeResult, effect);
+      const recovered = buildRecoveredWakeResult(wakeResult, wakeResultRecord);
+      const explicitNonWake = recovered
+        ? undefined
+        : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, this.buildAlreadyRunningWakeProof(effect));
+      const settled =
+        wakeResult.outcome === "woke" || recovered
+          ? this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+              result: recovered ?? wakeResultRecord,
+            })
+          : explicitNonWake
+            ? this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+                result: explicitNonWake,
+              })
+            : wakeResult.outcome === "failed"
+              ? this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+                  lastError: wakeResult.detail ?? "Approval wake failed.",
+                  result: wakeResultRecord,
+                })
+              : this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+                  result: wakeResultRecord,
+                });
+      if (!settled) {
+        throw new Error(`Approval wake effect ${effect.effectId} lost its terminal lease.`);
+      }
+      return {
+        result: wakeResult,
+        resultRecord: wakeResultRecord,
+        recoveredResult: recovered,
+        explicitNonWakeResult: explicitNonWake,
+      };
+    });
+    const { result, recoveredResult, explicitNonWakeResult } = wake;
+    if (result.outcome === "woke") {
       this.deps.requestRunProcessing(effect.targetId);
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-        result: resultRecord,
-      });
       return;
     }
-    const recoveredResult = buildRecoveredWakeResult(result, resultRecord);
     if (recoveredResult) {
-      if (resolveApprovalWait) {
-        this.ctx.storage.approvalWaitRuns.markResolved(effect.approvalId, new Date().toISOString());
-      }
       if (result.run?.status === "queued") {
         this.deps.requestRunProcessing(effect.targetId);
       }
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-        result: recoveredResult,
-      });
       return;
     }
-    const explicitNonWakeResult = buildExplicitNonWakeResult(
-      result,
-      resultRecord,
-      this.buildAlreadyRunningWakeProof(effect),
-    );
     if (explicitNonWakeResult) {
-      this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
-        result: explicitNonWakeResult,
-      });
       this.ctx.publishRealtime(
         resolveApprovalWait ? "approval_wait_wake_skipped" : "approval_wake_skipped",
         "approvals",
@@ -513,15 +828,8 @@ export class ApprovalEffectsService {
       return;
     }
     if (result.outcome === "failed") {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
-        lastError: result.detail ?? "Approval wake failed.",
-        result: resultRecord,
-      });
       return;
     }
-    this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
-      result: resultRecord,
-    });
     this.ctx.publishRealtime(
       resolveApprovalWait ? "approval_wait_wake_skipped" : "approval_wake_skipped",
       "approvals",
@@ -541,6 +849,75 @@ export class ApprovalEffectsService {
         },
       },
     );
+  }
+
+  private async handleApprovalWaitMaterialization(effect: ApprovalEffectRecord): Promise<void> {
+    try {
+      const materialize = this.deps.materializeApprovalWaitRun;
+      if (!materialize) {
+        throw new Error("Approval wait-run materialization is not configured.");
+      }
+      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+        const run = materialize(effect.approvalId);
+        if (!run || run.runId !== effect.targetId) {
+          throw new Error(`Approval ${effect.approvalId} did not materialize reserved run ${effect.targetId}.`);
+        }
+        const completed = this.ctx.storage.approvalEffects.completeEffect(
+          effect.effectId,
+          this.workerId,
+          effect.version,
+          {
+            result: {
+              approvalId: effect.approvalId,
+              runId: run.runId,
+              status: run.status,
+              materialized: true,
+            },
+          },
+        );
+        if (!completed) {
+          throw new Error(`Approval wait materialization effect ${effect.effectId} lost its completion lease.`);
+        }
+      });
+    } catch (error) {
+      this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        error,
+        {
+          deliveryState: "retry_scheduled",
+          approvalId: effect.approvalId,
+          runId: effect.targetId,
+          materialized: false,
+        },
+        APPROVAL_WAIT_MATERIALIZE_RETRY_MS,
+      );
+    }
+  }
+
+  private deferApprovalWaitWakeUntilMaterialized(effect: ApprovalEffectRecord): boolean {
+    const durableRuns = (this.ctx.storage as Partial<Pick<Storage, "durableRuns">>).durableRuns;
+    if (!durableRuns) {
+      return false;
+    }
+    try {
+      durableRuns.getRun(effect.targetId);
+      return false;
+    } catch (error) {
+      this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        error,
+        {
+          deliveryState: "retry_scheduled",
+          approvalId: effect.approvalId,
+          runId: effect.targetId,
+          reason: "reserved_wait_run_not_materialized",
+        },
+        APPROVAL_WAIT_MATERIALIZE_RETRY_MS,
+      );
+      return true;
+    }
   }
 
   private deferOrchestrationParentWakeUntilChildTerminal(effect: ApprovalEffectRecord): boolean {
@@ -614,58 +991,70 @@ export class ApprovalEffectsService {
       });
       return;
     }
-    const result = this.deps.wakeDurableRun(runId, {
-      eventKey: "approval.resolved",
-      correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
-      payload: asRecord(payload.payload),
+    const wake = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+      const wakeResult = this.deps.wakeDurableRun(runId, {
+        eventKey: "approval.resolved",
+        correlationId: asOptionalString(payload.correlationId) ?? effect.approvalId,
+        payload: asRecord(payload.payload),
+      });
+      const wakeResultRecord = buildWakeResultRecord(wakeResult, effect, {
+        turnId: effect.targetId,
+        runId,
+      });
+      const recovered = buildRecoveredWakeResult(wakeResult, wakeResultRecord);
+      const explicitNonWake = recovered
+        ? undefined
+        : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, this.buildAlreadyRunningWakeProof(effect));
+      const settled =
+        wakeResult.outcome === "woke" || recovered
+          ? this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+              result: recovered ?? wakeResultRecord,
+            })
+          : explicitNonWake
+            ? this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+                result: explicitNonWake,
+              })
+            : wakeResult.outcome === "failed"
+              ? this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+                  lastError: wakeResult.detail ?? "Linked chat turn wake failed.",
+                  result: wakeResultRecord,
+                })
+              : this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+                  result: wakeResultRecord,
+                });
+      if (!settled) {
+        throw new Error(`Linked Chat wake effect ${effect.effectId} lost its terminal lease.`);
+      }
+      return {
+        result: wakeResult,
+        resultRecord: wakeResultRecord,
+        recoveredResult: recovered,
+        explicitNonWakeResult: explicitNonWake,
+      };
     });
-    const resultRecord = buildWakeResultRecord(result, effect, {
-      turnId: effect.targetId,
-      runId,
-    });
+    const { result, recoveredResult, explicitNonWakeResult } = wake;
     if (result.outcome === "woke") {
       this.deps.requestRunProcessing(runId);
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-        result: resultRecord,
-      });
       return;
     }
-    const recoveredResult = buildRecoveredWakeResult(result, resultRecord);
     if (recoveredResult) {
       if (result.run?.status === "queued") {
         this.deps.requestRunProcessing(runId);
       }
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-        result: recoveredResult,
-      });
       return;
     }
-    const explicitNonWakeResult = buildExplicitNonWakeResult(
-      result,
-      resultRecord,
-      this.buildAlreadyRunningWakeProof(effect),
-    );
     if (explicitNonWakeResult) {
-      this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
-        result: explicitNonWakeResult,
-      });
       return;
     }
     if (result.outcome === "failed") {
-      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
-        lastError: result.detail ?? "Linked chat turn wake failed.",
-        result: resultRecord,
-      });
       return;
     }
-    this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
-      result: resultRecord,
-    });
   }
 
   private async handlePendingActionExecute(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
     const pendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
     if (!pendingAction || pendingAction.resolutionStatus === "executed") {
+      const completionPendingAction = pendingAction;
       if (!pendingAction && effect.payload.actionType === "code_mode.run") {
         const recoveredAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
         if (!this.isEffectStillClaimed(effect.effectId)) {
@@ -684,15 +1073,55 @@ export class ApprovalEffectsService {
         });
         return;
       }
+      if (pendingAction?.resolutionStatus === "executed") {
+        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result);
+        let materializationAction = pendingAction;
+        if (storedExecutionFailure && pendingAction.result) {
+          materializationAction = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+            this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
+              effect.approvalId,
+              pendingAction.result!,
+              pendingAction.result!,
+            ),
+          );
+        }
+        const materialized = storedExecutionFailure
+          ? this.materializeFailedChatApprovalOrDefer(
+              effect,
+              materializationAction,
+              materializationAction.result,
+              storedExecutionFailure,
+            )
+          : this.materializeExecutedChatApprovalOrDefer(effect, materializationAction, materializationAction.result);
+        if (!materialized) {
+          return;
+        }
+        return;
+      }
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
-          actionType: pendingAction?.actionType,
-          resolutionStatus: pendingAction?.resolutionStatus ?? "missing",
+          actionType: completionPendingAction?.actionType,
+          resolutionStatus: completionPendingAction?.resolutionStatus ?? "missing",
+          ...(completionPendingAction?.result ? { result: completionPendingAction.result } : {}),
         },
       });
       return;
     }
     if (pendingAction.resolutionStatus && pendingAction.resolutionStatus !== "pending") {
+      const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result);
+      if (pendingAction.resolutionStatus === "failed" && storedExecutionFailure) {
+        if (
+          !this.materializeFailedChatApprovalOrDefer(
+            effect,
+            pendingAction,
+            pendingAction.result,
+            storedExecutionFailure,
+          )
+        ) {
+          return;
+        }
+        return;
+      }
       this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: pendingAction.actionType,
@@ -719,14 +1148,53 @@ export class ApprovalEffectsService {
       refreshedPendingAction.resolutionStatus &&
       refreshedPendingAction.resolutionStatus !== "pending"
     ) {
+      const completionPendingAction = refreshedPendingAction;
       if (refreshedPendingAction.resolutionStatus === "executed") {
-        this.materializeExecutedChatApproval(effect, refreshedPendingAction, refreshedPendingAction.result);
+        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(refreshedPendingAction.result);
+        let materializationAction = refreshedPendingAction;
+        if (storedExecutionFailure && refreshedPendingAction.result) {
+          const actionRecord = toolInvokeResultToRecord(executedAction, refreshedPendingAction.actionType);
+          materializationAction = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+            this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
+              effect.approvalId,
+              refreshedPendingAction.result!,
+              actionRecord,
+            ),
+          );
+        }
+        const materialized = storedExecutionFailure
+          ? this.materializeFailedChatApprovalOrDefer(
+              effect,
+              materializationAction,
+              materializationAction.result,
+              storedExecutionFailure,
+            )
+          : this.materializeExecutedChatApprovalOrDefer(effect, materializationAction, materializationAction.result);
+        if (!materialized) {
+          return;
+        }
+        return;
+      } else if (refreshedPendingAction.resolutionStatus === "failed") {
+        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(refreshedPendingAction.result);
+        if (storedExecutionFailure) {
+          if (
+            !this.materializeFailedChatApprovalOrDefer(
+              effect,
+              refreshedPendingAction,
+              refreshedPendingAction.result,
+              storedExecutionFailure,
+            )
+          ) {
+            return;
+          }
+          return;
+        }
       }
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
-          actionType: refreshedPendingAction.actionType,
-          resolutionStatus: refreshedPendingAction.resolutionStatus,
-          ...(refreshedPendingAction.result ? { result: refreshedPendingAction.result } : {}),
+          actionType: completionPendingAction.actionType,
+          resolutionStatus: completionPendingAction.resolutionStatus,
+          ...(completionPendingAction.result ? { result: completionPendingAction.result } : {}),
         },
       });
       return;
@@ -763,21 +1231,38 @@ export class ApprovalEffectsService {
       return;
     }
 
-    if (executedAction?.outcome === "executed") {
+    const executionFailure = readApprovedActionExecutionFailure(executedAction);
+    if (executedAction?.outcome === "executed" && !executionFailure) {
       const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-        this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "executed", actionRecord);
+        runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+          this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "executed", actionRecord),
+        );
       }
-      this.materializeExecutedChatApproval(effect, pendingAction, actionRecord);
-      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-        result: actionRecord,
-      });
+      if (!this.materializeExecutedChatApprovalOrDefer(effect, pendingAction, actionRecord)) {
+        return;
+      }
+      return;
+    }
+
+    if (executedAction && executionFailure) {
+      const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
+      if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
+        runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+          this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", actionRecord),
+        );
+      }
+      if (!this.materializeFailedChatApprovalOrDefer(effect, pendingAction, actionRecord, executionFailure)) {
+        return;
+      }
       return;
     }
 
     const failureRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
     if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-      this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord);
+      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+        this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord),
+      );
     }
     this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
       lastError: executedAction?.policyReason ?? "Approved action could not execute.",
@@ -790,7 +1275,7 @@ export class ApprovalEffectsService {
     const inboxItemId = asOptionalString(payload.inboxItemId);
     const resolvedBy = asOptionalString(payload.resolvedBy);
     const approvalStatus = asApprovalStatus(payload.approvalStatus);
-    const state = mapDecisionToInboxState(asDecision(payload.decision));
+    const state = payload.inboxState === "expired" ? "expired" : mapDecisionToInboxState(asDecision(payload.decision));
     let item;
     if (inboxItemId) {
       try {
@@ -801,6 +1286,9 @@ export class ApprovalEffectsService {
     }
     item ??= this.ctx.storage.approvalInbox.findByApprovalAndToken(effect.approvalId, effect.targetId);
     if (!item) {
+      if (!this.cleanupRemoteActionTokenSecretOrDefer(effect, "missing")) {
+        return;
+      }
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           tokenId: effect.targetId,
@@ -810,29 +1298,31 @@ export class ApprovalEffectsService {
       });
       return;
     }
-    if (item.state !== "pending" && (item.state !== state || item.approvalStatus !== approvalStatus)) {
+    const updated = runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
+      this.ctx.storage.approvalInbox.reconcileResolution(item.inboxItemId, {
+        state,
+        approvalStatus,
+        resolvedAt: new Date().toISOString(),
+        resolvedBy,
+      }),
+    );
+    if (updated.state !== state || updated.approvalStatus !== approvalStatus) {
       this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
-        lastError: `Approval inbox item ${item.inboxItemId} is already ${item.state}; expected ${state}.`,
+        lastError: `Approval inbox item ${updated.inboxItemId} is already ${updated.state}; expected ${state}.`,
         result: {
-          inboxItemId: item.inboxItemId,
+          inboxItemId: updated.inboxItemId,
           tokenId: effect.targetId,
-          observedState: item.state,
+          observedState: updated.state,
           expectedState: state,
-          observedApprovalStatus: item.approvalStatus,
+          observedApprovalStatus: updated.approvalStatus,
           expectedApprovalStatus: approvalStatus,
         },
       });
       return;
     }
-    const updated =
-      item.state === "pending"
-        ? this.ctx.storage.approvalInbox.markResolved(item.inboxItemId, {
-            state,
-            approvalStatus,
-            resolvedAt: new Date().toISOString(),
-            resolvedBy,
-          })
-        : item;
+    if (!this.cleanupRemoteActionTokenSecretOrDefer(effect, updated.state)) {
+      return;
+    }
     this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
       result: {
         inboxItemId: updated.inboxItemId,
@@ -842,17 +1332,244 @@ export class ApprovalEffectsService {
     });
   }
 
+  private cleanupRemoteActionTokenSecretOrDefer(effect: ApprovalEffectRecord, inboxState: string): boolean {
+    const tokenSecrets = this.deps.approvalRemoteTokenSecrets;
+    if (!tokenSecrets) {
+      return true;
+    }
+    try {
+      tokenSecrets.deleteById(effect.targetId);
+      return true;
+    } catch (error) {
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "secret_cleanup_retry_scheduled",
+        tokenId: effect.targetId,
+        inboxState,
+      });
+      return false;
+    }
+  }
+
+  private materializeExecutedChatApprovalOrDefer(
+    effect: ApprovalEffectRecord,
+    pendingAction: PendingApprovalAction,
+    actionRecord: Record<string, unknown> | undefined,
+  ): boolean {
+    try {
+      this.materializeExecutedChatApproval(effect, pendingAction, actionRecord);
+      return true;
+    } catch (error) {
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        actionType: pendingAction.actionType,
+        resolutionStatus: "executed",
+        materialized: false,
+      });
+      return false;
+    }
+  }
+
   private materializeExecutedChatApproval(
     effect: ApprovalEffectRecord,
     pendingAction: PendingApprovalAction,
     actionRecord: Record<string, unknown> | undefined,
   ): void {
+    const testFallbackProjections: ChatMaterializationProjection[] = [];
+    let queuedDurableProjection = false;
     try {
+      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+        const completeMaterialization = () => {
+          const completed = this.ctx.storage.approvalEffects.completeEffect(
+            effect.effectId,
+            this.workerId,
+            effect.version,
+            { result: actionRecord ?? {} },
+          );
+          if (!completed) {
+            throw new Error(`Approval effect ${effect.effectId} lost its materialization completion lease.`);
+          }
+        };
+        if (pendingAction.actionType !== "tool.invoke") {
+          completeMaterialization();
+          return;
+        }
+        const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
+        if (!inlineApproval) {
+          completeMaterialization();
+          return;
+        }
+        const now = new Date().toISOString();
+        const toolResult = asRecord(actionRecord?.result) ?? {};
+        const toolName =
+          asOptionalString(pendingAction.request.toolName) ??
+          asOptionalString(inlineApproval.toolName) ??
+          asOptionalString(actionRecord?.toolName) ??
+          "tool.invoke";
+        const toolRun = this.ctx.storage.chatToolRuns
+          .listByTurn(inlineApproval.turnId)
+          .find((candidate) => candidate.approvalId === effect.approvalId);
+        if (toolRun && toolRun.status !== "executed") {
+          this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
+            status: "executed",
+            result: toolResult,
+            finishedAt: now,
+          });
+        }
+        this.ctx.storage.chatInlineApprovals.upsert({
+          approvalId: inlineApproval.approvalId,
+          sessionId: inlineApproval.sessionId,
+          turnId: inlineApproval.turnId,
+          kind: inlineApproval.kind,
+          toolName: inlineApproval.toolName ?? toolName,
+          status: "approved",
+          reason: inlineApproval.reason,
+          riskLevel: inlineApproval.riskLevel,
+          details: inlineApproval.details,
+          expiresAt: inlineApproval.expiresAt,
+          resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
+          resolvedAt: now,
+        });
+
+        let childTrace: ChatTurnTraceRecord;
+        try {
+          childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
+        } catch (error) {
+          throw new Error(`Chat turn ${inlineApproval.turnId} is unavailable for approval materialization.`, {
+            cause: error,
+          });
+        }
+        const outputText = buildApprovedToolActionOutput(toolName, toolResult);
+        const childMaterialized = this.completeChatTurnFromApprovedAction({
+          trace: childTrace,
+          outputText,
+          now,
+          approvalId: effect.approvalId,
+          actionRecord,
+        });
+        if (!childMaterialized) {
+          return;
+        }
+        queuedDurableProjection =
+          this.enqueueChatMaterializationProjection(
+            effect,
+            {
+              operationId: `chat.approval.materialized:${effect.effectId}:${childMaterialized.turnId}`,
+              occurredAt: now,
+              payload: {
+                type: "chat_thread_approval_materialized",
+                sessionId: childMaterialized.sessionId,
+                turnId: childMaterialized.turnId,
+                activeLeafTurnId: childMaterialized.turnId,
+                approvalId: effect.approvalId,
+              },
+              options: {
+                eventClass: "operational_signal",
+                eventAuthority: "retained_stream",
+                links: {
+                  sessionId: childMaterialized.sessionId,
+                  turnId: childMaterialized.turnId,
+                  approvalId: effect.approvalId,
+                  ...(childMaterialized.durable?.runId ? { runId: childMaterialized.durable.runId } : {}),
+                },
+              },
+            },
+            testFallbackProjections,
+          ) || queuedDurableProjection;
+        const parentMaterialized = this.materializeDelegationParentsFromApprovedChild({
+          childTrace,
+          outputText,
+          now,
+          approvalId: effect.approvalId,
+        });
+        if (parentMaterialized) {
+          queuedDurableProjection =
+            this.enqueueDelegationParentMaterializationProjection(
+              effect,
+              parentMaterialized,
+              now,
+              testFallbackProjections,
+            ) || queuedDurableProjection;
+        }
+        completeMaterialization();
+      });
+      if (queuedDurableProjection) {
+        this.requestObservabilityEffectProcessing();
+      }
+      this.publishTestFallbackProjections(testFallbackProjections);
+    } catch (error) {
+      try {
+        this.ctx.publishRealtime(
+          "approval_effect_materialization_failed",
+          "approvals",
+          {
+            approvalId: effect.approvalId,
+            effectKind: effect.effectKind,
+            targetId: effect.targetId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: {
+              approvalId: effect.approvalId,
+            },
+          },
+        );
+      } catch (diagnosticError) {
+        void diagnosticError;
+      }
+      throw error;
+    }
+  }
+
+  private materializeFailedChatApprovalOrDefer(
+    effect: ApprovalEffectRecord,
+    pendingAction: PendingApprovalAction,
+    actionRecord: Record<string, unknown> | undefined,
+    failure: ToolDomainExecutionFailure,
+  ): boolean {
+    try {
+      this.materializeFailedChatApproval(effect, pendingAction, actionRecord, failure);
+      return true;
+    } catch (error) {
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        actionType: pendingAction.actionType,
+        resolutionStatus: "failed",
+        materialized: false,
+        failureKind: failure.kind,
+      });
+      return false;
+    }
+  }
+
+  private materializeFailedChatApproval(
+    effect: ApprovalEffectRecord,
+    pendingAction: PendingApprovalAction,
+    actionRecord: Record<string, unknown> | undefined,
+    failure: ToolDomainExecutionFailure,
+  ): void {
+    const testFallbackProjections: ChatMaterializationProjection[] = [];
+    let queuedDurableProjection = false;
+    runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+      const completeMaterialization = () => {
+        const completed = this.ctx.storage.approvalEffects.completeEffect(
+          effect.effectId,
+          this.workerId,
+          effect.version,
+          { result: actionRecord ?? {} },
+        );
+        if (!completed) {
+          throw new Error(`Approval effect ${effect.effectId} lost its failed-materialization completion lease.`);
+        }
+      };
       if (pendingAction.actionType !== "tool.invoke") {
+        completeMaterialization();
         return;
       }
       const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
       if (!inlineApproval) {
+        completeMaterialization();
         return;
       }
       const now = new Date().toISOString();
@@ -862,14 +1579,142 @@ export class ApprovalEffectsService {
         asOptionalString(inlineApproval.toolName) ??
         asOptionalString(actionRecord?.toolName) ??
         "tool.invoke";
+      let childTrace: ChatTurnTraceRecord;
+      try {
+        childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
+      } catch (error) {
+        throw new Error(`Chat turn ${inlineApproval.turnId} is unavailable for failed approval materialization.`, {
+          cause: error,
+        });
+      }
+      const outputText = buildFailedApprovedToolActionOutput(toolName, toolResult, failure);
+      const childMaterialized = this.failChatTurnFromApprovedAction({
+        trace: childTrace,
+        outputText,
+        now,
+        approvalId: effect.approvalId,
+        actionRecord,
+        failure,
+        toolName,
+        toolResult,
+        resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
+      });
+      if (!childMaterialized) {
+        return;
+      }
+      queuedDurableProjection =
+        this.enqueueChatMaterializationProjection(
+          effect,
+          {
+            operationId: `chat.approval.failed-materialized:${effect.effectId}:${childMaterialized.turnId}`,
+            occurredAt: now,
+            payload: {
+              type: "chat_thread_approval_failed_materialized",
+              sessionId: childMaterialized.sessionId,
+              turnId: childMaterialized.turnId,
+              activeLeafTurnId: childMaterialized.turnId,
+              approvalId: effect.approvalId,
+              failureKind: failure.kind,
+            },
+            options: {
+              eventClass: "operational_signal",
+              eventAuthority: "retained_stream",
+              links: {
+                sessionId: childMaterialized.sessionId,
+                turnId: childMaterialized.turnId,
+                approvalId: effect.approvalId,
+                ...(childMaterialized.durable?.runId ? { runId: childMaterialized.durable.runId } : {}),
+              },
+            },
+          },
+          testFallbackProjections,
+        ) || queuedDurableProjection;
+      const parentMaterialized = this.materializeDelegationParentsFromFailedChild({
+        childTrace,
+        outputText,
+        now,
+        approvalId: effect.approvalId,
+        failure,
+      });
+      if (parentMaterialized) {
+        queuedDurableProjection =
+          this.enqueueDelegationParentMaterializationProjection(
+            effect,
+            parentMaterialized,
+            now,
+            testFallbackProjections,
+          ) || queuedDurableProjection;
+      }
+      completeMaterialization();
+    });
+    if (queuedDurableProjection) {
+      this.requestObservabilityEffectProcessing();
+    }
+    this.publishTestFallbackProjections(testFallbackProjections);
+  }
+
+  private failChatTurnFromApprovedAction(input: {
+    trace: ChatTurnTraceRecord;
+    outputText: string;
+    now: string;
+    approvalId: string;
+    actionRecord?: Record<string, unknown>;
+    failure: ToolDomainExecutionFailure;
+    toolName: string;
+    toolResult: Record<string, unknown>;
+    resolvedBy: string;
+  }): ChatTurnTraceRecord | undefined {
+    const materializedTrace = runApprovalEffectTransaction(this.ctx.storage, () => {
+      const durableStatus = this.completeDurableRunIfPresent(input.trace.durable?.runId, {
+        now: input.now,
+        outputText: input.outputText,
+        terminalStatus: "failed",
+        lastError: input.failure.message,
+        postCommit: {
+          approvalId: input.approvalId,
+          turnId: input.trace.turnId,
+          traceStatus: "failed",
+        },
+        checkpointState: {
+          approvalId: input.approvalId,
+          turnId: input.trace.turnId,
+          outputText: input.outputText,
+          approvedAction: input.actionRecord,
+          failureKind: input.failure.kind,
+          manualReconciliationRequired: input.failure.manualReconciliationRequired,
+        },
+      });
+      if (durableStatus && durableStatus !== "failed") {
+        throw new Error(
+          `Durable Chat run ${input.trace.durable?.runId ?? "unknown"} is already ${durableStatus}; failed approval materialization cannot replace it.`,
+        );
+      }
+      const currentTrace = this.ctx.storage.chatTurnTraces.get(input.trace.turnId);
+      if (isChatTurnTerminalStatus(currentTrace.status) && currentTrace.status !== "failed") {
+        throw new Error(
+          `Canonical Chat turn ${currentTrace.turnId} is already ${currentTrace.status}; failed approval materialization cannot replace it.`,
+        );
+      }
+      if (
+        durableStatus === "failed" &&
+        currentTrace.status === "failed" &&
+        hasCanonicalAssistantMessage(this.ctx.storage, currentTrace)
+      ) {
+        return currentTrace;
+      }
+      const inlineApproval = this.ctx.storage.chatInlineApprovals.get(input.approvalId);
+      if (!inlineApproval || inlineApproval.turnId !== currentTrace.turnId) {
+        throw new Error(`Inline approval ${input.approvalId} no longer links to Chat turn ${currentTrace.turnId}.`);
+      }
       const toolRun = this.ctx.storage.chatToolRuns
-        .listByTurn(inlineApproval.turnId)
-        .find((candidate) => candidate.approvalId === effect.approvalId);
-      if (toolRun && toolRun.status !== "executed") {
+        .listByTurn(currentTrace.turnId)
+        .find((candidate) => candidate.approvalId === input.approvalId);
+      if (toolRun && toolRun.status !== "failed") {
         this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
-          status: "executed",
-          result: toolResult,
-          finishedAt: now,
+          status: "failed",
+          result: input.toolResult,
+          error: input.failure.message,
+          finishedAt: input.now,
         });
       }
       this.ctx.storage.chatInlineApprovals.upsert({
@@ -877,55 +1722,56 @@ export class ApprovalEffectsService {
         sessionId: inlineApproval.sessionId,
         turnId: inlineApproval.turnId,
         kind: inlineApproval.kind,
-        toolName: inlineApproval.toolName ?? toolName,
+        toolName: inlineApproval.toolName ?? input.toolName,
         status: "approved",
         reason: inlineApproval.reason,
         riskLevel: inlineApproval.riskLevel,
         details: inlineApproval.details,
         expiresAt: inlineApproval.expiresAt,
-        resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
-        resolvedAt: now,
+        resolvedBy: input.resolvedBy,
+        resolvedAt: input.now,
       });
-
-      let childTrace: ChatTurnTraceRecord;
-      try {
-        childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
-      } catch {
-        return;
-      }
-      const outputText = buildApprovedToolActionOutput(toolName, toolResult);
-      this.completeChatTurnFromApprovedAction({
-        trace: childTrace,
-        outputText,
-        now,
-        approvalId: effect.approvalId,
-        actionRecord,
-      });
-      this.materializeDelegationParentsFromApprovedChild({
-        childTrace,
-        outputText,
-        now,
-        approvalId: effect.approvalId,
-      });
-    } catch (error) {
-      this.ctx.publishRealtime(
-        "approval_effect_materialization_failed",
-        "approvals",
+      const assistantMessageId = currentTrace.assistantMessageId ?? `assistant-approved-${currentTrace.turnId}`;
+      this.ctx.storage.chatMessages.upsert(
         {
-          approvalId: effect.approvalId,
-          effectKind: effect.effectKind,
-          targetId: effect.targetId,
-          error: error instanceof Error ? error.message : String(error),
+          messageId: assistantMessageId,
+          sessionId: currentTrace.sessionId,
+          role: "assistant",
+          actorType: "agent",
+          actorId: "assistant",
+          content: input.outputText,
+          timestamp: input.now,
         },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: effect.approvalId,
-          },
-        },
+        input.now,
       );
+      this.ctx.storage.chatTurnTraces.patch(currentTrace.turnId, {
+        assistantMessageId,
+        status: "failed",
+        finishedAt: input.now,
+        completion: {
+          status: "interrupted",
+          repaired: false,
+          repair: { applied: false },
+        },
+        failure: {
+          failureClass: "tool_failed",
+          message: input.failure.message,
+          retryable: false,
+        },
+        durable: currentTrace.durable?.runId
+          ? {
+              ...currentTrace.durable,
+              status: "failed",
+              checkpointKind: "run_failed",
+            }
+          : currentTrace.durable,
+      });
+      return currentTrace;
+    });
+    if (!materializedTrace) {
+      throw new Error(`Failed approval materialization did not commit Chat turn ${input.trace.turnId}.`);
     }
+    return materializedTrace;
   }
 
   private completeChatTurnFromApprovedAction(input: {
@@ -934,108 +1780,207 @@ export class ApprovalEffectsService {
     now: string;
     approvalId: string;
     actionRecord?: Record<string, unknown>;
-  }): void {
-    const assistantMessageId = input.trace.assistantMessageId ?? `assistant-approved-${input.trace.turnId}`;
-    const message: ChatMessageRecord = {
-      messageId: assistantMessageId,
-      sessionId: input.trace.sessionId,
-      role: "assistant",
-      actorType: "agent",
-      actorId: "assistant",
-      content: input.outputText,
-      timestamp: input.now,
-    };
-    this.ctx.storage.chatMessages.upsert(message, input.now);
-    const durable = input.trace.durable?.runId
-      ? {
-          ...input.trace.durable,
-          status: "completed" as const,
-          checkpointKind: "run_completed" as const,
-        }
-      : input.trace.durable;
-    const tracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
-      assistantMessageId,
-      status: "completed",
-      finishedAt: input.now,
-      completion: {
-        ...(input.trace.completion ?? {}),
-        status: "complete",
-        repaired: Boolean(input.trace.completion?.repaired),
-        repair: input.trace.completion?.repair ?? { applied: false },
-      },
-      durable,
-    };
-    (tracePatch as unknown as { failure: null }).failure = null;
-    this.ctx.storage.chatTurnTraces.patch(input.trace.turnId, tracePatch);
-    this.completeDurableRunIfPresent(input.trace.durable?.runId, {
-      now: input.now,
-      outputText: input.outputText,
-      checkpointState: {
-        approvalId: input.approvalId,
-        turnId: input.trace.turnId,
+  }): ChatTurnTraceRecord | undefined {
+    const materializedTrace = runApprovalEffectTransaction(this.ctx.storage, () => {
+      const durableStatus = this.completeDurableRunIfPresent(input.trace.durable?.runId, {
+        now: input.now,
         outputText: input.outputText,
-        approvedAction: input.actionRecord,
-      },
-    });
-    this.ctx.publishRealtime(
-      "chat_thread_updated",
-      "chat",
-      {
-        type: "chat_thread_approval_materialized",
-        sessionId: input.trace.sessionId,
-        turnId: input.trace.turnId,
-        activeLeafTurnId: input.trace.turnId,
-        approvalId: input.approvalId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
-          sessionId: input.trace.sessionId,
-          turnId: input.trace.turnId,
+        postCommit: {
           approvalId: input.approvalId,
-          ...(input.trace.durable?.runId ? { runId: input.trace.durable.runId } : {}),
+          turnId: input.trace.turnId,
+          traceStatus: "completed",
         },
-      },
-    );
+        checkpointState: {
+          approvalId: input.approvalId,
+          turnId: input.trace.turnId,
+          outputText: input.outputText,
+          approvedAction: input.actionRecord,
+        },
+      });
+      if (durableStatus && durableStatus !== "completed") {
+        return undefined;
+      }
+      const currentTrace = this.ctx.storage.chatTurnTraces.get(input.trace.turnId);
+      if (isChatTurnTerminalStatus(currentTrace.status) && currentTrace.status !== "completed") {
+        return undefined;
+      }
+      if (
+        durableStatus === "completed" &&
+        currentTrace.status === "completed" &&
+        hasCanonicalAssistantMessage(this.ctx.storage, currentTrace)
+      ) {
+        return currentTrace;
+      }
+      const assistantMessageId = currentTrace.assistantMessageId ?? `assistant-approved-${currentTrace.turnId}`;
+      const message: ChatMessageRecord = {
+        messageId: assistantMessageId,
+        sessionId: currentTrace.sessionId,
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: input.outputText,
+        timestamp: input.now,
+      };
+      this.ctx.storage.chatMessages.upsert(message, input.now);
+      const durable = currentTrace.durable?.runId
+        ? {
+            ...currentTrace.durable,
+            status: "completed" as const,
+            checkpointKind: "run_completed" as const,
+          }
+        : currentTrace.durable;
+      const tracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
+        assistantMessageId,
+        status: "completed",
+        finishedAt: input.now,
+        completion: {
+          ...(currentTrace.completion ?? {}),
+          status: "complete",
+          repaired: Boolean(currentTrace.completion?.repaired),
+          repair: currentTrace.completion?.repair ?? { applied: false },
+        },
+        durable,
+      };
+      (tracePatch as unknown as { failure: null }).failure = null;
+      this.ctx.storage.chatTurnTraces.patch(currentTrace.turnId, tracePatch);
+      return currentTrace;
+    });
+    if (!materializedTrace) {
+      return undefined;
+    }
+    return materializedTrace;
   }
 
   private completeDurableRunIfPresent(
     runId: string | undefined,
-    input: { now: string; outputText: string; checkpointState: Record<string, unknown> },
-  ): void {
+    input: {
+      now: string;
+      outputText: string;
+      checkpointState: Record<string, unknown>;
+      postCommit?: ApprovalMaterializationPostCommitInput;
+      terminalStatus?: "completed" | "failed";
+      lastError?: string;
+    },
+  ): DurableRunRecord["status"] | undefined {
     if (!runId) {
-      return;
+      return undefined;
     }
-    let run;
+    const terminalStatus = input.terminalStatus ?? "completed";
+    const checkpointKind = terminalStatus === "failed" ? "run_failed" : "run_completed";
+    const run = this.ctx.storage.durableRuns.getRun(runId);
+    if (isTerminalDurableRunStatus(run.status) && run.status !== terminalStatus) {
+      return run.status;
+    }
+    if (run.status !== "waiting" && run.status !== terminalStatus) {
+      return run.status;
+    }
+    let finalized = false;
     try {
-      run = this.ctx.storage.durableRuns.getRun(runId);
-    } catch {
-      return;
-    }
-    if (!isTerminalDurableRunStatus(run.status)) {
-      this.ctx.storage.durableRuns.updateRun({
-        runId,
-        status: "completed",
-        updatedAt: input.now,
-        finishedAt: input.now,
-        clearLease: true,
-        clearLastError: true,
-        metadata: {
-          ...(run.metadata ?? {}),
+      runApprovalEffectTransaction(this.ctx.storage, () => {
+        const latest = lockApprovalMaterializationRun(this.ctx.storage, runId);
+        if (latest.status !== "waiting" && latest.status !== terminalStatus) {
+          return;
+        }
+        const transitioning = latest.status === "waiting";
+        const existingReceipt = readApprovalMaterializedPostCommitReceipt(latest.metadata);
+        const matchingReceipt = Boolean(
+          input.postCommit && approvalMaterializationReceiptMatches(existingReceipt, input.postCommit),
+        );
+        const linkedTrace = input.postCommit
+          ? lockApprovalMaterializationTrace(this.ctx.storage, input.postCommit.turnId)
+          : undefined;
+        if (input.postCommit && linkedTrace) {
+          if (linkedTrace.durable?.runId !== runId) {
+            throw new Error(`Canonical Chat turn ${linkedTrace.turnId} no longer links to durable run ${runId}.`);
+          }
+          if (
+            isChatTurnTerminalStatus(linkedTrace.status) &&
+            linkedTrace.status !== input.postCommit.traceStatus &&
+            !(matchingReceipt && linkedTrace.status === input.postCommit.traceStatus)
+          ) {
+            throw new Error(
+              `Canonical Chat turn ${linkedTrace.turnId} is already ${linkedTrace.status}; approval materialization cannot replace that terminal state.`,
+            );
+          }
+        }
+        if (latest.status === terminalStatus && input.postCommit && !existingReceipt) {
+          throw new Error(
+            `Durable run ${runId} is ${terminalStatus} without an approval materialization receipt; refusing to replace canonical output.`,
+          );
+        }
+        if (latest.status === terminalStatus && existingReceipt && !matchingReceipt) {
+          throw buildApprovalMaterializationConflictError(runId, existingReceipt, input.postCommit);
+        }
+        if (!transitioning && (!input.postCommit || matchingReceipt)) {
+          finalized = true;
+          return;
+        }
+        let metadata: Record<string, unknown> = {
+          ...(latest.metadata ?? {}),
           outputText: input.outputText,
           finalOutput: input.outputText,
           outputSummary: summarizeText(input.outputText),
           finalSummary: summarizeText(input.outputText),
-        },
+        };
+        if (input.postCommit && !matchingReceipt) {
+          const generationId = randomUUID();
+          metadata = markTerminalChatPostCommitPending(metadata, input.now, input.postCommit.traceStatus, generationId);
+          metadata[APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY] = {
+            version: 1,
+            approvalId: input.postCommit.approvalId,
+            turnId: input.postCommit.turnId,
+            traceStatus: input.postCommit.traceStatus,
+            generationId,
+            requestedAt: input.now,
+            ...(input.postCommit.materializationKey !== undefined
+              ? { materializationKey: requireApprovalMaterializationKey(input.postCommit.materializationKey) }
+              : {}),
+          };
+        }
+        this.ctx.storage.durableRuns.updateRun({
+          runId,
+          status: terminalStatus,
+          updatedAt: input.now,
+          finishedAt: input.now,
+          clearLease: true,
+          ...(terminalStatus === "failed"
+            ? { lastError: input.lastError ?? "Approved tool action failed." }
+            : { clearLastError: true }),
+          expectedVersion: latest.version,
+          metadata,
+        });
+        if (transitioning) {
+          this.ctx.storage.durableRuns.createCheckpoint({
+            runId,
+            checkpointKind,
+            state: input.checkpointState,
+            createdAt: input.now,
+          });
+          this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, input.checkpointState);
+        }
+        finalized = true;
       });
-      this.ctx.storage.durableRuns.createCheckpoint({
-        runId,
-        checkpointKind: "run_completed",
-        state: input.checkpointState,
-        createdAt: input.now,
-      });
+    } catch (error) {
+      if (!(error instanceof ConflictError)) {
+        throw error;
+      }
+      const latest = this.ctx.storage.durableRuns.getRun(runId);
+      if (isTerminalDurableRunStatus(latest.status)) {
+        if (latest.status === terminalStatus && input.postCommit) {
+          const receipt = readApprovalMaterializedPostCommitReceipt(latest.metadata);
+          if (approvalMaterializationReceiptMatches(receipt, input.postCommit)) {
+            return latest.status;
+          }
+          if (receipt) {
+            throw buildApprovalMaterializationConflictError(runId, receipt, input.postCommit, error);
+          }
+          throw error;
+        }
+        return latest.status;
+      }
+      throw error;
     }
+    return finalized ? terminalStatus : this.ctx.storage.durableRuns.getRun(runId).status;
   }
 
   private materializeDelegationParentsFromApprovedChild(input: {
@@ -1043,45 +1988,99 @@ export class ApprovalEffectsService {
     outputText: string;
     now: string;
     approvalId: string;
-  }): void {
+  }): DelegationParentMaterialization | undefined {
     const parents = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([input.childTrace.sessionId]);
     const parent = parents.get(input.childTrace.sessionId);
     if (!parent) {
       return;
     }
-    let step: ChatDelegationStepRecord;
-    try {
-      step = this.ctx.storage.chatDelegationSteps.get(parent.stepId);
-    } catch {
+    if (!this.lockDelegationApprovalAggregate(parent.runId, parent.stepId)) {
       return;
     }
     const finishedAt = input.now;
-    const startedMs = Date.parse(step.startedAt);
-    const durationMs = Number.isFinite(startedMs) ? Math.max(0, Date.parse(finishedAt) - startedMs) : undefined;
-    this.ctx.storage.chatDelegationSteps.patch(step.stepId, {
+    const materialized = this.ctx.storage.chatDelegationSteps.materializeApprovalOutcome({
+      stepId: parent.stepId,
+      expectedChildSessionId: input.childTrace.sessionId,
+      expectedChildTurnId: input.childTrace.turnId,
       status: "completed",
       output: input.outputText,
       summary: summarizeText(input.outputText, 180),
-      error: undefined,
-      failureGuidance: undefined,
-      childSessionId: input.childTrace.sessionId,
-      childTurnId: input.childTrace.turnId,
       durableRunId: input.childTrace.durable?.runId,
       citations: input.childTrace.citations ?? [],
       finishedAt,
-      ...(durationMs !== undefined ? { durationMs } : {}),
     });
-    this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
-  }
-
-  private reconcileDelegationRun(parentSessionId: string, runId: string, now: string, approvalId: string): void {
-    let run;
-    try {
-      run = this.ctx.storage.chatDelegationRuns.get(runId);
-    } catch {
+    if (materialized.outcome === "rejected") {
       return;
     }
-    const steps = this.ctx.storage.chatDelegationSteps.listByRun(runId);
+    return this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
+  }
+
+  private materializeDelegationParentsFromFailedChild(input: {
+    childTrace: ChatTurnTraceRecord;
+    outputText: string;
+    now: string;
+    approvalId: string;
+    failure: ToolDomainExecutionFailure;
+  }): DelegationParentMaterialization | undefined {
+    const parents = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([input.childTrace.sessionId]);
+    const parent = parents.get(input.childTrace.sessionId);
+    if (!parent) {
+      return;
+    }
+    if (!this.lockDelegationApprovalAggregate(parent.runId, parent.stepId)) {
+      return;
+    }
+    const materialized = this.ctx.storage.chatDelegationSteps.materializeApprovalOutcome({
+      stepId: parent.stepId,
+      expectedChildSessionId: input.childTrace.sessionId,
+      expectedChildTurnId: input.childTrace.turnId,
+      status: "failed",
+      summary: summarizeText(input.outputText, 180),
+      error: input.failure.message,
+      failureGuidance:
+        input.failure.kind === "manual_reconciliation"
+          ? "Verify the external system before retrying; the approved action may have taken effect."
+          : "Inspect the tool failure and retry only after the underlying issue is resolved.",
+      durableRunId: input.childTrace.durable?.runId,
+      citations: input.childTrace.citations ?? [],
+      finishedAt: input.now,
+    });
+    if (materialized.outcome === "rejected") {
+      return;
+    }
+    return this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
+  }
+
+  private lockDelegationApprovalAggregate(runId: string, stepId: string): boolean {
+    try {
+      this.ctx.storage.chatDelegationRuns.getForUpdate(runId);
+      return this.ctx.storage.chatDelegationSteps
+        .listByRunForUpdate(runId)
+        .some((candidate) => candidate.stepId === stepId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private reconcileDelegationRun(
+    parentSessionId: string,
+    runId: string,
+    now: string,
+    approvalId: string,
+  ): DelegationParentMaterialization | undefined {
+    let run;
+    try {
+      run = this.ctx.storage.chatDelegationRuns.getForUpdate(runId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return;
+      }
+      throw error;
+    }
+    const steps = this.ctx.storage.chatDelegationSteps.listByRunForUpdate(runId);
     if (steps.length === 0) {
       return;
     }
@@ -1110,155 +2109,456 @@ export class ApprovalEffectsService {
         // The delegation run remains canonical if the optional execution-plan projection is missing.
       }
     }
-    if (status === "running") {
-      return;
-    }
-    const parentTrace = this.ctx.storage.chatTurnTraces
+    const listedParentTrace = this.ctx.storage.chatTurnTraces
       .listBySession(parentSessionId)
       .find((trace) => trace.orchestration?.runId === runId);
-    if (!parentTrace) {
+    if (status === "running") {
+      if (listedParentTrace && !isChatTurnTerminalStatus(listedParentTrace.status)) {
+        this.ctx.storage.chatTurnTraces.patch(listedParentTrace.turnId, {
+          status: "running",
+          orchestration: listedParentTrace.orchestration
+            ? {
+                ...listedParentTrace.orchestration,
+                status: "running",
+                finalSummary,
+                steps: steps.map((step) => ({
+                  stepId: step.stepId,
+                  role: step.role,
+                  label: step.label,
+                  index: step.index,
+                  status: step.status,
+                  providerId: step.providerId,
+                  model: step.model,
+                  startedAt: step.startedAt,
+                  finishedAt: step.finishedAt,
+                  durationMs: step.durationMs,
+                  summary: step.summary,
+                  error: step.error,
+                })),
+              }
+            : listedParentTrace.orchestration,
+        });
+      }
       return;
     }
-    const parentStatus = status === "failed" ? "failed" : status === "partial" ? "partial" : "completed";
-    const assistantMessageId = parentTrace.assistantMessageId ?? `assistant-approved-${parentTrace.turnId}`;
-    this.ctx.storage.chatMessages.upsert(
-      {
-        messageId: assistantMessageId,
-        sessionId: parentTrace.sessionId,
-        role: "assistant",
-        actorType: "agent",
-        actorId: "assistant",
-        content: stitchedOutput,
-        timestamp: now,
-      },
-      now,
-    );
-    const parentTracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
-      assistantMessageId,
-      status: parentStatus,
-      finishedAt: now,
-      completion: {
-        ...(parentTrace.completion ?? {}),
-        status: "complete",
-        repaired: Boolean(parentTrace.completion?.repaired),
-        repair: parentTrace.completion?.repair ?? { applied: false },
-      },
-      orchestration: parentTrace.orchestration
-        ? {
-            ...parentTrace.orchestration,
-            status,
-            finalSummary,
-            steps: steps.map((step) => ({
-              stepId: step.stepId,
-              role: step.role,
-              label: step.label,
-              index: step.index,
-              status: step.status,
-              providerId: step.providerId,
-              model: step.model,
-              startedAt: step.startedAt,
-              finishedAt: step.finishedAt,
-              durationMs: step.durationMs,
-              summary: step.summary,
-              error: step.error,
-            })),
-          }
-        : parentTrace.orchestration,
-      durable: parentTrace.durable?.runId
-        ? {
-            ...parentTrace.durable,
-            status: "completed",
-            checkpointKind: "run_completed",
-          }
-        : parentTrace.durable,
-    };
-    if (status === "failed") {
-      parentTracePatch.failure = parentTrace.failure;
-    } else {
-      (parentTracePatch as unknown as { failure: null }).failure = null;
+    if (!listedParentTrace) {
+      return;
     }
-    this.ctx.storage.chatTurnTraces.patch(parentTrace.turnId, parentTracePatch);
-    this.completeDurableRunIfPresent(parentTrace.durable?.runId, {
-      now,
-      outputText: stitchedOutput,
-      checkpointState: {
-        approvalId,
-        turnId: parentTrace.turnId,
+    const materializedParentTrace = runApprovalEffectTransaction(this.ctx.storage, () => {
+      const parentStatus = status === "failed" ? "failed" : status === "partial" ? "partial" : "completed";
+      const expectedParentDurableStatus = parentStatus === "failed" ? "failed" : "completed";
+      const parentFailureMessage = steps.find((step) => step.status === "failed")?.error ?? "Delegated action failed.";
+      const committedParentDurableStatus = this.completeDurableRunIfPresent(listedParentTrace.durable?.runId, {
+        now,
         outputText: stitchedOutput,
-        delegationRunId: runId,
-      },
-    });
-    this.ctx.publishRealtime(
-      "chat_thread_updated",
-      "chat",
-      {
-        type: "chat_thread_delegation_approval_materialized",
-        sessionId: parentTrace.sessionId,
-        turnId: parentTrace.turnId,
-        activeLeafTurnId: parentTrace.turnId,
-        approvalId,
-        delegationRunId: runId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
-          sessionId: parentTrace.sessionId,
-          turnId: parentTrace.turnId,
+        terminalStatus: expectedParentDurableStatus,
+        ...(expectedParentDurableStatus === "failed" ? { lastError: parentFailureMessage } : {}),
+        postCommit: {
           approvalId,
-          runId,
-          ...(parentTrace.durable?.runId ? { durableRunId: parentTrace.durable.runId } : {}),
+          turnId: listedParentTrace.turnId,
+          traceStatus: parentStatus,
+          materializationKey: buildDelegationParentApprovalMaterializationKey(runId, listedParentTrace.turnId),
+        },
+        checkpointState: {
+          approvalId,
+          turnId: listedParentTrace.turnId,
+          outputText: stitchedOutput,
+          delegationRunId: runId,
+        },
+      });
+      if (committedParentDurableStatus && committedParentDurableStatus !== expectedParentDurableStatus) {
+        return undefined;
+      }
+      const parentTrace = this.ctx.storage.chatTurnTraces.get(listedParentTrace.turnId);
+      if (isChatTurnTerminalStatus(parentTrace.status) && parentTrace.status !== parentStatus) {
+        return undefined;
+      }
+      if (
+        committedParentDurableStatus === expectedParentDurableStatus &&
+        parentTrace.status === parentStatus &&
+        hasCanonicalAssistantMessage(this.ctx.storage, parentTrace)
+      ) {
+        return parentTrace;
+      }
+      const assistantMessageId = parentTrace.assistantMessageId ?? `assistant-approved-${parentTrace.turnId}`;
+      this.ctx.storage.chatMessages.upsert(
+        {
+          messageId: assistantMessageId,
+          sessionId: parentTrace.sessionId,
+          role: "assistant",
+          actorType: "agent",
+          actorId: "assistant",
+          content: stitchedOutput,
+          timestamp: now,
+        },
+        now,
+      );
+      const parentTracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
+        assistantMessageId,
+        status: parentStatus,
+        finishedAt: now,
+        completion: {
+          ...(parentTrace.completion ?? {}),
+          status: parentStatus === "failed" ? "interrupted" : "complete",
+          repaired: Boolean(parentTrace.completion?.repaired),
+          repair: parentTrace.completion?.repair ?? { applied: false },
+        },
+        orchestration: parentTrace.orchestration
+          ? {
+              ...parentTrace.orchestration,
+              status,
+              finalSummary,
+              steps: steps.map((step) => ({
+                stepId: step.stepId,
+                role: step.role,
+                label: step.label,
+                index: step.index,
+                status: step.status,
+                providerId: step.providerId,
+                model: step.model,
+                startedAt: step.startedAt,
+                finishedAt: step.finishedAt,
+                durationMs: step.durationMs,
+                summary: step.summary,
+                error: step.error,
+              })),
+            }
+          : parentTrace.orchestration,
+        durable: parentTrace.durable?.runId
+          ? {
+              ...parentTrace.durable,
+              status: expectedParentDurableStatus,
+              checkpointKind: expectedParentDurableStatus === "failed" ? "run_failed" : "run_completed",
+            }
+          : parentTrace.durable,
+      };
+      if (status === "failed") {
+        parentTracePatch.failure = {
+          failureClass: "tool_failed",
+          message: parentFailureMessage,
+          retryable: false,
+        };
+      } else {
+        (parentTracePatch as unknown as { failure: null }).failure = null;
+      }
+      this.ctx.storage.chatTurnTraces.patch(parentTrace.turnId, parentTracePatch);
+      return parentTrace;
+    });
+    if (!materializedParentTrace) {
+      return undefined;
+    }
+    return { trace: materializedParentTrace, runId };
+  }
+
+  private enqueueDelegationParentMaterializationProjection(
+    effect: ApprovalEffectRecord,
+    materialized: DelegationParentMaterialization,
+    occurredAt: string,
+    testFallbackProjections: ChatMaterializationProjection[],
+  ): boolean {
+    return this.enqueueChatMaterializationProjection(
+      effect,
+      {
+        operationId: `chat.delegation.approval.materialized:${effect.effectId}:${materialized.runId}`,
+        occurredAt,
+        payload: {
+          type: "chat_thread_delegation_approval_materialized",
+          sessionId: materialized.trace.sessionId,
+          turnId: materialized.trace.turnId,
+          activeLeafTurnId: materialized.trace.turnId,
+          approvalId: effect.approvalId,
+          delegationRunId: materialized.runId,
+        },
+        options: {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId: materialized.trace.sessionId,
+            turnId: materialized.trace.turnId,
+            approvalId: effect.approvalId,
+            runId: materialized.runId,
+            ...(materialized.trace.durable?.runId ? { durableRunId: materialized.trace.durable.runId } : {}),
+          },
         },
       },
+      testFallbackProjections,
     );
   }
 
+  private enqueueChatMaterializationProjection(
+    effect: ApprovalEffectRecord,
+    projection: ChatMaterializationProjection,
+    testFallbackProjections: ChatMaterializationProjection[],
+  ): boolean {
+    const approvalEffects = this.ctx.storage.approvalEffects as Storage["approvalEffects"] & {
+      upsertObservabilityBatch?: Storage["approvalEffects"]["upsertObservabilityBatch"];
+    };
+    if (typeof approvalEffects.upsertObservabilityBatch !== "function") {
+      if (process.env.NODE_ENV === "test") {
+        testFallbackProjections.push(projection);
+        return false;
+      }
+      throw new Error("Chat approval materialization is missing its durable realtime projection outbox");
+    }
+    approvalEffects.upsertObservabilityBatch({
+      approvalId: effect.approvalId,
+      occurredAt: projection.occurredAt,
+      attribution: captureApprovalObservabilityAttribution(),
+      items: [
+        {
+          operationId: projection.operationId,
+          delivery: {
+            kind: "realtime",
+            eventType: "chat_thread_updated",
+            source: "chat",
+            payload: projection.payload,
+            options: projection.options,
+          },
+        },
+      ],
+    });
+    return true;
+  }
+
+  private publishTestFallbackProjections(projections: readonly ChatMaterializationProjection[]): void {
+    if (projections.length === 0) {
+      return;
+    }
+    if (process.env.NODE_ENV !== "test") {
+      throw new Error("Chat approval materialization projection fallback is test-only");
+    }
+    for (const projection of projections) {
+      this.ctx.publishRealtime("chat_thread_updated", "chat", projection.payload, projection.options);
+    }
+  }
+
   private async handleApprovalAfterHooks(effect: ApprovalEffectRecord): Promise<void> {
-    const approval = this.ctx.storage.approvals.get(effect.approvalId);
-    const payload = effect.payload;
-    const decision = asDecision(payload.decision);
-    const resolvedBy = asOptionalString(payload.resolvedBy) ?? approval.resolvedBy ?? "system";
-    const workspaceId = this.deps.resolveApprovalHookWorkspaceId({
-      approvalId: approval.approvalId,
-      ...(approval.payload ?? {}),
-      workspaceId:
-        typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
-          ? approval.linkage.workspaceId.trim()
-          : approval.payload.workspaceId,
-      sessionId:
-        typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
-          ? approval.linkage.sessionId.trim()
-          : approval.payload.sessionId,
-    });
-    this.deps.enqueueAfterHooks({
-      workspaceId,
-      trigger: "approval.resolve.after",
-      entityType: "approval",
-      entityId: approval.approvalId,
-      payload: {
-        approval,
-        decision,
-        resolvedBy,
-      },
-    });
-    this.deps.enqueueAfterHooks({
-      workspaceId,
-      trigger: "approval.response.after",
-      entityType: "approval",
-      entityId: approval.approvalId,
-      payload: {
-        approval,
-        decision,
-        resolvedBy,
-        deliveryChannel: typeof payload.deliveryChannel === "string" ? payload.deliveryChannel : null,
-      },
-    });
-    this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-      result: {
+    try {
+      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      const payload = effect.payload;
+      const decision = asDecision(payload.decision);
+      const resolvedBy = asOptionalString(payload.resolvedBy) ?? approval.resolvedBy ?? "system";
+      const workspaceId = this.deps.resolveApprovalHookWorkspaceId({
+        approvalId: approval.approvalId,
+        ...(approval.payload ?? {}),
+        workspaceId:
+          typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
+            ? approval.linkage.workspaceId.trim()
+            : approval.payload.workspaceId,
+        sessionId:
+          typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
+            ? approval.linkage.sessionId.trim()
+            : approval.payload.sessionId,
+      });
+      this.deps.enqueueAfterHooks({
         workspaceId,
-        enqueued: true,
+        trigger: "approval.resolve.after",
+        entityType: "approval",
+        entityId: approval.approvalId,
+        payload: {
+          approval,
+          decision,
+          resolvedBy,
+        },
+      });
+      this.deps.enqueueAfterHooks({
+        workspaceId,
+        trigger: "approval.response.after",
+        entityType: "approval",
+        entityId: approval.approvalId,
+        payload: {
+          approval,
+          decision,
+          resolvedBy,
+          deliveryChannel: typeof payload.deliveryChannel === "string" ? payload.deliveryChannel : null,
+        },
+      });
+      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+        const completed = this.ctx.storage.approvalEffects.completeEffect(
+          effect.effectId,
+          this.workerId,
+          effect.version,
+          {
+            result: {
+              workspaceId,
+              enqueued: true,
+            },
+          },
+        );
+        if (!completed) {
+          throw new Error(`Approval hook effect ${effect.effectId} lost its completion lease.`);
+        }
+      });
+    } catch (error) {
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        signalKind: "approval_after_hooks",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  private async handleApprovalResolutionSignals(effect: ApprovalEffectRecord): Promise<void> {
+    try {
+      const recordSignals = this.deps.recordApprovalResolutionSignals;
+      if (!recordSignals) {
+        throw new Error("Approval resolution signal delivery is not configured.");
+      }
+      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      // Improvement and activation owners can cross filesystem/process boundaries.
+      // Let their own idempotency/compensation commit before terminalizing this
+      // effect; a crash in between replays the deterministic owner on retry.
+      recordSignals(approval);
+      runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () => {
+        const completed = this.ctx.storage.approvalEffects.completeEffect(
+          effect.effectId,
+          this.workerId,
+          effect.version,
+          {
+            result: {
+              delivered: true,
+              approvalId: approval.approvalId,
+              status: approval.status,
+            },
+          },
+        );
+        if (!completed) {
+          throw new Error(`Approval resolution signal effect ${effect.effectId} lost its completion lease.`);
+        }
+      });
+    } catch (error) {
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        signalKind: "approval_resolution",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  private async handleApprovalObservability(effect: ApprovalEffectRecord): Promise<void> {
+    let envelope: ApprovalObservabilityEnvelope;
+    try {
+      envelope = parseApprovalObservabilityEnvelope(effect.payload);
+    } catch (error) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.observabilityWorkerId, effect.version, {
+        lastError: error instanceof Error ? error.message : String(error),
+        result: {
+          deliveryState: "invalid_envelope",
+          operationId: effect.targetId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      return;
+    }
+
+    if (envelope.predecessorDeliveryId) {
+      const predecessor = this.ctx.storage.approvalEffects.getByIdempotencyKey(envelope.predecessorDeliveryId);
+      if (!predecessor || predecessor.status !== "completed") {
+        this.deferClaimedEffectForRetry(
+          effect,
+          this.observabilityWorkerId,
+          new Error(`Approval observability predecessor ${envelope.predecessorDeliveryId} is not complete.`),
+          {
+            deliveryState: "blocked_on_predecessor",
+            deliveryKind: envelope.delivery.kind,
+            deliveryId: envelope.deliveryId,
+            operationId: envelope.operationId,
+            predecessorDeliveryId: envelope.predecessorDeliveryId,
+          },
+          APPROVAL_OBSERVABILITY_PREDECESSOR_RETRY_MS,
+        );
+        return;
+      }
+    }
+
+    try {
+      const delivery = envelope.delivery;
+      if (delivery.kind === "audit") {
+        await this.ctx.storage.audit.append(delivery.stream, delivery.payload, {
+          deliveryId: envelope.deliveryId,
+          occurredAt: envelope.occurredAt,
+          attribution: envelope.attribution,
+        });
+      } else {
+        this.ctx.publishRealtime(
+          delivery.eventType,
+          delivery.source,
+          {
+            ...delivery.payload,
+            [APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY]: {
+              deliveryId: envelope.deliveryId,
+              occurredAt: envelope.occurredAt,
+              attribution: envelope.attribution,
+            },
+          },
+          delivery.options,
+        );
+      }
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.observabilityWorkerId,
+        effect.version,
+        {
+          result: {
+            delivered: true,
+            deliveryState: "delivered",
+            deliveryKind: delivery.kind,
+            deliveryId: envelope.deliveryId,
+            operationId: envelope.operationId,
+            occurredAt: envelope.occurredAt,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Approval observability effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      this.deferClaimedEffectForRetry(effect, this.observabilityWorkerId, error, {
+        deliveryState: "retry_scheduled",
+        deliveryKind: envelope.delivery.kind,
+        deliveryId: envelope.deliveryId,
+        operationId: envelope.operationId,
+      });
+    }
+  }
+
+  private deferClaimedEffectForRetry(
+    effect: ApprovalEffectRecord,
+    workerId: string,
+    error: unknown,
+    result: Record<string, unknown>,
+    retryDelayOverrideMs?: number,
+  ): ApprovalEffectRecord | undefined {
+    const now = new Date();
+    const retryDelayMs =
+      retryDelayOverrideMs ??
+      Math.min(
+        APPROVAL_OBSERVABILITY_RETRY_BASE_MS * 2 ** Math.min(20, Math.max(0, effect.attemptCount - 1)),
+        APPROVAL_OBSERVABILITY_RETRY_MAX_MS,
+      );
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const retryAt = new Date(now.getTime() + retryDelayMs).toISOString();
+    const deferred = this.ctx.storage.approvalEffects.deferEffectForRetry(effect.effectId, workerId, effect.version, {
+      lastError: errorMessage,
+      retryAt,
+      updatedAt: now.toISOString(),
+      result: {
+        ...result,
+        delivered: false,
+        attemptCount: effect.attemptCount,
+        error: errorMessage,
+        retryAt,
+        retryDelayMs,
       },
     });
+    if (!deferred) {
+      const current = this.ctx.storage.approvalEffects.get(effect.effectId);
+      if (current.status === "completed") {
+        return current;
+      }
+      throw new Error(`Approval effect ${effect.effectId} lost its lease while scheduling retry.`, { cause: error });
+    }
+    return deferred;
   }
 
   private resolveLinkedTurnWakeTarget(approval: ApprovalRequest): { turnId: string; runId: string } | undefined {
@@ -1415,6 +2715,179 @@ export class ApprovalEffectsService {
   }
 }
 
+function runApprovalEffectTransaction<T>(storage: ApprovalEffectsServiceContext["storage"], callback: () => T): T {
+  const transaction = (storage as { runImmediateTransaction?: <R>(work: () => R) => R }).runImmediateTransaction;
+  if (transaction) {
+    return transaction.call(storage, callback) as T;
+  }
+  if (process.env.NODE_ENV === "test") {
+    return callback();
+  }
+  throw new Error("Approval effect durable completion is missing immediate transaction ownership");
+}
+
+function runClaimedApprovalEffectTransaction<T>(
+  storage: ApprovalEffectsServiceContext["storage"],
+  effect: ApprovalEffectRecord,
+  workerId: string,
+  callback: () => T,
+): T {
+  return runApprovalEffectTransaction(storage, () => {
+    const approvalEffects = storage.approvalEffects;
+    const lockFreshClaim = approvalEffects?.lockFreshClaimForUpdate;
+    if (typeof lockFreshClaim !== "function") {
+      if (process.env.NODE_ENV === "test") {
+        return callback();
+      }
+      throw new Error("Approval effect materialization is missing its database claim lock");
+    }
+    const locked = lockFreshClaim.call(approvalEffects, effect.effectId, workerId, effect.version);
+    if (!locked) {
+      throw new Error(`Approval effect ${effect.effectId} lost its materialization lease.`);
+    }
+    return callback();
+  });
+}
+
+function lockApprovalMaterializationRun(
+  storage: ApprovalEffectsServiceContext["storage"],
+  runId: string,
+): DurableRunRecord {
+  const durableRuns = storage.durableRuns as Storage["durableRuns"] & {
+    getRunForUpdate?: (currentRunId: string) => DurableRunRecord;
+  };
+  if (typeof durableRuns.getRunForUpdate === "function") {
+    return durableRuns.getRunForUpdate(runId);
+  }
+  if (process.env.NODE_ENV === "test") {
+    return durableRuns.getRun(runId);
+  }
+  throw new Error("Approval materialization is missing durable-run row-lock ownership");
+}
+
+function lockApprovalMaterializationTrace(
+  storage: ApprovalEffectsServiceContext["storage"],
+  turnId: string,
+): ChatTurnTraceRecord | undefined {
+  const chatTurnTraces = storage.chatTurnTraces as
+    | (Storage["chatTurnTraces"] & {
+        getForUpdate?: (currentTurnId: string) => ChatTurnTraceRecord;
+      })
+    | undefined;
+  if (typeof chatTurnTraces?.getForUpdate === "function") {
+    return chatTurnTraces.getForUpdate(turnId);
+  }
+  if (process.env.NODE_ENV === "test") {
+    return chatTurnTraces?.get(turnId);
+  }
+  throw new Error("Approval materialization is missing Chat-turn row-lock ownership");
+}
+
+function hasCanonicalAssistantMessage(
+  storage: ApprovalEffectsServiceContext["storage"],
+  trace: ChatTurnTraceRecord,
+): boolean {
+  if (!trace.assistantMessageId) {
+    return false;
+  }
+  const chatMessages = storage.chatMessages as Storage["chatMessages"] & {
+    get?: (messageId: string) => ChatMessageRecord | undefined;
+  };
+  if (typeof chatMessages.get !== "function") {
+    return false;
+  }
+  const message = chatMessages.get(trace.assistantMessageId);
+  return message?.role === "assistant" && message.sessionId === trace.sessionId;
+}
+
+function readApprovalMaterializedPostCommitReceipt(
+  metadata: Record<string, unknown> | undefined,
+): ApprovalMaterializedPostCommitReceipt | undefined {
+  const raw = metadata?.[APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY];
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Durable approval post-commit receipt is malformed.");
+  }
+  const approvalId = asOptionalString((raw as Record<string, unknown>).approvalId);
+  const turnId = asOptionalString((raw as Record<string, unknown>).turnId);
+  if (!approvalId || !turnId) {
+    throw new Error("Durable approval post-commit receipt is incomplete.");
+  }
+  const materializationKeyRaw = (raw as Record<string, unknown>).materializationKey;
+  const materializationKey = asOptionalString(materializationKeyRaw);
+  if (materializationKeyRaw !== undefined && !materializationKey) {
+    throw new Error("Durable approval post-commit receipt has an invalid materialization identity.");
+  }
+  const traceStatusRaw = (raw as Record<string, unknown>).traceStatus;
+  const traceStatus = asOptionalString(traceStatusRaw);
+  if (
+    traceStatusRaw !== undefined &&
+    (!traceStatus || !isChatTurnTerminalStatus(traceStatus as ChatTurnTraceRecord["status"]))
+  ) {
+    throw new Error("Durable approval post-commit receipt has an invalid trace status.");
+  }
+  return {
+    approvalId,
+    turnId,
+    ...(traceStatus ? { traceStatus: traceStatus as ChatTurnTraceRecord["status"] } : {}),
+    ...(materializationKey ? { materializationKey } : {}),
+  };
+}
+
+function approvalMaterializationReceiptMatches(
+  receipt: ApprovalMaterializedPostCommitReceipt | undefined,
+  requested: ApprovalMaterializationPostCommitInput,
+): boolean {
+  if (!receipt || receipt.turnId !== requested.turnId) {
+    return false;
+  }
+  if ((receipt.traceStatus ?? "completed") !== requested.traceStatus) {
+    return false;
+  }
+  const requestedMaterializationKey =
+    requested.materializationKey === undefined
+      ? undefined
+      : requireApprovalMaterializationKey(requested.materializationKey);
+  if (requestedMaterializationKey) {
+    return receipt.materializationKey
+      ? receipt.materializationKey === requestedMaterializationKey
+      : receipt.approvalId === requested.approvalId;
+  }
+  return !receipt.materializationKey && receipt.approvalId === requested.approvalId;
+}
+
+function buildApprovalMaterializationConflictError(
+  runId: string,
+  receipt: ApprovalMaterializedPostCommitReceipt,
+  requested: ApprovalMaterializationPostCommitInput | undefined,
+  cause?: unknown,
+): Error {
+  if (receipt.materializationKey || requested?.materializationKey) {
+    return new Error(
+      `Durable run ${runId} was already materialized under a different materialization identity by approval ${receipt.approvalId} for turn ${receipt.turnId}.`,
+      cause === undefined ? undefined : { cause },
+    );
+  }
+  return new Error(
+    `Durable run ${runId} was already materialized by approval ${receipt.approvalId} for turn ${receipt.turnId}.`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function requireApprovalMaterializationKey(value: string): string {
+  const materializationKey = value.trim();
+  if (!materializationKey) {
+    throw new Error("Approval materialization identity must be a non-empty string.");
+  }
+  return materializationKey;
+}
+
+function buildDelegationParentApprovalMaterializationKey(delegationRunId: string, parentTurnId: string): string {
+  return `delegation-parent:${encodeURIComponent(delegationRunId)}:${encodeURIComponent(parentTurnId)}`;
+}
+
 function isExpiredApprovalRequest(approval: ApprovalRequest): boolean {
   if (!approval.expiresAt) {
     return false;
@@ -1429,7 +2902,10 @@ function isExpiredApprovalRequest(approval: ApprovalRequest): boolean {
       return resolvedAt > expiresAt;
     }
   }
-  return expiresAt <= Date.now();
+  // Resolution effects consume a persisted terminal decision. Unresolved
+  // expiry is owned and reconciled by ApprovalRepository against DB time; a
+  // Gateway host clock must not suppress effects before that owner resolves it.
+  return false;
 }
 
 function buildApprovedToolActionOutput(toolName: string, result: Record<string, unknown>): string {
@@ -1461,6 +2937,86 @@ function buildApprovedToolActionOutput(toolName: string, result: Record<string, 
     lines.push("", "Result:", ...details.map((detail) => `- ${detail}`));
   }
   return lines.join("\n");
+}
+
+function buildFailedApprovedToolActionOutput(
+  toolName: string,
+  result: Record<string, unknown>,
+  failure: ToolDomainExecutionFailure,
+): string {
+  const lines =
+    failure.kind === "manual_reconciliation"
+      ? [
+          `Approved tool action requires manual reconciliation: \`${toolName}\`.`,
+          "The external outcome is unknown. Verify the target system before retrying this action.",
+        ]
+      : [`Approved tool action failed: \`${toolName}\`.`];
+  lines.push("", `Failure: ${failure.message}`);
+  const details = Object.entries(result)
+    .filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+    .slice(0, 6)
+    .map(([key, value]) => `${key}: ${String(value)}`);
+  if (details.length > 0) {
+    lines.push("", "Recorded result:", ...details.map((detail) => `- ${detail}`));
+  }
+  return lines.join("\n");
+}
+
+function readApprovedActionExecutionFailure(
+  result: ToolInvokeResult | undefined,
+): ToolDomainExecutionFailure | undefined {
+  if (!result) {
+    return undefined;
+  }
+  const domainResult = asRecord(result.result);
+  const domainFailure = domainResult ? readToolDomainExecutionFailure(domainResult, result.policyReason) : undefined;
+  if (domainFailure) {
+    return domainFailure;
+  }
+  if (result.outcome !== "executed") {
+    return {
+      message: result.policyReason || `Approved tool action reported ${result.outcome}.`,
+      kind: "failed",
+      manualReconciliationRequired: false,
+    };
+  }
+  return undefined;
+}
+
+function readStoredApprovedActionExecutionFailure(
+  actionRecord: Record<string, unknown> | undefined,
+): ToolDomainExecutionFailure | undefined {
+  if (!actionRecord) {
+    return undefined;
+  }
+  const outcome = asOptionalString(actionRecord.outcome);
+  const policyReason =
+    asOptionalString(actionRecord.policyReason) ??
+    asOptionalString(actionRecord.reason) ??
+    asOptionalString(actionRecord.error) ??
+    "Approved action could not execute.";
+  const result = asRecord(actionRecord.result);
+  const domainFailure = result ? readToolDomainExecutionFailure(result, policyReason) : undefined;
+  if (domainFailure) {
+    return domainFailure;
+  }
+  if (outcome && outcome !== "executed") {
+    return {
+      message: policyReason,
+      kind: "failed",
+      manualReconciliationRequired: false,
+    };
+  }
+  if (outcome !== "executed") {
+    return asOptionalString(actionRecord.reason) || asOptionalString(actionRecord.error)
+      ? {
+          message: policyReason,
+          kind: "failed",
+          manualReconciliationRequired: false,
+        }
+      : undefined;
+  }
+  return undefined;
 }
 
 function buildDelegationStitchedOutput(steps: ChatDelegationStepRecord[]): string {
@@ -1589,7 +3145,7 @@ export function deriveApprovalResolutionEffectsResult(
     ? {
         resumed: chatTurnEffect.status === "completed" && String(chatTurnEffect.result.outcome ?? "") === "woke",
         turnId: asOptionalString(chatTurnEffect.result.turnId) ?? chatTurnEffect.targetId,
-        durableRunId: asOptionalString(chatTurnEffect.result.runId),
+        durableRunId: asOptionalString(chatTurnEffect.result.runId) ?? asOptionalString(chatTurnEffect.payload.runId),
         wakeOutcome: asWakeOutcome(chatTurnEffect.result.outcome),
       }
     : { resumed: false };
@@ -1729,6 +3285,114 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function requireObservabilityIdentifier(value: unknown, fieldName: string): string {
+  const identifier = asOptionalString(value);
+  if (!identifier) {
+    throw new Error(`Approval observability ${fieldName} must be a non-empty string.`);
+  }
+  return identifier;
+}
+
+function captureApprovalObservabilityAttribution(): ApprovalObservabilityAttribution | undefined {
+  const attribution = getRequestAttribution();
+  if (!attribution) {
+    return undefined;
+  }
+  const captured = Object.fromEntries(
+    Object.entries(attribution).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+  ) as ApprovalObservabilityAttribution;
+  return Object.keys(captured).length > 0 ? captured : undefined;
+}
+
+function parseApprovalObservabilityEnvelope(value: unknown): ApprovalObservabilityEnvelope {
+  const envelope = asRecord(value);
+  if (!envelope || envelope.schemaVersion !== "approval_observability.v1") {
+    throw new Error("Approval observability envelope version is unsupported.");
+  }
+  const deliveryId = requireObservabilityIdentifier(envelope.deliveryId, "deliveryId");
+  const operationId = requireObservabilityIdentifier(envelope.operationId, "operationId");
+  const occurredAt = requireObservabilityIdentifier(envelope.occurredAt, "occurredAt");
+  if (!Number.isFinite(Date.parse(occurredAt))) {
+    throw new Error("Approval observability occurredAt must be an ISO timestamp.");
+  }
+  if (typeof envelope.orderIndex !== "number" || !Number.isInteger(envelope.orderIndex) || envelope.orderIndex < 1) {
+    throw new Error("Approval observability orderIndex must be a positive integer.");
+  }
+  const predecessorDeliveryId = asOptionalString(envelope.predecessorDeliveryId);
+  const attribution = parseApprovalObservabilityAttribution(envelope.attribution);
+  return {
+    schemaVersion: "approval_observability.v1",
+    deliveryId,
+    operationId,
+    occurredAt,
+    orderIndex: envelope.orderIndex,
+    ...(predecessorDeliveryId ? { predecessorDeliveryId } : {}),
+    ...(attribution ? { attribution } : {}),
+    delivery: parseApprovalObservabilityDelivery(envelope.delivery),
+  };
+}
+
+function parseApprovalObservabilityAttribution(value: unknown): ApprovalObservabilityAttribution | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const keys = [
+    "correlationId",
+    "traceId",
+    "originSurface",
+    "actorId",
+    "deviceId",
+    "grantId",
+    "companionSessionId",
+  ] as const;
+  const attribution = Object.fromEntries(
+    keys.flatMap((key) => {
+      const entry = asOptionalString(record[key]);
+      return entry ? [[key, entry]] : [];
+    }),
+  ) as ApprovalObservabilityAttribution;
+  return Object.keys(attribution).length > 0 ? attribution : undefined;
+}
+
+function parseApprovalObservabilityDelivery(value: unknown): ApprovalObservabilityDelivery {
+  const delivery = asRecord(value);
+  if (!delivery) {
+    throw new Error("Approval observability delivery must be an object.");
+  }
+  if (delivery.kind === "audit") {
+    const stream = delivery.stream;
+    if (stream !== "tool_invocations" && stream !== "policy_blocks" && stream !== "approvals" && stream !== "hooks") {
+      throw new Error("Approval observability audit stream is unsupported.");
+    }
+    const payload = asRecord(delivery.payload);
+    if (!payload) {
+      throw new Error("Approval observability audit payload must be an object.");
+    }
+    return { kind: "audit", stream, payload };
+  }
+  if (delivery.kind === "realtime") {
+    const eventType = asOptionalString(delivery.eventType);
+    const source = asOptionalString(delivery.source);
+    const payload = asRecord(delivery.payload);
+    if (!eventType || !source || !payload) {
+      throw new Error("Approval observability realtime delivery requires eventType, source, and an object payload.");
+    }
+    const options = delivery.options === undefined ? undefined : asRecord(delivery.options);
+    if (delivery.options !== undefined && !options) {
+      throw new Error("Approval observability realtime options must be an object when provided.");
+    }
+    return {
+      kind: "realtime",
+      eventType,
+      source,
+      payload,
+      options: options as Extract<ApprovalObservabilityDelivery, { kind: "realtime" }>["options"],
+    };
+  }
+  throw new Error("Approval observability delivery kind is unsupported.");
 }
 
 function normalizeApprovalWorkspaceId(approval: ApprovalRequest): string {

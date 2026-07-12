@@ -16,6 +16,7 @@ import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn
 // Type-only: erased at runtime, so the stream service's value import of this
 // module does not create an import cycle.
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
+import { isDurableControlError } from "./durable-control-error.js";
 
 export { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME };
 
@@ -75,6 +76,7 @@ export interface SubagentFanoutDelegatedStepInput {
   localOperatorOverrideId?: string;
   policyContext?: ToolPolicyActorContext;
   fullWebAccess?: boolean;
+  canonicalWriteFence?: <T>(work: () => T) => T;
 }
 
 export type SubagentFanoutRunDelegatedStep = (
@@ -100,6 +102,7 @@ export interface SubagentFanoutExecutorOptions {
   localOperatorOverrideId?: string;
   policyContext?: ToolPolicyActorContext;
   fullWebAccess?: boolean;
+  canonicalWriteFence?: <T>(work: () => T) => T;
 }
 
 function truncateWithLimit(value: string, limit: number): string {
@@ -344,8 +347,12 @@ export function createSubagentFanoutExecutor(
             localOperatorOverrideId: options.localOperatorOverrideId,
             policyContext: options.policyContext,
             fullWebAccess: options.fullWebAccess,
+            canonicalWriteFence: options.canonicalWriteFence,
           });
         } catch (error) {
+          if (isDurableControlError(error)) {
+            throw error;
+          }
           // executeDelegatedPlanStep shapes its own failures; this catch only
           // guards the fan-out from an unexpected throw so one subtask can never
           // sink its siblings.

@@ -66,6 +66,7 @@ describe("CapabilitySystemService loop 29 approval queue behavior", () => {
       readSkillStates: () => new Map(),
       invokeTool: vi.fn(),
       createApproval: vi.fn(),
+      resolveApproval: vi.fn(),
       publishRealtime: vi.fn(),
       readPolicySnapshot: () => ({}),
     });

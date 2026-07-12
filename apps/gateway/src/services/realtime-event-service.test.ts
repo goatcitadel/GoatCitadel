@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
-import { RealtimeEventService } from "./realtime-event-service.js";
+import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY, RealtimeEventService } from "./realtime-event-service.js";
 
 describe("RealtimeEventService", () => {
   it("publishes, emits, unsubscribes, and reads realtime events through storage", () => {
@@ -33,6 +33,87 @@ describe("RealtimeEventService", () => {
 
     expect(() => service.subscribeRealtime("not-a-listener" as never)).toThrow(TypeError);
     expect(() => service.publishRealtime("heartbeat", "system", { ok: true })).not.toThrow();
+  });
+
+  it("isolates throwing live listeners after one idempotent retained append", () => {
+    const storage = fakeStorage();
+    const retained = {
+      eventId: "approval-observability:approval-1:resolve-realtime",
+      sequence: 7,
+      eventType: "approval_resolved",
+      source: "approvals",
+      timestamp: "2026-07-10T12:00:00.000Z",
+      payload: { approvalId: "approval-1" },
+    } as RealtimeEvent;
+    storage.realtimeEvents.appendIdempotent
+      .mockReturnValueOnce({ event: retained, inserted: true })
+      .mockReturnValueOnce({ event: retained, inserted: false });
+    const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
+    const healthyListener = vi.fn();
+    service.subscribeRealtime(() => {
+      throw new Error("listener failed");
+    });
+    service.subscribeRealtime(healthyListener);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const payload = {
+      approvalId: "approval-1",
+      [APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY]: {
+        deliveryId: retained.eventId,
+        occurredAt: retained.timestamp,
+        attribution: { actorId: "operator-original" },
+      },
+    };
+    const options = {
+      eventClass: "domain_fact" as const,
+      eventAuthority: "retained_stream" as const,
+      links: { approvalId: "approval-1" },
+    };
+
+    expect(() => service.publishRealtime("approval_resolved", "approvals", payload, options)).not.toThrow();
+    expect(() => service.publishRealtime("approval_resolved", "approvals", payload, options)).not.toThrow();
+
+    expect(storage.realtimeEvents.appendIdempotent).toHaveBeenCalledTimes(2);
+    expect(healthyListener).toHaveBeenCalledOnce();
+    expect(healthyListener).toHaveBeenCalledWith(retained);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(storage.realtimeEvents.appendIdempotent).toHaveBeenCalledWith(
+      "approval_resolved",
+      "approvals",
+      { approvalId: "approval-1" },
+      options,
+      {
+        deliveryId: retained.eventId,
+        occurredAt: retained.timestamp,
+        attribution: { actorId: "operator-original" },
+      },
+    );
+    warn.mockRestore();
+  });
+
+  it("rejects a malformed reserved observability envelope before non-idempotent persistence", () => {
+    const storage = fakeStorage();
+    const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });
+
+    expect(() =>
+      service.publishRealtime(
+        "approval_resolved",
+        "approvals",
+        {
+          approvalId: "approval-1",
+          [APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY]: {
+            deliveryId: "approval-observability:approval-1:resolve-realtime",
+            occurredAt: "not-a-timestamp",
+          },
+        },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+      ),
+    ).toThrow(/invalid approval observability realtime envelope/i);
+    expect(storage.realtimeEvents.append).not.toHaveBeenCalled();
+    expect(storage.realtimeEvents.appendIdempotent).not.toHaveBeenCalled();
   });
 
   it("projects new and legacy realtime payloads without mutating caller or storage truth", () => {
@@ -178,6 +259,7 @@ function fakeStorage() {
   return {
     realtimeEvents: {
       append,
+      appendIdempotent: vi.fn(),
       list: vi.fn(() => [{ sequence: 1 }] as never),
       listAfterSequence: vi.fn(() => [{ sequence: 3 }] as never),
       getSequenceBounds: vi.fn(() => ({ oldestSequence: 1, newestSequence: 3 })),

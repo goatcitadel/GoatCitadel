@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  redactStructuredSecrets,
   type ChannelActivityInput,
   type ChannelActivityResult,
   type ChannelAttachmentInput,
@@ -57,6 +58,8 @@ export async function dispatchConnectorDelivery(
       payload: Record<string, unknown>,
       options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
     ) => void;
+    markExternalCallStarted?: () => void;
+    deliveryEffectId?: string;
     signal?: AbortSignal;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
@@ -91,6 +94,8 @@ export async function dispatchConnectorDelivery(
         commsUnsend: deps.commsUnsend,
         commsTyping: deps.commsTyping,
         commsActivity: deps.commsActivity,
+        markExternalCallStarted: deps.markExternalCallStarted,
+        deliveryEffectId: deps.deliveryEffectId,
         signal: deps.signal,
       });
 
@@ -101,7 +106,14 @@ export async function dispatchConnectorDelivery(
         });
       }
       requireConnectorCapability(connector, "interactive_actions", payload.action);
-      return dispatchMcpInvoke(connector, payload, deps.invokeMcpTool, deps.signal, deps.mcpInvokeContext);
+      return dispatchMcpInvoke(
+        connector,
+        payload,
+        deps.invokeMcpTool,
+        deps.signal,
+        deps.mcpInvokeContext,
+        deps.markExternalCallStarted,
+      );
 
     case "browser":
       if (payload.action !== "realtime.emit") {
@@ -110,7 +122,7 @@ export async function dispatchConnectorDelivery(
         });
       }
       requireConnectorCapability(connector, "interactive_actions", payload.action);
-      return dispatchBrowserRealtime(connector, payload, deps.publishRealtime);
+      return dispatchBrowserRealtime(connector, payload, deps.publishRealtime, deps.markExternalCallStarted);
 
     default:
       throw new ValidationError({
@@ -150,6 +162,8 @@ async function dispatchIntegrationChannelAction(
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
     commsActivity?: (input: ChannelActivityInput) => Promise<ChannelActivityResult | Record<string, unknown>>;
+    markExternalCallStarted?: () => void;
+    deliveryEffectId?: string;
     signal?: AbortSignal;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
@@ -166,13 +180,16 @@ async function dispatchIntegrationChannelAction(
     const rawMessage = requireNonEmptyString(actionPayload.message, "payload.message");
     const rawAttachments = normalizeAttachments(actionPayload.attachments);
     const { message, attachments } = applyAsDocumentDirectives(rawMessage, rawAttachments);
+    deps.markExternalCallStarted?.();
     result = await deps.commsSend({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       message,
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
+      interactiveActionTemplate: normalizeInteractiveActionTemplate(actionPayload.interactiveActionTemplate),
       commitmentId: optionalString(actionPayload.commitmentId),
+      effectId: deps.deliveryEffectId,
       ...governance,
       signal: deps.signal,
     });
@@ -180,20 +197,24 @@ async function dispatchIntegrationChannelAction(
     const rawMessage = requireNonEmptyString(actionPayload.message, "payload.message");
     const rawAttachments = normalizeAttachments(actionPayload.attachments);
     const { message, attachments } = applyAsDocumentDirectives(rawMessage, rawAttachments);
+    deps.markExternalCallStarted?.();
     result = await deps.commsReply({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       message,
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
+      interactiveActionTemplate: normalizeInteractiveActionTemplate(actionPayload.interactiveActionTemplate),
       replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
       replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
       commitmentId: optionalString(actionPayload.commitmentId),
+      effectId: deps.deliveryEffectId,
       ...governance,
       signal: deps.signal,
     });
   } else if (payload.action === "channel.react") {
     dispatchKind = "integration_channel_action";
+    deps.markExternalCallStarted?.();
     result = await deps.commsReact({
       connectionId: connector.sourceId,
       target,
@@ -206,6 +227,7 @@ async function dispatchIntegrationChannelAction(
     });
   } else if (payload.action === "channel.typing") {
     dispatchKind = "integration_channel_action";
+    deps.markExternalCallStarted?.();
     result = await deps.commsTyping({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -219,6 +241,7 @@ async function dispatchIntegrationChannelAction(
       throw new ValidationError({ message: "Connector delivery action channel.activity is not available." });
     }
     dispatchKind = "integration_channel_action";
+    deps.markExternalCallStarted?.();
     result = await deps.commsActivity({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -233,6 +256,7 @@ async function dispatchIntegrationChannelAction(
     });
   } else {
     dispatchKind = "integration_channel_action";
+    deps.markExternalCallStarted?.();
     result = await deps.commsUnsend({
       connectionId: connector.sourceId,
       target,
@@ -242,7 +266,6 @@ async function dispatchIntegrationChannelAction(
       signal: deps.signal,
     });
   }
-  throwIfConnectorDeliveryAborted(deps.signal);
   return {
     capabilityId:
       payload.action === "channel.send" || payload.action === "channel.reply"
@@ -326,6 +349,7 @@ async function dispatchMcpInvoke(
     | "policyContext"
     | "consentContext"
   >,
+  markExternalCallStarted?: () => void,
 ): Promise<ConnectorDeliveryDispatchResult> {
   const actionPayload = payload.payload ?? {};
   const toolName = requireNonEmptyString(actionPayload.toolName, "payload.toolName");
@@ -365,8 +389,8 @@ async function dispatchMcpInvoke(
       message: "MCP approval delivery requires workspaceId policy lineage.",
     });
   }
+  markExternalCallStarted?.();
   const response = await invokeMcpTool(request);
-  throwIfConnectorDeliveryAborted(signal);
   if (!response.ok) {
     throw new Error(response.error ?? `MCP invoke failed for ${connector.connectorId}/${toolName}.`);
   }
@@ -386,11 +410,13 @@ function dispatchBrowserRealtime(
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ) => void,
+  markExternalCallStarted?: () => void,
 ): ConnectorDeliveryDispatchResult {
   const actionPayload = payload.payload ?? {};
   const eventType = optionalString(actionPayload.eventType) ?? "connector_delivery_browser_event";
   const source = optionalString(actionPayload.source) ?? "connectors";
   const eventPayload = normalizeRecord(actionPayload.payload);
+  markExternalCallStarted?.();
   publishRealtime(
     eventType,
     source,
@@ -411,7 +437,7 @@ function dispatchBrowserRealtime(
     result: {
       eventType,
       source,
-      payload: eventPayload,
+      payload: redactStructuredSecrets(eventPayload).value,
     },
   };
 }
@@ -644,6 +670,49 @@ function normalizeInteractiveActions(value: unknown): ChannelSendInput["interact
   return {
     platform: optionalString(recordValue.platform),
     tokenId: optionalString(recordValue.tokenId),
+    buttons,
+  };
+}
+
+function normalizeInteractiveActionTemplate(value: unknown): ChannelSendInput["interactiveActionTemplate"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError({ message: "Approval action template is invalid." });
+  }
+  const recordValue = value as Record<string, unknown>;
+  const tokenId = optionalString(recordValue.tokenId);
+  const tokenRef = optionalString(recordValue.tokenRef);
+  const expiresAt = optionalString(recordValue.expiresAt);
+  if (
+    !tokenId ||
+    !tokenRef ||
+    !expiresAt ||
+    !Number.isFinite(Date.parse(expiresAt)) ||
+    !Array.isArray(recordValue.buttons)
+  ) {
+    throw new ValidationError({ message: "Approval action template is invalid." });
+  }
+  const buttons = recordValue.buttons
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const button = item as Record<string, unknown>;
+      const decision = button.decision === "a" || button.decision === "r" ? button.decision : undefined;
+      return {
+        label: optionalString(button.label) ?? "",
+        decision,
+      };
+    })
+    .filter((item): item is { label: string; decision: "a" | "r" } => Boolean(item.label && item.decision));
+  if (buttons.length === 0 || buttons.length !== recordValue.buttons.length) {
+    throw new ValidationError({ message: "Approval action template is invalid." });
+  }
+  return {
+    platform: optionalString(recordValue.platform),
+    tokenId,
+    tokenRef,
+    expiresAt,
     buttons,
   };
 }

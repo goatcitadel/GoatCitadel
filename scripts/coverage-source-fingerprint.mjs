@@ -4,6 +4,7 @@ import path from "node:path";
 
 const SOURCE_ROOTS = ["apps", "packages", "scripts"];
 const ROOT_FILES = [
+  ".github/workflows/verification-fast.yml",
   "coverage-policy.json",
   "package.json",
   "pnpm-lock.yaml",
@@ -45,7 +46,11 @@ const EXCLUDED_DIRECTORIES = new Set([
 export async function buildCoverageSourceFingerprint(repoRoot) {
   const files = [];
   for (const rootName of SOURCE_ROOTS) {
-    await collectFiles(path.join(repoRoot, rootName), files);
+    await collectFiles(path.join(repoRoot, rootName), files, {
+      directoryDepth: 0,
+      excludesPackageCoverageOutputs: rootName === "apps" || rootName === "packages",
+      insideSourceDirectory: false,
+    });
   }
   for (const fileName of ROOT_FILES) {
     const filePath = path.join(repoRoot, fileName);
@@ -65,7 +70,7 @@ export async function buildCoverageSourceFingerprint(repoRoot) {
   return `sha256:${hash.digest("hex")}`;
 }
 
-async function collectFiles(directory, out) {
+async function collectFiles(directory, out, options) {
   let entries;
   try {
     entries = await fs.readdir(directory, { withFileTypes: true });
@@ -77,8 +82,12 @@ async function collectFiles(directory, out) {
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (!isExcludedDirectory(entry.name)) {
-        await collectFiles(path.join(directory, entry.name), out);
+      if (!isExcludedDirectory(entry.name, options)) {
+        await collectFiles(path.join(directory, entry.name), out, {
+          ...options,
+          directoryDepth: options.directoryDepth + 1,
+          insideSourceDirectory: options.insideSourceDirectory || entry.name === "src",
+        });
       }
       continue;
     }
@@ -88,8 +97,14 @@ async function collectFiles(directory, out) {
   }
 }
 
-function isExcludedDirectory(name) {
-  return EXCLUDED_DIRECTORIES.has(name) || name.startsWith("coverage-");
+function isExcludedDirectory(name, options) {
+  if (options.insideSourceDirectory) {
+    return name === "dist" || name === "node_modules" || name === "coverage";
+  }
+  return (
+    EXCLUDED_DIRECTORIES.has(name) ||
+    (options.excludesPackageCoverageOutputs && options.directoryDepth === 1 && name.startsWith("coverage-"))
+  );
 }
 
 async function isFile(filePath) {

@@ -6,6 +6,7 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 function createGatewayHarness() {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
@@ -15,7 +16,71 @@ function createGatewayHarness() {
 }
 
 describe("GatewayService low-hanging facade delegation", () => {
-  it("replays approved dry-run MCP pending actions through the MCP runtime", async () => {
+  it("rolls back a policy-context denial when its canonical approval event cannot commit", async () => {
+    const gateway = createGatewayHarness();
+    let resolutionStatus = "pending";
+    let result: Record<string, unknown> | undefined;
+    const events: Array<Record<string, unknown>> = [];
+    let failEventAppend = true;
+    const markResolved = vi.fn((_: string, status: string, nextResult: Record<string, unknown>) => {
+      resolutionStatus = status;
+      result = nextResult;
+    });
+    const append = vi.fn((event: Record<string, unknown>) => {
+      if (failEventAppend) {
+        throw new Error("approval event store unavailable");
+      }
+      events.push(event);
+    });
+    const runImmediateTransaction = vi.fn(<T>(work: () => T): T => {
+      const previousResolutionStatus = resolutionStatus;
+      const previousResult = result;
+      const previousEventCount = events.length;
+      try {
+        return work();
+      } catch (error) {
+        resolutionStatus = previousResolutionStatus;
+        result = previousResult;
+        events.splice(previousEventCount);
+        throw error;
+      }
+    });
+    gateway.refreshApprovedPendingToolPolicyContext = vi.fn(() => {
+      throw new Error("permission profile was revoked");
+    });
+    gateway.storage = {
+      runImmediateTransaction,
+      pendingApprovalActions: {
+        markResolved,
+        find: vi.fn(() => ({ resolutionStatus, result })),
+      },
+      approvalEvents: { append },
+    };
+
+    await expect(
+      (GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "approval-preflight-denied"),
+    ).rejects.toThrow("approval event store unavailable");
+    expect(resolutionStatus).toBe("pending");
+    expect(result).toBeUndefined();
+    expect(events).toEqual([]);
+
+    failEventAppend = false;
+    await expect(
+      (GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "approval-preflight-denied"),
+    ).resolves.toBeUndefined();
+    expect(resolutionStatus).toBe("failed");
+    expect(result).toEqual({ reason: "permission profile was revoked" });
+    expect(events).toEqual([
+      expect.objectContaining({
+        approvalId: "approval-preflight-denied",
+        eventType: "approved_action_executed",
+        payload: { outcome: "blocked", reason: "permission profile was revoked" },
+      }),
+    ]);
+    expect(runImmediateTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes approved MCP pending actions through the canonical side-effect executor", async () => {
     const gateway = createGatewayHarness();
     const pending = {
       approvalId: "approval-mcp",
@@ -30,48 +95,25 @@ describe("GatewayService low-hanging facade delegation", () => {
         dryRun: true,
       },
     };
-    const markResolved = vi.fn();
-    const approvalEventsAppend = vi.fn();
     gateway.refreshApprovedPendingToolPolicyContext = vi.fn();
-    gateway.enrichMcpInvokePolicyContext = vi.fn((input: unknown) => input);
     gateway.storage = {
       pendingApprovalActions: {
         find: vi.fn(() => pending),
-        markResolved,
-      },
-      approvalEvents: {
-        append: approvalEventsAppend,
       },
     };
-    gateway.policyEngine = {
-      executeApprovedAction: vi.fn(async () => ({
-        outcome: "executed",
-        policyReason: "allowed_via_approval:approval-mcp",
-        auditEventId: "audit-1",
-        result: { externalRuntime: true, toolName: "mcp.invoke" },
-      })),
-    };
-    gateway.toolInvocationCoordinator = {
-      invokeApprovedMcpRuntime: vi.fn(async () => ({
-        ok: true,
-        output: { payload: "approved" },
-      })),
-      invokeApprovedExternalRuntimeTool: vi.fn(),
-    };
+    gateway.executeApprovedExternalRuntimePendingAction = vi.fn(async () => ({
+      outcome: "executed",
+      policyReason: "allowed_via_approval:approval-mcp",
+      auditEventId: "audit-1",
+      result: { externalRuntime: true, toolName: "mcp.invoke", ok: true },
+    }));
 
     const result = await (GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "approval-mcp");
 
-    expect(gateway.policyEngine.executeApprovedAction).toHaveBeenCalledWith("approval-mcp", undefined, {
-      deferResolution: true,
-      externalRuntimeReplay: true,
-    });
-    expect(gateway.toolInvocationCoordinator.invokeApprovedMcpRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        serverId: "srv-1",
-        toolName: "tool.echo",
-        arguments: { value: "hello" },
-        sessionId: "session-1",
-      }),
+    expect(gateway.executeApprovedExternalRuntimePendingAction).toHaveBeenCalledWith(
+      "approval-mcp",
+      pending,
+      undefined,
     );
     expect(result).toMatchObject({
       outcome: "executed",
@@ -81,18 +123,284 @@ describe("GatewayService low-hanging facade delegation", () => {
         ok: true,
       }),
     });
-    expect(markResolved).toHaveBeenCalledWith(
-      "approval-mcp",
-      "executed",
-      expect.objectContaining({ outcome: "executed" }),
+  });
+
+  it.each(["channel.send", "telegram.send", "gmail.send", "calendar.create_event", "http.post", "webhook.send"])(
+    "routes approved built-in external mutation %s through the canonical side-effect executor",
+    async (toolName) => {
+      const gateway = createGatewayHarness();
+      const pending = {
+        approvalId: `approval-${toolName}`,
+        actionType: "tool.invoke",
+        resolutionStatus: "pending",
+        createdAt: "2026-05-18T00:00:00.000Z",
+        request: {
+          toolName,
+          args: { connectionId: "connection-1", target: "operator", message: "hello" },
+          agentId: "operator",
+          sessionId: "session-1",
+        },
+      };
+      gateway.refreshApprovedPendingToolPolicyContext = vi.fn();
+      gateway.storage = {
+        pendingApprovalActions: {
+          find: vi.fn(() => pending),
+        },
+      };
+      gateway.executeApprovedExternalRuntimePendingAction = vi.fn(async () => ({
+        outcome: "executed",
+        policyReason: `allowed_via_approval:${pending.approvalId}`,
+        auditEventId: "audit-1",
+        result: { status: "sent", providerMessageId: "provider-message-1" },
+      }));
+
+      const result = await (GatewayService.prototype as any).executeApprovedPendingAction.call(
+        gateway,
+        pending.approvalId,
+      );
+
+      expect(gateway.executeApprovedExternalRuntimePendingAction).toHaveBeenCalledWith(
+        pending.approvalId,
+        pending,
+        undefined,
+      );
+      expect(result).toMatchObject({
+        outcome: "executed",
+        result: { status: "sent", providerMessageId: "provider-message-1" },
+      });
+    },
+  );
+
+  it("uses one deterministic durable child for autonomous delivery retries and create races", () => {
+    const gateway = createGatewayHarness();
+    const runs = new Map<string, any>();
+    let autonomyDisabled = false;
+    let connectors = [
+      {
+        connectorId: "connector-telegram",
+        connectorType: "telegram",
+        status: "active",
+        metadata: { key: "telegram" },
+      },
+    ];
+    gateway.isFeatureEnabled = vi.fn(
+      (feature: string) =>
+        feature === "durableKernelV1Enabled" || (feature === "autonomyV1Disabled" && autonomyDisabled),
     );
-    expect(approvalEventsAppend).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "approval-mcp",
-        eventType: "approved_action_executed",
-        payload: expect.objectContaining({ externalRuntime: true, outcome: "executed" }),
+    gateway.listConnectorRecords = vi.fn(() => connectors);
+    gateway.storage = {
+      chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+      durableRuns: {
+        getRun: vi.fn((runId: string) => {
+          const run = runs.get(runId);
+          if (!run) throw new NotFoundError({ entity: "Durable run", id: runId });
+          return run;
+        }),
+      },
+    };
+    const createDurableRun = vi.fn((input: Record<string, any>) => {
+      const run = {
+        runId: input.runId,
+        workflowKey: input.workflowKey,
+        status: "queued",
+        payload: input.payload,
+        metadata: input.metadata,
+      };
+      runs.set(run.runId, run);
+      return run;
+    });
+    gateway.createDurableRun = createDurableRun;
+    const input = {
+      runId: "source-run-1",
+      sessionId: "session-1",
+      assistantText: "Autonomous result",
+      deliveryChannel: { channelKey: "telegram", target: "42" },
+    };
+
+    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+      "autonomous-delivery:source-run-1",
+    );
+    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+      "autonomous-delivery:source-run-1",
+    );
+    expect(createDurableRun).toHaveBeenCalledTimes(1);
+    expect(createDurableRun).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "autonomous-delivery:source-run-1", workflowKey: "connector.delivery" }),
+    );
+
+    autonomyDisabled = true;
+    connectors = [];
+    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+      "autonomous-delivery:source-run-1",
+    );
+    expect(createDurableRun).toHaveBeenCalledTimes(1);
+
+    runs.clear();
+    autonomyDisabled = false;
+    connectors = [
+      {
+        connectorId: "connector-telegram",
+        connectorType: "telegram",
+        status: "active",
+        metadata: { key: "telegram" },
+      },
+    ];
+    createDurableRun.mockImplementationOnce((createInput: Record<string, any>) => {
+      runs.set(createInput.runId, {
+        runId: createInput.runId,
+        workflowKey: createInput.workflowKey,
+        status: "queued",
+        payload: createInput.payload,
+        metadata: createInput.metadata,
+      });
+      throw new Error("simulated concurrent unique-key winner");
+    });
+    expect(GatewayService.prototype.enqueueAutonomousChannelDelivery.call(gateway, input)).toBe(
+      "autonomous-delivery:source-run-1",
+    );
+  });
+
+  it("does not rewind a newer Chat branch while retrying silent-heartbeat cleanup", () => {
+    const gateway = createGatewayHarness();
+    const deleteMessages = vi.fn();
+    const deleteTraces = vi.fn();
+    const setActiveLeafIfCurrent = vi.fn();
+    gateway.storage = {
+      runImmediateTransaction: (work: () => unknown) => work(),
+      chatSessionBranchState: {
+        get: vi.fn(() => ({ activeLeafTurnId: "turn-newer" })),
+        setActiveLeafIfCurrent,
+        clear: vi.fn(),
+      },
+      chatMessages: { get: vi.fn(() => ({ content: "silent" })), deleteByMessageIds: deleteMessages },
+      chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-heartbeat" })), deleteByTurnIds: deleteTraces },
+    };
+    gateway.recordDevDiagnostic = vi.fn();
+    gateway.publishRealtime = vi.fn();
+
+    expect(
+      GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, {
+        sessionId: "session-1",
+        turnId: "turn-heartbeat",
+        userMessageId: "user-heartbeat",
+        assistantMessageId: "assistant-heartbeat",
+        parentTurnId: "turn-parent",
       }),
+    ).toMatchObject({ status: "manual_reconciliation", reason: expect.stringContaining("turn-newer") });
+    expect(deleteMessages).not.toHaveBeenCalled();
+    expect(deleteTraces).not.toHaveBeenCalled();
+    expect(setActiveLeafIfCurrent).not.toHaveBeenCalled();
+  });
+
+  it("treats realtime failure after canonical heartbeat cleanup as committed", () => {
+    const gateway = createGatewayHarness();
+    const setActiveLeafIfCurrent = vi.fn(() => true);
+    gateway.storage = {
+      runImmediateTransaction: (work: () => unknown) => work(),
+      chatSessionBranchState: {
+        get: vi.fn(() => ({ activeLeafTurnId: "turn-heartbeat" })),
+        setActiveLeafIfCurrent,
+        clear: vi.fn(),
+      },
+      chatMessages: { get: vi.fn(() => ({ content: "silent" })), deleteByMessageIds: vi.fn() },
+      chatTurnTraces: { get: vi.fn(() => ({ turnId: "turn-heartbeat" })), deleteByTurnIds: vi.fn() },
+    };
+    gateway.recordDevDiagnostic = vi.fn();
+    gateway.publishRealtime = vi.fn(() => {
+      throw new Error("retained stream unavailable");
+    });
+
+    expect(
+      GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, {
+        sessionId: "session-1",
+        turnId: "turn-heartbeat",
+        userMessageId: "user-heartbeat",
+        assistantMessageId: "assistant-heartbeat",
+        parentTurnId: "turn-parent",
+      }),
+    ).toEqual({ status: "completed" });
+    expect(setActiveLeafIfCurrent).toHaveBeenCalledWith(
+      "session-1",
+      "turn-heartbeat",
+      "turn-parent",
+      expect.any(String),
     );
+    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "chat.heartbeat.cleanup_projection_failed" }),
+    );
+  });
+
+  it("treats absent heartbeat artifacts as already cleaned after a newer leaf advances", () => {
+    const gateway = createGatewayHarness();
+    let activeLeafTurnId: string | undefined = "turn-heartbeat";
+    let messagesPresent = true;
+    let tracePresent = true;
+    const deleteMessages = vi.fn(() => {
+      messagesPresent = false;
+    });
+    const deleteTraces = vi.fn(() => {
+      tracePresent = false;
+    });
+    const setActiveLeafIfCurrent = vi.fn((_: string, expected: string, next: string) => {
+      if (activeLeafTurnId !== expected) return false;
+      activeLeafTurnId = next;
+      return true;
+    });
+    gateway.storage = {
+      runImmediateTransaction: (work: () => unknown) => work(),
+      chatSessionBranchState: {
+        get: vi.fn(() => (activeLeafTurnId ? { activeLeafTurnId } : undefined)),
+        setActiveLeafIfCurrent,
+        clear: vi.fn(() => {
+          activeLeafTurnId = undefined;
+        }),
+      },
+      chatMessages: {
+        get: vi.fn(() => (messagesPresent ? { content: "silent" } : undefined)),
+        deleteByMessageIds: deleteMessages,
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => {
+          if (!tracePresent) throw new NotFoundError({ entity: "Chat turn trace", id: "turn-heartbeat" });
+          return { turnId: "turn-heartbeat" };
+        }),
+        deleteByTurnIds: deleteTraces,
+      },
+    };
+    gateway.recordDevDiagnostic = vi.fn();
+    gateway.publishRealtime = vi.fn();
+    const input = {
+      sessionId: "session-1",
+      turnId: "turn-heartbeat",
+      userMessageId: "user-heartbeat",
+      assistantMessageId: "assistant-heartbeat",
+      parentTurnId: "turn-parent",
+    };
+
+    expect(GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, input)).toEqual({ status: "completed" });
+    activeLeafTurnId = "turn-newer";
+    expect(GatewayService.prototype.cleanupSilentHeartbeatTurn.call(gateway, input)).toEqual({
+      status: "already_completed",
+    });
+    expect(deleteMessages).toHaveBeenCalledTimes(1);
+    expect(deleteTraces).toHaveBeenCalledTimes(1);
+    expect(setActiveLeafIfCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the durable lease owner through the shipped Chat workflow host", () => {
+    const gateway = createGatewayHarness();
+    gateway.finalizeDurableChatRun = vi.fn();
+    const host = (
+      GatewayService.prototype as unknown as {
+        buildDurableChatTurnWorkflowHost(this: unknown): {
+          finalizeDurableChatRun: (...args: unknown[]) => void;
+        };
+      }
+    ).buildDurableChatTurnWorkflowHost.call(gateway);
+
+    host.finalizeDurableChatRun("run-1", {}, {}, "lease-owner-1");
+
+    expect(gateway.finalizeDurableChatRun).toHaveBeenCalledWith("run-1", {}, {}, "lease-owner-1");
   });
 
   it("delegates dev diagnostics recording and logger attachment", () => {
@@ -460,21 +768,33 @@ describe("GatewayService low-hanging facade delegation", () => {
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteToken.call(gateway, {
         token: "token",
+        connectorId: "browser:mission-control",
         decision: "approve",
         resolvedBy: "tester",
       }),
     ).resolves.toEqual({
-      input: { token: "token", decision: "approve", resolvedBy: "tester" },
+      input: {
+        token: "token",
+        connectorId: "browser:mission-control",
+        decision: "approve",
+        resolvedBy: "tester",
+      },
       source: "token",
     });
     await expect(
       GatewayService.prototype.resolveApprovalWithRemoteTokenId.call(gateway, {
         tokenId: "token-id",
+        connectorId: "mcp:srv-1",
         decision: "reject",
         resolvedBy: "tester",
       }),
     ).resolves.toEqual({
-      input: { tokenId: "token-id", decision: "reject", resolvedBy: "tester" },
+      input: {
+        tokenId: "token-id",
+        connectorId: "mcp:srv-1",
+        decision: "reject",
+        resolvedBy: "tester",
+      },
       source: "token-id",
     });
     expect(GatewayService.prototype.listApprovals.call(gateway, "pending", 3)).toEqual([
@@ -564,6 +884,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     const deactivateProfileActivations = vi.fn(() => 0);
     const activateProfile = vi.fn((input: unknown) => ({ activationId: "activation-1", ...input }));
     gateway.storage = {
+      gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
       permissionProfiles: {
         createProfile: vi.fn(() => baseProfile),
         getProfile: vi.fn(() => baseProfile),
@@ -642,6 +963,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     };
     const activeSurfaces = new Set<string>();
     gateway.storage = {
+      gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
       permissionProfiles: {
         createProfile: vi.fn(() => profile),
         getProfile: vi.fn(() => profile),
@@ -713,6 +1035,101 @@ describe("GatewayService low-hanging facade delegation", () => {
     ).toBe("profile-review");
   });
 
+  it("classifies tool configuration projection failures as committed mutations", () => {
+    const gateway = createGatewayHarness();
+    const profile = {
+      profileId: "profile-review",
+      label: "Review",
+      builtin: false,
+      status: "active",
+      scope: "operator",
+      scopeRef: "operator-a",
+      approvalMode: "approve_risky",
+      toolPatterns: ["session.status"],
+      allow: [],
+      deny: [],
+      defaultForSurfaces: [],
+      createdBy: "operator-a",
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    };
+    const override = {
+      overrideId: "override-a",
+      operatorId: "operator-a",
+      scope: "operator",
+      reason: "local review",
+      status: "revoked",
+      createdBy: "operator-a",
+      createdAt: "2026-05-17T00:00:00.000Z",
+      expiresAt: "2026-05-17T00:05:00.000Z",
+      revokedAt: "2026-05-17T00:01:00.000Z",
+      revokedBy: "operator-a",
+    };
+    gateway.storage = {
+      gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
+      permissionProfiles: {
+        createProfile: vi.fn(() => profile),
+        getProfile: vi.fn(() => profile),
+        updateProfile: vi.fn(() => profile),
+        archiveProfile: vi.fn(() => true),
+        activateProfile: vi.fn(() => ({
+          activationId: "activation-a",
+          profileId: profile.profileId,
+          operatorId: "operator-a",
+          surface: "chat",
+        })),
+        createLocalOperatorOverride: vi.fn(() => override),
+        getLocalOperatorOverride: vi.fn(() => override),
+        revokeLocalOperatorOverride: vi.fn(() => true),
+      },
+    };
+    gateway.publishRealtime = vi.fn(() => {
+      throw new Error("realtime projection unavailable");
+    });
+
+    const mutations = [
+      () =>
+        GatewayService.prototype.createPermissionProfile.call(gateway, {
+          label: "Review",
+          scope: "operator",
+          approvalMode: "approve_risky",
+          createdBy: "operator-a",
+        }),
+      () =>
+        GatewayService.prototype.updatePermissionProfile.call(gateway, profile.profileId, {
+          updatedBy: "operator-a",
+          label: "Updated",
+        }),
+      () => GatewayService.prototype.archivePermissionProfile.call(gateway, profile.profileId, "operator-a"),
+      () =>
+        GatewayService.prototype.activatePermissionProfile.call(gateway, {
+          profileId: profile.profileId,
+          operatorId: "operator-a",
+          surface: "chat",
+          createdBy: "operator-a",
+        }),
+      () =>
+        GatewayService.prototype.createLocalOperatorOverride.call(gateway, {
+          operatorId: "operator-a",
+          scope: "operator",
+          reason: "local review",
+          ttlSeconds: 300,
+          createdBy: "operator-a",
+        }),
+      () => GatewayService.prototype.revokeLocalOperatorOverride.call(gateway, override.overrideId, "operator-a"),
+    ];
+
+    expect(mutations.map((mutate) => mutate())).toEqual([
+      profile,
+      profile,
+      true,
+      expect.objectContaining({ activationId: "activation-a" }),
+      override,
+      override,
+    ]);
+    expect(gateway.publishRealtime).toHaveBeenCalledTimes(6);
+  });
+
   it("rejects bypass permission profile mutation and activation in remote hardened mode", () => {
     const gateway = createGatewayHarness();
     gateway.publishRealtime = vi.fn();
@@ -743,6 +1160,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     }));
     const activateProfile = vi.fn(() => ({ activationId: "activation-1" }));
     gateway.storage = {
+      gatewaySql: { runImmediateTransaction: vi.fn((operation: () => unknown) => operation()) },
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-a" })),
       },

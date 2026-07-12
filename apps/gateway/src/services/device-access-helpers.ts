@@ -227,7 +227,9 @@ export function mapAuthDeviceRequestRow(row: Record<string, unknown>): AuthDevic
     userAgent: typeof row.user_agent === "string" ? row.user_agent : undefined,
     status: normalizeDeviceAccessRequestStatus(row.status),
     createdAt: String(row.created_at ?? new Date().toISOString()),
-    expiresAt: String(row.expires_at ?? new Date().toISOString()),
+    // A request without a valid persisted deadline is terminalized by the
+    // database-clock expiry reconciler; never substitute the process clock.
+    expiresAt: typeof row.expires_at === "string" ? row.expires_at : "",
     resolvedAt: typeof row.resolved_at === "string" ? row.resolved_at : undefined,
     resolvedBy: typeof row.resolved_by === "string" ? row.resolved_by : undefined,
     resolutionNote: typeof row.resolution_note === "string" ? row.resolution_note : undefined,

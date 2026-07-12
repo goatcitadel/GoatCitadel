@@ -17,6 +17,7 @@ import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "no
 import { logger } from "@goatcitadel/gateway-core";
 import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import {
+  APPROVAL_EXPIRY_ACTOR_ID,
   clampInt,
   ConflictError,
   NotFoundError,
@@ -98,9 +99,6 @@ import type { NpuSidecarService } from "./npu-sidecar-service.js";
 import {
   buildCompanionSigningPayload,
   decodeBase64Url,
-  isCompanionSessionCurrentlyActive,
-  isCompanionSessionOperatorActive,
-  isCompanionSessionRefreshable,
   isRecord,
   mapCompanionSessionRow,
   normalizeCompanionAuditEvent,
@@ -113,7 +111,13 @@ import {
   type CompanionSessionRecord,
 } from "./companion-auth-helpers.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
-import { deriveApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
+import {
+  deriveApprovalResolutionEffectsResult,
+  type ApprovalObservabilityEffectInput,
+  type ApprovalResolutionEffectEnqueueOptions,
+} from "./approval-resolution-effects-service.js";
+import { buildApprovalResolutionObservabilityEffects } from "./approval-observability.js";
+import type { ApprovalResolutionContext } from "./approval-types.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { DeviceTokenVault } from "./device-token-vault.js";
 
@@ -153,7 +157,15 @@ export interface SettingsAuthRuntimeDependencies {
   readonly deviceTokenVault: DeviceTokenVault;
   createApproval(input: ApprovalCreateInput): Promise<{ approvalId: string }>;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
-  enqueueApprovalResolutionEffects(approval: ApprovalRequest, input: ApprovalResolveInput): ApprovalEffectRecord[];
+  enqueueApprovalResolutionEffects(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    options?: ApprovalResolutionEffectEnqueueOptions,
+  ): ApprovalEffectRecord[];
+  enqueueApprovalObservabilityEffects(
+    approvalId: string,
+    items: readonly ApprovalObservabilityEffectInput[],
+  ): ApprovalEffectRecord[];
   listApprovalEffects(approvalId: string): ApprovalEffectRecord[];
   buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]>;
   recordImprovementApprovalResolutionSignal(approval: ApprovalRequest): void;
@@ -763,10 +775,180 @@ function assertAuthModeHasEffectiveCredential(plan: AuthRuntimeSettings["plan"])
   }
 }
 
+interface AuthDatabaseClockSql {
+  readonly nowText: string;
+  readonly lockRow: string;
+  isFuture(expression: string): string;
+  isValidAndExpired(expression: string): string;
+  isExpiredOrInvalid(expression: string): string;
+}
+
+function getAuthDatabaseClockSql(deps: SettingsAuthRuntimeDependencies): AuthDatabaseClockSql {
+  if (deps.gatewaySql.dialect === "postgres") {
+    const isCanonical = (expression: string) =>
+      `(${expression} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$')`;
+    const parsed = (expression: string) => `gc_try_parse_timestamptz(${expression})`;
+    return {
+      nowText: `to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`,
+      lockRow: " FOR UPDATE",
+      isFuture: (expression) =>
+        `COALESCE(${isCanonical(expression)} AND isfinite(${parsed(expression)}) AND ${parsed(
+          expression,
+        )} > clock_timestamp(), FALSE)`,
+      isValidAndExpired: (expression) =>
+        `COALESCE(${isCanonical(expression)} AND isfinite(${parsed(expression)}) AND ${parsed(
+          expression,
+        )} <= clock_timestamp(), FALSE)`,
+      isExpiredOrInvalid: (expression) =>
+        `NOT COALESCE(${isCanonical(expression)} AND isfinite(${parsed(expression)}) AND ${parsed(
+          expression,
+        )} > clock_timestamp(), FALSE)`,
+    };
+  }
+  const isCanonical = buildSqliteCanonicalZonedInstantPredicate;
+  return {
+    nowText: `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    lockRow: "",
+    isFuture: (expression) => `COALESCE(${isCanonical(expression)} AND julianday(${expression}) > julianday('now'), 0)`,
+    isValidAndExpired: (expression) =>
+      `COALESCE(${isCanonical(expression)} AND julianday(${expression}) <= julianday('now'), 0)`,
+    isExpiredOrInvalid: (expression) =>
+      `NOT COALESCE(${isCanonical(expression)} AND julianday(${expression}) > julianday('now'), 0)`,
+  };
+}
+
+function buildSqliteCanonicalZonedInstantPredicate(expression: string): string {
+  const base = `substr(${expression}, 1, 19)`;
+  const basePattern = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]";
+  const zuluFraction = `substr(${expression}, 21, length(${expression}) - 21)`;
+  const offsetFraction = `substr(${expression}, 21, length(${expression}) - 26)`;
+  const offsetShape = (signPosition: string) => `
+    substr(${expression}, ${signPosition}, 1) IN ('+', '-')
+    AND substr(${expression}, ${signPosition} + 3, 1) = ':'
+    AND substr(${expression}, ${signPosition} + 1, 2) NOT GLOB '*[^0-9]*'
+    AND substr(${expression}, ${signPosition} + 4, 2) NOT GLOB '*[^0-9]*'
+  `;
+  return `(
+    typeof(${expression}) = 'text'
+    AND ${base} GLOB '${basePattern}'
+    AND (
+      (length(${expression}) = 20 AND substr(${expression}, 20, 1) = 'Z')
+      OR (length(${expression}) = 25 AND ${offsetShape("20")})
+      OR (
+        substr(${expression}, 20, 1) = '.'
+        AND (
+          (
+            length(${expression}) >= 22
+            AND length(${expression}) <= 30
+            AND substr(${expression}, -1, 1) = 'Z'
+            AND ${zuluFraction} <> ''
+            AND ${zuluFraction} NOT GLOB '*[^0-9]*'
+          )
+          OR (
+            length(${expression}) >= 27
+            AND length(${expression}) <= 35
+            AND ${offsetShape(`length(${expression}) - 5`)}
+            AND ${offsetFraction} <> ''
+            AND ${offsetFraction} NOT GLOB '*[^0-9]*'
+          )
+        )
+      )
+    )
+  )`;
+}
+
+function readDatabaseNowMs(deps: SettingsAuthRuntimeDependencies): number {
+  const parsed = Date.parse(deps.gatewaySql.readDatabaseNow());
+  if (!Number.isFinite(parsed)) {
+    throw new Error("Database clock did not return a valid timestamp.");
+  }
+  return parsed;
+}
+
+function createCompanionCredentialWindow(deps: SettingsAuthRuntimeDependencies): {
+  issuedAt: string;
+  accessTokenExpiresAt: string;
+  refreshTokenExpiresAt: string;
+} {
+  const clock = getAuthDatabaseClockSql(deps);
+  const row = deps.gatewaySql
+    .prepare(
+      deps.gatewaySql.dialect === "postgres"
+        ? `
+          WITH database_clock AS (
+            SELECT clock_timestamp() AS now_instant
+          )
+          SELECT
+            to_char(now_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS issued_at,
+            to_char(
+              (
+                now_instant + (CAST(@accessTtlMs AS DOUBLE PRECISION) * interval '1 millisecond')
+              ) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            ) AS access_token_expires_at,
+            to_char(
+              (
+                now_instant + (CAST(@refreshTtlMs AS DOUBLE PRECISION) * interval '1 millisecond')
+              ) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            ) AS refresh_token_expires_at
+          FROM database_clock
+        `
+        : `
+          SELECT
+            ${clock.nowText} AS issued_at,
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', @accessTtlModifier) AS access_token_expires_at,
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', @refreshTtlModifier) AS refresh_token_expires_at
+        `,
+    )
+    .get<{
+      issued_at?: unknown;
+      access_token_expires_at?: unknown;
+      refresh_token_expires_at?: unknown;
+    }>(
+      deps.gatewaySql.dialect === "postgres"
+        ? {
+            accessTtlMs: COMPANION_ACCESS_TOKEN_TTL_MS,
+            refreshTtlMs: COMPANION_REFRESH_TOKEN_TTL_MS,
+          }
+        : {
+            accessTtlModifier: `${COMPANION_ACCESS_TOKEN_TTL_MS / 1_000} seconds`,
+            refreshTtlModifier: `${COMPANION_REFRESH_TOKEN_TTL_MS / 1_000} seconds`,
+          },
+    );
+  if (
+    typeof row?.issued_at !== "string" ||
+    typeof row.access_token_expires_at !== "string" ||
+    typeof row.refresh_token_expires_at !== "string" ||
+    !Number.isFinite(Date.parse(row.issued_at)) ||
+    !Number.isFinite(Date.parse(row.access_token_expires_at)) ||
+    !Number.isFinite(Date.parse(row.refresh_token_expires_at))
+  ) {
+    throw new Error("Database clock did not return a valid companion credential window.");
+  }
+  return {
+    issuedAt: row.issued_at,
+    accessTokenExpiresAt: row.access_token_expires_at,
+    refreshTokenExpiresAt: row.refresh_token_expires_at,
+  };
+}
+
+export class DeviceAccessExpiredAfterCommitError extends ConflictError {
+  public readonly mutationCommitted = true;
+
+  public constructor() {
+    super({
+      message: "Device access request expired before it could be approved.",
+    });
+    this.name = "DeviceAccessExpiredAfterCommitError";
+  }
+}
+
 export async function resolveDeviceAccessApproval(
   deps: SettingsAuthRuntimeDependencies,
   currentApproval: ApprovalRequest,
   input: ApprovalResolveInput,
+  context?: ApprovalResolutionContext,
 ): Promise<ApprovalResolveResult> {
   if (currentApproval.status !== "pending") {
     throw new ConflictError({
@@ -786,9 +968,7 @@ export async function resolveDeviceAccessApproval(
 
   const request = await expireDeviceAccessRequestIfNeeded(deps, existingRequest);
   if (request.status === "expired") {
-    throw new ConflictError({
-      message: "Device access request expired before it could be approved.",
-    });
+    throw new DeviceAccessExpiredAfterCommitError();
   }
   if (request.status !== "pending") {
     throw new ConflictError({
@@ -796,50 +976,23 @@ export async function resolveDeviceAccessApproval(
     });
   }
 
-  const resolvedAt = new Date().toISOString();
   const requestStatus: DeviceAccessRequestStatus = input.decision === "approve" ? "approved" : "rejected";
   const deviceToken =
     input.decision === "approve" ? randomBytes(DEVICE_ACCESS_TOKEN_BYTES).toString("base64url") : undefined;
-  const deviceTokenExpiresAt = deviceToken
-    ? new Date(Date.now() + DEVICE_ACCESS_TOKEN_TTL_MS).toISOString()
-    : undefined;
-  let approval: ApprovalRequest;
+  const tokenWindow = deviceToken ? deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_TOKEN_TTL_MS) : undefined;
+  const resolvedAt = tokenWindow?.createdAt ?? deps.gatewaySql.readDatabaseNow();
+  const deviceTokenExpiresAt = tokenWindow?.expiresAt;
+  const clock = getAuthDatabaseClockSql(deps);
+  let approval!: ApprovalRequest;
+  let effects: ApprovalEffectRecord[] = [];
+  let events: ReturnType<SettingsAuthRuntimeDependencies["storage"]["approvalEvents"]["listByApprovalId"]> = [];
+  let tokenStoredByThisAttempt = false;
 
-  deps.storage.runImmediateTransaction(() => {
-    if (deviceToken) {
-      deps.gatewaySql
+  try {
+    deps.storage.runImmediateTransaction(() => {
+      const requestUpdate = deps.gatewaySql
         .prepare(
           `
-          INSERT INTO auth_device_grants (
-            grant_id, request_id, token_hash, device_label, device_type, platform,
-            granted_by, created_at, expires_at, metadata_json
-          ) VALUES (
-            @grantId, @requestId, @tokenHash, @deviceLabel, @deviceType, @platform,
-            @grantedBy, @createdAt, @expiresAt, @metadataJson
-          )
-        `,
-        )
-        .run({
-          grantId: randomUUID(),
-          requestId: request.requestId,
-          tokenHash: hashSensitiveToken(deviceToken),
-          deviceLabel: request.deviceLabel,
-          deviceType: request.deviceType,
-          platform: request.platform ?? null,
-          grantedBy: input.resolvedBy,
-          createdAt: resolvedAt,
-          expiresAt: deviceTokenExpiresAt ?? null,
-          metadataJson: JSON.stringify({
-            approvalId: currentApproval.approvalId,
-            requestedOrigin: request.requestedOrigin,
-            requestedIp: request.requestedIp,
-          }),
-        });
-    }
-
-    deps.gatewaySql
-      .prepare(
-        `
         UPDATE auth_device_requests
         SET status = @status,
             resolved_at = @resolvedAt,
@@ -849,88 +1002,169 @@ export async function resolveDeviceAccessApproval(
             approved_token_expires_at = @approvedTokenExpiresAt
         WHERE request_id = @requestId
           AND status = 'pending'
+          AND ${clock.isFuture("expires_at")}
       `,
-      )
-      .run({
-        requestId: request.requestId,
-        status: requestStatus,
-        resolvedAt,
-        resolvedBy: input.resolvedBy,
-        resolutionNote: input.resolutionNote ?? null,
-        // SECURITY: the operator-equivalent device token is NEVER written to
-        // disk. The hashed token lives in auth_device_grants (above); the
-        // plaintext is stashed in the in-memory vault for single-use handoff on
-        // the device's next status poll. We keep approved_token_expires_at as
-        // non-secret metadata for the status response/UI, and keep the
-        // approved_token_plaintext column (always NULL now) for schema compat.
-        approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
+        )
+        .run({
+          requestId: request.requestId,
+          status: requestStatus,
+          resolvedAt,
+          resolvedBy: input.resolvedBy,
+          resolutionNote: input.resolutionNote ?? null,
+          // SECURITY: only the token hash is persisted. The plaintext remains
+          // in the process-local single-use vault until the winning status poll.
+          approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
+        });
+      if (requestUpdate.changes !== 1) {
+        throw new ConflictError({
+          message: "Device access request is no longer pending or has expired.",
+        });
+      }
+
+      if (deviceToken) {
+        deps.deviceTokenVault.store(request.requestId, deviceToken, deviceTokenExpiresAt, Date.parse(resolvedAt));
+        tokenStoredByThisAttempt = true;
+      }
+
+      if (context?.remoteToken) {
+        deps.storage.approvals.mergeLinkage(currentApproval.approvalId, {
+          connectorId: context.remoteToken.connectorId,
+          tokenId: context.remoteToken.tokenId,
+        });
+      }
+
+      if (deviceToken) {
+        deps.gatewaySql
+          .prepare(
+            `
+          INSERT INTO auth_device_grants (
+            grant_id, request_id, token_hash, device_label, device_type, platform,
+            granted_by, created_at, expires_at, metadata_json
+          ) VALUES (
+            @grantId, @requestId, @tokenHash, @deviceLabel, @deviceType, @platform,
+            @grantedBy, @createdAt, @expiresAt, @metadataJson
+          )
+        `,
+          )
+          .run({
+            grantId: randomUUID(),
+            requestId: request.requestId,
+            tokenHash: hashSensitiveToken(deviceToken),
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform ?? null,
+            grantedBy: input.resolvedBy,
+            createdAt: resolvedAt,
+            expiresAt: deviceTokenExpiresAt ?? null,
+            metadataJson: JSON.stringify({
+              approvalId: currentApproval.approvalId,
+              requestedOrigin: request.requestedOrigin,
+              requestedIp: request.requestedIp,
+            }),
+          });
+      }
+
+      approval = deps.storage.approvals.resolve(currentApproval.approvalId, input);
+      deps.storage.approvalEvents.append({
+        approvalId: currentApproval.approvalId,
+        eventType: "resolved",
+        actorId: input.resolvedBy,
+        payload: {
+          decision: input.decision,
+          status: approval.status,
+        },
       });
+      deps.enqueueApprovalResolutionEffects(approval, input);
+      deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+        ...buildApprovalResolutionObservabilityEffects(approval, input),
+        {
+          operationId: `auth.device_request.resolve.audit:${request.requestId}`,
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: {
+              event: "auth.device_request.resolve",
+              requestId: request.requestId,
+              approvalId: currentApproval.approvalId,
+              status: requestStatus,
+              resolvedBy: input.resolvedBy,
+              deviceLabel: request.deviceLabel,
+              deviceType: request.deviceType,
+              platform: request.platform,
+              requestedIp: request.requestedIp,
+              deviceTokenExpiresAt,
+            },
+          },
+        },
+        {
+          operationId: `auth.device_request.resolve.realtime:${request.requestId}`,
+          delivery: {
+            kind: "realtime",
+            eventType: "auth_device_request_resolved",
+            source: "auth",
+            payload: {
+              requestId: request.requestId,
+              approvalId: currentApproval.approvalId,
+              status: requestStatus,
+              resolvedAt,
+              resolvedBy: input.resolvedBy,
+              deviceLabel: request.deviceLabel,
+              deviceType: request.deviceType,
+              platform: request.platform,
+              requestedIp: request.requestedIp,
+              deviceTokenExpiresAt,
+            },
+            options: {
+              eventClass: "domain_fact",
+              eventAuthority: "retained_stream",
+              links: {
+                approvalId: currentApproval.approvalId,
+              },
+              correlationId: currentApproval.approvalId,
+            },
+          },
+        },
+      ]);
+      effects = deps.listApprovalEffects(currentApproval.approvalId);
+      events = deps.storage.approvalEvents.listByApprovalId(currentApproval.approvalId);
 
-    approval = deps.storage.approvals.resolve(currentApproval.approvalId, input);
-    deps.storage.approvalEvents.append({
-      approvalId: currentApproval.approvalId,
-      eventType: "resolved",
-      actorId: input.resolvedBy,
-      payload: {
-        decision: input.decision,
-        status: approval.status,
-      },
+      // Settle the expiry boundary after every potentially blocking write/read
+      // in the transaction. In PostgreSQL an UPDATE can wait on a row lock while
+      // retaining the earlier `resolvedAt` bind value; this final fresh-clock
+      // check makes that stale timestamp incapable of authorizing a grant after
+      // the request's actual deadline. Throwing here rolls back the request,
+      // grant, approval, events, effects, and the process-local vault entry.
+      const commitRequest = deps.gatewaySql
+        .prepare(
+          `
+            SELECT request_id
+            FROM auth_device_requests
+            WHERE request_id = @requestId
+              AND status = @status
+              AND ${clock.isFuture("expires_at")}
+            LIMIT 1
+          `,
+        )
+        .get({ requestId: request.requestId, status: requestStatus });
+      if (!commitRequest) {
+        throw new ConflictError({
+          message: "Device access request expired before the approval transaction committed.",
+        });
+      }
     });
-  });
-
-  // Stash the plaintext only AFTER the approval transaction commits, so a rolled
-  // back approval can never leave a deliverable token in the in-memory vault.
-  if (deviceToken) {
-    deps.deviceTokenVault.store(request.requestId, deviceToken, deviceTokenExpiresAt);
+  } catch (error) {
+    if (tokenStoredByThisAttempt) {
+      deps.deviceTokenVault.delete(request.requestId);
+    }
+    throw error;
   }
 
-  deps.enqueueApprovalResolutionEffects(approval!, input);
-  await recordApprovalResolution(deps, approval!, input);
-  await deps.storage.audit.append("approvals", {
-    event: "auth.device_request.resolve",
-    requestId: request.requestId,
-    approvalId: currentApproval.approvalId,
-    status: requestStatus,
-    resolvedBy: input.resolvedBy,
-    deviceLabel: request.deviceLabel,
-    deviceType: request.deviceType,
-    platform: request.platform,
-    requestedIp: request.requestedIp,
-    deviceTokenExpiresAt,
-  });
-
-  deps.publishRealtime(
-    "auth_device_request_resolved",
-    "auth",
-    {
-      requestId: request.requestId,
-      approvalId: currentApproval.approvalId,
-      status: requestStatus,
-      resolvedAt,
-      resolvedBy: input.resolvedBy,
-      deviceLabel: request.deviceLabel,
-      deviceType: request.deviceType,
-      platform: request.platform,
-      requestedIp: request.requestedIp,
-      deviceTokenExpiresAt,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId: currentApproval.approvalId,
-      },
-      correlationId: currentApproval.approvalId,
-    },
-  );
-
-  const effects = deps.listApprovalEffects(currentApproval.approvalId);
   return {
-    approval: approval!,
+    approval,
     effects,
     replay: {
-      approval: approval!,
-      events: deps.storage.approvalEvents.listByApprovalId(currentApproval.approvalId),
+      approval,
+      events,
       effects,
     },
     durableRunId: effects.find((effect) => effect.effectKind === "approval_wait_wake")?.targetId,
@@ -945,42 +1179,53 @@ export async function expireDeviceAccessRequestIfNeeded(
   if (request.status !== "pending") {
     return request;
   }
-  const expiresAt = Date.parse(request.expiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt > Date.now()) {
+  if (!deps.gatewaySql.isDatabaseInstantExpired(request.expiresAt)) {
     return request;
   }
 
   const resolutionInput: ApprovalResolveInput = {
     decision: "reject",
-    resolvedBy: "system:auth-device-expiry",
+    resolvedBy: APPROVAL_EXPIRY_ACTOR_ID,
     resolutionNote: "Device access request expired before approval.",
   };
-  const resolvedAt = new Date().toISOString();
+  const clock = getAuthDatabaseClockSql(deps);
+  let resolvedAt = deps.gatewaySql.readDatabaseNow();
   let approval: ApprovalRequest | undefined;
+  let resolvedRequest: AuthDeviceRequestRecord | undefined;
 
   deps.storage.runImmediateTransaction(() => {
-    deps.gatewaySql
+    const requestUpdate = deps.gatewaySql
       .prepare(
         `
         UPDATE auth_device_requests
         SET status = 'expired',
-            resolved_at = @resolvedAt,
+            resolved_at = ${clock.nowText},
             resolved_by = @resolvedBy,
             resolution_note = @resolutionNote
         WHERE request_id = @requestId
           AND status = 'pending'
+          AND ${clock.isExpiredOrInvalid("expires_at")}
       `,
       )
       .run({
         requestId: request.requestId,
-        resolvedAt,
         resolvedBy: resolutionInput.resolvedBy,
         resolutionNote: resolutionInput.resolutionNote ?? null,
       });
+    if (requestUpdate.changes !== 1) {
+      resolvedRequest = getAuthDeviceRequestById(deps, request.requestId);
+      return;
+    }
+
+    resolvedRequest = getAuthDeviceRequestById(deps, request.requestId);
+    resolvedAt = resolvedRequest?.resolvedAt ?? deps.gatewaySql.readDatabaseNow();
 
     const currentApproval = deps.storage.approvals.get(request.approvalId);
     if (currentApproval.status === "pending") {
-      approval = deps.storage.approvals.resolve(request.approvalId, resolutionInput);
+      approval = deps.storage.approvals.resolve(request.approvalId, resolutionInput, {
+        resolvedAt,
+        allowExpired: true,
+      });
       deps.storage.approvalEvents.append({
         approvalId: request.approvalId,
         eventType: "resolved",
@@ -990,56 +1235,92 @@ export async function expireDeviceAccessRequestIfNeeded(
           status: approval.status,
         },
       });
+      deps.enqueueApprovalResolutionEffects(approval, resolutionInput, { allowExpired: true });
     }
-  });
-
-  if (approval) {
-    deps.enqueueApprovalResolutionEffects(approval, resolutionInput);
-    await recordApprovalResolution(deps, approval, resolutionInput);
-  }
-  await deps.storage.audit.append("approvals", {
-    event: "auth.device_request.expire",
-    requestId: request.requestId,
-    approvalId: request.approvalId,
-    deviceLabel: request.deviceLabel,
-    deviceType: request.deviceType,
-    platform: request.platform,
-    requestedIp: request.requestedIp,
-  });
-
-  deps.publishRealtime(
-    "auth_device_request_resolved",
-    "auth",
-    {
-      requestId: request.requestId,
-      approvalId: request.approvalId,
-      status: "expired",
-      resolvedAt,
-      resolvedBy: resolutionInput.resolvedBy,
-      deviceLabel: request.deviceLabel,
-      deviceType: request.deviceType,
-      platform: request.platform,
-      requestedIp: request.requestedIp,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId: request.approvalId,
+    deps.enqueueApprovalObservabilityEffects(request.approvalId, [
+      ...(approval ? buildApprovalResolutionObservabilityEffects(approval, resolutionInput) : []),
+      {
+        operationId: `auth.device_request.expire.audit:${request.requestId}`,
+        delivery: {
+          kind: "audit",
+          stream: "approvals",
+          payload: {
+            event: "auth.device_request.expire",
+            requestId: request.requestId,
+            approvalId: request.approvalId,
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform,
+            requestedIp: request.requestedIp,
+          },
+        },
       },
-      correlationId: request.approvalId,
-    },
-  );
+      {
+        operationId: `auth.device_request.expire.realtime:${request.requestId}`,
+        delivery: {
+          kind: "realtime",
+          eventType: "auth_device_request_resolved",
+          source: "auth",
+          payload: {
+            requestId: request.requestId,
+            approvalId: request.approvalId,
+            status: "expired",
+            resolvedAt,
+            resolvedBy: resolutionInput.resolvedBy,
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform,
+            requestedIp: request.requestedIp,
+          },
+          options: {
+            eventClass: "domain_fact",
+            eventAuthority: "retained_stream",
+            links: {
+              approvalId: request.approvalId,
+            },
+            correlationId: request.approvalId,
+          },
+        },
+      },
+    ]);
+    resolvedRequest ??= getAuthDeviceRequestById(deps, request.requestId);
+  });
 
-  return (
-    getAuthDeviceRequestById(deps, request.requestId) ?? {
-      ...request,
-      status: "expired",
-      resolvedAt,
-      resolvedBy: resolutionInput.resolvedBy,
-      resolutionNote: resolutionInput.resolutionNote,
+  return resolvedRequest ?? request;
+}
+
+export async function expirePendingDeviceAccessRequests(
+  deps: SettingsAuthRuntimeDependencies,
+  limit = 100,
+): Promise<number> {
+  const clock = getAuthDatabaseClockSql(deps);
+  const rows = deps.gatewaySql
+    .prepare(
+      `
+      SELECT request_id
+      FROM auth_device_requests
+      WHERE status = 'pending'
+        AND ${clock.isExpiredOrInvalid("expires_at")}
+      ORDER BY expires_at ASC, request_id ASC
+      LIMIT @limit
+    `,
+    )
+    .all({ limit: clampInt(limit, 100, 1, 1000) }) as Array<{ request_id?: unknown }>;
+  let expired = 0;
+  for (const row of rows) {
+    if (typeof row.request_id !== "string") {
+      continue;
     }
-  );
+    const request = getAuthDeviceRequestById(deps, row.request_id);
+    if (!request || request.status !== "pending") {
+      continue;
+    }
+    const reconciled = await expireDeviceAccessRequestIfNeeded(deps, request);
+    if (reconciled.status === "expired") {
+      expired += 1;
+    }
+  }
+  return expired;
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,9 +1343,6 @@ export async function createDeviceAccessRequest(
     throw new Error("Device approvals are not needed when gateway auth mode is none.");
   }
 
-  const now = Date.now();
-  const createdAt = new Date(now).toISOString();
-  const expiresAt = new Date(now + DEVICE_ACCESS_REQUEST_TTL_MS).toISOString();
   const requestId = randomUUID();
   const requestSecret = randomBytes(DEVICE_ACCESS_SECRET_BYTES).toString("base64url");
   const deviceType = normalizeDeviceAccessDeviceType(input.deviceType);
@@ -1105,10 +1383,14 @@ export async function createDeviceAccessRequest(
     },
   });
 
+  let createdAt = "";
+  let expiresAt = "";
   try {
-    deps.gatewaySql
-      .prepare(
-        `
+    ({ createdAt, expiresAt } = deps.gatewaySql.createDatabaseTtlWindow(DEVICE_ACCESS_REQUEST_TTL_MS));
+    deps.storage.runImmediateTransaction(() => {
+      deps.gatewaySql
+        .prepare(
+          `
       INSERT INTO auth_device_requests (
         request_id, approval_id, request_secret_hash, device_label, device_type, platform,
         requested_origin, requested_ip, user_agent, status, created_at, expires_at
@@ -1117,74 +1399,82 @@ export async function createDeviceAccessRequest(
         @requestedOrigin, @requestedIp, @userAgent, @status, @createdAt, @expiresAt
       )
     `,
-      )
-      .run({
-        requestId,
-        approvalId: approval.approvalId,
-        requestSecretHash: hashSensitiveToken(requestSecret),
-        deviceLabel,
-        deviceType,
-        platform: platform ?? null,
-        requestedOrigin: requestedOrigin ?? null,
-        requestedIp: requestedIp ?? null,
-        userAgent: userAgent ?? null,
-        status: "pending",
-        createdAt,
-        expiresAt,
-      });
+        )
+        .run({
+          requestId,
+          approvalId: approval.approvalId,
+          requestSecretHash: hashSensitiveToken(requestSecret),
+          deviceLabel,
+          deviceType,
+          platform: platform ?? null,
+          requestedOrigin: requestedOrigin ?? null,
+          requestedIp: requestedIp ?? null,
+          userAgent: userAgent ?? null,
+          status: "pending",
+          createdAt,
+          expiresAt,
+        });
+      deps.enqueueApprovalObservabilityEffects(approval.approvalId, [
+        {
+          operationId: `auth.device_request.create.audit:${requestId}`,
+          delivery: {
+            kind: "audit",
+            stream: "approvals",
+            payload: {
+              event: "auth.device_request.create",
+              requestId,
+              approvalId: approval.approvalId,
+              deviceLabel,
+              deviceType,
+              platform,
+              requestedOrigin,
+              requestedIp,
+              correlationId,
+              traceId,
+              originSurface,
+            },
+          },
+        },
+        {
+          operationId: `auth.device_request.create.realtime:${requestId}`,
+          delivery: {
+            kind: "realtime",
+            eventType: "auth_device_request_created",
+            source: "auth",
+            payload: {
+              requestId,
+              approvalId: approval.approvalId,
+              deviceLabel,
+              deviceType,
+              platform,
+              requestedOrigin,
+              requestedIp,
+              correlationId,
+              traceId,
+              originSurface,
+              createdAt,
+              expiresAt,
+            },
+            options: {
+              eventClass: "domain_fact",
+              eventAuthority: "retained_stream",
+              links: {
+                approvalId: approval.approvalId,
+              },
+              correlationId: approval.approvalId,
+            },
+          },
+        },
+      ]);
+    });
   } catch (error) {
     try {
-      await deps.resolveApproval(approval.approvalId, {
-        decision: "reject",
-        resolvedBy: "system:auth-device-request",
-        resolutionNote: "Device request registration failed.",
-      });
+      rejectOrphanedDeviceAccessApproval(deps, approval.approvalId);
     } catch {
       // Best effort cleanup only.
     }
     throw error;
   }
-
-  await deps.storage.audit.append("approvals", {
-    event: "auth.device_request.create",
-    requestId,
-    approvalId: approval.approvalId,
-    deviceLabel,
-    deviceType,
-    platform,
-    requestedOrigin,
-    requestedIp,
-    correlationId,
-    traceId,
-    originSurface,
-  });
-
-  deps.publishRealtime(
-    "auth_device_request_created",
-    "auth",
-    {
-      requestId,
-      approvalId: approval.approvalId,
-      deviceLabel,
-      deviceType,
-      platform,
-      requestedOrigin,
-      requestedIp,
-      correlationId,
-      traceId,
-      originSurface,
-      createdAt,
-      expiresAt,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId: approval.approvalId,
-      },
-      correlationId: approval.approvalId,
-    },
-  );
 
   return {
     requestId,
@@ -1195,6 +1485,47 @@ export async function createDeviceAccessRequest(
     pollAfterMs: DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
     message: "Waiting for approval from another authenticated Mission Control session.",
   };
+}
+
+function rejectOrphanedDeviceAccessApproval(deps: SettingsAuthRuntimeDependencies, approvalId: string): void {
+  const input: ApprovalResolveInput = {
+    decision: "reject",
+    resolvedBy: "system:auth-device-request",
+    resolutionNote: "Device request registration failed.",
+  };
+  const commitRejection = (includeEffects: boolean) => {
+    const current = deps.storage.approvals.get(approvalId);
+    if (current.status !== "pending") {
+      return;
+    }
+    const approval = deps.storage.approvals.resolve(approvalId, input);
+    deps.storage.approvalEvents.append({
+      approvalId,
+      eventType: "resolved",
+      actorId: input.resolvedBy,
+      payload: {
+        decision: input.decision,
+        status: approval.status,
+        orphanCleanup: true,
+        degraded: !includeEffects,
+      },
+    });
+    if (includeEffects) {
+      deps.enqueueApprovalResolutionEffects(approval, input);
+      deps.enqueueApprovalObservabilityEffects(
+        approvalId,
+        buildApprovalResolutionObservabilityEffects(approval, input),
+      );
+    }
+  };
+  try {
+    deps.storage.runImmediateTransaction(() => commitRejection(true));
+  } catch {
+    // A device approval without its request row is permanently unusable. Keep
+    // the terminal approval/event even if an auxiliary effect store is down;
+    // the creation observability envelope remains durable for reconciliation.
+    deps.storage.runImmediateTransaction(() => commitRejection(false));
+  }
 }
 
 export async function getDeviceAccessRequestStatus(
@@ -1212,40 +1543,63 @@ export async function getDeviceAccessRequestStatus(
 
   const current = await expireDeviceAccessRequestIfNeeded(deps, request);
   if (current.status === "approved" && !current.deliveredAt) {
-    const deliveredAt = new Date().toISOString();
-    const result = deps.gatewaySql
-      .prepare(
-        `
+    // A process that does not hold the plaintext must never burn the durable
+    // handoff marker. This preserves delivery by the approving node in a
+    // shared PostgreSQL deployment and after cross-node status polling.
+    const databaseNowMs = readDatabaseNowMs(deps);
+    const claimed = deps.deviceTokenVault.claim(current.requestId, databaseNowMs);
+    if (!claimed) {
+      return mapDeviceAccessStatusResponse(current);
+    }
+    const deliveredAt = new Date(databaseNowMs).toISOString();
+    const clock = getAuthDatabaseClockSql(deps);
+    let result: { changes?: number };
+    try {
+      result = deps.gatewaySql
+        .prepare(
+          `
       UPDATE auth_device_requests
       SET delivered_at = @deliveredAt,
           approved_token_plaintext = NULL
       WHERE request_id = @requestId
+        AND status = 'approved'
         AND delivered_at IS NULL
+        AND approved_token_expires_at IS NOT NULL
+        AND ${clock.isFuture("approved_token_expires_at")}
     `,
-      )
-      .run({
-        requestId: current.requestId,
-        deliveredAt,
-      });
-    if (result.changes === 0) {
+        )
+        .run({
+          requestId: current.requestId,
+          deliveredAt,
+        });
+    } catch (error) {
+      try {
+        deps.deviceTokenVault.store(
+          current.requestId,
+          claimed.token,
+          claimed.deviceTokenExpiresAt,
+          readDatabaseNowMs(deps),
+        );
+      } catch {
+        // Preserve the storage failure. If DB time is unavailable, retaining an
+        // operator-equivalent plaintext token would be a fail-open fallback.
+      }
+      throw error;
+    }
+    if (result.changes !== 1) {
       // A concurrent poll already won the single-use delivery. This caller must
-      // not receive the token; drop any vault entry defensively and report the
-      // approved-but-awaiting-handoff status.
-      deps.deviceTokenVault.delete(current.requestId);
+      // not receive the token. The winning delivery already consumed the
+      // durable marker, so the local claim must remain burned.
       const refreshed = getAuthDeviceRequestById(deps, requestId);
       if (refreshed) {
         return mapDeviceAccessStatusResponse(refreshed);
       }
       return mapDeviceAccessStatusResponse(current);
     }
-    // This poll won the delivery race: hand off the plaintext from the in-memory
-    // vault exactly once. If the entry is gone (gateway restarted) or expired,
-    // the device simply keeps waiting / re-requests — no token, no rejection.
-    const claimed = deps.deviceTokenVault.claim(current.requestId);
-    return mapDeviceAccessStatusResponse(
-      current,
-      claimed ? { deviceToken: claimed.token, deviceTokenExpiresAt: claimed.deviceTokenExpiresAt } : undefined,
-    );
+    return mapDeviceAccessStatusResponse(current, {
+      deviceToken: claimed.token,
+      deviceTokenExpiresAt: claimed.deviceTokenExpiresAt,
+    });
   }
 
   return mapDeviceAccessStatusResponse(current);
@@ -1389,13 +1743,15 @@ export function getActiveAuthDeviceGrantById(
   deps: SettingsAuthRuntimeDependencies,
   grantId: string,
 ): AuthDeviceGrantRecord | undefined {
-  const now = new Date().toISOString();
+  const clock = getAuthDatabaseClockSql(deps);
   const row = deps.gatewaySql
     .prepare(
       `
       SELECT *
       FROM auth_device_grants
       WHERE grant_id = @grantId
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
       LIMIT 1
     `,
     )
@@ -1404,12 +1760,12 @@ export function getActiveAuthDeviceGrantById(
     return undefined;
   }
   const grant = mapAuthDeviceGrantRow(row);
-  if (grant.revokedAt) {
+  if (grant.revokedAt !== undefined) {
     return undefined;
   }
-  if (grant.expiresAt) {
+  if (grant.expiresAt !== undefined) {
     const expiresAt = Date.parse(grant.expiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= Date.parse(now)) {
+    if (!Number.isFinite(expiresAt)) {
       return undefined;
     }
   }
@@ -1421,40 +1777,56 @@ export function validateDeviceAccessToken(
   token: string,
 ): { actorId: string; deviceId: string; grantId: string } | undefined {
   const tokenHash = hashSensitiveToken(token);
-  const now = new Date().toISOString();
-  const row = deps.gatewaySql
-    .prepare(
-      `
-    SELECT *
-    FROM auth_device_grants
-    WHERE token_hash = @tokenHash
-      AND revoked_at IS NULL
-      AND (expires_at IS NULL OR expires_at > @now)
-    LIMIT 1
-  `,
-    )
-    .get({
-      tokenHash,
-      now,
-    }) as Record<string, unknown> | undefined;
+  const clock = getAuthDatabaseClockSql(deps);
+  let grant: AuthDeviceGrantRecord | undefined;
+  deps.storage.runImmediateTransaction(() => {
+    const row = deps.gatewaySql
+      .prepare(
+        `
+          SELECT *
+          FROM auth_device_grants
+          WHERE token_hash = @tokenHash
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+          LIMIT 1${clock.lockRow}
+        `,
+      )
+      .get({ tokenHash }) as Record<string, unknown> | undefined;
+    if (!row) {
+      return;
+    }
+    const activeGrant = mapAuthDeviceGrantRow(row);
+    deps.gatewaySql
+      .prepare(
+        `
+          UPDATE auth_device_grants
+          SET last_used_at = ${clock.nowText}
+          WHERE grant_id = @grantId
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+        `,
+      )
+      .run({ grantId: activeGrant.grantId });
+    const finalGrant = deps.gatewaySql
+      .prepare(
+        `
+          SELECT grant_id
+          FROM auth_device_grants
+          WHERE grant_id = @grantId
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+          LIMIT 1
+        `,
+      )
+      .get({ grantId: activeGrant.grantId });
+    if (finalGrant) {
+      grant = activeGrant;
+    }
+  });
 
-  if (!row) {
+  if (!grant) {
     return undefined;
   }
-
-  const grant = mapAuthDeviceGrantRow(row);
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE auth_device_grants
-    SET last_used_at = @lastUsedAt
-    WHERE grant_id = @grantId
-  `,
-    )
-    .run({
-      grantId: grant.grantId,
-      lastUsedAt: now,
-    });
 
   return {
     actorId: `device:${grant.grantId}`,
@@ -1468,30 +1840,45 @@ export async function exchangeCompanionSessionFromDeviceGrant(
   grantId: string,
   input: CompanionSessionExchangeInput,
 ): Promise<CompanionSessionExchangeResponse> {
-  const grant = getActiveAuthDeviceGrantById(deps, grantId);
-  if (!grant) {
-    throw new NotFoundError("Device access grant not found.");
-  }
-
   const signingPublicKeyPem = normalizeCompanionSigningPublicKeyPem(input.signingPublicKeyPem);
   assertCompanionSigningPublicKeyPem(signingPublicKeyPem);
 
-  const now = Date.now();
-  const issuedAt = new Date(now).toISOString();
-  const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
-  const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
   const accessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
   const refreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
   const sessionId = randomUUID();
-  const metadata = {
-    ...grant.metadata,
-    clientName: normalizeOptionalDeviceAccessText(input.clientName, 120),
-    appVersion: normalizeOptionalDeviceAccessText(input.appVersion, 80),
-    bootstrapRepo: "GoatCitadel-mobile",
-    contractId: COMPANION_CONTRACT_ID,
-  };
+  const clock = getAuthDatabaseClockSql(deps);
+  let grant!: AuthDeviceGrantRecord;
+  let issuedAt = "";
+  let accessTokenExpiresAt = "";
+  let refreshTokenExpiresAt = "";
+  let metadata: Record<string, unknown> = {};
 
   deps.storage.runImmediateTransaction(() => {
+    const grantRow = deps.gatewaySql
+      .prepare(
+        `
+          SELECT *
+          FROM auth_device_grants
+          WHERE grant_id = @grantId
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+          LIMIT 1${clock.lockRow}
+        `,
+      )
+      .get({ grantId }) as Record<string, unknown> | undefined;
+    if (!grantRow) {
+      throw new NotFoundError("Device access grant not found.");
+    }
+    grant = mapAuthDeviceGrantRow(grantRow);
+    ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
+    metadata = {
+      ...grant.metadata,
+      clientName: normalizeOptionalDeviceAccessText(input.clientName, 120),
+      appVersion: normalizeOptionalDeviceAccessText(input.appVersion, 80),
+      bootstrapRepo: "GoatCitadel-mobile",
+      contractId: COMPANION_CONTRACT_ID,
+    };
+
     deps.gatewaySql
       .prepare(
         `
@@ -1549,6 +1936,24 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         lastRotatedAt: issuedAt,
         metadataJson: JSON.stringify(metadata),
       });
+
+    const finalGrant = deps.gatewaySql
+      .prepare(
+        `
+          SELECT grant_id
+          FROM auth_device_grants
+          WHERE grant_id = @grantId
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+          LIMIT 1
+        `,
+      )
+      .get({ grantId });
+    if (!finalGrant) {
+      throw new ConflictError({
+        message: "Device access grant expired before the companion session was committed.",
+      });
+    }
   });
 
   await deps.storage.audit.append("approvals", {
@@ -1595,48 +2000,137 @@ export async function rotateCompanionSession(
     });
   }
 
-  const session = getActiveCompanionSessionByRefreshToken(deps, refreshToken);
-  if (!session) {
-    throw new NotFoundError("Companion session not found.");
-  }
-
-  const now = Date.now();
-  const issuedAt = new Date(now).toISOString();
-  const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
-  const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
   const nextAccessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
   const nextRefreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
-
-  const result = deps.gatewaySql
+  const currentRefreshTokenHash = hashSensitiveToken(refreshToken);
+  const clock = getAuthDatabaseClockSql(deps);
+  const candidate = deps.gatewaySql
     .prepare(
       `
-    UPDATE companion_sessions
-    SET access_token_hash = @accessTokenHash,
-        access_token_expires_at = @accessTokenExpiresAt,
-        refresh_token_hash = @refreshTokenHash,
-        refresh_token_expires_at = @refreshTokenExpiresAt,
-        last_rotated_at = @lastRotatedAt,
-        last_seen_at = @lastSeenAt
-    WHERE session_id = @sessionId
-      AND refresh_token_hash = @currentRefreshTokenHash
-      AND revoked_at IS NULL
-  `,
+        SELECT session_id, grant_id
+        FROM companion_sessions
+        WHERE refresh_token_hash = @refreshTokenHash
+        LIMIT 1
+      `,
     )
-    .run({
-      sessionId: session.sessionId,
-      currentRefreshTokenHash: hashSensitiveToken(refreshToken),
-      accessTokenHash: hashSensitiveToken(nextAccessToken),
-      accessTokenExpiresAt,
-      refreshTokenHash: hashSensitiveToken(nextRefreshToken),
-      refreshTokenExpiresAt,
-      lastRotatedAt: issuedAt,
-      lastSeenAt: issuedAt,
-    });
-  if (result.changes === 0) {
-    throw new ConflictError({
-      message: "Companion session refresh token has already been rotated.",
-    });
+    .get<{ session_id?: unknown; grant_id?: unknown }>({ refreshTokenHash: currentRefreshTokenHash });
+  if (typeof candidate?.session_id !== "string" || typeof candidate.grant_id !== "string") {
+    throw new NotFoundError("Companion session not found.");
   }
+  let session!: CompanionSessionRecord;
+  let issuedAt = "";
+  let accessTokenExpiresAt = "";
+  let refreshTokenExpiresAt = "";
+
+  deps.storage.runImmediateTransaction(() => {
+    const grantRow = deps.gatewaySql
+      .prepare(
+        `
+          SELECT *
+          FROM auth_device_grants
+          WHERE grant_id = @grantId
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+          LIMIT 1${clock.lockRow}
+        `,
+      )
+      .get({ grantId: candidate.grant_id }) as Record<string, unknown> | undefined;
+    if (!grantRow) {
+      throw new NotFoundError("Companion session not found.");
+    }
+    const sessionRow = deps.gatewaySql
+      .prepare(
+        `
+          SELECT *
+          FROM companion_sessions
+          WHERE session_id = @sessionId
+            AND grant_id = @grantId
+            AND refresh_token_hash = @refreshTokenHash
+            AND revoked_at IS NULL
+            AND ${clock.isFuture("refresh_token_expires_at")}
+          LIMIT 1${clock.lockRow}
+        `,
+      )
+      .get({
+        sessionId: candidate.session_id,
+        grantId: candidate.grant_id,
+        refreshTokenHash: currentRefreshTokenHash,
+      }) as Record<string, unknown> | undefined;
+    if (!sessionRow) {
+      throw new NotFoundError("Companion session not found.");
+    }
+    session = mapCompanionSessionRow({
+      ...sessionRow,
+      device_label: grantRow.device_label,
+      device_type: grantRow.device_type,
+      platform: grantRow.platform,
+      grant_expires_at: grantRow.expires_at,
+      grant_revoked_at: grantRow.revoked_at,
+    });
+    ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
+
+    const result = deps.gatewaySql
+      .prepare(
+        `
+          UPDATE companion_sessions
+          SET access_token_hash = @accessTokenHash,
+              access_token_expires_at = @accessTokenExpiresAt,
+              refresh_token_hash = @refreshTokenHash,
+              refresh_token_expires_at = @refreshTokenExpiresAt,
+              last_rotated_at = @lastRotatedAt,
+              last_seen_at = @lastSeenAt
+          WHERE session_id = @sessionId
+            AND refresh_token_hash = @currentRefreshTokenHash
+            AND revoked_at IS NULL
+            AND ${clock.isFuture("refresh_token_expires_at")}
+            AND EXISTS (
+              SELECT 1
+              FROM auth_device_grants g
+              WHERE g.grant_id = companion_sessions.grant_id
+                AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
+            )
+        `,
+      )
+      .run({
+        sessionId: session.sessionId,
+        currentRefreshTokenHash,
+        accessTokenHash: hashSensitiveToken(nextAccessToken),
+        accessTokenExpiresAt,
+        refreshTokenHash: hashSensitiveToken(nextRefreshToken),
+        refreshTokenExpiresAt,
+        lastRotatedAt: issuedAt,
+        lastSeenAt: issuedAt,
+      });
+    if (result.changes === 0) {
+      throw new ConflictError({
+        message: "Companion session refresh token has already been rotated.",
+      });
+    }
+
+    const finalSession = deps.gatewaySql
+      .prepare(
+        `
+          SELECT s.session_id
+          FROM companion_sessions s
+          INNER JOIN auth_device_grants g
+            ON g.grant_id = s.grant_id
+          WHERE s.session_id = @sessionId
+            AND s.refresh_token_hash = @refreshTokenHash
+            AND s.revoked_at IS NULL
+            AND ${clock.isFuture("s.refresh_token_expires_at")}
+            AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
+          LIMIT 1
+        `,
+      )
+      .get({ sessionId: session.sessionId, refreshTokenHash: hashSensitiveToken(nextRefreshToken) });
+    if (!finalSession) {
+      throw new ConflictError({
+        message: "Companion session expired before refresh was committed.",
+      });
+    }
+  });
 
   await deps.storage.audit.append("approvals", {
     event: "auth.companion_session.refresh",
@@ -1667,27 +2161,56 @@ export function getActiveCompanionSessionById(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
 ): CompanionSessionRecord | undefined {
-  const now = new Date().toISOString();
-  const session = getCompanionSessionById(deps, sessionId);
-  if (!session) {
-    return undefined;
-  }
-  if (!isCompanionSessionCurrentlyActive(session, now)) {
-    deps.gatewaySql
-      .prepare(
-        `
-        UPDATE companion_sessions
-        SET revoked_at = COALESCE(revoked_at, @revokedAt)
-        WHERE session_id = @sessionId
+  const clock = getAuthDatabaseClockSql(deps);
+  const row = deps.gatewaySql
+    .prepare(
+      `
+        SELECT
+          s.*,
+          g.device_label,
+          g.device_type,
+          g.platform,
+          g.expires_at AS grant_expires_at,
+          g.revoked_at AS grant_revoked_at
+        FROM companion_sessions s
+        INNER JOIN auth_device_grants g
+          ON g.grant_id = s.grant_id
+        WHERE s.session_id = @sessionId
+          AND s.revoked_at IS NULL
+          AND ${clock.isFuture("s.access_token_expires_at")}
+          AND g.revoked_at IS NULL
+          AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
+        LIMIT 1
       `,
-      )
-      .run({
-        sessionId,
-        revokedAt: now,
-      });
-    return undefined;
+    )
+    .get({ sessionId }) as Record<string, unknown> | undefined;
+  if (row) {
+    return mapCompanionSessionRow(row);
   }
-  return session;
+
+  deps.gatewaySql
+    .prepare(
+      `
+        UPDATE companion_sessions
+        SET revoked_at = COALESCE(revoked_at, ${clock.nowText})
+        WHERE session_id = @sessionId
+          AND revoked_at IS NULL
+          AND (
+            ${clock.isExpiredOrInvalid("access_token_expires_at")}
+            OR EXISTS (
+              SELECT 1
+              FROM auth_device_grants g
+              WHERE g.grant_id = companion_sessions.grant_id
+                AND (
+                  g.revoked_at IS NOT NULL
+                  OR (g.expires_at IS NOT NULL AND ${clock.isExpiredOrInvalid("g.expires_at")})
+                )
+            )
+          )
+      `,
+    )
+    .run({ sessionId });
+  return undefined;
 }
 
 export function getCompanionSessionById(
@@ -1724,7 +2247,8 @@ export function getActiveCompanionSessionByRefreshToken(
   deps: SettingsAuthRuntimeDependencies,
   refreshToken: string,
 ): CompanionSessionRecord | undefined {
-  const now = new Date().toISOString();
+  const clock = getAuthDatabaseClockSql(deps);
+  const refreshTokenHash = hashSensitiveToken(refreshToken);
   const row = deps.gatewaySql
     .prepare(
       `
@@ -1739,32 +2263,32 @@ export function getActiveCompanionSessionByRefreshToken(
       INNER JOIN auth_device_grants g
         ON g.grant_id = s.grant_id
       WHERE s.refresh_token_hash = @refreshTokenHash
+        AND s.revoked_at IS NULL
+        AND ${clock.isFuture("s.refresh_token_expires_at")}
+        AND g.revoked_at IS NULL
+        AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
       LIMIT 1
     `,
     )
     .get({
-      refreshTokenHash: hashSensitiveToken(refreshToken),
+      refreshTokenHash,
     }) as Record<string, unknown> | undefined;
-  if (!row) {
-    return undefined;
+  if (row) {
+    return mapCompanionSessionRow(row);
   }
-  const session = mapCompanionSessionRow(row);
-  if (!isCompanionSessionRefreshable(session, now)) {
-    deps.gatewaySql
-      .prepare(
-        `
+
+  deps.gatewaySql
+    .prepare(
+      `
         UPDATE companion_sessions
-        SET revoked_at = COALESCE(revoked_at, @revokedAt)
-        WHERE session_id = @sessionId
+        SET revoked_at = COALESCE(revoked_at, ${clock.nowText})
+        WHERE refresh_token_hash = @refreshTokenHash
+          AND revoked_at IS NULL
+          AND ${clock.isExpiredOrInvalid("refresh_token_expires_at")}
       `,
-      )
-      .run({
-        sessionId: session.sessionId,
-        revokedAt: now,
-      });
-    return undefined;
-  }
-  return session;
+    )
+    .run({ refreshTokenHash });
+  return undefined;
 }
 
 export function getCompanionSessionInfo(
@@ -1789,9 +2313,19 @@ export function listCompanionSessions(
   const view = options?.view === "all" ? "all" : "active";
   const limit = clampInt(options?.limit, 50, 1, 200);
   const grantId = options?.grantId?.trim();
-  const now = new Date().toISOString();
-  const query = grantId
-    ? `
+  const clock = getAuthDatabaseClockSql(deps);
+  const filters = [
+    ...(grantId ? ["s.grant_id = @grantId"] : []),
+    ...(view === "active"
+      ? [
+          "s.revoked_at IS NULL",
+          clock.isFuture("s.refresh_token_expires_at"),
+          "g.revoked_at IS NULL",
+          `(g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})`,
+        ]
+      : []),
+  ];
+  const query = `
     SELECT
       s.*,
       g.device_label,
@@ -1802,21 +2336,7 @@ export function listCompanionSessions(
     FROM companion_sessions s
     INNER JOIN auth_device_grants g
       ON g.grant_id = s.grant_id
-    WHERE s.grant_id = @grantId
-    ORDER BY s.created_at DESC, s.session_id DESC
-    LIMIT @limit
-  `
-    : `
-    SELECT
-      s.*,
-      g.device_label,
-      g.device_type,
-      g.platform,
-      g.expires_at AS grant_expires_at,
-      g.revoked_at AS grant_revoked_at
-    FROM companion_sessions s
-    INNER JOIN auth_device_grants g
-      ON g.grant_id = s.grant_id
+    ${filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : ""}
     ORDER BY s.created_at DESC, s.session_id DESC
     LIMIT @limit
   `;
@@ -1829,10 +2349,7 @@ export function listCompanionSessions(
     .all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
 
   return {
-    items: rows
-      .map(mapCompanionSessionRow)
-      .filter((session) => view === "all" || isCompanionSessionOperatorActive(session, now))
-      .map(toCompanionSessionAdminRecord),
+    items: rows.map(mapCompanionSessionRow).map(toCompanionSessionAdminRecord),
   };
 }
 
@@ -1980,6 +2497,16 @@ export async function recordApprovalResolution(
       correlationId: approval.approvalId,
     },
   );
+  recordApprovalResolutionSignals(deps, approval);
+}
+
+export function recordApprovalResolutionSignals(
+  deps: Pick<
+    SettingsAuthRuntimeDependencies,
+    "recordImprovementApprovalResolutionSignal" | "handleActivationApprovalResolution"
+  >,
+  approval: ApprovalRequest,
+): void {
   deps.recordImprovementApprovalResolutionSignal(approval);
   deps.handleActivationApprovalResolution(approval);
 }
@@ -1989,72 +2516,110 @@ export function validateCompanionAccessToken(
   token: string,
 ): CompanionAccessValidationResult | undefined {
   const tokenHash = hashSensitiveToken(token);
-  const now = new Date().toISOString();
-  const row = deps.gatewaySql
+  const clock = getAuthDatabaseClockSql(deps);
+  const candidate = deps.gatewaySql
     .prepare(
       `
-    SELECT
-      s.*,
-      g.device_label,
-      g.device_type,
-      g.platform,
-      g.expires_at AS grant_expires_at,
-      g.revoked_at AS grant_revoked_at
-    FROM companion_sessions s
-    INNER JOIN auth_device_grants g
-      ON g.grant_id = s.grant_id
-    WHERE s.access_token_hash = @tokenHash
-    LIMIT 1
-  `,
+        SELECT session_id, grant_id
+        FROM companion_sessions
+        WHERE access_token_hash = @tokenHash
+        LIMIT 1
+      `,
     )
-    .get({
-      tokenHash,
-    }) as Record<string, unknown> | undefined;
-  if (!row) {
+    .get<{ session_id?: unknown; grant_id?: unknown }>({ tokenHash });
+  if (typeof candidate?.session_id !== "string" || typeof candidate.grant_id !== "string") {
     return undefined;
   }
+  let session: CompanionSessionRecord | undefined;
 
-  const session = mapCompanionSessionRow(row);
-  if (!isCompanionSessionCurrentlyActive(session, now)) {
+  deps.storage.runImmediateTransaction(() => {
+    const grantRow = deps.gatewaySql
+      .prepare(
+        `
+          SELECT *
+          FROM auth_device_grants
+          WHERE grant_id = @grantId
+            AND revoked_at IS NULL
+            AND (expires_at IS NULL OR ${clock.isFuture("expires_at")})
+          LIMIT 1${clock.lockRow}
+        `,
+      )
+      .get({ grantId: candidate.grant_id }) as Record<string, unknown> | undefined;
+    if (!grantRow) {
+      return;
+    }
+    const sessionRow = deps.gatewaySql
+      .prepare(
+        `
+          SELECT *
+          FROM companion_sessions
+          WHERE session_id = @sessionId
+            AND grant_id = @grantId
+            AND access_token_hash = @tokenHash
+            AND revoked_at IS NULL
+            AND ${clock.isFuture("access_token_expires_at")}
+          LIMIT 1${clock.lockRow}
+        `,
+      )
+      .get({ sessionId: candidate.session_id, grantId: candidate.grant_id, tokenHash }) as
+      | Record<string, unknown>
+      | undefined;
+    if (!sessionRow) {
+      return;
+    }
+    session = mapCompanionSessionRow({
+      ...sessionRow,
+      device_label: grantRow.device_label,
+      device_type: grantRow.device_type,
+      platform: grantRow.platform,
+      grant_expires_at: grantRow.expires_at,
+      grant_revoked_at: grantRow.revoked_at,
+    });
+
     deps.gatewaySql
       .prepare(
         `
-      UPDATE companion_sessions
-      SET revoked_at = COALESCE(revoked_at, @revokedAt)
-      WHERE session_id = @sessionId
-    `,
+          UPDATE companion_sessions
+          SET last_seen_at = ${clock.nowText}
+          WHERE session_id = @sessionId
+        `,
       )
-      .run({
-        sessionId: session.sessionId,
-        revokedAt: now,
-      });
+      .run({ sessionId: session.sessionId });
+    deps.gatewaySql
+      .prepare(
+        `
+          UPDATE auth_device_grants
+          SET last_used_at = ${clock.nowText}
+          WHERE grant_id = @grantId
+        `,
+      )
+      .run({ grantId: session.grantId });
+
+    const finalSession = deps.gatewaySql
+      .prepare(
+        `
+          SELECT s.session_id
+          FROM companion_sessions s
+          INNER JOIN auth_device_grants g
+            ON g.grant_id = s.grant_id
+          WHERE s.session_id = @sessionId
+            AND s.access_token_hash = @tokenHash
+            AND s.revoked_at IS NULL
+            AND ${clock.isFuture("s.access_token_expires_at")}
+            AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
+          LIMIT 1
+        `,
+      )
+      .get({ sessionId: session.sessionId, tokenHash });
+    if (!finalSession) {
+      session = undefined;
+    }
+  });
+
+  if (!session) {
     return undefined;
   }
-
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE companion_sessions
-    SET last_seen_at = @lastSeenAt
-    WHERE session_id = @sessionId
-  `,
-    )
-    .run({
-      sessionId: session.sessionId,
-      lastSeenAt: now,
-    });
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE auth_device_grants
-    SET last_used_at = @lastUsedAt
-    WHERE grant_id = @grantId
-  `,
-    )
-    .run({
-      grantId: session.grantId,
-      lastUsedAt: now,
-    });
 
   return {
     actorId: `companion:${session.sessionId}`,
@@ -2078,32 +2643,11 @@ export function verifyCompanionRequestSignature(
 ): void {
   const session = getActiveCompanionSessionById(deps, input.sessionId);
   if (!session) {
-    void deps.storage.audit.append("approvals", {
-      event: "auth.companion_request.session_inactive",
-      actorId: `companion:${input.sessionId}`,
-      companionSessionId: input.sessionId,
-      detail: "Companion session is no longer active.",
-      method: input.method.toUpperCase(),
-      path: input.path,
-    });
-    throw new Error("Companion session is no longer active.");
+    rejectInactiveCompanionRequest(deps, input);
   }
 
-  const timestamp = Date.parse(input.timestamp);
-  if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > COMPANION_REQUEST_CLOCK_SKEW_MS) {
-    void deps.storage.audit.append("approvals", {
-      event: "auth.companion_request.timestamp_invalid",
-      actorId: `companion:${session.sessionId}`,
-      deviceId: session.grantId,
-      grantId: session.grantId,
-      companionSessionId: session.sessionId,
-      contractId: COMPANION_CONTRACT_ID,
-      detail: "Companion request timestamp is outside the accepted skew window.",
-      method: input.method.toUpperCase(),
-      path: input.path,
-      nonce: input.nonce,
-    });
-    throw new Error("Companion request timestamp is outside the accepted skew window.");
+  if (!deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS)) {
+    rejectStaleCompanionRequest(deps, session, input);
   }
 
   const nonce = normalizeCompanionNonce(input.nonce);
@@ -2137,49 +2681,103 @@ export function verifyCompanionRequestSignature(
     throw new Error("Invalid companion request signature.");
   }
 
-  const now = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + COMPANION_REQUEST_REPLAY_TTL_MS).toISOString();
-  deps.gatewaySql
-    .prepare(
-      `
-    DELETE FROM companion_request_replays
-    WHERE expires_at <= @now
-  `,
-    )
-    .run({ now });
+  const clock = getAuthDatabaseClockSql(deps);
   try {
-    deps.gatewaySql
-      .prepare(
-        `
-      INSERT INTO companion_request_replays (
-        session_id,
-        nonce,
-        method,
-        path,
-        request_hash,
-        created_at,
-        expires_at
-      ) VALUES (
-        @sessionId,
-        @nonce,
-        @method,
-        @path,
-        @requestHash,
-        @createdAt,
-        @expiresAt
-      )
-    `,
-      )
-      .run({
-        sessionId: session.sessionId,
-        nonce,
-        method,
-        path,
-        requestHash,
-        createdAt: now,
-        expiresAt,
-      });
-  } catch {
+    deps.storage.runImmediateTransaction(() => {
+      deps.gatewaySql
+        .prepare(
+          `
+            DELETE FROM companion_request_replays
+            WHERE ${clock.isValidAndExpired("expires_at")}
+          `,
+        )
+        .run();
+
+      if (!deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS)) {
+        throw new CompanionRequestTimestampBoundaryError();
+      }
+      const { createdAt, expiresAt } = deps.gatewaySql.createDatabaseTtlWindow(COMPANION_REQUEST_REPLAY_TTL_MS);
+      const inserted = deps.gatewaySql
+        .prepare(
+          `
+            INSERT INTO companion_request_replays (
+              session_id,
+              nonce,
+              method,
+              path,
+              request_hash,
+              created_at,
+              expires_at
+            )
+            SELECT
+              @sessionId,
+              @nonce,
+              @method,
+              @path,
+              @requestHash,
+              @createdAt,
+              @expiresAt
+            WHERE EXISTS (
+              SELECT 1
+              FROM companion_sessions s
+              INNER JOIN auth_device_grants g
+                ON g.grant_id = s.grant_id
+              WHERE s.session_id = @sessionId
+                AND s.revoked_at IS NULL
+                AND ${clock.isFuture("s.access_token_expires_at")}
+                AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
+            )
+          `,
+        )
+        .run({
+          sessionId: session.sessionId,
+          nonce,
+          method,
+          path,
+          requestHash,
+          createdAt,
+          expiresAt,
+        });
+      if (inserted.changes !== 1) {
+        throw new CompanionRequestSessionBoundaryError();
+      }
+
+      // The INSERT can wait on a competing nonce. Re-prove all authority at
+      // the actual acceptance boundary before committing the tombstone.
+      if (
+        !deps.gatewaySql.isDatabaseInstantWithinSkew(input.timestamp, COMPANION_REQUEST_CLOCK_SKEW_MS) ||
+        !deps.gatewaySql.isDatabaseInstantFuture(expiresAt)
+      ) {
+        throw new CompanionRequestTimestampBoundaryError();
+      }
+      const finalSession = deps.gatewaySql
+        .prepare(
+          `
+            SELECT s.session_id
+            FROM companion_sessions s
+            INNER JOIN auth_device_grants g
+              ON g.grant_id = s.grant_id
+            WHERE s.session_id = @sessionId
+              AND s.revoked_at IS NULL
+              AND ${clock.isFuture("s.access_token_expires_at")}
+              AND g.revoked_at IS NULL
+              AND (g.expires_at IS NULL OR ${clock.isFuture("g.expires_at")})
+            LIMIT 1
+          `,
+        )
+        .get({ sessionId: session.sessionId });
+      if (!finalSession) {
+        throw new CompanionRequestSessionBoundaryError();
+      }
+    });
+  } catch (error) {
+    if (error instanceof CompanionRequestTimestampBoundaryError) {
+      rejectStaleCompanionRequest(deps, session, input);
+    }
+    if (error instanceof CompanionRequestSessionBoundaryError) {
+      rejectInactiveCompanionRequest(deps, input, session);
+    }
     void deps.storage.audit.append("approvals", {
       event: "auth.companion_request.replay_rejected",
       actorId: `companion:${session.sessionId}`,
@@ -2193,7 +2791,7 @@ export function verifyCompanionRequestSignature(
       nonce,
       requestHash,
     });
-    throw new Error("Companion request replay detected.");
+    throw new Error("Companion request replay detected.", { cause: error });
   }
 
   void deps.storage.audit.append("approvals", {
@@ -2208,6 +2806,54 @@ export function verifyCompanionRequestSignature(
     nonce,
     requestHash,
   });
+}
+
+class CompanionRequestTimestampBoundaryError extends Error {}
+
+class CompanionRequestSessionBoundaryError extends Error {}
+
+function rejectStaleCompanionRequest(
+  deps: SettingsAuthRuntimeDependencies,
+  session: CompanionSessionRecord,
+  input: {
+    method: string;
+    path: string;
+    timestamp: string;
+    nonce: string;
+  },
+): never {
+  void deps.storage.audit.append("approvals", {
+    event: "auth.companion_request.timestamp_invalid",
+    actorId: `companion:${session.sessionId}`,
+    deviceId: session.grantId,
+    grantId: session.grantId,
+    companionSessionId: session.sessionId,
+    contractId: COMPANION_CONTRACT_ID,
+    detail: "Companion request timestamp is outside the accepted skew window.",
+    method: input.method.toUpperCase(),
+    path: input.path,
+    nonce: input.nonce,
+  });
+  throw new Error("Companion request timestamp is outside the accepted skew window.");
+}
+
+function rejectInactiveCompanionRequest(
+  deps: SettingsAuthRuntimeDependencies,
+  input: { sessionId: string; method: string; path: string },
+  session?: CompanionSessionRecord,
+): never {
+  void deps.storage.audit.append("approvals", {
+    event: "auth.companion_request.session_inactive",
+    actorId: `companion:${session?.sessionId ?? input.sessionId}`,
+    deviceId: session?.grantId,
+    grantId: session?.grantId,
+    companionSessionId: session?.sessionId ?? input.sessionId,
+    contractId: session ? COMPANION_CONTRACT_ID : undefined,
+    detail: "Companion session is no longer active.",
+    method: input.method.toUpperCase(),
+    path: input.path,
+  });
+  throw new Error("Companion session is no longer active.");
 }
 
 function legacyProfileToApprovalMode(profile: string | undefined): ToolApprovalMode {

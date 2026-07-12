@@ -112,8 +112,10 @@ export interface ChatTurnTracePatchInput {
 
 export class ChatTurnTraceRepository {
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly insertStmt;
   private readonly patchStmt;
+  private readonly patchIfStatusStmt;
   private readonly listBySessionStmt;
   private readonly listCompletedSinceStmt;
   private readonly listActiveStmt;
@@ -123,6 +125,9 @@ export class ChatTurnTraceRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_turn_traces WHERE turn_id = ?");
+    this.getForUpdateStmt = db.prepare(
+      `SELECT * FROM chat_turn_traces WHERE turn_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+    );
     this.insertStmt = db.prepare(`
       INSERT INTO chat_turn_traces (
         turn_id, session_id, user_message_id, parent_turn_id, branch_kind, source_turn_id,
@@ -168,6 +173,33 @@ export class ChatTurnTraceRepository {
         finished_at = @finishedAt
       WHERE turn_id = @turnId
     `);
+    this.patchIfStatusStmt = db.prepare(`
+      UPDATE chat_turn_traces
+      SET
+        parent_turn_id = @parentTurnId,
+        branch_kind = @branchKind,
+        source_turn_id = @sourceTurnId,
+        assistant_message_id = @assistantMessageId,
+        execution_plan_id = @executionPlanId,
+        status = @status,
+        model = @model,
+        routing_json = @routingJson,
+        retrieval_json = @retrievalJson,
+        reflection_json = @reflectionJson,
+        proactive_json = @proactiveJson,
+        completion_json = @completionJson,
+        durable_json = @durableJson,
+        orchestration_json = @orchestrationJson,
+        guidance_json = @guidanceJson,
+        loop_guard_json = @loopGuardJson,
+        pending_user_input_json = @pendingUserInputJson,
+        citations_json = @citationsJson,
+        failure_json = @failureJson,
+        capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
+        specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
+        finished_at = @finishedAt
+      WHERE turn_id = @turnId AND status = @expectedStatus
+    `);
     this.listBySessionStmt = db.prepare(`
       SELECT * FROM chat_turn_traces
       WHERE session_id = @sessionId
@@ -197,60 +229,98 @@ export class ChatTurnTraceRepository {
     return mapRow(row);
   }
 
-  public create(input: ChatTurnTraceCreateInput): ChatTurnTraceRecord {
-    this.insertStmt.run({
-      turnId: input.turnId,
-      sessionId: input.sessionId,
-      userMessageId: input.userMessageId,
-      parentTurnId: input.parentTurnId ?? null,
-      branchKind: input.branchKind ?? "append",
-      sourceTurnId: input.sourceTurnId ?? null,
-      assistantMessageId: input.assistantMessageId ?? null,
-      executionPlanId: input.executionPlanId ?? null,
-      status: input.status ?? "running",
-      mode: input.mode,
-      model: input.model ?? null,
-      webMode: input.webMode,
-      memoryMode: input.memoryMode,
-      thinkingLevel: input.thinkingLevel,
-      routingJson: serializeRoutingJson(input.routing ?? {}, input.effectiveToolAutonomy, {
-        speedMode: input.speedMode,
-        subagentPolicy: input.subagentPolicy,
-      }),
-      retrievalJson: input.retrieval ? JSON.stringify(input.retrieval) : null,
-      reflectionJson: input.reflection ? JSON.stringify(input.reflection) : null,
-      proactiveJson: input.proactive ? JSON.stringify(input.proactive) : null,
-      completionJson: input.completion ? JSON.stringify(input.completion) : null,
-      durableJson: input.durable ? JSON.stringify(input.durable) : null,
-      orchestrationJson: input.orchestration ? JSON.stringify(input.orchestration) : null,
-      guidanceJson: input.guidance ? JSON.stringify(input.guidance) : null,
-      loopGuardJson: input.loopGuard ? JSON.stringify(input.loopGuard) : null,
-      pendingUserInputJson: input.pendingUserInput ? JSON.stringify(input.pendingUserInput) : null,
-      citationsJson: input.citations ? JSON.stringify(input.citations) : null,
-      failureJson: input.failure ? JSON.stringify(input.failure) : null,
-      capabilityUpgradeSuggestionsJson: input.capabilityUpgradeSuggestions
-        ? JSON.stringify(input.capabilityUpgradeSuggestions)
-        : null,
-      specialistCandidateSuggestionsJson: input.specialistCandidateSuggestions
-        ? JSON.stringify(input.specialistCandidateSuggestions)
-        : null,
-      startedAt: input.startedAt ?? new Date().toISOString(),
-      finishedAt: input.finishedAt ?? null,
-    });
-    const trace = this.get(input.turnId);
-    if (trace.sessionId !== input.sessionId || trace.userMessageId !== input.userMessageId) {
-      throw new Error(
-        `Chat turn trace ${input.turnId} already belongs to session ${trace.sessionId} and message ${trace.userMessageId}.`,
-      );
+  /** Lock a trace before a transactionally fenced read-modify-write. */
+  public getForUpdate(turnId: string): ChatTurnTraceRecord {
+    const row = toChatTurnTraceRow(this.getForUpdateStmt.get(turnId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Chat turn trace", id: turnId });
     }
-    return trace;
+    return mapRow(row);
+  }
+
+  public create(input: ChatTurnTraceCreateInput): ChatTurnTraceRecord {
+    return this.db.transaction("immediate", () => {
+      this.insertStmt.run({
+        turnId: input.turnId,
+        sessionId: input.sessionId,
+        userMessageId: input.userMessageId,
+        parentTurnId: input.parentTurnId ?? null,
+        branchKind: input.branchKind ?? "append",
+        sourceTurnId: input.sourceTurnId ?? null,
+        assistantMessageId: input.assistantMessageId ?? null,
+        executionPlanId: input.executionPlanId ?? null,
+        status: input.status ?? "running",
+        mode: input.mode,
+        model: input.model ?? null,
+        webMode: input.webMode,
+        memoryMode: input.memoryMode,
+        thinkingLevel: input.thinkingLevel,
+        routingJson: serializeRoutingJson(input.routing ?? {}, input.effectiveToolAutonomy, {
+          speedMode: input.speedMode,
+          subagentPolicy: input.subagentPolicy,
+        }),
+        retrievalJson: input.retrieval ? JSON.stringify(input.retrieval) : null,
+        reflectionJson: input.reflection ? JSON.stringify(input.reflection) : null,
+        proactiveJson: input.proactive ? JSON.stringify(input.proactive) : null,
+        completionJson: input.completion ? JSON.stringify(input.completion) : null,
+        durableJson: input.durable ? JSON.stringify(input.durable) : null,
+        orchestrationJson: input.orchestration ? JSON.stringify(input.orchestration) : null,
+        guidanceJson: input.guidance ? JSON.stringify(input.guidance) : null,
+        loopGuardJson: input.loopGuard ? JSON.stringify(input.loopGuard) : null,
+        pendingUserInputJson: input.pendingUserInput ? JSON.stringify(input.pendingUserInput) : null,
+        citationsJson: input.citations ? JSON.stringify(input.citations) : null,
+        failureJson: input.failure ? JSON.stringify(input.failure) : null,
+        capabilityUpgradeSuggestionsJson: input.capabilityUpgradeSuggestions
+          ? JSON.stringify(input.capabilityUpgradeSuggestions)
+          : null,
+        specialistCandidateSuggestionsJson: input.specialistCandidateSuggestions
+          ? JSON.stringify(input.specialistCandidateSuggestions)
+          : null,
+        startedAt: input.startedAt ?? new Date().toISOString(),
+        finishedAt: input.finishedAt ?? null,
+      });
+      const trace = this.get(input.turnId);
+      if (trace.sessionId !== input.sessionId || trace.userMessageId !== input.userMessageId) {
+        throw new Error(
+          `Chat turn trace ${input.turnId} already belongs to session ${trace.sessionId} and message ${trace.userMessageId}.`,
+        );
+      }
+      return trace;
+    });
   }
 
   public patch(turnId: string, input: ChatTurnTracePatchInput): ChatTurnTraceRecord {
     const current = this.get(turnId);
+    this.patchStmt.run(this.buildPatchParams(turnId, input, current));
+    return this.get(turnId);
+  }
+
+  public patchIfStatus(
+    turnId: string,
+    expectedStatuses: readonly ChatTurnTraceRecord["status"][],
+    input: ChatTurnTracePatchInput,
+  ): ChatTurnTraceRecord | undefined {
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(turnId);
+      if (!expectedStatuses.includes(current.status)) {
+        return undefined;
+      }
+      const result = this.patchIfStatusStmt.run({
+        ...this.buildPatchParams(turnId, input, current),
+        expectedStatus: current.status,
+      });
+      return result.changes > 0 ? this.get(turnId) : undefined;
+    });
+  }
+
+  private buildPatchParams(
+    turnId: string,
+    input: ChatTurnTracePatchInput,
+    current: ChatTurnTraceRecord,
+  ): Record<string, unknown> {
     const hasFailure = Object.prototype.hasOwnProperty.call(input, "failure");
     const hasPendingUserInput = Object.prototype.hasOwnProperty.call(input, "pendingUserInput");
-    this.patchStmt.run({
+    return {
       turnId,
       parentTurnId: input.parentTurnId !== undefined ? input.parentTurnId : (current.parentTurnId ?? null),
       branchKind: input.branchKind ?? current.branchKind,
@@ -288,8 +358,7 @@ export class ChatTurnTraceRepository {
         input.specialistCandidateSuggestions ?? current.specialistCandidateSuggestions ?? [],
       ),
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
-    });
-    return this.get(turnId);
+    };
   }
 
   /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */

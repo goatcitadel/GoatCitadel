@@ -20,6 +20,7 @@ function createStorageStub(): Storage {
     },
     toolGrants: {
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
       consumeOne: vi.fn(),
     },
     pendingApprovalActions: {

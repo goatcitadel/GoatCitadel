@@ -15,6 +15,13 @@ export interface ApprovalResolveResult {
   resolutionEffects?: ApprovalResolutionEffectsResult;
 }
 
+export interface ApprovalResolutionContext {
+  remoteToken?: {
+    tokenId: string;
+    connectorId: string;
+  };
+}
+
 export interface ApprovalReplayResult {
   approval: ApprovalRequest;
   events: ApprovalReplayEvent[];
@@ -26,4 +33,7 @@ export interface ApprovalReplayResult {
 export interface RemoteApprovalActionTokenIssueResult extends RemoteActionTokenRecord {
   approvalId: string;
   token: string;
+  deliveryStatus?: "queued" | "not_configured" | "failed";
+  deliveryRunId?: string;
+  deliveryError?: string;
 }

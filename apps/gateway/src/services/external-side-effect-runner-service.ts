@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- External-effect claims, replay fencing, and operator-ledger transitions stay co-located so boundary ownership remains auditable. */
 import { createHash } from "node:crypto";
 import type {
   ExternalSideEffectRunRecord,
@@ -14,6 +15,7 @@ import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import { wardRequiresDryRun } from "./dry-run-commit-service.js";
 
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
+const EXTERNAL_SIDE_EFFECT_DESTINATION_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-destination-digest:v1";
 
 export interface ExternalSideEffectRunStore {
   createOrGet(
@@ -54,6 +56,17 @@ export interface ExternalSideEffectRunStore {
     },
     now?: string,
   ): ExternalSideEffectRunRecord;
+  markFailureIfStatus(
+    runId: string,
+    expectedStatus: ExternalSideEffectRunStatus,
+    input: {
+      status: "failed_before_boundary" | "unknown_external_outcome";
+      errorText: string;
+      responsePayload?: Record<string, unknown>;
+    },
+    now?: string,
+  ): ExternalSideEffectRunRecord;
+  isStatusStale?(runId: string, expectedStatus: ExternalSideEffectRunStatus, staleAfterMs: number): boolean;
 }
 
 export interface ExternalSideEffectIntentInput {
@@ -207,12 +220,28 @@ export function deriveExternalSideEffectReversibility(input: {
 export interface ExternalSideEffectClaimInput {
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
+  /** Atomically owns the mutation claim and strict completion with its operator-visible side-effect run. */
+  runClaimTransaction?<T>(work: () => T): T;
   workspaceId?: string;
   boundary: string;
   catalogId?: string;
   connectionId?: string;
   actionId?: string;
   checkedAt: string;
+  /**
+   * Opts the mutation claim into token-fenced stale takeover. Ordinary live
+   * callers leave this unset, so an expired wall-clock alone can never seize a
+   * provider call. The replay worker supplies the same bounded interval it
+   * uses to classify a pre-boundary run as stale.
+   */
+  claimLeaseDurationMs?: number;
+  /**
+   * Non-secret digest of the canonical provider destination. When present it
+   * becomes part of the mutation payload hash and the redacted run summary.
+   */
+  externalDestinationFingerprint?: string;
+  /** Internal durable-replay guard: re-read this exact run before claiming its mutation generation. */
+  replayRunId?: string;
   idempotencyKey?: string;
   actorScope?: string;
   payload: unknown;
@@ -228,18 +257,35 @@ export interface ExternalSideEffectClaimResult {
   payloadHash: string;
   actorScope: string;
   routePath: string;
+  /** Ownership generation for every mutation settlement and boundary claim. */
+  claimToken?: string;
   sideEffectRunId?: string;
 }
 
 export interface ExternalSideEffectExecutionContext extends ExternalSideEffectClaimResult {
   readonly externalCallStarted: boolean;
+  readonly externalCallNotRequired: boolean;
   /** Call immediately before the provider or bridge request crosses the external side-effect boundary. */
   markExternalCallStarted(): void;
+  /** Call only when preflight completed safely without crossing an external boundary. */
+  markExternalCallNotRequired(): void;
 }
 
 export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSideEffectClaimInput {
   label: string;
   output?: Record<string, unknown>;
+  /**
+   * Internal replay-worker guard. A durable replay must never execute or
+   * settle through a mutation store that cannot prove generation ownership.
+   * Legacy live callers remain compatible when their store predates tokens.
+   */
+  requireMutationClaimOwnership?: boolean;
+  /**
+   * Require the operator-visible side-effect ledger to record the boundary
+   * before provider code runs. Intended for durable workflows where a missing
+   * boundary marker must fail closed instead of creating a replay ambiguity.
+   */
+  requireDurableBoundaryRecord?: boolean;
   /**
    * The Citadel Ward effect resolved for this action (via evaluateWards()). When it is
    * `require_dry_run`, a direct execute is REFUSED before the boundary — the side-effect must
@@ -248,6 +294,8 @@ export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSi
    */
   wardEffect?: WardEffect;
   execute(claim: ExternalSideEffectExecutionContext): Promise<TValue>;
+  /** Optional canonical completion commit. When present it owns all terminal stores atomically. */
+  commitCompleted?(claim: ExternalSideEffectExecutionContext, value: TValue): void;
 }
 
 export type IdempotentExternalSideEffectRunResult<TValue> =
@@ -311,7 +359,8 @@ export interface ExternalSideEffectReplayWorkerInput<TValue> {
 }
 
 export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaimInput): ExternalSideEffectClaimResult {
-  const payloadHash = hashStableJson(input.payload);
+  const externalDestinationFingerprint = normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint);
+  const payloadHash = hashExternalSideEffectPayload(input.payload, externalDestinationFingerprint);
   const idempotencyKey =
     input.idempotencyKey?.trim() ||
     hashStableIntentParts([input.boundary, input.catalogId, input.connectionId, input.actionId, payloadHash]);
@@ -338,25 +387,70 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
     });
   }
 
-  const claim = input.mutationStore.claim({
-    method: "POST",
-    routePath,
-    idempotencyKey,
-    actorScope,
-    payloadHash,
-    now: input.checkedAt,
-  });
-  return recordExternalSideEffectRun(input, {
-    replayPolicy: "idempotent_external",
-    replayOutcome: claim.outcome,
-    replayAttempt: claim.outcome === "claimed" ? (claim.claimKind ?? "new") : "blocked",
-    resumable: false,
-    resumeState: mapExternalSideEffectResumeState(claim.outcome),
-    idempotencyKey,
-    payloadHash,
-    actorScope,
-    routePath,
-  });
+  const claimAndRecord = (): ExternalSideEffectClaimResult => {
+    const currentReplayRun = input.replayRunId
+      ? input.sideEffectRunStore!.createOrGet(
+          {
+            workspaceId: input.workspaceId,
+            boundary: input.boundary,
+            routePath,
+            catalogId: input.catalogId,
+            connectionId: input.connectionId,
+            actionId: input.actionId,
+            actorScope,
+            idempotencyKey,
+            payloadHash,
+            status: "claimed_not_sent",
+            replayOutcome: "claimed",
+            replayAttempt: "new",
+            requestPayload: summarizeExternalSideEffectRequest(input.payload, externalDestinationFingerprint),
+          },
+          input.checkedAt,
+        )
+      : undefined;
+    if (currentReplayRun && currentReplayRun.runId !== input.replayRunId) {
+      throw new Error(`External side-effect replay run ${input.replayRunId} no longer owns its mutation identity.`);
+    }
+    const currentReplayBlock = currentReplayRun
+      ? buildCurrentReplayRunBlock(currentReplayRun, { idempotencyKey, payloadHash, actorScope, routePath })
+      : undefined;
+    if (currentReplayBlock) {
+      return currentReplayBlock;
+    }
+    const claim = input.mutationStore!.claim({
+      method: "POST",
+      routePath,
+      idempotencyKey,
+      actorScope,
+      payloadHash,
+      ...(input.claimLeaseDurationMs !== undefined
+        ? { leaseDurationMs: input.claimLeaseDurationMs }
+        : { now: input.checkedAt }),
+    });
+    const claimed: ExternalSideEffectClaimResult = {
+      replayPolicy: "idempotent_external",
+      replayOutcome: claim.outcome,
+      replayAttempt:
+        claim.outcome === "claimed"
+          ? claim.claimKind === "retry_after_stale_claim"
+            ? "retry_after_failure"
+            : (claim.claimKind ?? "new")
+          : "blocked",
+      resumable: false,
+      resumeState: mapExternalSideEffectResumeState(claim.outcome),
+      idempotencyKey,
+      payloadHash,
+      actorScope,
+      routePath,
+      ...(claim.outcome === "claimed" && claim.record?.claimToken ? { claimToken: claim.record.claimToken } : {}),
+    };
+    return currentReplayRun
+      ? { ...claimed, sideEffectRunId: currentReplayRun.runId }
+      : recordExternalSideEffectRun(input, claimed);
+  };
+  return input.sideEffectRunStore && input.runClaimTransaction
+    ? input.runClaimTransaction(claimAndRecord)
+    : claimAndRecord();
 }
 
 export async function runReplaySafeExternalSideEffectWorker<TValue>(
@@ -365,7 +459,7 @@ export async function runReplaySafeExternalSideEffectWorker<TValue>(
   const limit = clampReplayWorkerLimit(input.limit ?? input.runs.length);
   const results: Array<ExternalSideEffectReplayWorkerResult<TValue>> = [];
   for (const run of input.runs.slice(0, limit)) {
-    const eligibility = readExternalSideEffectReplayEligibility(run, input.checkedAt, input.staleClaimedNotSentAfterMs);
+    const eligibility = readExternalSideEffectReplayEligibility(run);
     if (!eligibility.eligible) {
       results.push({
         status: "skipped",
@@ -396,8 +490,49 @@ export async function runReplaySafeExternalSideEffectWorker<TValue>(
       });
       continue;
     }
-    markPreBoundaryReplayReady(job.mutationStore, run, input.checkedAt);
-    const result = await runIdempotentExternalSideEffect(job);
+    if (!job.mutationStore || !job.sideEffectRunStore || !job.runClaimTransaction) {
+      results.push({
+        status: "skipped",
+        run,
+        reason: "job_unavailable",
+        message:
+          "External side-effect replay requires one transaction owner for its mutation claim and durable boundary.",
+      });
+      continue;
+    }
+    if (run.status === "claimed_not_sent") {
+      if (!job.sideEffectRunStore.isStatusStale) {
+        results.push({
+          status: "skipped",
+          run,
+          reason: "job_unavailable",
+          message: "External side-effect replay requires database-clock stale-claim authority.",
+        });
+        continue;
+      }
+      if (
+        !job.sideEffectRunStore.isStatusStale(
+          run.runId,
+          "claimed_not_sent",
+          input.staleClaimedNotSentAfterMs ?? 5 * 60 * 1000,
+        )
+      ) {
+        results.push({
+          status: "skipped",
+          run,
+          reason: "claimed_not_sent_not_stale",
+          message: "Pre-boundary claim is still recent; the worker left it alone to avoid racing a live request.",
+        });
+        continue;
+      }
+    }
+    const result = await runIdempotentExternalSideEffect({
+      ...job,
+      claimLeaseDurationMs: input.staleClaimedNotSentAfterMs ?? 5 * 60 * 1000,
+      replayRunId: run.runId,
+      requireMutationClaimOwnership: true,
+      requireDurableBoundaryRecord: true,
+    });
     if (result.status === "executed") {
       results.push({ status: "executed", run, result });
     } else if (result.status === "blocked") {
@@ -429,9 +564,15 @@ export async function runIdempotentExternalSideEffect<TValue>(
           input.catalogId,
           input.connectionId,
           input.actionId,
-          hashStableJson(input.payload),
+          hashExternalSideEffectPayload(
+            input.payload,
+            normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
+          ),
         ]),
-      payloadHash: hashStableJson(input.payload),
+      payloadHash: hashExternalSideEffectPayload(
+        input.payload,
+        normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
+      ),
       actorScope: input.actorScope?.trim() || input.connectionId || input.catalogId || "",
       routePath: [
         "external_side_effect",
@@ -454,6 +595,13 @@ export async function runIdempotentExternalSideEffect<TValue>(
     };
   }
 
+  if (
+    input.requireDurableBoundaryRecord &&
+    (!input.mutationStore || !input.sideEffectRunStore || !input.runClaimTransaction)
+  ) {
+    throw new Error(`${input.label} requires a transaction owner for durable claim and completion state.`);
+  }
+
   const claim = claimIdempotentExternalSideEffect(input);
   if (claim.replayOutcome !== "claimed") {
     return {
@@ -465,82 +613,239 @@ export async function runIdempotentExternalSideEffect<TValue>(
     };
   }
 
+  if (input.requireMutationClaimOwnership && !claim.claimToken) {
+    return {
+      status: "failed",
+      claim,
+      error: new Error(`${input.label} could not establish a token-fenced mutation claim.`),
+      output: buildExternalSideEffectReplayOutput(claim, input.output),
+    };
+  }
+
+  let ownedClaim = claim;
   let externalCallStarted = false;
+  let externalCallNotRequired = false;
+  let externalBoundaryRecorded = false;
+  let boundaryClaimLost = false;
   const markExternalCallStarted = () => {
     if (!externalCallStarted) {
+      if (input.requireDurableBoundaryRecord) {
+        if (!input.sideEffectRunStore || !claim.sideEffectRunId) {
+          throw new Error(`${input.label} requires a durable external-boundary record before execution.`);
+        }
+        try {
+          input.runClaimTransaction!(() => {
+            ownedClaim = rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim);
+            markExternalSideEffectRunStarted(input.sideEffectRunStore, ownedClaim, input.checkedAt);
+          });
+        } catch (error) {
+          boundaryClaimLost = isExternalSideEffectBoundaryClaimLostError(error);
+          throw error;
+        }
+        externalBoundaryRecorded = true;
+        externalCallStarted = true;
+        return;
+      }
+      ownedClaim = rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim);
       externalCallStarted = true;
       try {
-        markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
-      } catch (error) {
-        // The in-memory boundary flag is authoritative for this request. A
-        // local run-store write failure must not turn a sent external request
-        // into a retryable pre-boundary failure.
-        void error;
+        markExternalSideEffectRunStarted(input.sideEffectRunStore, ownedClaim, input.checkedAt);
+        externalBoundaryRecorded = true;
+      } catch {
+        // Legacy callers retain best-effort mirror behavior. Strict durable
+        // callers opt into the fail-closed branch above.
       }
     }
   };
+  const markExternalCallNotRequired = () => {
+    if (externalCallStarted) {
+      throw new Error(`${input.label} cannot skip an external boundary after the external call started.`);
+    }
+    externalCallNotRequired = true;
+  };
   const executionClaim: ExternalSideEffectExecutionContext = {
     ...claim,
+    get claimToken() {
+      return ownedClaim.claimToken;
+    },
     get externalCallStarted() {
       return externalCallStarted;
     },
+    get externalCallNotRequired() {
+      return externalCallNotRequired;
+    },
     markExternalCallStarted,
+    markExternalCallNotRequired,
   };
 
   try {
     const value = await input.execute(executionClaim);
-    markExternalCallStarted();
-    safeMarkIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
-    safeMarkExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
+    if (input.requireDurableBoundaryRecord && !externalCallStarted && !externalCallNotRequired) {
+      // The callback violated the strict contract. Treat the outcome as unknown:
+      // provider code may have run, so never reopen the mutation for retry.
+      externalCallStarted = true;
+      throw new Error(`${input.label} crossed execution without recording its durable external boundary.`);
+    }
+    if (!externalCallStarted && !externalCallNotRequired) {
+      markExternalCallStarted();
+    }
+    if (input.commitCompleted) {
+      input.commitCompleted(executionClaim, value);
+    } else if (input.requireDurableBoundaryRecord) {
+      input.runClaimTransaction!(() => {
+        markIdempotentExternalSideEffectCompleted(input.mutationStore, ownedClaim, input.checkedAt);
+        markExternalSideEffectRunCompleted(input.sideEffectRunStore, ownedClaim, value, input.checkedAt);
+      });
+    } else {
+      if (input.requireMutationClaimOwnership) {
+        markIdempotentExternalSideEffectCompleted(input.mutationStore, ownedClaim, input.checkedAt);
+      } else {
+        safeMarkIdempotentExternalSideEffectCompleted(input.mutationStore, ownedClaim, input.checkedAt);
+      }
+      safeMarkExternalSideEffectRunCompleted(
+        input.sideEffectRunStore,
+        ownedClaim,
+        value,
+        input.checkedAt,
+        externalBoundaryRecorded
+          ? "external_call_started"
+          : claim.replayAttempt === "retry_after_failure"
+            ? "failed_before_boundary"
+            : "claimed_not_sent",
+      );
+    }
     return {
       status: "executed",
       claim: {
-        ...claim,
+        ...ownedClaim,
         resumable: false,
         resumeState: "completed",
       },
       value,
     };
   } catch (error) {
-    if (!externalCallStarted) {
-      markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
+    let failure = error;
+    let manualReconciliationRequired = externalCallStarted || boundaryClaimLost;
+    if (!manualReconciliationRequired) {
+      try {
+        markIdempotentExternalSideEffectFailed(input.mutationStore, ownedClaim, input.checkedAt);
+      } catch (settlementError) {
+        if (!isExternalSideEffectBoundaryClaimLostError(settlementError)) {
+          throw settlementError;
+        }
+        boundaryClaimLost = true;
+        manualReconciliationRequired = true;
+        failure = settlementError;
+      }
     }
-    safeMarkExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, externalCallStarted, input.checkedAt);
+    if (!boundaryClaimLost) {
+      const expectedStatus = input.requireDurableBoundaryRecord
+        ? externalBoundaryRecorded
+          ? "external_call_started"
+          : claim.replayAttempt === "retry_after_failure"
+            ? "failed_before_boundary"
+            : "claimed_not_sent"
+        : undefined;
+      safeMarkExternalSideEffectRunFailed(
+        input.sideEffectRunStore,
+        ownedClaim,
+        failure,
+        manualReconciliationRequired,
+        input.checkedAt,
+        expectedStatus,
+      );
+    }
     const failedClaim = {
-      ...claim,
+      ...ownedClaim,
       resumable: false,
-      resumeState: externalCallStarted
+      resumeState: manualReconciliationRequired
         ? ("manual_review_unknown_external_outcome" as const)
         : ("manual_retry_after_recorded_failure" as const),
     };
     return {
       status: "failed",
       claim: failedClaim,
-      error: error instanceof Error ? error : new Error("external_side_effect_failed"),
+      error: failure instanceof Error ? failure : new Error("external_side_effect_failed"),
       output: buildExternalSideEffectReplayOutput(failedClaim, input.output),
     };
   }
 }
 
+class ExternalSideEffectMutationClaimLostError extends Error {
+  public readonly code = "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST";
+
+  public constructor(message: string) {
+    super(message);
+    this.name = "ExternalSideEffectMutationClaimLostError";
+  }
+}
+
+function rotateExternalSideEffectMutationClaimAtBoundary<TValue>(
+  input: IdempotentExternalSideEffectRunInput<TValue>,
+  claim: ExternalSideEffectClaimResult,
+): ExternalSideEffectClaimResult {
+  if (!claim.claimToken) {
+    if (input.requireMutationClaimOwnership) {
+      throw new ExternalSideEffectMutationClaimLostError(
+        `${input.label} cannot cross the external boundary without a token-fenced mutation claim.`,
+      );
+    }
+    return claim;
+  }
+  if (!input.mutationStore) {
+    throw new ExternalSideEffectMutationClaimLostError(
+      `${input.label} lost its mutation store before crossing the external boundary.`,
+    );
+  }
+
+  const boundaryCheckedAt = new Date().toISOString();
+  const released = input.mutationStore.markFailed({
+    method: "POST",
+    routePath: claim.routePath,
+    idempotencyKey: claim.idempotencyKey,
+    actorScope: claim.actorScope,
+    updatedAt: boundaryCheckedAt,
+    claimToken: claim.claimToken,
+  });
+  if (released !== true) {
+    throw new ExternalSideEffectMutationClaimLostError(
+      `${input.label} lost mutation ownership before crossing the external boundary.`,
+    );
+  }
+
+  const refreshed = input.mutationStore.claim({
+    method: "POST",
+    routePath: claim.routePath,
+    idempotencyKey: claim.idempotencyKey,
+    actorScope: claim.actorScope,
+    payloadHash: claim.payloadHash,
+    ...(input.claimLeaseDurationMs !== undefined ? { leaseDurationMs: input.claimLeaseDurationMs } : {}),
+  });
+  if (refreshed.outcome !== "claimed" || !refreshed.record.claimToken) {
+    throw new ExternalSideEffectMutationClaimLostError(
+      `${input.label} could not renew mutation ownership before crossing the external boundary.`,
+    );
+  }
+  return {
+    ...claim,
+    claimToken: refreshed.record.claimToken,
+  };
+}
+
+function isExternalSideEffectBoundaryClaimLostError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST"
+  );
+}
+
 function readExternalSideEffectReplayEligibility(
   run: ExternalSideEffectRunRecord,
-  checkedAt: string,
-  staleClaimedNotSentAfterMs = 5 * 60 * 1000,
 ): { eligible: true } | { eligible: false; reason: ExternalSideEffectReplayWorkerSkipReason; message: string } {
-  if (run.status === "failed_before_boundary") {
+  if (run.status === "failed_before_boundary" || run.status === "claimed_not_sent") {
     return { eligible: true };
-  }
-  if (run.status === "claimed_not_sent") {
-    const updatedAt = Date.parse(run.updatedAt);
-    const now = Date.parse(checkedAt);
-    if (Number.isFinite(updatedAt) && Number.isFinite(now) && now - updatedAt >= staleClaimedNotSentAfterMs) {
-      return { eligible: true };
-    }
-    return {
-      eligible: false,
-      reason: "claimed_not_sent_not_stale",
-      message: "Pre-boundary claim is still recent; the worker left it alone to avoid racing a live request.",
-    };
   }
   if (run.status === "completed" || run.status === "blocked_duplicate") {
     return {
@@ -571,20 +876,6 @@ function readExternalSideEffectReplayEligibility(
   };
 }
 
-function markPreBoundaryReplayReady(
-  mutationStore: MutationIdempotencyStore | undefined,
-  run: ExternalSideEffectRunRecord,
-  checkedAt: string,
-): void {
-  mutationStore?.markFailed({
-    method: "POST",
-    routePath: run.routePath,
-    idempotencyKey: run.idempotencyKey,
-    actorScope: run.actorScope,
-    updatedAt: checkedAt,
-  });
-}
-
 function readReplayJobIdentityMismatch<TValue>(
   run: ExternalSideEffectRunRecord,
   job: IdempotentExternalSideEffectRunInput<TValue>,
@@ -598,7 +889,50 @@ function readReplayJobIdentityMismatch<TValue>(
   if (job.catalogId !== run.catalogId || job.connectionId !== run.connectionId || job.actionId !== run.actionId) {
     return "Replay job capability identity does not match the recorded external side-effect run.";
   }
+  const jobActorScope = job.actorScope?.trim() || job.connectionId || job.catalogId || "";
+  if (jobActorScope !== run.actorScope) {
+    return "Replay job actor scope does not match the recorded external side-effect mutation identity.";
+  }
+  const jobRoutePath = [
+    "external_side_effect",
+    job.boundary,
+    job.catalogId ?? "unknown_catalog",
+    job.connectionId ?? "unknown_connection",
+    job.actionId ?? "unknown_action",
+  ].join(":");
+  if (jobRoutePath !== run.routePath) {
+    return "Replay job route does not match the recorded external side-effect mutation identity.";
+  }
   return undefined;
+}
+
+function buildCurrentReplayRunBlock(
+  run: ExternalSideEffectRunRecord,
+  identity: Pick<ExternalSideEffectClaimResult, "idempotencyKey" | "payloadHash" | "actorScope" | "routePath">,
+): ExternalSideEffectClaimResult | undefined {
+  if (
+    run.payloadHash === identity.payloadHash &&
+    (run.status === "claimed_not_sent" || run.status === "failed_before_boundary")
+  ) {
+    return undefined;
+  }
+  const replayOutcome: IntegrationExternalWritebackReplayOutcome =
+    run.status === "completed" || run.status === "blocked_duplicate"
+      ? "duplicate"
+      : run.status === "idempotency_unavailable"
+        ? "idempotency_unavailable"
+        : run.status === "external_call_started" || run.status === "unknown_external_outcome"
+          ? "in_progress"
+          : "payload_mismatch";
+  return {
+    replayPolicy: "idempotent_external",
+    replayOutcome,
+    replayAttempt: "blocked",
+    resumable: false,
+    resumeState: mapExternalSideEffectResumeState(replayOutcome),
+    ...identity,
+    sideEffectRunId: run.runId,
+  };
 }
 
 export function buildExternalSideEffectReplayOutput(
@@ -657,7 +991,10 @@ function recordExternalSideEffectRun(
       status: externalRunStatusForReplayOutcome(claim.replayOutcome),
       replayOutcome: claim.replayOutcome,
       replayAttempt: claim.replayAttempt,
-      requestPayload: summarizeExternalSideEffectPayload(input.payload),
+      requestPayload: summarizeExternalSideEffectRequest(
+        input.payload,
+        normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
+      ),
     },
     input.checkedAt,
   );
@@ -710,11 +1047,12 @@ function safeMarkExternalSideEffectRunCompleted(
   claim: ExternalSideEffectClaimResult,
   value: unknown,
   checkedAt: string,
+  expectedStatus: ExternalSideEffectRunStatus,
 ): void {
   try {
     markExternalSideEffectRunCompleted(store, claim, value, checkedAt);
   } catch (error) {
-    safeMarkExternalSideEffectRunFailed(store, claim, error, true, checkedAt);
+    safeMarkExternalSideEffectRunFailed(store, claim, error, true, checkedAt, expectedStatus);
   }
 }
 
@@ -724,9 +1062,10 @@ function safeMarkExternalSideEffectRunFailed(
   error: unknown,
   externalCallStarted: boolean,
   checkedAt: string,
+  expectedStatus?: ExternalSideEffectRunStatus,
 ): void {
   try {
-    markExternalSideEffectRunFailed(store, claim, error, externalCallStarted, checkedAt);
+    markExternalSideEffectRunFailed(store, claim, error, externalCallStarted, checkedAt, expectedStatus);
   } catch {
     // Best effort only: callers still receive the original execution result.
   }
@@ -757,16 +1096,18 @@ function markExternalSideEffectRunFailed(
   error: unknown,
   externalCallStarted: boolean,
   checkedAt: string,
+  expectedStatus?: ExternalSideEffectRunStatus,
 ): void {
   if (claim.sideEffectRunId) {
-    store?.markFailure(
-      claim.sideEffectRunId,
-      {
-        status: externalCallStarted ? "unknown_external_outcome" : "failed_before_boundary",
-        errorText: error instanceof Error ? error.message : "external_side_effect_failed",
-      },
-      checkedAt,
-    );
+    const failure = {
+      status: externalCallStarted ? ("unknown_external_outcome" as const) : ("failed_before_boundary" as const),
+      errorText: error instanceof Error ? error.message : "external_side_effect_failed",
+    };
+    if (expectedStatus) {
+      store?.markFailureIfStatus(claim.sideEffectRunId, expectedStatus, failure, checkedAt);
+      return;
+    }
+    store?.markFailure(claim.sideEffectRunId, failure, checkedAt);
   }
 }
 
@@ -794,6 +1135,16 @@ function summarizeExternalSideEffectPayload(value: unknown): Record<string, unkn
     ...(workflowRunStatus ? { workflowRunStatus } : {}),
     ...(workflowRunUrl ? { workflowRunUrl } : {}),
     ...(workflowRunStatus ? { workflowRunStatusSource: "webhook_response" } : {}),
+  };
+}
+
+function summarizeExternalSideEffectRequest(
+  value: unknown,
+  externalDestinationFingerprint: string | undefined,
+): Record<string, unknown> {
+  return {
+    ...summarizeExternalSideEffectPayload(value),
+    ...(externalDestinationFingerprint ? { externalDestinationFingerprint } : {}),
   };
 }
 
@@ -848,13 +1199,19 @@ export function markIdempotentExternalSideEffectCompleted(
   claim: ExternalSideEffectClaimResult,
   updatedAt: string,
 ): void {
-  mutationStore?.markCompleted({
+  const settled = mutationStore?.markCompleted({
     method: "POST",
     routePath: claim.routePath,
     idempotencyKey: claim.idempotencyKey,
     actorScope: claim.actorScope,
     updatedAt,
+    ...(claim.claimToken ? { claimToken: claim.claimToken } : {}),
   });
+  if (claim.claimToken && settled !== true) {
+    throw new ExternalSideEffectMutationClaimLostError(
+      `External side-effect mutation ${claim.idempotencyKey} lost ownership before completion.`,
+    );
+  }
 }
 
 export function markIdempotentExternalSideEffectFailed(
@@ -862,13 +1219,19 @@ export function markIdempotentExternalSideEffectFailed(
   claim: ExternalSideEffectClaimResult,
   updatedAt: string,
 ): void {
-  mutationStore?.markFailed({
+  const settled = mutationStore?.markFailed({
     method: "POST",
     routePath: claim.routePath,
     idempotencyKey: claim.idempotencyKey,
     actorScope: claim.actorScope,
     updatedAt,
+    ...(claim.claimToken ? { claimToken: claim.claimToken } : {}),
   });
+  if (claim.claimToken && settled !== true) {
+    throw new ExternalSideEffectMutationClaimLostError(
+      `External side-effect mutation ${claim.idempotencyKey} lost ownership before failure settlement.`,
+    );
+  }
 }
 
 function formatExternalSideEffectReplayBlockMessage(
@@ -917,6 +1280,48 @@ function domainSeparatedDigestHex(canonicalPayload: string): string {
 
 function hashStableJson(value: unknown): string {
   return domainSeparatedDigestHex(stableStringify(value));
+}
+
+function hashExternalSideEffectPayload(value: unknown, externalDestinationFingerprint: string | undefined): string {
+  return externalDestinationFingerprint
+    ? hashStableJson({ externalDestinationFingerprint, payload: value })
+    : hashStableJson(value);
+}
+
+export function fingerprintExternalSideEffectDestination(destination: string): string {
+  const trimmed = destination.trim();
+  if (!trimmed) {
+    throw new Error("External side-effect destination must be non-empty before fingerprinting.");
+  }
+  let canonical: string;
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = "";
+    canonical = parsed.toString();
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      throw error;
+    }
+    // Non-URL destinations (for example provider resource identifiers) remain
+    // supported as opaque canonical strings.
+    canonical = trimmed;
+  }
+  return createHash("sha256")
+    .update(EXTERNAL_SIDE_EFFECT_DESTINATION_DIGEST_DOMAIN_KEY)
+    .update("\0")
+    .update(canonical)
+    .digest("hex");
+}
+
+function normalizeExternalDestinationFingerprint(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new Error("External side-effect destination fingerprint must be a SHA-256 hex digest.");
+  }
+  return normalized;
 }
 
 function stableStringify(value: unknown): string {

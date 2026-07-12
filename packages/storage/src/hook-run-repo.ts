@@ -37,6 +37,7 @@ export class HookRunRepository {
   private readonly insertStmt;
   private readonly getStmt;
   private readonly findByIdempotencyStmt;
+  private readonly findByIdempotencyForUpdateStmt;
   private readonly listByWorkspaceStmt;
   private readonly updateAttemptStmt;
   private readonly updateOutcomeStmt;
@@ -96,6 +97,14 @@ export class HookRunRepository {
         AND idempotency_key = @idempotencyKey
       LIMIT 1
     `);
+    this.findByIdempotencyForUpdateStmt = db.prepare(`
+      SELECT *
+      FROM hook_runs
+      WHERE hook_id = @hookId
+        AND idempotency_key = @idempotencyKey
+      LIMIT 1
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.listByWorkspaceStmt = db.prepare(`
       SELECT *
       FROM hook_runs
@@ -132,6 +141,7 @@ export class HookRunRepository {
         durable_run_id = @durableRunId,
         updated_at = @updatedAt
       WHERE run_id = @runId
+        AND durable_run_id IS NULL
     `);
   }
 
@@ -175,6 +185,11 @@ export class HookRunRepository {
 
   public findByIdempotency(hookId: string, idempotencyKey: string): HookRunRecord | undefined {
     const row = toHookRunRow(this.findByIdempotencyStmt.get({ hookId, idempotencyKey }));
+    return row ? mapHookRunRow(row) : undefined;
+  }
+
+  public findByIdempotencyForUpdate(hookId: string, idempotencyKey: string): HookRunRecord | undefined {
+    const row = toHookRunRow(this.findByIdempotencyForUpdateStmt.get({ hookId, idempotencyKey }));
     return row ? mapHookRunRow(row) : undefined;
   }
 
@@ -237,12 +252,18 @@ export class HookRunRepository {
   }
 
   public attachDurableRun(runId: string, durableRunId: string, now = new Date().toISOString()): HookRunRecord {
-    this.attachDurableStmt.run({
+    const result = this.attachDurableStmt.run({
       runId,
       durableRunId,
       updatedAt: now,
     });
-    return this.get(runId);
+    const current = this.get(runId);
+    if (result.changes > 0 || current.durableRunId === durableRunId) {
+      return current;
+    }
+    throw new Error(
+      `Hook run ${runId} is already linked to durable run ${current.durableRunId ?? "<missing>"}; cannot attach ${durableRunId}.`,
+    );
   }
 }
 

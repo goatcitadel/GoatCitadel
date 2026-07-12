@@ -38,6 +38,17 @@ function createStorageStub(): Storage {
         expiresAt: input.expiresAt,
         explanationStatus: "not_requested",
       })),
+      createWithTtlDuration: vi.fn((input, ttlMs) => ({
+        approvalId: "approval-dry-run",
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        status: "pending",
+        payload: input.payload,
+        preview: input.preview,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+        explanationStatus: "not_requested",
+      })),
     },
     approvalEvents: { append: vi.fn() },
     audit: { append: vi.fn(async () => undefined) },
@@ -55,6 +66,7 @@ function createStorageStub(): Storage {
     toolGrants: {
       consumeOne: vi.fn(),
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
     },
   } as unknown as Storage;
 }

@@ -5,7 +5,7 @@
  * Public agent chat-turn entry points over the narrowed chat runtime host.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
   ChatCapabilityUpgradeSuggestion,
@@ -20,10 +20,11 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatTurnTraceRecord,
+  DurableRunRecord,
   GatewayEventInput,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { isChatTurnActiveStatus, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
@@ -37,6 +38,7 @@ import {
   dedupeChatCitations,
   detectDelegationRoles,
   inferDegradedAssistantTurnFailure,
+  patchChatTurnTraceIfStatus,
 } from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
@@ -52,6 +54,7 @@ import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
+import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnLeaseControl,
@@ -75,6 +78,19 @@ type ChatTurnProactiveTriggerInput = {
 type ChatTurnEntryStorage = ChatTurnPrepHost["storage"] &
   chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
   Pick<Storage, "chatReflectionAttempts" | "chatSessionBindings">;
+
+export interface AgentChatTurnIdentity {
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
+export interface AgentChatTurnRequestOptions {
+  abortSignal?: AbortSignal;
+  onChildDurableRunLaunched?: (runId: string) => void;
+  turnIdentity?: AgentChatTurnIdentity;
+  assertDispatchOwnership?: () => void;
+}
 
 export interface ChatTurnEntryHost
   extends
@@ -107,8 +123,10 @@ export interface ChatTurnEntryHost
       parentTurnId?: string;
       existingUserMessage?: ChatMessageRecord;
       ingestUserMessage?: boolean;
+      userMessageId?: string;
       turnId?: string;
       assistantMessageId?: string;
+      mutationLifecycle?: ChatStreamMutationLifecycle;
     },
   ): Promise<PreparedAgentChatTurn>;
   requireChatTurnContext(
@@ -164,9 +182,16 @@ export async function agentSendChatMessage(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-  options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
+  options?: AgentChatTurnRequestOptions,
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
+    const canonicalResponse = options?.turnIdentity
+      ? await loadCanonicalAgentTurnResponse(host, sessionId, input, options.turnIdentity)
+      : undefined;
+    if (canonicalResponse) {
+      return canonicalResponse;
+    }
+    options?.assertDispatchOwnership?.();
     input = await applySurfaceRoutingPreflight(host, sessionId, input, (error) => {
       host.recordDevDiagnostic({
         level: "warn",
@@ -177,6 +202,11 @@ export async function agentSendChatMessage(
         context: { error: error instanceof Error ? error.message : String(error) },
       });
     });
+    const requireDurableExecution = Boolean(options?.turnIdentity && input.policyRunId?.trim());
+    const existingBinding = host.storage.chatSessionBindings.get(sessionId);
+    if (requireDurableExecution && existingBinding?.transport !== undefined && existingBinding.transport !== "llm") {
+      throw new Error("Deterministic delegated Chat execution requires an LLM session binding.");
+    }
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "send",
       providerId: input.providerId,
@@ -212,11 +242,26 @@ export async function agentSendChatMessage(
         },
       },
     });
-    const prepared = await host.prepareAgentChatTurn(sessionId, input, {
-      branchKind: "append",
-    });
+    const prepared = await host.prepareAgentChatTurn(
+      sessionId,
+      input,
+      options?.turnIdentity
+        ? {
+            branchKind: "append",
+            turnId: options.turnIdentity.turnId,
+            userMessageId: options.turnIdentity.userMessageId,
+            assistantMessageId: options.turnIdentity.assistantMessageId,
+          }
+        : { branchKind: "append" },
+    );
+    const useDurableExecution = chatTurnDispatchService.shouldUseDurableExecution(
+      host,
+      prepared,
+      input,
+      requireDurableExecution,
+    );
     const binding =
-      host.storage.chatSessionBindings.get(sessionId) ??
+      existingBinding ??
       host.storage.chatSessionBindings.upsert({
         sessionId,
         workspaceId: prepared.workspaceId,
@@ -224,6 +269,7 @@ export async function agentSendChatMessage(
         writable: true,
       });
     if (binding.transport !== "llm") {
+      options?.assertDispatchOwnership?.();
       return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
         host,
         sessionId,
@@ -234,7 +280,9 @@ export async function agentSendChatMessage(
         { abortSignal: options?.abortSignal },
       );
     }
-    const modeOrchestration = await host.resolvePreparedTurnOrchestration(prepared);
+    const modeOrchestration = requireDurableExecution
+      ? undefined
+      : await host.resolvePreparedTurnOrchestration(prepared);
     if (modeOrchestration) {
       host.recordDevDiagnostic({
         level: "info",
@@ -251,10 +299,18 @@ export async function agentSendChatMessage(
         prepared,
         "chat_thread_turn_appended",
         modeOrchestration,
-        { abortSignal: options?.abortSignal, onChildDurableRunLaunched: options?.onChildDurableRunLaunched },
+        {
+          abortSignal: options?.abortSignal,
+          onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
+          assertDispatchOwnership: options?.assertDispatchOwnership,
+          durableRunId: options?.turnIdentity
+            ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
+            : undefined,
+          requireDurableExecution,
+        },
       );
     }
-    if (chatTurnDispatchService.shouldUseDurableExecution(host, prepared, input)) {
+    if (requireDurableExecution || useDurableExecution) {
       return chatTurnDispatchService.consumePreparedAgentChatTurn(
         host,
         sessionId,
@@ -262,11 +318,99 @@ export async function agentSendChatMessage(
         prepared,
         "chat_thread_turn_appended",
         undefined,
-        { abortSignal: options?.abortSignal, onChildDurableRunLaunched: options?.onChildDurableRunLaunched },
+        {
+          abortSignal: options?.abortSignal,
+          onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
+          assertDispatchOwnership: options?.assertDispatchOwnership,
+          durableRunId: options?.turnIdentity
+            ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
+            : undefined,
+          requireDurableExecution,
+        },
       );
     }
     return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);
   });
+}
+
+async function loadCanonicalAgentTurnResponse(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+  identity: AgentChatTurnIdentity,
+): Promise<ChatSendMessageResponse | undefined> {
+  try {
+    const context = await requireEntryChatTurnContext(host, sessionId, identity.turnId);
+    assertDeterministicTurnTrace(context.trace, sessionId, identity);
+    assertDeterministicUserMessage(context.userMessage, sessionId, input, identity);
+    if (context.assistantMessage && context.assistantMessage.messageId !== identity.assistantMessageId) {
+      throw new Error(`Canonical agent turn ${identity.turnId} has an unexpected assistant message identity.`);
+    }
+    return {
+      sessionId,
+      userMessage: context.userMessage,
+      assistantMessage: context.assistantMessage,
+      transport: "llm",
+      model: context.trace.model,
+      turnId: context.trace.turnId,
+      trace: context.trace,
+      citations: context.trace.citations,
+      routing: context.trace.routing,
+    };
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function requireEntryChatTurnContext(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+): Promise<{
+  trace: ChatTurnTraceRecord;
+  userMessage: ChatMessageRecord;
+  assistantMessage?: ChatMessageRecord;
+}> {
+  return host.requireChatTurnContext(sessionId, turnId);
+}
+
+function assertDeterministicTurnTrace(
+  trace: ChatTurnTraceRecord,
+  sessionId: string,
+  identity: AgentChatTurnIdentity,
+): void {
+  if (
+    trace.turnId !== identity.turnId ||
+    trace.sessionId !== sessionId ||
+    trace.userMessageId !== identity.userMessageId ||
+    (trace.assistantMessageId !== undefined && trace.assistantMessageId !== identity.assistantMessageId)
+  ) {
+    throw new Error(`Canonical agent turn ${identity.turnId} does not match its deterministic identity.`);
+  }
+}
+
+function assertDeterministicUserMessage(
+  message: ChatMessageRecord,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+  identity: AgentChatTurnIdentity,
+): void {
+  if (
+    message.messageId !== identity.userMessageId ||
+    message.sessionId !== sessionId ||
+    message.role !== "user" ||
+    message.content.trim() !== input.content.trim()
+  ) {
+    throw new Error(`Canonical agent turn ${identity.turnId} has a conflicting deterministic user message.`);
+  }
+}
+
+function buildDeterministicAgentDurableRunId(turnId: string): string {
+  const digest = createHash("sha256").update(`agent-turn:${turnId}`).digest("hex").slice(0, 32);
+  return `durable-chat-${digest}`;
 }
 
 async function runAgentSendChatMessageLlmPath(
@@ -274,7 +418,7 @@ async function runAgentSendChatMessageLlmPath(
   sessionId: string,
   input: ChatSendMessageRequest,
   prepared: PreparedAgentChatTurn,
-  options?: { abortSignal?: AbortSignal },
+  options?: AgentChatTurnRequestOptions,
 ): Promise<ChatSendMessageResponse> {
   const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
   const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
@@ -303,6 +447,7 @@ async function runAgentSendChatMessageLlmPath(
       )
     : undefined;
   try {
+    options?.assertDispatchOwnership?.();
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
       sessionId,
@@ -335,6 +480,7 @@ async function runAgentSendChatMessageLlmPath(
       modelRouter: prepared.modelRouterDecision,
       signal: controller.signal,
     });
+    assertChatTurnCompletionWritable(host, prepared.turnId, controller.signal, [turnResult.turnTrace.status]);
     let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
       attempted: false,
       attemptCount: 0,
@@ -413,6 +559,7 @@ async function runAgentSendChatMessageLlmPath(
         modelRouter: prepared.modelRouterDecision,
         signal: controller.signal,
       });
+      assertChatTurnCompletionWritable(host, retryTurnId, controller.signal, [retryResult.turnTrace.status]);
       if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {
         turnId = retryTurnId;
         turnResult = retryResult;
@@ -513,30 +660,9 @@ async function runAgentSendChatMessageLlmPath(
         turnResult.turnTrace.routing.effectiveModel ?? turnResult.assistantModel ?? input.model ?? prepared.prefs.model,
     });
     const assistantEventId = prepared.assistantMessageId;
-    await host.ingestEvent(randomUUID(), {
-      eventId: assistantEventId,
-      route: prepared.route,
-      actor: {
-        type: "agent",
-        id: "assistant",
-      },
-      message: {
-        role: "assistant",
-        content: assistantText,
-      },
-      usage: assistantUsage,
-    });
-    const assistantMessage: ChatMessageRecord = {
-      messageId: assistantEventId,
-      sessionId,
-      role: "assistant",
-      actorType: "agent",
-      actorId: "assistant",
-      content: assistantText,
-      timestamp: new Date().toISOString(),
-    };
+    const storage = host.storage;
     const finalTraceStatus = turnResult.turnTrace.status === "failed" ? "failed" : "completed";
-    const trace = host.storage.chatTurnTraces.patch(turnId, {
+    const finalTracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
       assistantMessageId: assistantEventId,
       status: finalTraceStatus,
       finishedAt: new Date().toISOString(),
@@ -554,11 +680,47 @@ async function runAgentSendChatMessageLlmPath(
       },
       citations: dedupedTurnCitations,
       failure: persistedTurnFailure,
-    });
+    };
+    const completionOwnerStatuses = [
+      ...new Set(["running", turnResult.turnTrace.status]),
+    ] as ChatTurnTraceRecord["status"][];
+    let trace: ChatTurnTraceRecord | undefined;
+    assertChatTurnCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
+    await host.ingestEvent(
+      randomUUID(),
+      {
+        eventId: assistantEventId,
+        route: prepared.route,
+        actor: {
+          type: "agent",
+          id: "assistant",
+        },
+        message: {
+          role: "assistant",
+          content: assistantText,
+        },
+        usage: assistantUsage,
+      },
+      {
+        onCommit: () => {
+          trace = patchChatTurnTraceIfStatus(storage.chatTurnTraces, turnId, completionOwnerStatuses, finalTracePatch);
+        },
+      },
+    );
+    trace ??= patchChatTurnTraceIfStatus(storage.chatTurnTraces, turnId, completionOwnerStatuses, finalTracePatch);
+    const assistantMessage: ChatMessageRecord = {
+      messageId: assistantEventId,
+      sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: assistantText,
+      timestamp: new Date().toISOString(),
+    };
     let hydratedTrace: ChatTurnTraceRecord = {
       ...trace,
       citations: dedupedTurnCitations,
-      toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+      toolRuns: storage.chatToolRuns.listByTurn(turnId),
     };
     const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
       sessionId,
@@ -574,13 +736,13 @@ async function runAgentSendChatMessageLlmPath(
       trace: hydratedTrace,
     });
     if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-      hydratedTrace = host.storage.chatTurnTraces.patch(turnId, {
+      hydratedTrace = storage.chatTurnTraces.patch(turnId, {
         capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
         specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
       });
       hydratedTrace = {
         ...hydratedTrace,
-        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        toolRuns: storage.chatToolRuns.listByTurn(turnId),
       };
     }
     host.recordCapabilityGapFromTrace({
@@ -606,6 +768,7 @@ async function runAgentSendChatMessageLlmPath(
     // turns are excluded (no self-feeding classifier/review loop on their output).
     if (finalTraceStatus === "completed") {
       const autonomousTurn = isAutonomousTurnRequest(input);
+      const delegatedChild = Boolean(prepared.parentDelegationStepId);
       host.recordTurnCommitments({
         sessionId,
         workspaceId: prepared.workspaceId,
@@ -618,10 +781,16 @@ async function runAgentSendChatMessageLlmPath(
       host.scheduleBackgroundReviewIfDue({
         sessionId,
         workspaceId: prepared.workspaceId,
+        turnId,
         userText: prepared.content,
         assistantText,
-        parentTurnId: prepared.parentTurnId,
+        delegatedChild,
         autonomous: autonomousTurn,
+      });
+      host.scheduleMemoryMaintenancePostTurnEvaluation({
+        sessionId,
+        turnId,
+        delegatedChild,
       });
     }
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
@@ -671,6 +840,34 @@ async function runAgentSendChatMessageLlmPath(
   }
 }
 
+function assertChatTurnCompletionWritable(
+  host: Pick<ChatTurnEntryHost, "storage">,
+  turnId: string,
+  signal: AbortSignal,
+  allowedTerminalStatuses: readonly ChatTurnTraceRecord["status"][] = [],
+): void {
+  if (signal.aborted) {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  let status: ChatTurnTraceRecord["status"];
+  try {
+    status = host.storage.chatTurnTraces.get(turnId).status;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      // The turn runtime may not have persisted its trace yet. The abort
+      // signal remains the completion fence in that compatibility case.
+      return;
+    }
+    throw error;
+  }
+  if (status === "cancelled") {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  if (isChatTurnTerminalStatus(status) && !allowedTerminalStatuses.includes(status)) {
+    throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership to ${status}.`);
+  }
+}
+
 function withCostAttribution(
   usage: GatewayEventInput["usage"] | undefined,
   attribution: { providerId?: string; model?: string },
@@ -706,7 +903,7 @@ export async function* agentSendChatMessageStream(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
@@ -762,6 +959,7 @@ export async function* agentSendChatMessageStream(
       });
       const prepared = await host.prepareAgentChatTurn(sessionId, input, {
         branchKind: "append",
+        ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
       });
       const binding =
         host.storage.chatSessionBindings.get(sessionId) ??
@@ -772,7 +970,14 @@ export async function* agentSendChatMessageStream(
           writable: true,
         });
       if (binding.transport !== "llm") {
-        const stream = options?.abortSignal
+        const integrationOptions =
+          options?.abortSignal || options?.mutationLifecycle
+            ? {
+                ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+                ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+              }
+            : undefined;
+        const stream = integrationOptions
           ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
               host,
               sessionId,
@@ -780,7 +985,7 @@ export async function* agentSendChatMessageStream(
               prepared,
               binding,
               "chat_thread_turn_appended",
-              { abortSignal: options.abortSignal },
+              integrationOptions,
             )
           : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
               host,
@@ -793,13 +998,23 @@ export async function* agentSendChatMessageStream(
         yield* host.withEphemeralStreamEnvelope(stream);
         return;
       }
-      const durableRunId = chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-        host,
-        sessionId,
-        input,
-        prepared,
-        "chat_thread_turn_appended",
-      );
+      const durableRunId = options?.mutationLifecycle
+        ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+            host,
+            sessionId,
+            input,
+            prepared,
+            "chat_thread_turn_appended",
+            undefined,
+            { mutationLifecycle: options.mutationLifecycle },
+          )
+        : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+            host,
+            sessionId,
+            input,
+            prepared,
+            "chat_thread_turn_appended",
+          );
       const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
       try {
         yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
@@ -820,7 +1035,7 @@ export async function retryChatTurn(
   overrides: Partial<ChatSendMessageRequest> = {},
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "retry-turn", async () => {
-    const current = await host.requireChatTurnContext(sessionId, turnId);
+    const current = await requireEntryChatTurnContext(host, sessionId, turnId);
     const request: ChatSendMessageRequest = {
       content: current.userMessage.content,
       attachments: current.userMessage.attachments?.map((item) => item.attachmentId),
@@ -909,11 +1124,11 @@ export async function* retryChatTurnStream(
   sessionId: string,
   turnId: string,
   overrides: Partial<ChatSendMessageRequest> = {},
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
-      const current = await host.requireChatTurnContext(sessionId, turnId);
+      const current = await requireEntryChatTurnContext(host, sessionId, turnId);
       const request: ChatSendMessageRequest = {
         content: current.userMessage.content,
         attachments: current.userMessage.attachments?.map((item) => item.attachmentId),
@@ -968,6 +1183,7 @@ export async function* retryChatTurnStream(
         parentTurnId: current.trace.parentTurnId,
         existingUserMessage: current.userMessage,
         ingestUserMessage: false,
+        ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
       });
       const binding =
         host.storage.chatSessionBindings.get(sessionId) ??
@@ -978,7 +1194,14 @@ export async function* retryChatTurnStream(
           writable: true,
         });
       if (binding.transport !== "llm") {
-        const stream = options?.abortSignal
+        const integrationOptions =
+          options?.abortSignal || options?.mutationLifecycle
+            ? {
+                ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+                ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+              }
+            : undefined;
+        const stream = integrationOptions
           ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
               host,
               sessionId,
@@ -986,7 +1209,7 @@ export async function* retryChatTurnStream(
               prepared,
               binding,
               "chat_thread_turn_retried",
-              { abortSignal: options.abortSignal },
+              integrationOptions,
             )
           : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
               host,
@@ -999,13 +1222,23 @@ export async function* retryChatTurnStream(
         yield* host.withEphemeralStreamEnvelope(stream);
         return;
       }
-      const durableRunId = chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-        host,
-        sessionId,
-        request,
-        prepared,
-        "chat_thread_turn_retried",
-      );
+      const durableRunId = options?.mutationLifecycle
+        ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+            host,
+            sessionId,
+            request,
+            prepared,
+            "chat_thread_turn_retried",
+            undefined,
+            { mutationLifecycle: options.mutationLifecycle },
+          )
+        : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+            host,
+            sessionId,
+            request,
+            prepared,
+            "chat_thread_turn_retried",
+          );
       const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
       try {
         yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
@@ -1026,7 +1259,7 @@ export async function editChatTurn(
   input: ChatSendMessageRequest,
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "edit-turn", async () => {
-    const current = await host.requireChatTurnContext(sessionId, turnId);
+    const current = await requireEntryChatTurnContext(host, sessionId, turnId);
     const request: ChatSendMessageRequest = {
       ...input,
       attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
@@ -1095,11 +1328,11 @@ export async function* editChatTurnStream(
   sessionId: string,
   turnId: string,
   input: ChatSendMessageRequest,
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
-      const current = await host.requireChatTurnContext(sessionId, turnId);
+      const current = await requireEntryChatTurnContext(host, sessionId, turnId);
       const request: ChatSendMessageRequest = {
         ...input,
         attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
@@ -1134,6 +1367,7 @@ export async function* editChatTurnStream(
         branchKind: "edit",
         sourceTurnId: turnId,
         parentTurnId: current.trace.parentTurnId,
+        ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
       });
       const binding =
         host.storage.chatSessionBindings.get(sessionId) ??
@@ -1144,7 +1378,14 @@ export async function* editChatTurnStream(
           writable: true,
         });
       if (binding.transport !== "llm") {
-        const stream = options?.abortSignal
+        const integrationOptions =
+          options?.abortSignal || options?.mutationLifecycle
+            ? {
+                ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+                ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+              }
+            : undefined;
+        const stream = integrationOptions
           ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
               host,
               sessionId,
@@ -1152,7 +1393,7 @@ export async function* editChatTurnStream(
               prepared,
               binding,
               "chat_thread_turn_edited",
-              { abortSignal: options.abortSignal },
+              integrationOptions,
             )
           : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
               host,
@@ -1165,13 +1406,23 @@ export async function* editChatTurnStream(
         yield* host.withEphemeralStreamEnvelope(stream);
         return;
       }
-      const durableRunId = chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-        host,
-        sessionId,
-        request,
-        prepared,
-        "chat_thread_turn_edited",
-      );
+      const durableRunId = options?.mutationLifecycle
+        ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+            host,
+            sessionId,
+            request,
+            prepared,
+            "chat_thread_turn_edited",
+            undefined,
+            { mutationLifecycle: options.mutationLifecycle },
+          )
+        : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+            host,
+            sessionId,
+            request,
+            prepared,
+            "chat_thread_turn_edited",
+          );
       const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
       try {
         yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
@@ -1221,9 +1472,11 @@ export async function cancelChatTurn(
   turnId: string,
   cancelledBy?: string,
 ): Promise<ChatCancelTurnResponse> {
+  const storage = host.storage;
+  const cancelDurableChatRun = host.cancelDurableChatRun;
   let current: ChatTurnTraceRecord | undefined;
   try {
-    current = host.storage.chatTurnTraces.get(turnId);
+    current = storage.chatTurnTraces.get(turnId);
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
       throw error;
@@ -1247,14 +1500,53 @@ export async function cancelChatTurn(
     active.controller.abort(new ChatTurnCancelledError(turnId));
   }
   const durableRunId = current?.durable?.runId ?? activeStream?.runId;
-  if (durableRunId && host.cancelDurableChatRun) {
+  let durableCancellation: DurableRunRecord | undefined;
+  let durableCancellationError: unknown;
+  if (durableRunId && cancelDurableChatRun) {
     try {
-      host.cancelDurableChatRun(durableRunId, cancelledBy ?? "operator");
-    } catch {
-      // The chat trace still records the operator cancel even if the durable run already settled.
+      durableCancellation = cancelDurableChatRun(durableRunId, cancelledBy ?? "operator");
+    } catch (error) {
+      durableCancellationError = error;
+      try {
+        durableCancellation = storage.durableRuns.getRun(durableRunId);
+      } catch {
+        // Preserve the original cancellation error when canonical run truth is unavailable.
+      }
     }
   }
-  const trace = host.markChatTurnCancelled(sessionId, turnId, cancelledBy);
+  const durableTerminalWinner =
+    durableCancellation &&
+    (durableCancellation.status === "completed" ||
+      durableCancellation.status === "failed" ||
+      durableCancellation.status === "dead_lettered");
+  if (durableCancellationError && !durableTerminalWinner && durableCancellation?.status !== "cancelled") {
+    throw durableCancellationError;
+  }
+  const trace = durableTerminalWinner
+    ? (() => {
+        try {
+          return storage.chatTurnTraces.get(turnId);
+        } catch {
+          if (current) {
+            return current;
+          }
+          throw durableCancellationError ?? new Error(`Chat turn ${turnId} terminal projection is unavailable.`);
+        }
+      })()
+    : host.markChatTurnCancelled(sessionId, turnId, cancelledBy);
+  const durableTerminalProjectionAligned =
+    !durableTerminalWinner ||
+    (durableCancellation?.status === "completed" && trace.status === "completed") ||
+    ((durableCancellation?.status === "failed" || durableCancellation?.status === "dead_lettered") &&
+      trace.status === "failed");
+  if (!durableTerminalProjectionAligned || (durableTerminalWinner && isChatTurnActiveStatus(trace.status))) {
+    return {
+      sessionId,
+      turnId,
+      cancelled: false,
+      trace,
+    };
+  }
   host.persistChatStreamChunk(
     {
       type: "trace_update",

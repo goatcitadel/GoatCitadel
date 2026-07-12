@@ -44,6 +44,7 @@ import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
 const LOOPBACK_HOST = new URL("http://127.0.0.1").hostname;
+const findPendingApprovalAction = vi.fn(() => undefined);
 
 const storageStub = {
   approvals: {
@@ -59,7 +60,8 @@ const storageStub = {
     })),
   },
   pendingApprovalActions: {
-    find: vi.fn(() => undefined),
+    find: findPendingApprovalAction,
+    findFreshPending: vi.fn(() => findPendingApprovalAction()),
   },
 } as unknown as Storage;
 
@@ -305,7 +307,7 @@ describe("executeTool", () => {
 
     const storageWithGrant = {
       toolGrants: {
-        list: vi.fn(() => [
+        listActive: vi.fn(() => [
           {
             grantId: "grant-1",
             toolPattern: "file.read_range",
@@ -344,7 +346,7 @@ describe("executeTool", () => {
     }
   });
 
-  it("uses uncapped fallback grant listing during physical file execution", async () => {
+  it("uses the database-active grant listing during physical file execution", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(os.tmpdir(), `tool-executor-uncapped-grant-${randomUUID()}.ts`);
     await fs.writeFile(filePath, ["one", "two", "three"].join("\n"), "utf8");
@@ -373,11 +375,11 @@ describe("executeTool", () => {
         createdAt: "2026-03-22T12:00:00.000Z",
       },
     ];
-    const list = vi.fn((scope: string, scopeRef: string, limit: number) =>
-      scope === "session" && scopeRef === "sess-grant" ? grants.slice(0, limit) : [],
+    const listActive = vi.fn((scope: string, scopeRef: string) =>
+      scope === "session" && scopeRef === "sess-grant" ? grants : [],
     );
     const storageWithGrant = {
-      toolGrants: { list },
+      toolGrants: { listActive },
     } as unknown as Storage;
 
     try {
@@ -393,7 +395,7 @@ describe("executeTool", () => {
       );
 
       expect(result).toMatchObject({ path: filePath, content: "one" });
-      expect(list).toHaveBeenCalledWith("session", "sess-grant", Number.MAX_SAFE_INTEGER);
+      expect(listActive).toHaveBeenCalledWith("session", "sess-grant");
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -422,8 +424,8 @@ describe("executeTool", () => {
     const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
     const storageWithConsumedGrant = {
       toolGrants: {
-        get: vi.fn(() => grant),
-        list: vi.fn(() => []),
+        findActive: vi.fn(() => grant),
+        listActive: vi.fn(() => []),
       },
       knowledge: {
         listDocuments: vi.fn(() => []),
@@ -471,7 +473,7 @@ describe("executeTool", () => {
       );
 
       expect(result.document).toMatchObject({ sourceRef: sourcePath });
-      expect(storageWithConsumedGrant.toolGrants.list).not.toHaveBeenCalled();
+      expect(storageWithConsumedGrant.toolGrants.listActive).not.toHaveBeenCalled();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -490,7 +492,7 @@ describe("executeTool", () => {
 
     const storageWithGrant = {
       toolGrants: {
-        list: vi.fn(() => [
+        listActive: vi.fn(() => [
           {
             grantId: "grant-realpath",
             toolPattern: "file.read_range",
@@ -537,7 +539,7 @@ describe("executeTool", () => {
 
     const storageWithGrant = {
       toolGrants: {
-        list: vi.fn(() => [
+        listActive: vi.fn(() => [
           {
             grantId: "grant-full-disk-realpath",
             toolPattern: "file.read_range",
@@ -586,7 +588,7 @@ describe("executeTool", () => {
 
     const storageWithGrant = {
       toolGrants: {
-        list: vi.fn((scope: string, scopeRef: string) => {
+        listActive: vi.fn((scope: string, scopeRef: string) => {
           if (scope !== "workspace" || scopeRef !== "workspace-1") {
             return [];
           }
@@ -626,11 +628,7 @@ describe("executeTool", () => {
         endLine: 2,
         content: "red\ngreen",
       });
-      expect(storageWithGrant.toolGrants.list).toHaveBeenCalledWith(
-        "workspace",
-        "workspace-1",
-        Number.MAX_SAFE_INTEGER,
-      );
+      expect(storageWithGrant.toolGrants.listActive).toHaveBeenCalledWith("workspace", "workspace-1");
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -1219,9 +1217,125 @@ describe("executeTool", () => {
     });
   });
 
+  it("hydrates protected Telegram approval actions only inside the provider adapter", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const rawToken = `grat_${"p".repeat(43)}`;
+    const tokenId = "rat_provider_boundary";
+    const tokenRef = `keychain:goatcitadel:approval-remote-action:${tokenId}`;
+    const expiresAt = "2099-07-10T00:15:00.000Z";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 2468 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
+      deliveryId: "delivery-provider-boundary",
+      status: "queued",
+      channelKey: input.channelKey,
+      target: input.target,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    }));
+    const resolveApprovalActionTokenSecret = vi.fn(() => rawToken);
+    const deleteApprovalActionTokenSecret = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram",
+          key: "telegram",
+          config: {
+            botToken: "telegram-provider-token",
+            defaultChatId: "-1001234567890",
+          },
+        })),
+      },
+      remoteActionTokens: {
+        get: vi.fn(() => ({
+          tokenId,
+          actionType: "approval.resolve",
+          approvalId: "approval-provider-boundary",
+          connectorId: "integration:conn-telegram",
+          mutation: { approvalId: "approval-provider-boundary" },
+          createdAt: "2026-07-10T00:00:00.000Z",
+          expiresAt,
+          state: "pending",
+        })),
+      },
+      commsDeliveries: {
+        createQueued: queuedSpy,
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const request: ToolInvokeRequest = {
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-telegram",
+        target: "-1001234567890",
+        message: "Approval requested.",
+        interactiveActionTemplate: {
+          platform: "telegram",
+          tokenId,
+          tokenRef,
+          expiresAt,
+          buttons: [
+            { label: "Approve", decision: "a" },
+            { label: "Deny", decision: "r" },
+          ],
+        },
+      },
+      agentId: "operator",
+      sessionId: "sess-telegram-approval",
+      authContext: {
+        boundary: "tool_host_boundary",
+        secretRefs: [tokenRef],
+      },
+    };
+    const result = await executeTool(
+      request,
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.telegram.org"],
+        },
+      },
+      commsStorage,
+      {
+        resolveApprovalActionTokenSecret,
+        deleteApprovalActionTokenSecret,
+        isApprovalActionConnectorReady: vi.fn(() => true),
+      },
+    );
+
+    expect(JSON.stringify(request)).not.toContain(rawToken);
+    expect(JSON.stringify(queuedSpy.mock.calls)).not.toContain(rawToken);
+    expect(JSON.stringify(queuedSpy.mock.calls)).toContain(tokenRef);
+    expect(resolveApprovalActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    expect(deleteApprovalActionTokenSecret).toHaveBeenCalledWith(tokenRef);
+    const telegramCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { body?: BodyInit | null }];
+    const telegramBody = JSON.parse(String(telegramCall[1]?.body ?? "{}")) as Record<string, unknown>;
+    expect(telegramBody).toMatchObject({
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Approve", callback_data: `gca:${rawToken}:a` },
+            { text: "Deny", callback_data: `gca:${rawToken}:r` },
+          ],
+        ],
+      },
+    });
+    expect(result).toMatchObject({ status: "sent", providerMessageId: "2468" });
+  });
+
   it("sends channel messages through Slack bot API with rendered attachments", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const auditOnlySecret = "slack-callback-secret-value-1234567890";
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -1271,9 +1385,23 @@ describe("executeTool", () => {
           connectionId: "conn-slack",
           message: "Build green again.",
           attachments: [{ title: "Runbook", url: "https://example.com/runbook" }],
+          interactiveActions: {
+            platform: "slack",
+            tokenId: "rat-secret-proof",
+            buttons: [
+              {
+                label: "Approve",
+                callbackData: `Authorization: Bearer ${auditOnlySecret}`,
+              },
+            ],
+          },
         },
         agentId: "operator",
         sessionId: "sess-slack",
+        authContext: {
+          boundary: "tool_host_boundary",
+          secretRefs: ["keychain:goatcitadel:test:slack-callback"],
+        },
       },
       {
         ...policyConfig,
@@ -1290,6 +1418,8 @@ describe("executeTool", () => {
         target: "#build-alerts",
       }),
     );
+    expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).not.toContain(auditOnlySecret);
+    expect(JSON.stringify(queuedSpy.mock.calls[0]?.[0]?.payload)).toContain("[REDACTED]");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://slack.com/api/chat.postMessage",
       expect.objectContaining({
@@ -5356,7 +5486,7 @@ describe("executeTool", () => {
     globalThis.fetch = vi.fn(async () => new Response("ok", { status: 200 })) as unknown as typeof fetch;
     const storageWithMixedGrants = {
       toolGrants: {
-        get: vi.fn(() => ({
+        findActive: vi.fn(() => ({
           grantId: "grant-unconstrained",
           toolPattern: "http.get",
           decision: "allow",
@@ -5366,7 +5496,7 @@ describe("executeTool", () => {
           createdBy: "test",
           createdAt: new Date().toISOString(),
         })),
-        list: vi.fn(() => [
+        listActive: vi.fn(() => [
           {
             grantId: "grant-other-host",
             toolPattern: "http.get",
@@ -5396,7 +5526,7 @@ describe("executeTool", () => {
       );
 
       expect(result).toMatchObject({ body: "ok" });
-      expect(storageWithMixedGrants.toolGrants.list).not.toHaveBeenCalled();
+      expect(storageWithMixedGrants.toolGrants.listActive).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -5659,15 +5789,20 @@ describe("executeTool", () => {
 
   it("covers HTTP POST execution and sanitizes leaked tool output", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
+    const beforeExternalSideEffect = vi.fn();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("Bearer abcdefghijklmnopqrstuvwxyz", { status: 201 })) as typeof fetch,
+      vi.fn(async () => {
+        expect(beforeExternalSideEffect).toHaveBeenCalledTimes(1);
+        return new Response("Bearer abcdefghijklmnopqrstuvwxyz", { status: 201 });
+      }) as typeof fetch,
     );
 
     const result = await executeTool(
       toolRequest("http.post", { url: "https://example.com/api", body: { ok: true } }),
       policyConfig,
       storageStub,
+      { beforeExternalSideEffect },
     );
 
     expect(result).toMatchObject({
@@ -5679,12 +5814,14 @@ describe("executeTool", () => {
         leakDetections: ["bearer_token"],
       },
     });
+    expect(beforeExternalSideEffect).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an already-aborted HTTP mutation local and undispatched", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async () => new Response("should not be reached", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const beforeExternalSideEffect = vi.fn();
     const controller = new AbortController();
     controller.abort();
     const reason = controller.signal.reason as Error;
@@ -5699,9 +5836,11 @@ describe("executeTool", () => {
         },
         policyConfig,
         storageStub,
+        { beforeExternalSideEffect },
       ),
     ).rejects.toBe(reason);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(beforeExternalSideEffect).not.toHaveBeenCalled();
   });
 
   it("keeps an HTTP mutation abort unknown once fetch dispatch has started", async () => {

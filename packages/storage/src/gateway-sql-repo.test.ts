@@ -59,4 +59,48 @@ describe("GatewaySqlRepository", () => {
       1,
     );
   });
+
+  it("owns database-clock TTL windows and fails closed for malformed instants", () => {
+    const repo = createRepo();
+    const realNow = Date.now();
+    const originalDateNow = Date.now;
+
+    try {
+      Date.now = () => Date.parse("2099-01-01T00:00:00.000Z");
+      const databaseNow = repo.readDatabaseNow();
+      const window = repo.createDatabaseTtlWindow(60_000);
+
+      assert.ok(Math.abs(Date.parse(databaseNow) - realNow) < 5_000);
+      assert.ok(Math.abs(Date.parse(window.createdAt) - realNow) < 5_000);
+      assert.equal(Date.parse(window.expiresAt) - Date.parse(window.createdAt), 60_000);
+      assert.equal(repo.isDatabaseInstantFuture(window.expiresAt), true);
+      assert.equal(repo.isDatabaseInstantExpired(window.expiresAt), false);
+      assert.equal(repo.isDatabaseInstantFuture("not-a-timestamp"), false);
+      assert.equal(repo.isDatabaseInstantExpired("not-a-timestamp"), true);
+      assert.equal(repo.isDatabaseInstantWithinSkew(databaseNow, 1_000), true);
+      assert.equal(repo.isDatabaseInstantWithinSkew("not-a-timestamp", 1_000), false);
+      assert.equal(repo.isDatabaseInstantFuture(window.expiresAt.replace("Z", "+00:00")), true);
+      for (const malformed of [
+        "",
+        "infinity",
+        "-infinity",
+        "tomorrow",
+        "now",
+        "epoch",
+        "2026-07-11T12:00:00.1234567890Z",
+      ]) {
+        assert.equal(repo.isDatabaseInstantFuture(malformed), false, malformed);
+        assert.equal(repo.isDatabaseInstantExpired(malformed), true, malformed);
+        assert.equal(repo.isDatabaseInstantWithinSkew(malformed, 1_000), false, malformed);
+      }
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  it("rejects invalid database-clock durations", () => {
+    const repo = createRepo();
+    assert.throws(() => repo.createDatabaseTtlWindow(0), /positive duration/i);
+    assert.throws(() => repo.createDatabaseTtlWindow(Number.NaN), /positive duration/i);
+  });
 });

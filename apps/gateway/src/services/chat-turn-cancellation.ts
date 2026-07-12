@@ -7,7 +7,12 @@
  * durable payload so the cancel patch has a row to land on.
  */
 
-import { isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
+import {
+  CHAT_TURN_ACTIVE_STATUSES,
+  isChatTurnActiveStatus,
+  isChatTurnTerminalStatus,
+  NotFoundError,
+} from "@goatcitadel/contracts";
 import type { ChatMode, ChatTurnTraceRecord, DurableRunRecord, RealtimeEvent } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
@@ -63,16 +68,29 @@ export function markChatTurnCancelled(
   if (isChatTurnTerminalStatus(current.status)) {
     return deps.createHydratedChatTurnTrace(turnId, current);
   }
-  const trace = deps.storage.chatTurnTraces.patch(turnId, {
-    status: "cancelled",
-    failure: undefined,
-    completion: {
-      finishReason: current.completion?.finishReason,
-      status: "interrupted",
-      repaired: Boolean(current.completion?.repaired),
-    },
-    finishedAt: new Date().toISOString(),
-  });
+  let trace: ChatTurnTraceRecord | undefined;
+  while (isChatTurnActiveStatus(current.status)) {
+    trace = deps.storage.chatTurnTraces.patchIfStatus(turnId, CHAT_TURN_ACTIVE_STATUSES, {
+      status: "cancelled",
+      failure: undefined,
+      completion: {
+        finishReason: current.completion?.finishReason,
+        status: "interrupted",
+        repaired: Boolean(current.completion?.repaired),
+      },
+      finishedAt: new Date().toISOString(),
+    });
+    if (trace) {
+      break;
+    }
+    current = deps.storage.chatTurnTraces.get(turnId);
+    if (current.sessionId !== sessionId) {
+      throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
+    }
+  }
+  if (!trace) {
+    return deps.createHydratedChatTurnTrace(turnId, current);
+  }
   deps.recordDevDiagnostic({
     level: "info",
     category: "chat",

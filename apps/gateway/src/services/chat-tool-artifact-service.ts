@@ -24,6 +24,7 @@ export async function persistChatToolArtifact(
     contentType?: string;
     snippet?: string;
     createdAt?: string;
+    canonicalWriteFence?: <T>(work: () => T) => T;
   },
 ): Promise<{
   artifactId: string;
@@ -45,18 +46,20 @@ export async function persistChatToolArtifact(
   if (!fsSync.existsSync(absolutePath)) {
     await fs.writeFile(absolutePath, projectedContent.content, "utf8");
   }
-  const record = deps.storage.chatToolArtifacts.create({
-    artifactId,
-    sessionId: input.sessionId,
-    turnId: input.turnId,
-    toolRunId: input.toolRunId,
-    toolName: input.toolName,
-    contentType: input.contentType,
-    byteLength: Buffer.byteLength(projectedContent.content, "utf8"),
-    snippet: projectedSnippet,
-    storageRelPath,
-    createdAt: input.createdAt ?? new Date().toISOString(),
-  });
+  const createRecord = () =>
+    deps.storage.chatToolArtifacts.create({
+      artifactId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      toolRunId: input.toolRunId,
+      toolName: input.toolName,
+      contentType: input.contentType,
+      byteLength: Buffer.byteLength(projectedContent.content, "utf8"),
+      snippet: projectedSnippet,
+      storageRelPath,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    });
+  const record = input.canonicalWriteFence ? input.canonicalWriteFence(createRecord) : createRecord();
   return {
     artifactId: record.artifactId,
     storageRelPath: record.storageRelPath,

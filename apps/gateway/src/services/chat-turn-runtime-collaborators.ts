@@ -11,6 +11,7 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 
@@ -26,7 +27,11 @@ export interface ChatTurnRealtimeEmitter {
 }
 
 export interface ChatTurnTranscriptIngress {
-  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
+  ingestEvent(
+    idempotencyKey: string,
+    payload: GatewayEventInput,
+    options?: { onCommit?: () => void; afterCommit?: () => void },
+  ): Promise<unknown>;
 }
 
 export interface ChatTurnActiveExecutionControl {
@@ -103,8 +108,14 @@ export interface ChatTurnDurableRunOwner {
     prepared: PreparedAgentChatTurn,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
   ): DurableRunRecord | undefined;
-  finalizeDurableChatRun(runId: string, prepared: PreparedAgentChatTurn, trace: ChatTurnTraceRecord): void;
+  finalizeDurableChatRun(
+    runId: string,
+    prepared: PreparedAgentChatTurn,
+    trace: ChatTurnTraceRecord,
+    expectedLeaseOwnerId?: string,
+  ): void;
   /**
    * Soft-cancel a durable chat run when an external `AbortSignal` fires while
    * `consumePreparedAgentChatTurn` is waiting on its persisted stream. The
@@ -112,7 +123,7 @@ export interface ChatTurnDurableRunOwner {
    * (`cancelDurableRun`). Optional because not every dispatch host owns a
    * durable kernel (e.g., tests).
    */
-  cancelDurableChatRun?(runId: string, actorId?: string): void;
+  cancelDurableChatRun?(runId: string, actorId?: string): DurableRunRecord | undefined;
 }
 
 export interface ChatTurnMemorySideEffects {
@@ -146,10 +157,16 @@ export interface ChatTurnMemorySideEffects {
     prompt: string;
     relationScope?: MemoryRelationScope;
   }): void;
-  scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void;
+  scheduleMemoryMaintenancePostTurnEvaluation(input: {
+    sessionId: string;
+    /** The turn that just completed, retained for truthful post-turn provenance. */
+    turnId: string;
+    /** True only for a delegated child, not for an ordinary turn with branch ancestry. */
+    delegatedChild: boolean;
+  }): void;
   /**
    * Fire-and-forget self-improvement background review (P2-S1). After a
-   * successful root turn, distills durable operator facts and (when a reusable
+   * successful eligible turn, distills durable operator facts and (when a reusable
    * procedure emerged) drafts a candidate skill — counter-gated to run every few
    * turns. The host resolves the master-autonomy / eval-integrity / non-human
    * guards and the counter; the entry/stream services only supply the transcript.
@@ -158,9 +175,12 @@ export interface ChatTurnMemorySideEffects {
   scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
     workspaceId: string;
+    /** The turn that produced this review input and owns any resulting provenance. */
+    turnId: string;
     userText: string;
     assistantText: string;
-    parentTurnId?: string;
+    /** True only for a delegated child, not for an ordinary turn with branch ancestry. */
+    delegatedChild: boolean;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
   }): void;

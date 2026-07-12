@@ -62,6 +62,7 @@ export function enqueueAgentEndHook(
     trigger: "agent_end",
     entityType: "chat_turn",
     entityId: input.turnId,
+    idempotencyDiscriminator: input.status,
     payload: {
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,

@@ -60,11 +60,22 @@ describe("DeviceTokenVault", () => {
     expect(vault.claim("req-4")?.token).toBe("second");
   });
 
-  it("treats a missing/invalid expiry as non-self-expiring (claim still bounds it)", () => {
+  it("fails closed for missing or malformed operator-token expiry", () => {
     const vault = new DeviceTokenVault({ now: () => Number.MAX_SAFE_INTEGER });
     vault.store("req-5", "token");
-    expect(vault.has("req-5")).toBe(true);
-    expect(vault.claim("req-5")?.token).toBe("token");
+    vault.store("req-6", "token", "not-a-timestamp");
+    expect(vault.has("req-5")).toBe(false);
     expect(vault.claim("req-5")).toBeUndefined();
+    expect(vault.has("req-6")).toBe(false);
+    expect(vault.claim("req-6")).toBeUndefined();
+  });
+
+  it("accepts an authoritative database clock for cross-node delivery", () => {
+    const vault = new DeviceTokenVault({ now: () => Date.parse("2099-01-01T00:00:00.000Z") });
+    const databaseNow = Date.parse("2026-07-11T12:00:00.000Z");
+    vault.store("req-db", "token", "2026-07-11T12:01:00.000Z", databaseNow);
+
+    expect(vault.has("req-db", databaseNow)).toBe(true);
+    expect(vault.claim("req-db", databaseNow)?.token).toBe("token");
   });
 });

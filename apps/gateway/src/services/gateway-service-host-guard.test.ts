@@ -491,10 +491,45 @@ describe("gateway service host guard", () => {
       .map(({ relativePath }) => relativePath);
     expect(inlineHostBuilders).toEqual([]);
   }, 15_000);
+
+  it("routes policy-engine approval creation through the canonical Gateway lifecycle", async () => {
+    const files = await readServiceSources();
+    const gatewayService = files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "";
+    const normalizedGatewayService = normalizeSourceForGuard(gatewayService);
+    const createApprovalMethod = normalizeSourceForGuard(extractPublicMethodSource(gatewayService, "createApproval"));
+
+    expect(normalizedGatewayService).toMatch(
+      /new ToolPolicyEngine\(config\.toolPolicy, this\.storage, undefined, \{[\s\S]{0,700}createApproval: \(input, onCreated, authority\) => this\.createApproval\(input, onCreated, authority\)/,
+    );
+    expect(createApprovalMethod).toMatch(
+      /const approval = authority \? await this\.approvalRuntime\.createApproval\(input, onCreated, authority\) : await this\.approvalRuntime\.createApproval\(input, onCreated\)/,
+    );
+    expect(gatewayService).toMatch(
+      /new CapabilitySystemService\(\{[\s\S]{0,800}resolveApproval: \(approvalId, input\) => this\.resolveApproval\(approvalId, input\)/,
+    );
+  }, 15_000);
 });
 
 function normalizeTypeAlias(source: string): string {
   return source.replace(/\s+/g, " ").trim();
+}
+
+function normalizeSourceForGuard(source: string): string {
+  return source.replace(/\s+/g, " ").trim();
+}
+
+function extractPublicMethodSource(source: string, methodName: string): string {
+  const escapedMethodName = methodName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const signature = new RegExp(`\\bpublic\\s+(?:async\\s+)?${escapedMethodName}\\s*\\(`).exec(source);
+  if (!signature) {
+    return "";
+  }
+  const remainder = source.slice(signature.index + signature[0].length);
+  const nextPublicMember = /\n\s*public\s+(?:async\s+)?[A-Za-z_$]/.exec(remainder);
+  return source.slice(
+    signature.index,
+    nextPublicMember ? signature.index + signature[0].length + nextPublicMember.index : source.length,
+  );
 }
 
 function extractGatewayServiceNamedImports(source: string): string[] {

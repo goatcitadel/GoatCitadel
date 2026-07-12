@@ -11,7 +11,7 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatToolRunRecord,
 } from "@goatcitadel/contracts";
-import type { DatabaseClient } from "./db.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import {
   attachTurnTraceDetails,
@@ -153,6 +153,116 @@ function setRawField(db: DatabaseClient, turnId: string, field: string, value: u
 }
 
 describe("ChatTurnTraceRepository", () => {
+  it("rolls back a newly inserted trace when its post-insert read fails", () => {
+    const { db } = createStore();
+    const originalPrepare = db.prepare.bind(db);
+    let failNextTraceRead = false;
+    db.prepare = ((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (sql !== "SELECT * FROM chat_turn_traces WHERE turn_id = ?") {
+        return statement;
+      }
+      return {
+        run: (...params: unknown[]) => statement.run(...params),
+        get: <T = unknown>(...params: unknown[]) => {
+          if (failNextTraceRead) {
+            failNextTraceRead = false;
+            throw new Error("trace read unavailable");
+          }
+          return statement.get<T>(...params);
+        },
+        all: <T = unknown>(...params: unknown[]) => statement.all<T>(...params),
+      };
+    }) as DatabaseClient["prepare"];
+    const repo = new ChatTurnTraceRepository(db);
+    failNextTraceRead = true;
+
+    assert.throws(() => repo.create(baseTrace()), /trace read unavailable/);
+    assert.throws(() => repo.get("turn-a"), /not found/i);
+  });
+
+  it("conditionally completes only while the observed lifecycle status still owns the turn", () => {
+    const { repo } = createStore();
+    repo.create(baseTrace({ status: "running" }));
+
+    const completed = repo.patchIfStatus("turn-a", ["running"], {
+      status: "completed",
+      assistantMessageId: "assistant-a",
+    });
+
+    assert.equal(completed?.status, "completed");
+    repo.patch("turn-a", { status: "cancelled" });
+    const lost = repo.patchIfStatus("turn-a", ["running"], {
+      status: "completed",
+      assistantMessageId: "assistant-late",
+    });
+    assert.equal(lost, undefined);
+    assert.equal(repo.get("turn-a").status, "cancelled");
+    assert.equal(repo.get("turn-a").assistantMessageId, "assistant-a");
+  });
+
+  it("does not restore stale fields when a same-status writer wins before the conditional update", () => {
+    const { repo } = createStore();
+    repo.create(
+      baseTrace({
+        status: "running",
+        retrieval: { l0Used: true, l1Used: false, l2Used: false },
+      }),
+    );
+    const internal = repo as unknown as {
+      getForUpdateStmt: { get: (turnId: string) => unknown };
+    };
+    const originalGet = internal.getForUpdateStmt.get.bind(internal.getForUpdateStmt);
+    let injectedConcurrentWrite = false;
+    internal.getForUpdateStmt.get = (turnId) => {
+      if (!injectedConcurrentWrite) {
+        injectedConcurrentWrite = true;
+        repo.patch("turn-a", {
+          retrieval: { l0Used: true, l1Used: true, l2Used: false },
+        });
+      }
+      return originalGet(turnId);
+    };
+
+    const completed = repo.patchIfStatus("turn-a", ["running"], {
+      status: "completed",
+      assistantMessageId: "assistant-a",
+    });
+
+    assert.equal(completed?.status, "completed");
+    assert.equal(completed?.assistantMessageId, "assistant-a");
+    assert.deepEqual(completed?.retrieval, {
+      l0Used: true,
+      l1Used: true,
+      l2Used: false,
+    });
+  });
+
+  it("uses a PostgreSQL row lock for transactionally fenced trace reads", () => {
+    const preparedSql: string[] = [];
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new ChatTurnTraceRepository(db);
+
+    assert.throws(() => repo.getForUpdate("turn-missing"), /not found/i);
+    assert.ok(preparedSql.includes("SELECT * FROM chat_turn_traces WHERE turn_id = ? FOR UPDATE"));
+  });
+
   it("lists root and parent siblings for bounded branch rendering", () => {
     const { repo } = createStore();
     repo.create(baseTrace({ turnId: "root-a", userMessageId: "user-root-a", startedAt: "2026-03-26T00:00:01.000Z" }));

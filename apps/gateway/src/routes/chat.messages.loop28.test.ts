@@ -205,6 +205,7 @@ describe("chat message route-decision tails", () => {
       "sess-1",
       expect.objectContaining(governance),
       expect.anything(),
+      expect.objectContaining({ markCommitted: expect.any(Function) }),
     );
     expect(retryChatTurn).toHaveBeenCalledWith("sess-1", "turn-1", expect.objectContaining(governance));
     expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining(governance));

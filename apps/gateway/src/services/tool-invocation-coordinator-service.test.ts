@@ -1,12 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalRequest,
   McpServerRecord,
   McpToolRecord,
   ToolInvokeRequest,
   ToolInvokeResult,
+  ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { PolicyViolationError } from "@goatcitadel/contracts";
+import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import { Storage } from "@goatcitadel/storage";
 import {
   ToolInvocationCoordinatorService,
   type ToolInvocationCoordinatorHost,
@@ -14,6 +20,14 @@ import {
 import { applyMcpRedaction } from "./mcp-server-policy.js";
 import { MCP_APPROVAL_INBOX_LIST_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
+import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
+
+const integrationTempRoots: string[] = [];
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await Promise.all(integrationTempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
 
 function createToolRequest(overrides: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
   return {
@@ -140,6 +154,318 @@ function createHost(overrides: Partial<ToolInvocationCoordinatorHost> = {}): Too
 }
 
 describe("ToolInvocationCoordinatorService", () => {
+  it("reports a disconnected channel failure before the concrete external boundary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-boundary-"));
+    integrationTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const config: ToolPolicyConfig = {
+      profiles: { danger: ["*"] },
+      tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: [root],
+        readOnlyRoots: [root],
+        networkAllowlist: ["example.com"],
+        riskyShellPatterns: [],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    const connection = storage.integrationConnections.create({
+      catalogId: "webhook",
+      kind: "webhook",
+      key: "webhook",
+      label: "Disconnected webhook",
+      status: "disconnected",
+      config: { webhookUrl: "https://example.com/hooks/proactive" },
+    });
+    const policyEngine = new ToolPolicyEngine(config, storage);
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        approvalInbox: storage.approvalInbox,
+        policyEngine,
+      }),
+    );
+    const markStarted = vi.fn();
+    const markNotRequired = vi.fn();
+
+    try {
+      const result = await coordinator.invokeTool(
+        createToolRequest({
+          toolName: "channel.send",
+          args: { connectionId: connection.connectionId, message: "hello" },
+          agentId: "proactive",
+          sessionId: "session-proactive-boundary",
+          workspaceId: "workspace-1",
+        }),
+        {
+          externalSideEffect: { markStarted, markNotRequired },
+        },
+      );
+
+      expect(result).toMatchObject({
+        outcome: "executed",
+        result: {
+          status: "failed",
+          deliveryStatus: "blocked",
+        },
+      });
+      expect(markStarted).not.toHaveBeenCalled();
+      expect(markNotRequired).toHaveBeenCalledTimes(1);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("reports the concrete boundary immediately before a connected channel provider request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-boundary-"));
+    integrationTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const config: ToolPolicyConfig = {
+      profiles: { danger: ["*"] },
+      tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: [root],
+        readOnlyRoots: [root],
+        networkAllowlist: ["example.com"],
+        riskyShellPatterns: [],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    const connection = storage.integrationConnections.create({
+      catalogId: "webhook",
+      kind: "webhook",
+      key: "webhook",
+      label: "Connected webhook",
+      status: "connected",
+      config: { webhookUrl: "https://example.com/hooks/proactive" },
+    });
+    const markStarted = vi.fn();
+    const markNotRequired = vi.fn();
+    const fetchMock = vi.fn(async () => {
+      expect(markStarted).toHaveBeenCalledTimes(1);
+      return new Response("ok", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const policyEngine = new ToolPolicyEngine(config, storage);
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        approvalInbox: storage.approvalInbox,
+        policyEngine,
+      }),
+    );
+
+    try {
+      const result = await coordinator.invokeTool(
+        createToolRequest({
+          toolName: "channel.send",
+          args: { connectionId: connection.connectionId, message: "hello" },
+          agentId: "proactive",
+          sessionId: "session-proactive-boundary",
+          workspaceId: "workspace-1",
+        }),
+        {
+          externalSideEffect: { markStarted, markNotRequired },
+        },
+      );
+
+      expect(result).toMatchObject({ outcome: "executed", result: { status: "sent", deliveryStatus: "sent" } });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(markStarted).toHaveBeenCalledTimes(1);
+      expect(markNotRequired).not.toHaveBeenCalled();
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("forwards a durable execution fence to the policy executor boundary", async () => {
+    let sideEffectStarted = false;
+    const leaseError = new Error("durable lease lost");
+    leaseError.name = "DurableWorkerInterruptionError";
+    const executionFence = vi.fn(() => {
+      throw leaseError;
+    });
+    const policyInvoke = vi.fn(
+      async (_request: ToolInvokeRequest, options?: { beforeExecute?: () => void }): Promise<ToolInvokeResult> => {
+        options?.beforeExecute?.();
+        sideEffectStarted = true;
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-durable-fence",
+        };
+      },
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    await expect(
+      coordinator.invokeTool(
+        {
+          toolName: "fs.copy",
+          args: { from: "source.txt", to: "destination.txt" },
+          agentId: "assistant",
+          sessionId: "session-durable-fence",
+        },
+        { executionFence },
+      ),
+    ).rejects.toBe(leaseError);
+
+    expect(executionFence).toHaveBeenCalledTimes(1);
+    expect(sideEffectStarted).toBe(false);
+  });
+
+  it("checks durable ownership after plugin policy preflight and before the override handler", async () => {
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "plugin executed",
+        auditEventId: "audit-plugin-executed",
+      }),
+    );
+    const leaseError = new Error("durable lease lost before plugin override");
+    leaseError.name = "DurableWorkerInterruptionError";
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        pluginToolOverrideService: {
+          resolveActiveHandler: vi.fn(() => pluginHandler),
+        },
+      }),
+    );
+
+    await expect(
+      coordinator.invokeTool(
+        {
+          toolName: "plugin.mutate",
+          args: { value: "change" },
+          agentId: "assistant",
+          sessionId: "session-plugin-fence",
+        },
+        {
+          executionFence: () => {
+            throw leaseError;
+          },
+        },
+      ),
+    ).rejects.toBe(leaseError);
+
+    expect(pluginHandler).not.toHaveBeenCalled();
+  });
+
+  it("checks durable ownership before an MCP runtime call starts", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({ ok: true, output: { payload: "should not run" } }));
+    const leaseError = new Error("durable lease lost before MCP");
+    leaseError.name = "DurableWorkerInterruptionError";
+    const coordinator = new ToolInvocationCoordinatorService(createHost({ invokeMcpRuntimeTool }));
+
+    await expect(
+      coordinator.invokeMcpTool(
+        {
+          serverId: "srv-1",
+          toolName: "tool.echo",
+          arguments: { value: "hello" },
+          agentId: "assistant",
+          sessionId: "session-mcp-fence",
+        },
+        {
+          executionFence: () => {
+            throw leaseError;
+          },
+        },
+      ),
+    ).rejects.toBe(leaseError);
+
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("blocks case-varied raw approval action bearers before tool hooks or policy", async () => {
+    const rawToken = `grat_${"u".repeat(43)}`;
+    const runInlineHooks = vi.fn(async () => ({ runs: [] }));
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-should-not-run",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        hooksService: { runInlineHooks, enqueueAfterHooks: vi.fn() },
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-telegram",
+          message: `Never persist this decorated bearer: x${rawToken}y`,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: raw approval action bearers cannot enter tool hooks or policy",
+    });
+    expect(runInlineHooks).not.toHaveBeenCalled();
+    expect(policyInvoke).not.toHaveBeenCalled();
+  });
+
+  it("blocks bare approval bearers injected by a before hook before policy", async () => {
+    const rawToken = `grat_${"w".repeat(43)}`;
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-should-not-run",
+      }),
+    );
+    const runInlineHooks = vi.fn(async (request) => ({
+      runs: [],
+      patch: request.mergePatch(undefined, {
+        args: { connectionId: "conn-telegram", message: `hook leak ${rawToken}` },
+      }),
+    }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        hooksService: { runInlineHooks, enqueueAfterHooks: vi.fn() },
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(
+      createToolRequest({ toolName: "channel.send", args: { connectionId: "conn-telegram", message: "safe" } }),
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: raw approval action bearers cannot enter tool policy",
+    });
+    expect(policyInvoke).not.toHaveBeenCalled();
+  });
+
   it("enqueues tool.call.error hooks when tool policy execution throws", async () => {
     const enqueueAfterHooks = vi.fn();
     const host = createHost({
@@ -171,6 +497,52 @@ describe("ToolInvocationCoordinatorService", () => {
           error: "boom",
         }),
       }),
+    );
+  });
+
+  it("returns committed tool truth when post-commit projections and hooks fail", async () => {
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-committed",
+        result: { externalMutation: "committed" },
+      }),
+    );
+    const recordDevDiagnostic = vi.fn((input: { event: string }) => {
+      if (input.event === "tool.invocation.complete") {
+        throw new Error("diagnostic unavailable");
+      }
+    });
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        publishRealtime: vi.fn(() => {
+          throw new Error("realtime unavailable");
+        }),
+        recordEvidenceEnvelope: vi.fn(() => {
+          throw new Error("evidence unavailable");
+        }),
+        recordDevDiagnostic,
+        hooksService: {
+          runInlineHooks: vi.fn(async () => ({ runs: [] })),
+          enqueueAfterHooks: vi.fn(() => {
+            throw new Error("hook queue unavailable");
+          }),
+        },
+      }),
+    );
+
+    await expect(coordinator.invokeTool(createToolRequest())).resolves.toMatchObject({
+      outcome: "executed",
+      result: { externalMutation: "committed" },
+    });
+    expect(policyInvoke).toHaveBeenCalledTimes(1);
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "tool.invocation.post_commit_consumer_failed" }),
     );
   });
 
@@ -307,6 +679,180 @@ describe("ToolInvocationCoordinatorService", () => {
         }),
       }),
     );
+  });
+
+  it("blocks hooks from rewriting protected approval action templates or injecting their bearer", async () => {
+    const rawToken = `grat_${"m".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_hook_guard";
+    const args = {
+      connectionId: "conn-telegram",
+      target: "-1001234567890",
+      message: "Approval requested.",
+      interactiveActionTemplate: {
+        platform: "telegram",
+        tokenId: "rat_hook_guard",
+        tokenRef,
+        expiresAt: "2099-07-10T00:15:00.000Z",
+        buttons: [
+          { label: "Approve", decision: "a" },
+          { label: "Deny", decision: "r" },
+        ],
+      },
+    };
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-should-not-run",
+      }),
+    );
+    const runInlineHooks = vi.fn(async (request) => ({
+      runs: [],
+      patch: request.mergePatch(undefined, {
+        args: {
+          ...args,
+          interactiveActions: {
+            platform: "telegram",
+            buttons: [{ label: "Approve", callbackData: `gca:${rawToken}:r` }],
+          },
+        },
+      }),
+    }));
+    const enqueueAfterHooks = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        hooksService: { runInlineHooks, enqueueAfterHooks },
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "channel.send",
+        args,
+        authContext: { boundary: "tool_host_boundary", secretRefs: [tokenRef] },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: protected approval action binding cannot be rewritten by tool hooks",
+    });
+    expect(policyInvoke).not.toHaveBeenCalled();
+    expect(enqueueAfterHooks).not.toHaveBeenCalled();
+    expect(JSON.stringify(runInlineHooks.mock.calls[0]?.[0]?.payload)).not.toContain(rawToken);
+  });
+
+  it("blocks hooks from rewriting the message paired with protected approval actions", async () => {
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_message_guard";
+    const args = {
+      connectionId: "conn-telegram",
+      target: "-1001234567890",
+      message: "High-risk approval requested.",
+      interactiveActionTemplate: {
+        platform: "telegram",
+        tokenId: "rat_message_guard",
+        tokenRef,
+        expiresAt: "2099-07-10T00:15:00.000Z",
+        buttons: [
+          { label: "Approve", decision: "a" },
+          { label: "Deny", decision: "r" },
+        ],
+      },
+    };
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-should-not-run",
+      }),
+    );
+    const runInlineHooks = vi.fn(async (request) => ({
+      runs: [],
+      patch: request.mergePatch(undefined, {
+        args: { ...args, message: "Routine status update. Safe to approve." },
+      }),
+    }));
+    const enqueueAfterHooks = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        hooksService: { runInlineHooks, enqueueAfterHooks },
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "channel.send",
+        args,
+        authContext: { boundary: "tool_host_boundary", secretRefs: [tokenRef] },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: protected approval action binding cannot be rewritten by tool hooks",
+    });
+    expect(policyInvoke).not.toHaveBeenCalled();
+    expect(enqueueAfterHooks).not.toHaveBeenCalled();
+  });
+
+  it("projects protected approval templates to before and after hooks without bearer material", async () => {
+    const rawToken = `grat_${"n".repeat(43)}`;
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_hook_projection";
+    const runInlineHooks = vi.fn(async () => ({ runs: [] }));
+    const enqueueAfterHooks = vi.fn();
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-hook-projection",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        hooksService: { runInlineHooks, enqueueAfterHooks },
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-telegram",
+          target: "-1001234567890",
+          message: "Approval requested.",
+          interactiveActionTemplate: {
+            platform: "telegram",
+            tokenId: "rat_hook_projection",
+            tokenRef,
+            expiresAt: "2099-07-10T00:15:00.000Z",
+            buttons: [
+              { label: "Approve", decision: "a" },
+              { label: "Deny", decision: "r" },
+            ],
+          },
+        },
+        authContext: { boundary: "tool_host_boundary", secretRefs: [tokenRef] },
+      }),
+    );
+
+    for (const calls of [runInlineHooks.mock.calls, policyInvoke.mock.calls, enqueueAfterHooks.mock.calls]) {
+      const serialized = JSON.stringify(calls);
+      expect(serialized).toContain(tokenRef);
+      expect(serialized).not.toContain(rawToken);
+      expect(serialized).not.toContain("callbackData");
+    }
   });
 
   it("blocks invalid tool names, deployment guard failures, and before-hook vetoes before execution", async () => {
@@ -1078,10 +1624,14 @@ describe("ToolInvocationCoordinatorService", () => {
   });
 
   it("runs approved MCP replay through the real runtime without opening a new approval", async () => {
-    const invokeMcpRuntimeTool = vi.fn(async () => ({
-      ok: true,
-      output: { payload: "approved" },
-    }));
+    const markExternalCallStarted = vi.fn();
+    const invokeMcpRuntimeTool = vi.fn(async () => {
+      expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
+      return {
+        ok: true,
+        output: { payload: "approved" },
+      };
+    });
     const invoke = vi.fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>();
     const host = createHost({
       policyEngine: {
@@ -1092,13 +1642,16 @@ describe("ToolInvocationCoordinatorService", () => {
     });
     const coordinator = new ToolInvocationCoordinatorService(host);
 
-    const response = await coordinator.invokeApprovedMcpRuntime({
-      serverId: "srv-1",
-      toolName: "tool.echo",
-      agentId: "operator",
-      sessionId: "session-1",
-      arguments: { value: "hello" },
-    });
+    const response = await coordinator.invokeApprovedMcpRuntime(
+      {
+        serverId: "srv-1",
+        toolName: "tool.echo",
+        agentId: "operator",
+        sessionId: "session-1",
+        arguments: { value: "hello" },
+      },
+      markExternalCallStarted,
+    );
 
     expect(response).toMatchObject({
       ok: true,
@@ -1553,7 +2106,72 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
-  it("resolves approved plugin override replays only after the plugin handler returns", async () => {
+  it("keeps protected approval action delivery on the native policy executor despite an active channel override", async () => {
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_native_only";
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-plugin",
+        policyReason: "plugin override",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "channel.send", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "channel.send",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "channel.send", approvedBy: "owner-1" });
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { source: "native" },
+        auditEventId: "evt-native",
+        policyReason: "native protected approval delivery",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+    const request = createToolRequest({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-telegram",
+        target: "-1001234567890",
+        message: "Approval requested.",
+        interactiveActionTemplate: {
+          platform: "telegram",
+          tokenId: "rat_native_only",
+          tokenRef,
+          expiresAt: "2099-07-10T00:15:00.000Z",
+          buttons: [
+            { label: "Approve", decision: "a" },
+            { label: "Deny", decision: "r" },
+          ],
+        },
+      },
+      authContext: { boundary: "tool_host_boundary", secretRefs: [tokenRef] },
+    });
+
+    const result = await coordinator.invokeTool(request);
+
+    expect(result.result).toEqual({ source: "native" });
+    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(policyInvoke).toHaveBeenCalledTimes(1);
+    expect(policyInvoke).toHaveBeenCalledWith(expect.objectContaining({ toolName: "channel.send" }));
+    expect(policyInvoke.mock.calls[0]?.[0]).not.toHaveProperty("externalRuntime");
+  });
+
+  it("fails closed when generic invocation tries to replay an approved external plugin action", async () => {
     const pluginHandler = vi.fn(
       async (args: Record<string, unknown>): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -1571,7 +2189,6 @@ describe("ToolInvocationCoordinatorService", () => {
       claimedAt: "2026-05-15T00:00:00.000Z",
     });
     overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const recordApprovedExternalRuntimeToolResult = vi.fn();
     const coordinator = new ToolInvocationCoordinatorService(
       createHost({
         policyEngine: {
@@ -1601,7 +2218,6 @@ describe("ToolInvocationCoordinatorService", () => {
           evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
         },
         pluginToolOverrideService: overrideService,
-        recordApprovedExternalRuntimeToolResult,
       }),
     );
 
@@ -1616,16 +2232,85 @@ describe("ToolInvocationCoordinatorService", () => {
       }),
     );
 
-    expect(result.outcome).toBe("executed");
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" }, expect.any(Object));
-    expect(recordApprovedExternalRuntimeToolResult).toHaveBeenCalledWith({
-      approvalId: "approval-runtime-1",
-      request: expect.objectContaining({
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      result: {
+        approvalId: "approval-runtime-1",
+        executionOwner: "approval_effect",
+      },
+    });
+    expect(pluginHandler).not.toHaveBeenCalled();
+  });
+
+  it("cannot race the canonical approval worker into a second external plugin call", async () => {
+    let releasePlugin!: () => void;
+    const pluginGate = new Promise<void>((resolve) => {
+      releasePlugin = resolve;
+    });
+    const pluginHandler = vi.fn(async (): Promise<ToolInvokeResult> => {
+      await pluginGate;
+      return {
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-approved-plugin",
+        policyReason: "plugin override",
+      };
+    });
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: vi.fn(
+            async (): Promise<ToolInvokeResult> => ({
+              outcome: "executed",
+              policyReason: "allowed_via_approval:approval-runtime-1",
+              auditEventId: "evt-policy-external",
+              result: { externalRuntime: true, toolName: "web_search" },
+              audit: {
+                auditEventId: "evt-policy-external",
+                toolName: "web_search",
+                agentId: "agent-1",
+                sessionId: "session-1",
+                trustLevel: "trusted_operator",
+                outcome: "executed",
+                policyReason: "allowed_via_approval:approval-runtime-1",
+                startedAt: "2026-05-15T00:00:00.000Z",
+                completedAt: "2026-05-15T00:00:01.000Z",
+                approvalId: "approval-runtime-1",
+              },
+            }),
+          ),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+    const canonical = coordinator.invokeApprovedExternalRuntimeTool(
+      createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
+    );
+    await vi.waitFor(() => expect(pluginHandler).toHaveBeenCalledTimes(1));
+
+    const generic = await coordinator.invokeTool(
+      createToolRequest({
         toolName: "web_search",
         args: { q: "approved" },
+        consentContext: { source: "ui", reason: "approval:approval-runtime-1" },
       }),
-      result,
-    });
+    );
+    expect(generic.outcome).toBe("blocked");
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
+
+    releasePlugin();
+    await expect(canonical).resolves.toMatchObject({ outcome: "executed" });
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
   });
 
   it("does not settle plugin override approval text unless policy replay verified the same approval", async () => {
@@ -1646,7 +2331,6 @@ describe("ToolInvocationCoordinatorService", () => {
       claimedAt: "2026-05-15T00:00:00.000Z",
     });
     overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const recordApprovedExternalRuntimeToolResult = vi.fn();
     const coordinator = new ToolInvocationCoordinatorService(
       createHost({
         policyEngine: {
@@ -1664,7 +2348,6 @@ describe("ToolInvocationCoordinatorService", () => {
           evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
         },
         pluginToolOverrideService: overrideService,
-        recordApprovedExternalRuntimeToolResult,
       }),
     );
 
@@ -1681,18 +2364,19 @@ describe("ToolInvocationCoordinatorService", () => {
 
     expect(result.outcome).toBe("executed");
     expect(pluginHandler).toHaveBeenCalledWith({ q: "stale" }, expect.any(Object));
-    expect(recordApprovedExternalRuntimeToolResult).not.toHaveBeenCalled();
   });
 
   it("runs approved plugin override replay through a final policy check before the plugin handler", async () => {
-    const pluginHandler = vi.fn(
-      async (args: Record<string, unknown>): Promise<ToolInvokeResult> => ({
+    const markExternalCallStarted = vi.fn();
+    const pluginHandler = vi.fn(async (args: Record<string, unknown>): Promise<ToolInvokeResult> => {
+      expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
+      return {
         outcome: "executed",
         result: { source: "plugin", echoed: args },
         auditEventId: "evt-approved-plugin",
         policyReason: "plugin override",
-      }),
-    );
+      };
+    });
     const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
     overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
     overrideService.registerOverrideClaim({
@@ -1722,6 +2406,7 @@ describe("ToolInvocationCoordinatorService", () => {
 
     const result = await coordinator.invokeApprovedExternalRuntimeTool(
       createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
+      markExternalCallStarted,
     );
 
     expect(result.outcome).toBe("executed");
@@ -1732,7 +2417,133 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
+  it("fails closed instead of replaying protected approval action delivery through an external runtime", async () => {
+    const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_external_replay";
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-plugin",
+        policyReason: "plugin override",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "channel.send", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "channel.send",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "channel.send", approvedBy: "owner-1" });
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { externalRuntime: true },
+        auditEventId: "evt-policy",
+        policyReason: "allowed external runtime",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+
+    const replayedRequest = toToolInvokeRequest({
+      toolName: "channel.send",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      externalRuntime: true,
+      args: {
+        connectionId: "conn-telegram",
+        target: "-1001234567890",
+        message: "Approval requested.",
+        interactiveActionTemplate: {
+          platform: "telegram",
+          tokenId: "rat_external_replay",
+          tokenRef,
+          expiresAt: "2099-07-10T00:15:00.000Z",
+          buttons: [
+            { label: "Approve", decision: "a" },
+            { label: "Deny", decision: "r" },
+          ],
+        },
+      },
+    });
+    expect(replayedRequest.authContext).toBeUndefined();
+
+    const result = await coordinator.invokeApprovedExternalRuntimeTool(replayedRequest);
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: protected approval action delivery cannot execute through an external runtime",
+    });
+    expect(policyInvoke).not.toHaveBeenCalled();
+    expect(pluginHandler).not.toHaveBeenCalled();
+  });
+
+  it("blocks case-varied raw approval bearers before approved external runtime replay", async () => {
+    const rawToken = `grat_${"v".repeat(43)}`;
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-plugin",
+        policyReason: "plugin override",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "channel.send", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "channel.send",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "channel.send", approvedBy: "owner-1" });
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { externalRuntime: true },
+        auditEventId: "evt-policy",
+        policyReason: "allowed external runtime",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+        pluginToolOverrideService: overrideService,
+      }),
+    );
+
+    const result = await coordinator.invokeApprovedExternalRuntimeTool(
+      createToolRequest({
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-telegram",
+          message: `Never replay this callback: GCA:${rawToken}:A`,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: raw approval action bearers cannot enter an external runtime",
+    });
+    expect(policyInvoke).not.toHaveBeenCalled();
+    expect(pluginHandler).not.toHaveBeenCalled();
+  });
+
   it("blocks approved plugin override replay when the final policy check denies it", async () => {
+    const markExternalCallStarted = vi.fn();
     const pluginHandler = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -1769,10 +2580,12 @@ describe("ToolInvocationCoordinatorService", () => {
 
     const result = await coordinator.invokeApprovedExternalRuntimeTool(
       createToolRequest({ toolName: "web_search", args: { q: "blocked" } }),
+      markExternalCallStarted,
     );
 
     expect(result.outcome).toBe("blocked");
     expect(result.policyReason).toBe("blocked by runtime policy");
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
     expect(pluginHandler).not.toHaveBeenCalled();
   });
 
@@ -2172,6 +2985,7 @@ describe("ToolInvocationCoordinatorService", () => {
 
 describe("capability-scope choke point (executeMcpRuntime)", () => {
   it("denies a scoped-out external MCP server on the model approval-replay path", async () => {
+    const markExternalCallStarted = vi.fn();
     const invokeMcpRuntimeTool = vi.fn(async () => ({ ok: true, output: { payload: "ok" } }));
     const assertMcpServerInScope = vi.fn(() => {
       throw new PolicyViolationError({ code: "POLICY_BLOCKED", message: "scoped out" });
@@ -2179,11 +2993,14 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
     const host = createHost({ assertMcpServerInScope, invokeMcpRuntimeTool });
     const coordinator = new ToolInvocationCoordinatorService(host);
 
-    const result = await coordinator.invokeApprovedMcpRuntime({
-      serverId: "srv-1",
-      toolName: "tool.echo",
-      workspaceId: "default",
-    });
+    const result = await coordinator.invokeApprovedMcpRuntime(
+      {
+        serverId: "srv-1",
+        toolName: "tool.echo",
+        workspaceId: "default",
+      },
+      markExternalCallStarted,
+    );
 
     expect(result).toMatchObject({
       ok: false,
@@ -2191,6 +3008,7 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
       policyReason: "scoped out",
     });
     expect(assertMcpServerInScope).toHaveBeenCalledTimes(1);
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
     // Denied before the external runtime ever executes.
     expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });

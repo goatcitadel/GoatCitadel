@@ -22,6 +22,9 @@ const FAST_LANE_PERF_BUDGETS = Object.freeze({
   "fast.test": { warnMs: 135_000 },
   "fast.smoke": { warnMs: 45_000 },
 });
+// Scenario timestamps and durations are sampled by adjacent clock calls. Permit
+// only a small scheduling gap before treating the wall-clock interval as untrusted.
+const FAST_LANE_INTERVAL_CLOCK_TOLERANCE_MS = 250;
 
 export function createRunId(lane) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -80,7 +83,9 @@ export async function finalizeRunContext(context, statusOverride) {
     baseManifest.lane === "fast" ? await writeFastLanePerfArtifact(context, baseManifest) : undefined;
   const finalStatus =
     statusOverride ??
-    (fastLanePerf?.strict && fastLanePerf.status === "failed" ? "failed" : deriveManifestStatus(context.manifest));
+    (fastLanePerf?.integrityFailure || (fastLanePerf?.strict && fastLanePerf.status === "failed")
+      ? "failed"
+      : deriveManifestStatus(context.manifest));
   const finalManifest = createVerificationRunManifest({
     ...baseManifest,
     status: finalStatus,
@@ -92,6 +97,7 @@ export async function finalizeRunContext(context, statusOverride) {
               artifact: FAST_LANE_PERF_ARTIFACT,
               status: fastLanePerf.status,
               strict: fastLanePerf.strict,
+              integrityFailure: fastLanePerf.integrityFailure,
             },
           }
         : {}),
@@ -416,7 +422,13 @@ function buildSummaryMarkdown(manifest) {
       ? [
           "## Fast Lane Performance",
           "",
-          `- Budget status: \`${fastLanePerf.status}\`${fastLanePerf.strict ? " (strict)" : " (not enforced)"}`,
+          `- Budget status: \`${fastLanePerf.status}\`${
+            fastLanePerf.integrityFailure
+              ? " (measurement integrity failure; enforced)"
+              : fastLanePerf.strict
+                ? " (strict)"
+                : " (not enforced)"
+          }`,
           `- Timing artifact: \`${fastLanePerf.artifact}\``,
           "",
         ]
@@ -435,10 +447,13 @@ function buildSummaryMarkdown(manifest) {
 }
 
 async function writeFastLanePerfArtifact(context, manifest) {
-  const strict = String(process.env.GOATCITADEL_VERIFY_PERF_BUDGET ?? "").trim().toLowerCase() === "strict";
+  const strict =
+    String(process.env.GOATCITADEL_VERIFY_PERF_BUDGET ?? "")
+      .trim()
+      .toLowerCase() === "strict";
   const payload = buildFastLanePerfPayload(manifest, { strict });
   await writeJson(path.join(context.artifactRoot, FAST_LANE_PERF_ARTIFACT), payload);
-  return { status: payload.status, strict };
+  return { status: payload.status, strict, integrityFailure: payload.integrityFailure };
 }
 
 export function buildFastLanePerfPayload(manifest, options = {}) {
@@ -447,17 +462,25 @@ export function buildFastLanePerfPayload(manifest, options = {}) {
     id: scenario.id,
     title: scenario.title,
     status: scenario.status,
+    startedAt: scenario.startedAt,
+    finishedAt: scenario.finishedAt,
     durationMs: scenario.durationMs,
   }));
+  const fastTestTiming = deriveFastTestTiming(scenarioTimings, manifest);
+  const fastTestBudget = {
+    ...evaluatePerfBudget("fast.test", fastTestTiming.durationMs, FAST_LANE_PERF_BUDGETS["fast.test"]),
+    calculation: fastTestTiming.calculation,
+    integrityFailure: fastTestTiming.integrityFailure === true,
+    ...(fastTestTiming.integrityFailure
+      ? {
+          status: "failed",
+          reason: fastTestTiming.failureReason,
+        }
+      : {}),
+  };
   const budgets = [
     evaluatePerfBudget("total", manifest.durationMs ?? 0, FAST_LANE_PERF_BUDGETS.total),
-    evaluatePerfBudget(
-      "fast.test",
-      scenarioTimings
-        .filter((scenario) => scenario.id === "fast.test" || scenario.id.startsWith("fast.test."))
-        .reduce((sum, scenario) => sum + (scenario.durationMs ?? 0), 0),
-      FAST_LANE_PERF_BUDGETS["fast.test"],
-    ),
+    fastTestBudget,
     evaluatePerfBudget(
       "fast.smoke",
       scenarioTimings.find((scenario) => scenario.id === "fast.smoke")?.durationMs ?? 0,
@@ -471,8 +494,69 @@ export function buildFastLanePerfPayload(manifest, options = {}) {
     lane: manifest.lane,
     strict,
     status,
+    integrityFailure: fastTestTiming.integrityFailure === true,
     budgets,
     scenarios: scenarioTimings,
+  };
+}
+
+function deriveFastTestTiming(scenarioTimings, manifest) {
+  const testTimings = scenarioTimings.filter(
+    (scenario) => scenario.id === "fast.test" || scenario.id.startsWith("fast.test."),
+  );
+  if (testTimings.length === 0) {
+    return {
+      durationMs: 0,
+      calculation: "missing_scenarios",
+      integrityFailure: true,
+      failureReason: "No fast.test scenarios were recorded.",
+    };
+  }
+
+  const invalidDurationScenario = testTimings.find(
+    (scenario) => !Number.isFinite(scenario.durationMs) || scenario.durationMs < 0,
+  );
+  if (invalidDurationScenario) {
+    return {
+      durationMs: 0,
+      calculation: "invalid_scenario_duration",
+      integrityFailure: true,
+      failureReason: `Fast test scenario ${invalidDurationScenario.id} has an invalid durationMs.`,
+    };
+  }
+
+  const durationSumMs = testTimings.reduce((sum, scenario) => sum + scenario.durationMs, 0);
+  const intervals = testTimings.map((scenario) => {
+    const startedAtMs = typeof scenario.startedAt === "string" ? Date.parse(scenario.startedAt) : Number.NaN;
+    const finishedAtMs = typeof scenario.finishedAt === "string" ? Date.parse(scenario.finishedAt) : Number.NaN;
+    return { startedAtMs, finishedAtMs, durationMs: scenario.durationMs };
+  });
+  const runStartedAtMs = typeof manifest.startedAt === "string" ? Date.parse(manifest.startedAt) : Number.NaN;
+  const runFinishedAtMs = typeof manifest.finishedAt === "string" ? Date.parse(manifest.finishedAt) : Number.NaN;
+  const hasValidRunBounds =
+    Number.isFinite(runStartedAtMs) && Number.isFinite(runFinishedAtMs) && runFinishedAtMs >= runStartedAtMs;
+  const hasCompleteIntervals =
+    hasValidRunBounds &&
+    intervals.every(
+      ({ startedAtMs, finishedAtMs, durationMs }) =>
+        Number.isFinite(startedAtMs) &&
+        Number.isFinite(finishedAtMs) &&
+        Number.isFinite(durationMs) &&
+        durationMs >= 0 &&
+        finishedAtMs >= startedAtMs &&
+        startedAtMs >= runStartedAtMs &&
+        finishedAtMs <= runFinishedAtMs &&
+        Math.abs(finishedAtMs - startedAtMs - durationMs) <= FAST_LANE_INTERVAL_CLOCK_TOLERANCE_MS,
+    );
+  if (!hasCompleteIntervals) {
+    return { durationMs: durationSumMs, calculation: "scenario_duration_sum" };
+  }
+
+  const earliestStartMs = Math.min(...intervals.map(({ startedAtMs }) => startedAtMs));
+  const latestFinishMs = Math.max(...intervals.map(({ finishedAtMs }) => finishedAtMs));
+  return {
+    durationMs: latestFinishMs - earliestStartMs,
+    calculation: "test_phase_elapsed",
   };
 }
 

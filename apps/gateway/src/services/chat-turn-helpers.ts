@@ -4,7 +4,9 @@ import {
   type ChatMode,
   type ChatTurnFailureClass,
   type ChatTurnFailureRecord,
+  type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import type { OrchestrationStepExecutionResult } from "../orchestration/types.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 
@@ -31,6 +33,48 @@ export function isChatTurnCancelledError(error: unknown): boolean {
   const name = error.name.toLowerCase();
   const message = error.message.toLowerCase();
   return name.includes("cancel") || message.includes("chat turn cancelled");
+}
+
+export function patchChatTurnTraceIfStatus(
+  repository: Pick<Storage["chatTurnTraces"], "get" | "patch" | "patchIfStatus">,
+  turnId: string,
+  expectedStatuses: readonly ChatTurnTraceRecord["status"][],
+  input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
+): ChatTurnTraceRecord {
+  const current = repository.get(turnId);
+  if (!expectedStatuses.includes(current.status)) {
+    throwChatTurnCompletionOwnershipError(turnId, current.status);
+  }
+  const patched = repository.patchIfStatus
+    ? repository.patchIfStatus(turnId, expectedStatuses, input)
+    : repository.patch(turnId, input);
+  if (patched) {
+    return patched;
+  }
+  throwChatTurnCompletionOwnershipError(turnId, repository.get(turnId).status);
+}
+
+export function tryPatchChatTurnTraceIfStatus(
+  repository: Pick<Storage["chatTurnTraces"], "get" | "patch" | "patchIfStatus">,
+  turnId: string,
+  expectedStatuses: readonly ChatTurnTraceRecord["status"][],
+  input: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
+): { trace: ChatTurnTraceRecord; patched: boolean } {
+  const current = repository.get(turnId);
+  if (!expectedStatuses.includes(current.status)) {
+    return { trace: current, patched: false };
+  }
+  const patched = repository.patchIfStatus
+    ? repository.patchIfStatus(turnId, expectedStatuses, input)
+    : repository.patch(turnId, input);
+  return patched ? { trace: patched, patched: true } : { trace: repository.get(turnId), patched: false };
+}
+
+function throwChatTurnCompletionOwnershipError(turnId: string, status: ChatTurnTraceRecord["status"]): never {
+  if (status === "cancelled") {
+    throw new ChatTurnCancelledError(turnId);
+  }
+  throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership to ${status}.`);
 }
 
 export function splitIntoChunks(input: string, maxChunkLength: number): string[] {
@@ -276,4 +320,19 @@ export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitati
     };
   }
   return deduped;
+}
+
+export function readDurableRecoveryInterruption(signal: AbortSignal | undefined, error: unknown): Error | undefined {
+  const candidate = signal?.aborted ? signal.reason : error;
+  if (!(candidate instanceof Error)) {
+    return undefined;
+  }
+  return candidate.name === "DurableWorkerInterruptionError" || candidate.name === "DurableRunPausedError"
+    ? candidate
+    : undefined;
+}
+
+export function readDurableCancellation(signal: AbortSignal | undefined, error: unknown): Error | undefined {
+  const candidate = signal?.aborted ? signal.reason : error;
+  return candidate instanceof Error && candidate.name === "DurableRunCancelledError" ? candidate : undefined;
 }

@@ -1356,6 +1356,7 @@ function createPolicyStorage(): Storage {
   return {
     toolGrants: {
       list: vi.fn(() => []),
+      listActive: vi.fn(() => []),
     },
     toolAccessDecisions: {
       record: vi.fn(),

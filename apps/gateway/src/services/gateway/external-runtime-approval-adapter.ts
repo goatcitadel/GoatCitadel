@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   McpInvokeRequest,
   McpInvokeResponse,
@@ -7,17 +8,93 @@ import type {
   ToolInvokeResult,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
+import {
+  executeApprovedExternalRuntimeSideEffect,
+  type ApprovedExternalRuntimeSideEffectInput,
+} from "../approved-external-runtime-side-effect-service.js";
+
+type ApprovedExternalRuntimeExecutionOptions =
+  | {
+      deferResolution: true;
+      externalRuntimeReplay: true;
+    }
+  | {
+      deferResolution: true;
+      externalSideEffect: {
+        markStarted(): void;
+        markNotRequired(): void;
+      };
+    };
+
+export interface ApprovedExternalRuntimePendingActionPort {
+  storage: ApprovedExternalRuntimeSideEffectInput["storage"];
+  executeApprovedAction(
+    approvalId: string,
+    signal: AbortSignal | undefined,
+    options: ApprovedExternalRuntimeExecutionOptions,
+  ): Promise<ToolInvokeResult | undefined>;
+  enrichMcpInvokePolicyContext(input: McpInvokeRequest): McpInvokeRequest;
+  invokeApprovedMcpRuntime(input: McpInvokeRequest, markExternalCallStarted?: () => void): Promise<McpInvokeResponse>;
+  invokeApprovedExternalRuntimeTool(
+    request: ToolInvokeRequest,
+    markExternalCallStarted?: () => void,
+  ): Promise<ToolInvokeResult>;
+}
+
+export async function executeApprovedExternalRuntimePendingAction(
+  port: ApprovedExternalRuntimePendingActionPort,
+  approvalId: string,
+  pending: PendingApprovalAction,
+  signal?: AbortSignal,
+): Promise<ToolInvokeResult> {
+  const storedRequest = toToolInvokeRequest(pending.request, signal);
+  return executeApprovedExternalRuntimeSideEffect({
+    storage: port.storage,
+    approvalId,
+    request: storedRequest,
+    execute: async (markExternalCallStarted) => {
+      if (!requiresApprovedExternalRuntimeAdapter(pending)) {
+        const result = await port.executeApprovedAction(approvalId, signal, {
+          deferResolution: true,
+          externalSideEffect: {
+            markStarted: markExternalCallStarted,
+            // The canonical runner records the no-boundary outcome after this
+            // callback returns. Keep that single durable owner authoritative.
+            markNotRequired: () => undefined,
+          },
+        });
+        return result ?? staleApprovedActionResult(false);
+      }
+
+      const policyResult = await port.executeApprovedAction(approvalId, signal, {
+        deferResolution: true,
+        externalRuntimeReplay: true,
+      });
+      if (!policyResult || policyResult.outcome !== "executed") {
+        return policyResult ?? staleApprovedActionResult(true);
+      }
+
+      const request = withExternalRuntimePolicyContext(storedRequest, policyResult);
+      if (request.toolName === "mcp.invoke") {
+        const mcpResult = await port.invokeApprovedMcpRuntime(
+          port.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
+          markExternalCallStarted,
+        );
+        return toolInvokeResultFromMcpApproval(policyResult, mcpResult);
+      }
+      return port.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted);
+    },
+  });
+}
 
 export function isApprovedExternalRuntimePendingAction(
   pending: PendingApprovalAction | undefined,
 ): pending is PendingApprovalAction {
-  if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
-    return false;
-  }
-  if (pending.request.externalRuntime === true) {
-    return true;
-  }
-  return readRecordString(pending.request, "toolName") === "mcp.invoke";
+  return Boolean(pending && pending.actionType === "tool.invoke" && pending.resolutionStatus === "pending");
+}
+
+export function requiresApprovedExternalRuntimeAdapter(pending: PendingApprovalAction): boolean {
+  return pending.request.externalRuntime === true || readRecordString(pending.request, "toolName") === "mcp.invoke";
 }
 
 export function approvedExternalRuntimeRequestMatches(
@@ -207,6 +284,16 @@ function readOptionalRecordString(record: Record<string, unknown>, key: string):
 
 function stableRecordStringify(value: unknown): string {
   return JSON.stringify(sortRecordValue(value));
+}
+
+function staleApprovedActionResult(externalRuntime: boolean): ToolInvokeResult {
+  return {
+    outcome: "blocked",
+    policyReason: externalRuntime
+      ? "Approved external runtime action no longer matches executable pending state."
+      : "Approved action no longer matches executable pending state.",
+    auditEventId: randomUUID(),
+  };
 }
 
 function sortRecordValue(value: unknown): unknown {

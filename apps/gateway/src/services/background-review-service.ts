@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -5,10 +6,12 @@ import type {
   OperatorProfileFact,
   OperatorProfileFactKind,
 } from "@goatcitadel/contracts";
+import type { RecordOperatorProfileFactsResult } from "./operator-profile-service.js";
 import type {
-  RecordOperatorProfileFactsResult,
-} from "./operator-profile-service.js";
-import type { SkillMutationResult } from "./skill-mutation-service.js";
+  DraftSkillMutationInput,
+  PreparedSkillMutationPlan,
+  SkillMutationResult,
+} from "./skill-mutation-service.js";
 
 /**
  * P2-S1 — Background-review (the self-improvement learning loop).
@@ -91,11 +94,11 @@ export interface BackgroundReviewSkillSuggestion {
 
 export interface BackgroundReviewTurnInput {
   sessionId: string;
+  /** The completed turn that produced this review input. */
+  sourceTurnId: string;
   workspaceId: string;
   userText: string;
   assistantText: string;
-  /** The triggering root turn id (provenance for an authored skill). */
-  parentTurnId?: string;
   /** Honor the master autonomy kill switch (`autonomyV1Disabled`). */
   autonomyEnabled: boolean;
   /** Eval-integrity turns must never produce side effects. */
@@ -106,6 +109,8 @@ export interface BackgroundReviewTurnInput {
   turnSucceeded?: boolean;
   /** Abort signal so a slow review never outlives anything that cares. */
   signal?: AbortSignal;
+  /** Deterministic durable effect identity used to dedupe candidate authoring on replay. */
+  effectExecutionId?: string;
 }
 
 /** Outcome of a single background review, returned for observability/testing. */
@@ -143,10 +148,7 @@ export interface BackgroundReviewServiceDeps {
    * Persist durable operator facts via the governed operator-profile service
    * (secrets blocked, snapshotted, autonomy-gated). Returns the write outcome.
    */
-  recordOperatorProfileFacts(
-    workspaceId: string,
-    facts: OperatorProfileFact[],
-  ): RecordOperatorProfileFactsResult;
+  recordOperatorProfileFacts(workspaceId: string, facts: OperatorProfileFact[]): RecordOperatorProfileFactsResult;
   /**
    * Author or patch a single skill via the governed skill-mutation service
    * (validated, jailed, candidate-only, snapshotted). Returns the mutation
@@ -155,9 +157,13 @@ export interface BackgroundReviewServiceDeps {
   draftSkillMutation(input: {
     skillMarkdown: string;
     skillId?: string;
+    evaluationRunId?: string;
     sourceTurnId?: string;
     summary?: string;
   }): Promise<SkillMutationResult>;
+  prepareDurableSkillMutation(input: DraftSkillMutationInput): PreparedSkillMutationPlan;
+  applyPreparedSkillMutationFilesSync(plan: PreparedSkillMutationPlan): void;
+  commitPreparedSkillMutation(plan: PreparedSkillMutationPlan): SkillMutationResult;
   now?: () => Date;
   timeoutMs?: number;
 }
@@ -193,14 +199,14 @@ export class BackgroundReviewService {
     const memoryFacts = await this.extractMemoryFacts(transcript, input.signal);
     let memoryWrite: RecordOperatorProfileFactsResult | undefined;
     if (memoryFacts.length > 0) {
-      memoryWrite = this.safeRecordFacts(input.workspaceId, memoryFacts);
+      memoryWrite = this.safeRecordFacts(input.workspaceId, memoryFacts, Boolean(input.effectExecutionId));
     }
 
     // (c) Skill suggestion → optionally author/patch ONE skill (candidate).
     const suggestion = await this.suggestSkill(transcript, input.signal);
     let skillMutation: SkillMutationResult | undefined;
     if (suggestion.shouldAuthor && suggestion.skillMarkdown) {
-      skillMutation = await this.safeDraftSkill(suggestion, input.parentTurnId);
+      skillMutation = await this.safeDraftSkill(suggestion, input.sourceTurnId, input.effectExecutionId);
     }
 
     const summaryMarker = buildSummaryMarker(memoryWrite, skillMutation);
@@ -218,10 +224,7 @@ export class BackgroundReviewService {
    * Memory-extraction model call. Read-only, strict JSON, no tool calls. Applies
    * the anti-self-poisoning filter + confidence gate. Returns `[]` on any error.
    */
-  public async extractMemoryFacts(
-    transcript: string,
-    signal?: AbortSignal,
-  ): Promise<OperatorProfileFact[]> {
+  public async extractMemoryFacts(transcript: string, signal?: AbortSignal): Promise<OperatorProfileFact[]> {
     const content = await this.callStrictJson(buildMemorySystemPrompt(), buildMemoryUserPrompt(transcript), signal);
     if (!content) {
       return [];
@@ -229,14 +232,19 @@ export class BackgroundReviewService {
     return parseMemoryFacts(content);
   }
 
+  public extractTurnMemoryFacts(
+    userText: string,
+    assistantText: string,
+    signal?: AbortSignal,
+  ): Promise<OperatorProfileFact[]> {
+    return this.extractMemoryFacts(buildTranscript(userText, assistantText), signal);
+  }
+
   /**
    * Skill-suggestion model call. Read-only, strict JSON, no tool calls. Returns a
    * `shouldAuthor:false` suggestion on any error (nothing authored).
    */
-  public async suggestSkill(
-    transcript: string,
-    signal?: AbortSignal,
-  ): Promise<BackgroundReviewSkillSuggestion> {
+  public async suggestSkill(transcript: string, signal?: AbortSignal): Promise<BackgroundReviewSkillSuggestion> {
     const content = await this.callStrictJson(buildSkillSystemPrompt(), buildSkillUserPrompt(transcript), signal);
     if (!content) {
       return { shouldAuthor: false };
@@ -244,13 +252,48 @@ export class BackgroundReviewService {
     return parseSkillSuggestion(content);
   }
 
+  public suggestTurnSkill(
+    userText: string,
+    assistantText: string,
+    signal?: AbortSignal,
+  ): Promise<BackgroundReviewSkillSuggestion> {
+    return this.suggestSkill(buildTranscript(userText, assistantText), signal);
+  }
+
+  /** Commit precomputed facts through the existing governed profile boundary. */
+  public recordMemoryFacts(
+    workspaceId: string,
+    facts: OperatorProfileFact[],
+    options: { strict?: boolean } = {},
+  ): RecordOperatorProfileFactsResult | undefined {
+    return this.safeRecordFacts(workspaceId, facts, options.strict === true);
+  }
+
+  /** Validate and freeze a provider suggestion before durable persistence. */
+  public prepareSuggestedSkillMutation(
+    suggestion: BackgroundReviewSkillSuggestion,
+    sourceTurnId: string | undefined,
+    effectExecutionId: string,
+  ): PreparedSkillMutationPlan | undefined {
+    if (!suggestion.shouldAuthor || !suggestion.skillMarkdown) {
+      return undefined;
+    }
+    return this.deps.prepareDurableSkillMutation(buildSkillMutationInput(suggestion, sourceTurnId, effectExecutionId));
+  }
+
+  /** Create or verify the exact plan-owned files outside any database transaction. */
+  public applyPreparedSkillMutationFiles(plan: PreparedSkillMutationPlan): void {
+    this.deps.applyPreparedSkillMutationFilesSync(plan);
+  }
+
+  /** Commit lifecycle state only; the durable caller owns the receipt transaction. */
+  public commitPreparedSkillMutation(plan: PreparedSkillMutationPlan): SkillMutationResult {
+    return this.deps.commitPreparedSkillMutation(plan);
+  }
+
   // ── internals ────────────────────────────────────────────────────────
 
-  private async callStrictJson(
-    system: string,
-    user: string,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  private async callStrictJson(system: string, user: string, signal?: AbortSignal): Promise<string> {
     const defaults = this.deps.resolveModelDefaults();
     const apiStyle = this.deps.resolveApiStyle(defaults.providerId, defaults.model);
     const request: ChatCompletionRequest = {
@@ -285,10 +328,14 @@ export class BackgroundReviewService {
   private safeRecordFacts(
     workspaceId: string,
     facts: OperatorProfileFact[],
+    strictPersistence: boolean,
   ): RecordOperatorProfileFactsResult | undefined {
     try {
       return this.deps.recordOperatorProfileFacts(workspaceId, facts);
-    } catch {
+    } catch (error) {
+      if (strictPersistence) {
+        throw error;
+      }
       // A persistence failure must never crash the background pass.
       return undefined;
     }
@@ -297,24 +344,54 @@ export class BackgroundReviewService {
   private async safeDraftSkill(
     suggestion: BackgroundReviewSkillSuggestion,
     sourceTurnId?: string,
+    effectExecutionId?: string,
   ): Promise<SkillMutationResult | undefined> {
     if (!suggestion.skillMarkdown) {
       return undefined;
     }
     try {
-      return await this.deps.draftSkillMutation({
-        skillMarkdown: suggestion.skillMarkdown,
-        ...(suggestion.skillId ? { skillId: suggestion.skillId } : {}),
-        ...(sourceTurnId ? { sourceTurnId } : {}),
-        ...(suggestion.summary ? { summary: suggestion.summary } : {}),
-      });
-    } catch {
+      return await this.deps.draftSkillMutation(buildSkillMutationInput(suggestion, sourceTurnId, effectExecutionId));
+    } catch (error) {
+      if (effectExecutionId) {
+        throw error;
+      }
       // Validation/jail/secret rejection (or any write error) is non-fatal: the
       // skill mutation service rejects unsafe drafts by throwing, and a rejected
       // draft must not crash the review.
       return undefined;
     }
   }
+}
+
+function buildSkillMutationInput(
+  suggestion: BackgroundReviewSkillSuggestion,
+  sourceTurnId?: string,
+  effectExecutionId?: string,
+): {
+  skillMarkdown: string;
+  skillId?: string;
+  evaluationRunId?: string;
+  sourceTurnId?: string;
+  summary?: string;
+} {
+  if (!suggestion.skillMarkdown) {
+    throw new Error("A skill mutation requires non-empty Markdown.");
+  }
+  return {
+    skillMarkdown: suggestion.skillMarkdown,
+    ...(effectExecutionId
+      ? { skillId: buildBackgroundReviewEffectSkillId(effectExecutionId), evaluationRunId: effectExecutionId }
+      : suggestion.skillId
+        ? { skillId: suggestion.skillId }
+        : {}),
+    ...(sourceTurnId ? { sourceTurnId } : {}),
+    ...(suggestion.summary ? { summary: suggestion.summary } : {}),
+  };
+}
+
+function buildBackgroundReviewEffectSkillId(effectExecutionId: string): string {
+  const digest = createHash("sha256").update(effectExecutionId).digest("hex").slice(0, 24);
+  return `background-review-${digest}`;
 }
 
 // ── pure helpers ───────────────────────────────────────────────────────
@@ -511,11 +588,7 @@ function normalizeConfidence(value: unknown): number {
   return value;
 }
 
-function normalizeText(
-  value: unknown,
-  maxLength: number,
-  options: { trim?: boolean } = {},
-): string | undefined {
+function normalizeText(value: unknown, maxLength: number, options: { trim?: boolean } = {}): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

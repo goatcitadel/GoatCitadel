@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import { Storage } from "@goatcitadel/storage";
 import { deriveCredentialDims, EventIngestService } from "./event-ingest.js";
 
 function buildPayload(): GatewayEventInput {
@@ -141,10 +143,18 @@ describe("EventIngestService", () => {
     } as unknown as Storage;
 
     const service = new EventIngestService(storage);
+    const onCommit = vi.fn(() => {
+      expect(inTransaction).toBe(true);
+    });
+    const afterCommit = vi.fn(() => {
+      expect(inTransaction).toBe(false);
+    });
     const result = await service.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey: "idem-1",
       payload: buildPayload(),
+      onCommit,
+      afterCommit,
     });
 
     expect(result.accepted).toBe(true);
@@ -154,7 +164,169 @@ describe("EventIngestService", () => {
     expect(storage.transcriptOutbox.enqueue).toHaveBeenCalledTimes(1);
     expect(storage.transcripts.append).toHaveBeenCalledTimes(1);
     expect(storage.transcriptOutbox.markDelivered).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(afterCommit).toHaveBeenCalledTimes(1);
     expect(inTransaction).toBe(false);
+  });
+
+  it("does not report after-commit ownership when a real SQLite ingest transaction rolls back", async () => {
+    const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "transcripts"),
+      auditDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "audit"),
+    });
+    try {
+      const service = new EventIngestService(storage);
+      const mutationIdentity = {
+        method: "POST",
+        routePath: "/api/v1/chat/sessions/:sessionId/messages",
+        idempotencyKey: "idem-http-rollback",
+        actorScope: "operator:test",
+      };
+      storage.mutationIdempotency.claim({
+        ...mutationIdentity,
+        payloadHash: "payload-1",
+      });
+      const onCommit = vi.fn(() => storage.mutationIdempotency.markCompleted(mutationIdentity));
+      const afterCommit = vi.fn();
+      vi.spyOn(storage.sessions, "applyUsage").mockImplementationOnce(() => {
+        throw new Error("usage write failed inside ingest transaction");
+      });
+
+      await expect(
+        service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-rollback",
+          payload: buildPayload(),
+          onCommit,
+          afterCommit,
+        }),
+      ).rejects.toThrow("usage write failed inside ingest transaction");
+
+      expect(onCommit).toHaveBeenCalledTimes(1);
+      expect(afterCommit).not.toHaveBeenCalled();
+      expect(storage.chatMessages.get("evt-1")).toBeUndefined();
+      expect(storage.idempotency.find("/api/v1/gateway/events", "idem-rollback")).toBeUndefined();
+      expect(storage.mutationIdempotency.get(mutationIdentity)?.status).toBe("pending");
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("keeps the HTTP mutation claim completed when post-commit delivery crashes", async () => {
+    const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "transcripts"),
+      auditDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "audit"),
+    });
+    try {
+      const service = new EventIngestService(storage);
+      const mutationIdentity = {
+        method: "POST",
+        routePath: "/api/v1/chat/sessions/:sessionId/messages",
+        idempotencyKey: "idem-http-committed",
+        actorScope: "operator:test",
+      };
+      storage.mutationIdempotency.claim({
+        ...mutationIdentity,
+        payloadHash: "payload-1",
+      });
+
+      await expect(
+        service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-committed-delivery-crash",
+          payload: buildPayload(),
+          onCommit: () => storage.mutationIdempotency.markCompleted(mutationIdentity),
+          afterCommit: () => {
+            throw new Error("process crashed before HTTP response completion");
+          },
+        }),
+      ).rejects.toThrow("process crashed before HTTP response completion");
+
+      expect(storage.chatMessages.get("evt-1")).toBeDefined();
+      expect(storage.mutationIdempotency.get(mutationIdentity)?.status).toBe("completed");
+      expect(storage.mutationIdempotency.claim({ ...mutationIdentity, payloadHash: "payload-1" }).outcome).toBe(
+        "duplicate",
+      );
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("rolls back a stale owner and commits the same event only for the winning claim generation", async () => {
+    const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "transcripts"),
+      auditDir: path.join(os.tmpdir(), `goatcitadel-event-ingest-${unique}`, "audit"),
+    });
+    try {
+      const service = new EventIngestService(storage);
+      const identity = {
+        method: "POST",
+        routePath: "/api/v1/chat/sessions/:sessionId/agent-send/stream",
+        idempotencyKey: "idem-http-stale-owner",
+        actorScope: "operator:test",
+      };
+      const staleOwner = storage.mutationIdempotency.claim({
+        ...identity,
+        payloadHash: "payload-1",
+        now: "2026-07-11T12:00:00.000Z",
+        leaseDurationMs: 1_000,
+      });
+      if (staleOwner.outcome !== "claimed") {
+        throw new Error(`expected stale owner claim, received ${staleOwner.outcome}`);
+      }
+      const winner = storage.mutationIdempotency.claim({
+        ...identity,
+        payloadHash: "payload-1",
+        now: "2026-07-11T12:00:02.000Z",
+        leaseDurationMs: 1_000,
+      });
+      if (winner.outcome !== "claimed") {
+        throw new Error(`expected winning owner claim, received ${winner.outcome}`);
+      }
+
+      await expect(
+        service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "event-stale-owner",
+          payload: buildPayload(),
+          onCommit: () => {
+            if (!storage.mutationIdempotency.markCompleted({ ...identity, claimToken: staleOwner.record.claimToken })) {
+              throw new Error("HTTP mutation claim ownership was lost");
+            }
+          },
+        }),
+      ).rejects.toThrow("HTTP mutation claim ownership was lost");
+
+      expect(storage.chatMessages.get("evt-1")).toBeUndefined();
+      expect(storage.idempotency.find("/api/v1/gateway/events", "event-stale-owner")).toBeUndefined();
+      expect(storage.mutationIdempotency.get(identity)).toMatchObject({
+        status: "pending",
+        claimToken: winner.record.claimToken,
+      });
+
+      const accepted = await service.ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "event-winning-owner",
+        payload: buildPayload(),
+        onCommit: () => {
+          if (!storage.mutationIdempotency.markCompleted({ ...identity, claimToken: winner.record.claimToken })) {
+            throw new Error("winning HTTP mutation claim was rejected");
+          }
+        },
+      });
+
+      expect(accepted).toMatchObject({ accepted: true, deduped: false });
+      expect(storage.chatMessages.get("evt-1")).toBeDefined();
+      expect(storage.mutationIdempotency.get(identity)?.status).toBe("completed");
+    } finally {
+      storage.close();
+    }
   });
 
   it("returns success even when transcript append fails after commit", async () => {

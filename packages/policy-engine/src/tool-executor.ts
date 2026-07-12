@@ -62,6 +62,14 @@ const MAX_SHELL_OUTPUT_BYTES = 4096;
 
 export interface ToolExecutorRuntimeHooks {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
+  resolveApprovalActionTokenSecret?: (secretRef: string) => string;
+  /** Remove a protected approval action bearer after a terminal provider outcome. */
+  deleteApprovalActionTokenSecret?: (secretRef: string) => void;
+  /** Revalidate authenticated callback ingress immediately before a protected provider send. */
+  isApprovalActionConnectorReady?: (connectionId: string) => boolean;
+  /** Called at the concrete provider or irreversible mutation boundary. */
+  beforeExternalSideEffect?: () => void;
   /**
    * Impure `schedule.manage` fulfillment. The cron mutation (create/list/cancel
    * an `agent_turn` job) lives in the gateway, not this pure package, so the
@@ -172,7 +180,7 @@ export async function executeTool(
     case "http.get":
       return finalizeToolResult(await httpGet(request, config, storage));
     case "http.post":
-      return finalizeToolResult(await httpPost(request, config, storage));
+      return finalizeToolResult(await httpPost(request, config, storage, runtimeHooks));
     case "shell.exec":
       return finalizeToolResult(await shellExec(request, config, storage));
     case "shell.exec_background":
@@ -237,7 +245,13 @@ export async function executeTool(
     case "zalo.send":
     case "zalouser.send":
       return finalizeToolResult(
-        await executeCommsTool(request, config, storage, resolveExecutionGrantAllowedHosts(request, storage)),
+        await executeCommsTool(
+          request,
+          config,
+          storage,
+          resolveExecutionGrantAllowedHosts(request, storage),
+          runtimeHooks,
+        ),
       );
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
@@ -294,7 +308,12 @@ async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, sto
   };
 }
 
-async function httpPost(request: ToolInvokeRequest, config: ToolPolicyConfig, storage?: Storage) {
+async function httpPost(
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: Storage | undefined,
+  runtimeHooks: ToolExecutorRuntimeHooks,
+) {
   const args = request.args;
   const url = required(args.url, "url");
   const body = JSON.stringify(args.body ?? {});
@@ -310,6 +329,7 @@ async function httpPost(request: ToolInvokeRequest, config: ToolPolicyConfig, st
       : new Error("http.post aborted before dispatch");
   }
   try {
+    runtimeHooks.beforeExternalSideEffect?.();
     const res = await fetchAllowlisted(
       url,
       { method: "POST", headers: { "Content-Type": "application/json" }, body },
@@ -977,18 +997,16 @@ function resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?:
 
 function resolveMatchedExecutionAllowGrant(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord | undefined {
   const grantId = request.policyContext?.matchedGrantId?.trim();
-  const grantRepo = storage?.toolGrants as
-    | (Storage["toolGrants"] & { get?: (grantId: string) => ToolGrantRecord })
-    | undefined;
-  if (!grantId || !grantRepo?.get) {
+  const grantRepo = storage?.toolGrants;
+  if (!grantId || !grantRepo) {
     return undefined;
   }
   try {
-    const grant = grantRepo.get(grantId);
-    if (grant.decision !== "allow" || !matchesGrantToolPattern(grant.toolPattern, request.toolName)) {
+    const grant = grantRepo.findActive(grantId);
+    if (!grant) {
       return undefined;
     }
-    if (grant.revokedAt || (grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now())) {
+    if (grant.decision !== "allow" || !matchesGrantToolPattern(grant.toolPattern, request.toolName)) {
       return undefined;
     }
     return grant;
@@ -1011,19 +1029,13 @@ function getStrictestReadAccessMode(
 
 function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord[] {
   const grantRepo = storage?.toolGrants;
-  if (!grantRepo?.list) {
+  if (!grantRepo?.listActive) {
     return [];
   }
   const grants: ToolGrantRecord[] = [];
   for (const candidate of buildGrantScopeCandidates(request)) {
-    const activeGrantRepo = grantRepo as typeof grantRepo & { listActive?: typeof grantRepo.list };
-    const scoped = (
-      activeGrantRepo.listActive
-        ? activeGrantRepo.listActive(candidate.scope, candidate.scopeRef)
-        : grantRepo
-            .list(candidate.scope, candidate.scopeRef, Number.MAX_SAFE_INTEGER)
-            .filter((grant) => isGrantActive(grant))
-    )
+    const scoped = grantRepo
+      .listActive(candidate.scope, candidate.scopeRef)
       .filter((grant) => grant.decision === "allow")
       .filter((grant) => matchesGrantToolPattern(grant.toolPattern, request.toolName));
     grants.push(...scoped);
@@ -1049,19 +1061,6 @@ function buildGrantScopeCandidates(
 
 function matchesGrantToolPattern(pattern: string, toolName: string): boolean {
   return matchesToolPattern(pattern, toolName);
-}
-
-function isGrantActive(grant: ToolGrantRecord): boolean {
-  if (grant.revokedAt) {
-    return false;
-  }
-  if (grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now()) {
-    return false;
-  }
-  if (typeof grant.usesRemaining === "number" && grant.usesRemaining <= 0) {
-    return false;
-  }
-  return true;
 }
 
 function isPathWithinAnyGrantRoot(candidate: string, roots: string[]): boolean {

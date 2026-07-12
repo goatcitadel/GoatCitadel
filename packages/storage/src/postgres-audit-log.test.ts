@@ -115,6 +115,29 @@ test("PostgresAuditLog fills request attribution and falls back when sequence ro
   assert.equal(payload.companionSessionId, "companion-1");
 });
 
+test("PostgresAuditLog dedupes delivery ids and uses captured occurrence attribution", async () => {
+  const db = new InMemoryAuditDb();
+  const log = new PostgresAuditLog(db);
+  const options = {
+    deliveryId: "approval-observability:approval-1:resolve-audit",
+    occurredAt: "2026-07-10T11:00:00.000Z",
+    attribution: { actorId: "operator-original", traceId: "trace-original" },
+  };
+
+  await log.append("approvals", { event: "approval.resolve", approvalId: "approval-1" }, options);
+  await runWithRequestAttribution({ actorId: "wrong-retry-actor" }, () =>
+    log.append("approvals", { event: "approval.resolve", approvalId: "approval-1" }, options),
+  );
+
+  assert.equal(db.rows.length, 1);
+  assert.equal(db.rows[0]?.event_id, options.deliveryId);
+  assert.equal(db.rows[0]?.occurred_at, options.occurredAt);
+  assert.equal(db.rows[0]?.actor_id, "operator-original");
+  const payload = JSON.parse(String(db.rows[0]?.payload)) as Record<string, unknown>;
+  assert.equal(payload.traceId, "trace-original");
+  assert.equal(payload.deliveryId, options.deliveryId);
+});
+
 function auditRow(overrides: Partial<StoredAuditRow>): StoredAuditRow {
   return {
     stream_name: "tool_invocations",
@@ -155,6 +178,13 @@ class InMemoryAuditDb implements DatabaseClient {
       return {
         run: (params: unknown) => {
           const input = params as Record<string, unknown>;
+          if (
+            this.rows.some(
+              (row) => row.stream_name === String(input.streamName) && row.event_id === String(input.eventId),
+            )
+          ) {
+            return { changes: 0 };
+          }
           this.rows.push({
             stream_name: String(input.streamName),
             event_id: String(input.eventId),

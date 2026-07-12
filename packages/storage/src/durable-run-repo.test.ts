@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import type { DurableRunRecord } from "@goatcitadel/contracts";
 import { createDatabase } from "./sqlite.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
@@ -30,7 +31,459 @@ function createRepo(): DurableRunRepository {
   return new DurableRunRepository(db);
 }
 
+function createRepoWithDb(): { db: DatabaseClient; repo: DurableRunRepository } {
+  const dbPath = path.join(os.tmpdir(), `goatcitadel-durable-${randomUUID()}.db`);
+  createdFiles.push(dbPath);
+  const db = createDatabase({ dbPath });
+  return { db, repo: new DurableRunRepository(db) };
+}
+
 describe("DurableRunRepository", () => {
+  it("locks only the exact active, unexpired SQLite lease inside an immediate transaction", () => {
+    const { db, repo } = createRepoWithDb();
+    const active = repo.createRun({
+      runId: "run-active-lease",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-07-11T12:00:00.000Z",
+      leaseExpiresAt: "2026-07-11T12:05:00.000Z",
+      now: "2026-07-11T12:00:00.000Z",
+    });
+    repo.createRun({
+      runId: "run-queued-lease",
+      workflowKey: "chat.turn.execute",
+      status: "queued",
+      leaseOwnerId: "worker-a",
+      leaseExpiresAt: "2026-07-11T12:05:00.000Z",
+      now: "2026-07-11T12:00:00.000Z",
+    });
+
+    const locked = db.transaction("immediate", () =>
+      repo.lockActiveLeaseForUpdate(active.runId, "worker-a", "2026-07-11T12:04:59.999Z"),
+    );
+    assert.equal(locked?.runId, active.runId);
+    assert.equal(locked?.leaseOwnerId, "worker-a");
+
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(active.runId, "worker-b", "2026-07-11T12:04:59.999Z"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(active.runId, "worker-a", "2026-07-11T12:05:00.000Z"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate("run-queued-lease", "worker-a", "2026-07-11T12:04:00.000Z"),
+      ),
+      undefined,
+    );
+  });
+
+  it("claims and renews leases from the database clock under fast and slow host skew", () => {
+    const repo = createRepo();
+    const run = repo.createRun({ runId: "run-db-clock-lease", workflowKey: "workflow.db-clock-lease" });
+    const databaseClockRepo = repo as unknown as {
+      tryClaimQueuedRunWithDatabaseClock(input: {
+        runId: string;
+        workerId: string;
+        leaseDurationMs: number;
+      }): DurableRunRecord | undefined;
+      renewLeaseWithDatabaseClock(input: {
+        runId: string;
+        workerId: string;
+        leaseDurationMs: number;
+      }): DurableRunRecord | undefined;
+    };
+    const realDateNow = Date.now;
+    const databaseNow = realDateNow();
+    try {
+      Date.now = () => Date.parse("2100-01-01T00:00:00.000Z");
+      const claimed = databaseClockRepo.tryClaimQueuedRunWithDatabaseClock({
+        runId: run.runId,
+        workerId: "worker-db-clock",
+        leaseDurationMs: 60_000,
+      });
+      assert.equal(claimed?.status, "running");
+      assert.ok(Math.abs(Date.parse(claimed?.leaseHeartbeatAt ?? "") - databaseNow) < 5_000);
+      assert.ok(
+        Math.abs(Date.parse(claimed?.leaseExpiresAt ?? "") - Date.parse(claimed?.leaseHeartbeatAt ?? "") - 60_000) < 5,
+      );
+
+      Date.now = () => Date.parse("2000-01-01T00:00:00.000Z");
+      const renewed = databaseClockRepo.renewLeaseWithDatabaseClock({
+        runId: run.runId,
+        workerId: "worker-db-clock",
+        leaseDurationMs: 60_000,
+      });
+      assert.ok(Math.abs(Date.parse(renewed?.leaseHeartbeatAt ?? "") - databaseNow) < 5_000);
+      assert.ok(
+        Math.abs(Date.parse(renewed?.leaseExpiresAt ?? "") - Date.parse(renewed?.leaseHeartbeatAt ?? "") - 60_000) < 5,
+      );
+
+      (repo as unknown as { db: DatabaseClient }).db
+        .prepare(
+          "UPDATE durable_runs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') WHERE run_id = ?",
+        )
+        .run(run.runId);
+      assert.equal(
+        databaseClockRepo.renewLeaseWithDatabaseClock({
+          runId: run.runId,
+          workerId: "worker-db-clock",
+          leaseDurationMs: 60_000,
+        }),
+        undefined,
+      );
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
+  it("selects expired running leases from the SQLite database clock instead of the caller clock", () => {
+    const { db, repo } = createRepoWithDb();
+    const fresh = repo.createRun({
+      runId: "run-db-clock-fresh-recovery",
+      workflowKey: "workflow.db-clock-recovery",
+      status: "running",
+      leaseOwnerId: "worker-fresh",
+    });
+    const expired = repo.createRun({
+      runId: "run-db-clock-expired-recovery",
+      workflowKey: "workflow.db-clock-recovery",
+      status: "running",
+      leaseOwnerId: "worker-expired",
+    });
+    db.prepare(
+      "UPDATE durable_runs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes') WHERE run_id = ?",
+    ).run(fresh.runId);
+    db.prepare(
+      "UPDATE durable_runs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 minutes') WHERE run_id = ?",
+    ).run(expired.runId);
+
+    assert.deepEqual(repo.listExpiredRunningRunIds("2100-01-01T00:00:00.000Z"), [expired.runId]);
+    assert.deepEqual(repo.listExpiredRunningRunIds("2000-01-01T00:00:00.000Z"), [expired.runId]);
+  });
+
+  it("uses the database clock to enforce the latest retry gate during queued claim", () => {
+    const { db, repo } = createRepoWithDb();
+    const run = repo.createRun({
+      runId: "run-db-clock-retry-gate",
+      workflowKey: "workflow.db-clock-retry-gate",
+    });
+    db.prepare(
+      `
+      INSERT INTO durable_retries (
+        retry_id, run_id, attempt_no, reason, next_retry_at, created_at
+      ) VALUES (
+        'retry-db-clock-gate', ?, 1, 'temporary failure',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes'),
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      )
+    `,
+    ).run(run.runId);
+
+    assert.equal(
+      repo.tryClaimQueuedRunWithDatabaseClock({
+        runId: run.runId,
+        workerId: "worker-too-early",
+        leaseDurationMs: 60_000,
+      }),
+      undefined,
+    );
+
+    db.prepare(
+      "UPDATE durable_retries SET next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') WHERE run_id = ?",
+    ).run(run.runId);
+    const claimed = repo.tryClaimQueuedRunWithDatabaseClock({
+      runId: run.runId,
+      workerId: "worker-ready",
+      leaseDurationMs: 60_000,
+    });
+    assert.equal(claimed?.status, "running");
+    assert.equal(claimed?.leaseOwnerId, "worker-ready");
+  });
+
+  it("creates retry readiness from the SQLite database clock under host skew", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      runId: "run-db-clock-retry-schedule",
+      workflowKey: "workflow.db-clock-retry-schedule",
+    });
+    const databaseClockRepo = repo as unknown as {
+      readDatabaseNow(): string;
+      upsertRetryWithDatabaseClock(input: {
+        runId: string;
+        attemptNo: number;
+        reason: string;
+        delayMs: number;
+      }): ReturnType<DurableRunRepository["upsertRetry"]>;
+    };
+    const realDateNow = Date.now;
+    const databaseNow = realDateNow();
+    try {
+      Date.now = () => Date.parse("2100-01-01T00:00:00.000Z");
+      assert.ok(Math.abs(Date.parse(databaseClockRepo.readDatabaseNow()) - databaseNow) < 5_000);
+      const retry = databaseClockRepo.upsertRetryWithDatabaseClock({
+        runId: run.runId,
+        attemptNo: 1,
+        reason: "temporary failure",
+        delayMs: 60_000,
+      });
+      assert.ok(Math.abs(Date.parse(retry.createdAt) - databaseNow) < 5_000);
+      assert.ok(Math.abs(Date.parse(retry.nextRetryAt ?? "") - Date.parse(retry.createdAt) - 60_000) < 5);
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
+  it("locks only the exact expired lease according to the SQLite database clock", () => {
+    const { db, repo } = createRepoWithDb();
+    const run = repo.createRun({
+      runId: "run-db-clock-expired-fence",
+      workflowKey: "workflow.db-clock-expired-fence",
+      status: "running",
+      leaseOwnerId: "worker-expired",
+    });
+    db.prepare(
+      "UPDATE durable_runs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') WHERE run_id = ?",
+    ).run(run.runId);
+    const observed = repo.getRun(run.runId);
+    const databaseClockRepo = repo as unknown as {
+      lockExpiredLeaseForUpdate(input: {
+        runId: string;
+        expectedLeaseOwnerId?: string;
+        expectedLeaseExpiresAt: string;
+      }): DurableRunRecord | undefined;
+    };
+
+    const locked = db.transaction("immediate", () =>
+      databaseClockRepo.lockExpiredLeaseForUpdate({
+        runId: observed.runId,
+        expectedLeaseOwnerId: observed.leaseOwnerId,
+        expectedLeaseExpiresAt: observed.leaseExpiresAt!,
+      }),
+    );
+    assert.equal(locked?.runId, run.runId);
+
+    db.prepare(
+      "UPDATE durable_runs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes') WHERE run_id = ?",
+    ).run(run.runId);
+    assert.equal(
+      db.transaction("immediate", () =>
+        databaseClockRepo.lockExpiredLeaseForUpdate({
+          runId: observed.runId,
+          expectedLeaseOwnerId: observed.leaseOwnerId,
+          expectedLeaseExpiresAt: observed.leaseExpiresAt!,
+        }),
+      ),
+      undefined,
+    );
+  });
+
+  it("uses the SQLite database clock for the fresh commit fence", () => {
+    const { db, repo } = createRepoWithDb();
+    const now = Date.now();
+    repo.createRun({
+      runId: "run-sqlite-fresh-lease",
+      workflowKey: "proactive.tick",
+      status: "running",
+      leaseOwnerId: "worker-sqlite",
+      leaseHeartbeatAt: new Date(now).toISOString(),
+      leaseExpiresAt: new Date(now + 60_000).toISOString(),
+      now: new Date(now).toISOString(),
+    });
+    repo.createRun({
+      runId: "run-sqlite-expired-lease",
+      workflowKey: "proactive.tick",
+      status: "running",
+      leaseOwnerId: "worker-sqlite",
+      leaseHeartbeatAt: new Date(now - 120_000).toISOString(),
+      leaseExpiresAt: new Date(now - 60_000).toISOString(),
+      now: new Date(now - 120_000).toISOString(),
+    });
+
+    const fresh = db.transaction("immediate", () =>
+      repo.lockFreshActiveLeaseForUpdate("run-sqlite-fresh-lease", "worker-sqlite"),
+    );
+    const expired = db.transaction("immediate", () =>
+      repo.lockFreshActiveLeaseForUpdate("run-sqlite-expired-lease", "worker-sqlite"),
+    );
+
+    assert.equal(fresh?.runId, "run-sqlite-fresh-lease");
+    assert.equal(expired, undefined);
+  });
+
+  it("uses a PostgreSQL row lock with exact owner and unexpired-lease predicates", () => {
+    const preparedSql: string[] = [];
+    const activeRow = {
+      run_id: "run-postgres-lease",
+      workflow_key: "chat.turn.execute",
+      status: "running",
+      attempt_count: 1,
+      max_attempts: 3,
+      payload_json: "{}",
+      metadata_json: null,
+      started_at: "2026-07-11T12:00:00.000Z",
+      finished_at: null,
+      last_error: null,
+      lease_owner_id: "worker-a",
+      lease_expires_at: "2026-07-11T12:05:00.000Z",
+      lease_heartbeat_at: "2026-07-11T12:00:00.000Z",
+      version: 2,
+      created_at: "2026-07-11T12:00:00.000Z",
+      updated_at: "2026-07-11T12:00:00.000Z",
+    };
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const lockStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: <T = unknown>(...args: unknown[]) => {
+        const input = args[0] as { expectedLeaseOwnerId?: string; now?: string };
+        return (
+          input.expectedLeaseOwnerId === activeRow.lease_owner_id &&
+          typeof input.now === "string" &&
+          input.now < activeRow.lease_expires_at
+            ? activeRow
+            : undefined
+        ) as T | undefined;
+      },
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return sql.includes("lease_owner_id = @expectedLeaseOwnerId") ? lockStatement : emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new DurableRunRepository(db);
+
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(activeRow.run_id, "worker-a", "2026-07-11T12:04:59.999Z"),
+      )?.runId,
+      activeRow.run_id,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(activeRow.run_id, "worker-b", "2026-07-11T12:04:59.999Z"),
+      ),
+      undefined,
+    );
+    assert.equal(
+      db.transaction("immediate", () =>
+        repo.lockActiveLeaseForUpdate(activeRow.run_id, "worker-a", activeRow.lease_expires_at),
+      ),
+      undefined,
+    );
+
+    const lockSql = preparedSql.find((sql) => sql.includes("lease_owner_id = @expectedLeaseOwnerId"));
+    assert.ok(lockSql);
+    assert.match(lockSql, /status = 'running'/);
+    assert.match(lockSql, /lease_expires_at IS NOT NULL/);
+    assert.match(lockSql, /lease_expires_at > @now/);
+    assert.match(lockSql, /FOR UPDATE/);
+  });
+
+  it("uses the database clock when locking a lease for commit", () => {
+    const preparedSql: string[] = [];
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new DurableRunRepository(db) as DurableRunRepository & {
+      lockFreshActiveLeaseForUpdate(runId: string, expectedLeaseOwnerId: string): unknown;
+    };
+
+    repo.lockFreshActiveLeaseForUpdate("run-commit", "worker-a");
+
+    const commitLockSql = preparedSql.find((sql) =>
+      sql.includes("gc_try_parse_timestamptz(lease_expires_at) > clock_timestamp()"),
+    );
+    assert.ok(commitLockSql);
+    assert.match(commitLockSql, /gc_try_parse_timestamptz\(lease_expires_at\) > clock_timestamp\(\)/);
+    assert.match(commitLockSql, /FOR UPDATE/);
+  });
+
+  it("uses a PostgreSQL row lock for general durable-run state transitions", () => {
+    const preparedSql: string[] = [];
+    const row = {
+      run_id: "run-transition-lock",
+      workflow_key: "chat.turn.execute",
+      status: "running",
+      attempt_count: 1,
+      max_attempts: 3,
+      payload_json: "{}",
+      metadata_json: null,
+      started_at: "2026-07-11T12:00:00.000Z",
+      finished_at: null,
+      last_error: null,
+      lease_owner_id: "worker-a",
+      lease_expires_at: "2026-07-11T12:05:00.000Z",
+      lease_heartbeat_at: "2026-07-11T12:00:00.000Z",
+      version: 2,
+      created_at: "2026-07-11T12:00:00.000Z",
+      updated_at: "2026-07-11T12:00:00.000Z",
+    };
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const lockStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: <T = unknown>() => row as T,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return /WHERE run_id = \?\s+FOR UPDATE/.test(sql) ? lockStatement : emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new DurableRunRepository(db) as DurableRunRepository & {
+      getRunForUpdate(runId: string): unknown;
+    };
+
+    const locked = repo.getRunForUpdate("run-transition-lock") as DurableRunRecord;
+
+    assert.equal(locked.runId, "run-transition-lock");
+    const transitionLockSql = preparedSql.find((sql) => /WHERE run_id = \?\s+FOR UPDATE/.test(sql));
+    assert.ok(transitionLockSql);
+  });
+
   it("persists payload updates when runs are patched", () => {
     const repo = createRepo();
     const run = repo.createRun({
@@ -206,6 +659,118 @@ describe("DurableRunRepository", () => {
 
     assert.equal(resolved.resolvedAt, "2026-04-10T00:00:00.000Z");
     assert.equal(resolved.resolutionNote, "recovered by operator");
+    assert.throws(
+      () =>
+        repo.resolveDeadLetter(deadLetter.deadLetterId, {
+          resolvedAt: "2026-04-10T01:00:00.000Z",
+          resolutionNote: "second recovery",
+        }),
+      /already resolved/,
+    );
+    assert.deepEqual(repo.getDeadLetterById(deadLetter.deadLetterId), resolved);
+  });
+
+  it("lists only failed runs with pending linked-state finalization", () => {
+    const repo = createRepo();
+    const pending = repo.createRun({
+      runId: "run-pending-finalization",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      metadata: {
+        "0": "integer-like keys serialize first",
+        linkedFinalizationPending: {
+          reason: "trace reconciliation required",
+          requestedAt: "2026-04-10T00:00:00.000Z",
+        },
+      },
+    });
+    repo.createRun({ runId: "run-ordinary-failed", workflowKey: "connector.delivery", status: "failed" });
+    repo.createRun({
+      runId: "run-pending-but-running",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      metadata: pending.metadata,
+    });
+
+    assert.deepEqual(repo.listPendingLinkedFinalizationRunIds(), [pending.runId]);
+    assert.deepEqual(repo.listPendingLinkedFinalizationRunIds(1, " run-before"), [pending.runId]);
+  });
+
+  it("lists only completed Chat runs with pending autonomous post-commit work", () => {
+    const repo = createRepo();
+    const pending = repo.createRun({
+      runId: "run-autonomous-pending",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      metadata: {
+        autonomous: { kind: "scheduled" },
+        autonomousChatPostCommitPending: { version: 1, requestedAt: "2026-04-10T00:00:00.000Z" },
+      },
+    });
+    repo.createRun({
+      runId: "run-autonomous-running",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      metadata: pending.metadata,
+    });
+    repo.createRun({
+      runId: "run-wrong-workflow",
+      workflowKey: "connector.delivery",
+      status: "completed",
+      metadata: pending.metadata,
+    });
+    repo.createRun({ runId: "run-completed-ordinary", workflowKey: "chat.turn.execute", status: "completed" });
+
+    assert.deepEqual(repo.listPendingAutonomousChatPostCommitRunIds(), [pending.runId]);
+    assert.deepEqual(repo.listPendingAutonomousChatPostCommitRunIds(1, " run-before"), [pending.runId]);
+  });
+
+  it("lists terminal Chat runs with pending general post-commit work", () => {
+    const repo = createRepo();
+    const completed = repo.createRun({
+      runId: "run-general-completed",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      metadata: { generalChatPostCommitPending: { version: 1 } },
+    });
+    const failed = repo.createRun({
+      runId: "run-general-failed",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      metadata: completed.metadata,
+    });
+    const cancelled = repo.createRun({
+      runId: "run-general-cancelled",
+      workflowKey: "chat.turn.execute",
+      status: "cancelled",
+      metadata: completed.metadata,
+    });
+    const waiting = repo.createRun({
+      runId: "run-general-waiting",
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      metadata: completed.metadata,
+    });
+    repo.createRun({
+      runId: "run-general-running",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      metadata: completed.metadata,
+    });
+    repo.createRun({
+      runId: "run-general-wrong-workflow",
+      workflowKey: "connector.delivery",
+      status: "completed",
+      metadata: completed.metadata,
+    });
+
+    assert.deepEqual(repo.listPendingGeneralChatPostCommitRunIds(), [
+      cancelled.runId,
+      completed.runId,
+      failed.runId,
+      waiting.runId,
+    ]);
+    assert.deepEqual(repo.listPendingGeneralChatPostCommitRunIds(1, cancelled.runId), [completed.runId]);
   });
 
   it("covers run validation, lease lifecycle, indexes, and dead-letter edge cases", () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSecretText, redactStructuredSecrets } from "@goatcitadel/contracts";
-import { getRequestAttribution } from "./request-attribution.js";
+import { getRequestAttribution, type RequestAttribution } from "./request-attribution.js";
 
 const ARGV_LIKE_KEY_PATTERN = /^(?:argv|args|execArgv|commandArgs|command_argv)$/i;
 const SECRET_ARG_FLAG_PATTERN =
@@ -14,6 +14,12 @@ const AUDIT_FILE_LOCK_STALE_MS = 60_000;
 
 export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
 
+export interface AuditAppendOptions {
+  deliveryId?: string;
+  occurredAt?: string;
+  attribution?: RequestAttribution;
+}
+
 export class AuditLog {
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly writeQueues = new Map<AuditStream, Promise<void>>();
@@ -21,9 +27,13 @@ export class AuditLog {
 
   public constructor(private readonly auditDir: string) {}
 
-  public async append(stream: AuditStream, payload: Record<string, unknown>): Promise<void> {
+  public async append(
+    stream: AuditStream,
+    payload: Record<string, unknown>,
+    options?: AuditAppendOptions,
+  ): Promise<void> {
     const prior = this.writeQueues.get(stream) ?? Promise.resolve();
-    const next = prior.catch(() => undefined).then(() => this.appendInternal(stream, payload));
+    const next = prior.catch(() => undefined).then(() => this.appendInternal(stream, payload, options));
     this.writeQueues.set(stream, next);
     try {
       await next;
@@ -34,13 +44,18 @@ export class AuditLog {
     }
   }
 
-  private async appendInternal(stream: AuditStream, payload: Record<string, unknown>): Promise<void> {
+  private async appendInternal(
+    stream: AuditStream,
+    payload: Record<string, unknown>,
+    options?: AuditAppendOptions,
+  ): Promise<void> {
     const filePath = path.join(this.auditDir, `${stream}.jsonl`);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const attribution = getRequestAttribution();
+    const attribution = options?.attribution ?? getRequestAttribution();
     const baseRecord = {
-      timestamp: new Date().toISOString(),
       ...payload,
+      timestamp:
+        options?.occurredAt ?? (typeof payload.timestamp === "string" ? payload.timestamp : new Date().toISOString()),
       correlationId: payload.correlationId ?? attribution?.correlationId,
       traceId: payload.traceId ?? attribution?.traceId,
       originSurface: payload.originSurface ?? attribution?.originSurface,
@@ -48,6 +63,7 @@ export class AuditLog {
       deviceId: payload.deviceId ?? attribution?.deviceId,
       grantId: payload.grantId ?? attribution?.grantId,
       companionSessionId: payload.companionSessionId ?? attribution?.companionSessionId,
+      ...(options?.deliveryId ? { eventId: options.deliveryId, deliveryId: options.deliveryId } : {}),
     };
     const sanitizedRecord = sanitizeForAudit(baseRecord);
     let line: string;
@@ -75,6 +91,9 @@ export class AuditLog {
     }
     await this.runWithStreamLock(filePath, async () => {
       await this.pruneAuditStreamIfDue(stream, filePath);
+      if (options?.deliveryId && (await auditFileContainsDeliveryId(filePath, options.deliveryId))) {
+        return;
+      }
       await fs.appendFile(filePath, line, { encoding: "utf8" });
     });
   }
@@ -138,6 +157,32 @@ export class AuditLog {
       this.lastPrunedAt.set(stream, now);
     }
   }
+}
+
+async function auditFileContainsDeliveryId(filePath: string, deliveryId: string): Promise<boolean> {
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.includes(deliveryId)) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { eventId?: unknown; deliveryId?: unknown };
+      if (parsed.eventId === deliveryId || parsed.deliveryId === deliveryId) {
+        return true;
+      }
+    } catch {
+      // Malformed historical lines are ignored; a valid idempotent record is still appended.
+    }
+  }
+  return false;
 }
 
 async function runWithAuditFileLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {

@@ -45,6 +45,9 @@ import {
   hasDeNovoContext,
   planDeNovoActions,
 } from "./chat-proactive-denovo-planner.js";
+import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
+import { readToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
+import type { ToolInvocationRuntimeOptions } from "./tool-invocation-coordinator-service.js";
 
 /** Origination mode for proactive planning (P1-F5). */
 export type ProactiveOriginationMode = "reactive" | "de_novo";
@@ -151,7 +154,7 @@ export interface ChatProactiveServiceCallbacks {
 
   listChatMessages(sessionId: string, limit: number): Promise<Array<{ role: string; content: string }>>;
 
-  invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
+  invokeTool(request: ToolInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<ToolInvokeResult>;
 
   resolveToolPolicyContext?(input: {
     operatorId?: string;
@@ -203,6 +206,9 @@ export interface ChatProactiveServiceContext {
     | "chatSessionMeta"
     | "chatSessionPrefs"
     | "durableRuns"
+    | "externalSideEffectRuns"
+    | "mutationIdempotency"
+    | "runImmediateTransaction"
     | "pendingApprovalActions"
     | "sessionAutonomyPrefs"
     | "tasks"
@@ -215,6 +221,20 @@ export interface ChatProactiveServiceContext {
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
+}
+
+class ProactiveSideEffectReconciliationError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "ProactiveSideEffectReconciliationError";
+  }
+}
+
+class ProactiveSideEffectRetryableError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "ProactiveSideEffectRetryableError";
+  }
 }
 
 function safeJsonParse<T>(raw: string, fallback: T): T {
@@ -340,6 +360,27 @@ export class ChatProactiveService {
     private readonly callbacks: ChatProactiveServiceCallbacks,
   ) {}
 
+  private publishRealtimeSafely(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void {
+    try {
+      if (options) {
+        this.ctx.publishRealtime(channel, topic, payload, options);
+      } else {
+        this.ctx.publishRealtime(channel, topic, payload);
+      }
+    } catch (error) {
+      log.warn("proactive realtime projection failed", {
+        channel,
+        topic,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // ── scheduler lifecycle ──────────────────────────────────────────
 
   startScheduler(): void {
@@ -349,7 +390,7 @@ export class ChatProactiveService {
     this.scheduler = setInterval(() => {
       const task = this.runSchedulerTick().catch((error) => {
         log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
-        this.ctx.publishRealtime("system", "chat", {
+        this.publishRealtimeSafely("system", "chat", {
           type: "proactive_scheduler_error",
           message: (error as Error).message,
         });
@@ -455,7 +496,7 @@ export class ChatProactiveService {
             sessionId: current.sessionId,
             error: error instanceof Error ? error.message : String(error),
           });
-          this.ctx.publishRealtime("system", "chat", {
+          this.publishRealtimeSafely("system", "chat", {
             type: "proactive_scheduler_session_error",
             sessionId: current.sessionId,
             message: (error as Error).message,
@@ -1114,26 +1155,55 @@ export class ChatProactiveService {
     patch: Partial<ProactiveDurableState>,
     status?: DurableRunRecord["status"],
   ): DurableRunRecord {
-    const currentMetadata = isRecord(run.metadata) ? { ...run.metadata } : {};
-    const currentState = this.readProactiveDurableState(run);
-    const nextState = {
-      ...currentState,
-      ...patch,
-    };
-    const now = new Date().toISOString();
-    return this.ctx.storage.durableRuns.updateRun({
-      runId: run.runId,
-      status: status ?? run.status,
-      metadata: {
-        ...currentMetadata,
-        proactive: nextState,
-      },
-      startedAt: run.startedAt ?? now,
-      ...(status === "completed" || status === "failed" ? { finishedAt: now } : { clearFinishedAt: true }),
-      clearLease: status === "completed" || status === "failed",
-      ...(status === "failed" ? { lastError: run.lastError } : { clearLastError: true }),
-      updatedAt: now,
+    const expectedLeaseOwnerId = this.requireProactiveExecutionLeaseOwner(run);
+    let updated!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshProactiveExecutionLease(run.runId, expectedLeaseOwnerId);
+      const currentMetadata = isRecord(current.metadata) ? { ...current.metadata } : {};
+      const currentState = this.readProactiveDurableState(current);
+      const nextState = {
+        ...currentState,
+        ...patch,
+      };
+      const now = new Date().toISOString();
+      updated = this.ctx.storage.durableRuns.updateRun({
+        runId: run.runId,
+        status: status ?? current.status,
+        metadata: {
+          ...currentMetadata,
+          proactive: nextState,
+        },
+        startedAt: current.startedAt ?? now,
+        ...(status === "completed" || status === "failed" ? { finishedAt: now } : { clearFinishedAt: true }),
+        clearLease: status === "completed" || status === "failed",
+        ...(status === "failed" ? { lastError: current.lastError } : { clearLastError: true }),
+        updatedAt: now,
+        expectedVersion: current.version,
+      });
     });
+    return updated;
+  }
+
+  private requireProactiveExecutionLeaseOwner(run: DurableRunRecord): string {
+    const leaseOwnerId = run.leaseOwnerId?.trim();
+    if (!leaseOwnerId) {
+      throw this.buildProactiveLeaseLossError(run.runId);
+    }
+    return leaseOwnerId;
+  }
+
+  private lockFreshProactiveExecutionLease(runId: string, expectedLeaseOwnerId: string): DurableRunRecord {
+    const locked = this.ctx.storage.durableRuns.lockFreshActiveLeaseForUpdate(runId, expectedLeaseOwnerId);
+    if (!locked) {
+      throw this.buildProactiveLeaseLossError(runId);
+    }
+    return locked;
+  }
+
+  private buildProactiveLeaseLossError(runId: string): Error {
+    const error = new Error(`Proactive durable run ${runId} lost its execution lease`);
+    error.name = "DurableWorkerInterruptionError";
+    return error;
   }
 
   private recordDurableTimelineEvent(
@@ -1162,104 +1232,124 @@ export class ChatProactiveService {
     waitForEvent: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
     statePatch: Partial<ProactiveDurableState>,
   ): DurableRunRecord {
-    const currentMetadata = isRecord(run.metadata) ? { ...run.metadata } : {};
-    const currentState = this.readProactiveDurableState(run);
-    const nextMetadata = {
-      ...currentMetadata,
-      waitForEvent: {
-        eventKey: waitForEvent.eventKey,
-        correlationId: waitForEvent.correlationId ?? null,
-      },
-      proactive: {
-        ...currentState,
-        ...statePatch,
-      },
-    };
     const now = new Date().toISOString();
-    const updated = this.ctx.storage.durableRuns.updateRun({
-      runId: run.runId,
-      status: "waiting",
-      metadata: nextMetadata,
-      startedAt: run.startedAt ?? now,
-      clearFinishedAt: true,
-      clearLease: true,
-      clearLastError: true,
-      updatedAt: now,
+    let updated!: DurableRunRecord;
+    let checkpointState!: Record<string, unknown>;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const locked = this.lockFreshProactiveExecutionLease(run.runId, this.requireProactiveExecutionLeaseOwner(run));
+      const currentMetadata = isRecord(locked.metadata) ? { ...locked.metadata } : {};
+      const currentState = this.readProactiveDurableState(locked);
+      const nextMetadata = {
+        ...currentMetadata,
+        waitForEvent: {
+          eventKey: waitForEvent.eventKey,
+          correlationId: waitForEvent.correlationId ?? null,
+        },
+        proactive: {
+          ...currentState,
+          ...statePatch,
+        },
+      };
+      checkpointState = {
+        waitForEvent: nextMetadata.waitForEvent,
+        proactive: nextMetadata.proactive,
+        ...(waitForEvent.payload ?? {}),
+      };
+      updated = this.ctx.storage.durableRuns.updateRun({
+        runId: locked.runId,
+        status: "waiting",
+        metadata: nextMetadata,
+        startedAt: locked.startedAt ?? now,
+        clearFinishedAt: true,
+        clearLease: true,
+        clearLastError: true,
+        updatedAt: now,
+        expectedVersion: locked.version,
+      });
+      this.ctx.storage.durableRuns.createCheckpoint({
+        runId: locked.runId,
+        checkpointKind: "run_waiting",
+        state: checkpointState,
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(locked.runId, "run_waiting", checkpointState);
     });
-    const checkpointState = {
-      waitForEvent: nextMetadata.waitForEvent,
-      proactive: nextMetadata.proactive,
-      ...(waitForEvent.payload ?? {}),
-    };
-    this.ctx.storage.durableRuns.createCheckpoint({
-      runId: run.runId,
-      checkpointKind: "run_waiting",
-      state: checkpointState,
-      createdAt: now,
-    });
-    this.recordDurableTimelineEvent(run.runId, "run_waiting", checkpointState);
     const checkpointRecord = checkpointState as Record<string, unknown>;
     const proactiveState = toPlainRecord(checkpointRecord.proactive);
-    this.ctx.publishRealtime(
-      "system",
-      "durable",
-      {
-        type: "durable_run_waiting",
-        runId: run.runId,
-        checkpoint: checkpointState,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: buildProactiveRealtimeLinks({
-          durableRunId: run.runId,
-          proactiveRunId:
-            typeof checkpointRecord.proactiveRunId === "string" ? checkpointRecord.proactiveRunId : undefined,
-          approvalId: typeof checkpointRecord.approvalId === "string" ? checkpointRecord.approvalId : undefined,
-          taskId: typeof proactiveState?.taskId === "string" ? proactiveState.taskId : undefined,
-        }),
-      },
-    );
+    try {
+      this.publishRealtimeSafely(
+        "system",
+        "durable",
+        {
+          type: "durable_run_waiting",
+          runId: run.runId,
+          checkpoint: checkpointState,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: buildProactiveRealtimeLinks({
+            durableRunId: run.runId,
+            proactiveRunId:
+              typeof checkpointRecord.proactiveRunId === "string" ? checkpointRecord.proactiveRunId : undefined,
+            approvalId: typeof checkpointRecord.approvalId === "string" ? checkpointRecord.approvalId : undefined,
+            taskId: typeof proactiveState?.taskId === "string" ? proactiveState.taskId : undefined,
+          }),
+        },
+      );
+    } catch {
+      // Retained realtime is downstream of the atomic waiting transition.
+      return updated;
+    }
     return updated;
   }
 
-  private completeDurableRun(runId: string, checkpointState: Record<string, unknown>): void {
+  private completeDurableRun(run: DurableRunRecord, checkpointState: Record<string, unknown>): void {
     const now = new Date().toISOString();
-    this.ctx.storage.durableRuns.updateRun({
-      runId,
-      status: "completed",
-      updatedAt: now,
-      finishedAt: now,
-      clearLease: true,
-      clearLastError: true,
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.lockFreshProactiveExecutionLease(run.runId, this.requireProactiveExecutionLeaseOwner(run));
+      this.ctx.storage.durableRuns.updateRun({
+        runId: run.runId,
+        status: "completed",
+        updatedAt: now,
+        finishedAt: now,
+        clearLease: true,
+        clearLastError: true,
+        expectedVersion: current.version,
+      });
+      this.ctx.storage.durableRuns.createCheckpoint({
+        runId: run.runId,
+        checkpointKind: "run_completed",
+        state: checkpointState,
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(run.runId, "run_completed", checkpointState);
     });
-    this.ctx.storage.durableRuns.createCheckpoint({
-      runId,
-      checkpointKind: "run_completed",
-      state: checkpointState,
-      createdAt: now,
-    });
-    this.recordDurableTimelineEvent(runId, "run_completed", checkpointState);
-    this.ctx.publishRealtime(
-      "system",
-      "durable",
-      {
-        type: "durable_run_completed",
-        runId,
-        checkpoint: checkpointState,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: buildProactiveRealtimeLinks({
-          durableRunId: runId,
-          proactiveRunId:
-            typeof checkpointState.proactiveRunId === "string" ? checkpointState.proactiveRunId : undefined,
-          approvalId: typeof checkpointState.approvalId === "string" ? checkpointState.approvalId : undefined,
-          taskId: typeof checkpointState.taskId === "string" ? checkpointState.taskId : undefined,
-        }),
-      },
-    );
+    try {
+      this.publishRealtimeSafely(
+        "system",
+        "durable",
+        {
+          type: "durable_run_completed",
+          runId: run.runId,
+          checkpoint: checkpointState,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: buildProactiveRealtimeLinks({
+            durableRunId: run.runId,
+            proactiveRunId:
+              typeof checkpointState.proactiveRunId === "string" ? checkpointState.proactiveRunId : undefined,
+            approvalId: typeof checkpointState.approvalId === "string" ? checkpointState.approvalId : undefined,
+            taskId: typeof checkpointState.taskId === "string" ? checkpointState.taskId : undefined,
+          }),
+        },
+      );
+    } catch {
+      // Retained realtime is downstream of the atomic completion.
+      return;
+    }
   }
 
   private findActiveProactiveTickRun(sessionId: string): ProactiveRunRecord | undefined {
@@ -1312,7 +1402,7 @@ export class ChatProactiveService {
           proactiveRunId: input.runId,
         },
       });
-      this.ctx.publishRealtime(
+      this.publishRealtimeSafely(
         "task_updated",
         "tasks",
         { task: updated },
@@ -1345,7 +1435,7 @@ export class ChatProactiveService {
         proactiveRunId: input.runId,
       },
     });
-    this.ctx.publishRealtime(
+    this.publishRealtimeSafely(
       "task_created",
       "tasks",
       { task: created },
@@ -1386,7 +1476,7 @@ export class ChatProactiveService {
         externalReferenceRoots: patch.externalReferenceRoots,
       },
     });
-    this.ctx.publishRealtime(
+    this.publishRealtimeSafely(
       "task_updated",
       "tasks",
       { task: updated },
@@ -1436,6 +1526,7 @@ export class ChatProactiveService {
     action: ProactiveActionRecord,
     durableRunId: string,
     signal?: AbortSignal,
+    expectedLeaseOwnerId?: string,
   ): Promise<ProactiveActionRecord> {
     throwIfProactiveDurableRunAborted(signal);
     if (!action.toolName) {
@@ -1478,66 +1569,151 @@ export class ChatProactiveService {
           taskId: action.linkedTaskId,
           surface,
         }).policyContext;
-      const result = await this.callbacks.invokeTool({
-        toolName: action.toolName,
-        args: action.args ?? {},
-        agentId: "proactive",
-        sessionId: action.sessionId,
+      const sideEffect = await runIdempotentExternalSideEffect({
+        mutationStore: this.ctx.storage.mutationIdempotency,
+        sideEffectRunStore: this.ctx.storage.externalSideEffectRuns,
+        runClaimTransaction: (work) => this.ctx.storage.runImmediateTransaction(work),
         workspaceId,
-        taskId: action.linkedTaskId,
-        runId: durableRunId,
-        surface,
-        permissionProfileId: policyContext?.permissionProfileId,
-        localOperatorOverrideId: policyContext?.localOperatorOverrideId,
-        policyContext,
-        signal,
-        consentContext: {
-          operatorId: actor.operatorId,
-          source: "agent",
-          reason: "proactive durable execution",
+        boundary: "proactive_tool_action",
+        catalogId: action.toolName,
+        actionId: action.actionId,
+        actorScope: workspaceId,
+        idempotencyKey: `proactive-action:${action.actionId}`,
+        checkedAt: new Date().toISOString(),
+        payload: {
+          actionId: action.actionId,
+          toolName: action.toolName,
+          args: action.args ?? {},
+          sessionId: action.sessionId,
+          taskId: action.linkedTaskId,
         },
-      });
-      throwIfProactiveDurableRunAborted(signal);
-      const externalReferenceRoots = this.detectExternalReferenceRoots(action.args, result.result);
-      if (result.outcome === "executed") {
-        return this.updateProactiveAction(action.actionId, {
-          status: "executed",
-          linkedDurableRunId: durableRunId,
-          result: result.result ?? {},
-          externalReferenceRoots,
-        });
-      }
-      if (result.outcome === "approval_required") {
-        let approval = result.approvalId ? this.ctx.storage.approvals.get(result.approvalId) : undefined;
-        if (approval?.approvalId) {
-          approval = this.ctx.storage.approvals.mergeLinkage(approval.approvalId, {
-            sessionId: action.sessionId,
-            taskId: action.linkedTaskId,
-            proactiveRunId: action.runId,
-            originSurface: action.originSurface,
+        label: `Proactive action ${action.actionId}`,
+        output: { actionId: action.actionId, proactiveRunId: action.runId, durableRunId },
+        requireDurableBoundaryRecord: true,
+        execute: async (claim) => {
+          const executionFence = expectedLeaseOwnerId
+            ? () => {
+                this.ctx.storage.runImmediateTransaction(() => {
+                  this.lockFreshProactiveExecutionLease(durableRunId, expectedLeaseOwnerId);
+                });
+              }
+            : undefined;
+          const result = await this.callbacks.invokeTool(
+            {
+              toolName: action.toolName!,
+              args: action.args ?? {},
+              agentId: "proactive",
+              sessionId: action.sessionId,
+              workspaceId,
+              taskId: action.linkedTaskId,
+              runId: durableRunId,
+              surface,
+              permissionProfileId: policyContext?.permissionProfileId,
+              localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+              policyContext,
+              signal,
+              consentContext: {
+                operatorId: actor.operatorId,
+                source: "agent",
+                reason: "proactive durable execution",
+              },
+            },
+            {
+              ...(executionFence ? { executionFence } : {}),
+              externalSideEffect: {
+                markStarted: () => claim.markExternalCallStarted(),
+                markNotRequired: () => claim.markExternalCallNotRequired(),
+              },
+            },
+          );
+          const executionFailure = readProactiveToolExecutionFailure(result);
+          if (executionFailure) {
+            if (!claim.externalCallStarted) {
+              claim.markExternalCallNotRequired();
+            }
+            throw new Error(executionFailure);
+          }
+          if (result.outcome !== "executed") {
+            if (claim.externalCallStarted) {
+              throw new Error(result.policyReason);
+            }
+            claim.markExternalCallNotRequired();
+          }
+          const externalReferenceRoots = this.detectExternalReferenceRoots(action.args, result.result);
+          if (result.outcome === "executed") {
+            return this.updateProactiveAction(action.actionId, {
+              status: "executed",
+              linkedDurableRunId: durableRunId,
+              result: result.result ?? {},
+              externalReferenceRoots,
+            });
+          }
+          if (result.outcome === "approval_required") {
+            let approval = result.approvalId ? this.ctx.storage.approvals.get(result.approvalId) : undefined;
+            if (approval?.approvalId) {
+              approval = this.ctx.storage.approvals.mergeLinkage(approval.approvalId, {
+                sessionId: action.sessionId,
+                taskId: action.linkedTaskId,
+                proactiveRunId: action.runId,
+                originSurface: action.originSurface,
+                externalReferenceRoots,
+              });
+            }
+            return this.updateProactiveAction(action.actionId, {
+              status: "blocked",
+              approvalId: result.approvalId,
+              linkedDurableRunId: approval?.linkage?.durableRunId ?? durableRunId,
+              error: "Approval required by policy.",
+              result: {
+                approvalId: result.approvalId,
+                policyReason: result.policyReason,
+              },
+              externalReferenceRoots,
+            });
+          }
+          return this.updateProactiveAction(action.actionId, {
+            status: "blocked",
+            linkedDurableRunId: durableRunId,
+            error: result.policyReason,
             externalReferenceRoots,
           });
-        }
-        return this.updateProactiveAction(action.actionId, {
-          status: "blocked",
-          approvalId: result.approvalId,
-          linkedDurableRunId: approval?.linkage?.durableRunId ?? durableRunId,
-          error: "Approval required by policy.",
-          result: {
-            approvalId: result.approvalId,
-            policyReason: result.policyReason,
-          },
-          externalReferenceRoots,
-        });
+        },
+      });
+      if (sideEffect.status === "executed") {
+        return sideEffect.value;
       }
+      if (sideEffect.status === "failed" && signal?.aborted) {
+        throwIfProactiveDurableRunAborted(signal);
+      }
+      const latest = this.getProactiveAction(action.actionId);
+      if (latest.status !== "suggested") {
+        return latest;
+      }
+      if (sideEffect.status === "failed" && sideEffect.claim.resumeState === "manual_retry_after_recorded_failure") {
+        throw new ProactiveSideEffectRetryableError(sideEffect.error.message);
+      }
+      if (
+        sideEffect.status === "blocked" &&
+        (sideEffect.claim.replayOutcome === "in_progress" || sideEffect.claim.replayOutcome === "duplicate")
+      ) {
+        throw new ProactiveSideEffectReconciliationError(
+          `Proactive action ${action.actionId} has durable side-effect state ${sideEffect.claim.replayOutcome} but no terminal action row; manual reconciliation is required.`,
+        );
+      }
+      const error = sideEffect.status === "failed" ? sideEffect.error.message : sideEffect.message;
       return this.updateProactiveAction(action.actionId, {
-        status: "blocked",
+        status: "failed",
         linkedDurableRunId: durableRunId,
-        error: result.policyReason,
-        externalReferenceRoots,
+        error,
       });
     } catch (error) {
       throwIfProactiveDurableRunAborted(signal);
+      if (
+        error instanceof ProactiveSideEffectReconciliationError ||
+        error instanceof ProactiveSideEffectRetryableError
+      ) {
+        throw error;
+      }
       return this.updateProactiveAction(action.actionId, {
         status: "failed",
         linkedDurableRunId: durableRunId,
@@ -1618,7 +1794,7 @@ export class ChatProactiveService {
       approvalId: undefined,
       blockedActionId: undefined,
     });
-    this.completeDurableRun(finalizedRun.runId, {
+    this.completeDurableRun(finalizedRun, {
       proactiveRunId,
       status: completed.status,
       stopReason: completed.stopReason,
@@ -1644,7 +1820,11 @@ export class ChatProactiveService {
       const pendingAction = this.ctx.storage.pendingApprovalActions.find(approvalId);
       const executedOutcome =
         typeof pendingAction?.result?.outcome === "string" ? pendingAction.result.outcome : undefined;
-      if (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") {
+      const storedExecutionFailure = readStoredProactiveToolExecutionFailure(pendingAction?.result);
+      if (
+        (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") &&
+        !storedExecutionFailure
+      ) {
         const approvedResult = isRecord(pendingAction?.result?.result)
           ? (pendingAction?.result?.result as Record<string, unknown>)
           : undefined;
@@ -1678,9 +1858,11 @@ export class ChatProactiveService {
         return "continue";
       }
 
-      const failureMessage = pendingAction?.result?.policyReason
-        ? String(pendingAction.result.policyReason)
-        : "Approved action failed during post-approval execution.";
+      const failureMessage =
+        storedExecutionFailure ??
+        (pendingAction?.result?.policyReason
+          ? String(pendingAction.result.policyReason)
+          : "Approved action failed during post-approval execution.");
       this.updateProactiveAction(blockedAction.actionId, {
         status: "failed",
         linkedDurableRunId: run.runId,
@@ -1880,7 +2062,8 @@ export class ChatProactiveService {
             reason: "planner_no_action",
           },
         );
-        this.ctx.publishRealtime(
+        this.touchSessionProactiveTick(sessionId, proactiveRunId);
+        this.publishRealtimeSafely(
           "proactive_no_action",
           "chat",
           {
@@ -1899,7 +2082,6 @@ export class ChatProactiveService {
             }),
           },
         );
-        this.touchSessionProactiveTick(sessionId, proactiveRunId);
         return completed;
       }
 
@@ -1953,7 +2135,8 @@ export class ChatProactiveService {
             reason: "suggest_only",
           },
         );
-        this.ctx.publishRealtime(
+        this.touchSessionProactiveTick(sessionId, proactiveRunId);
+        this.publishRealtimeSafely(
           "proactive_suggestion_created",
           "chat",
           {
@@ -1973,8 +2156,34 @@ export class ChatProactiveService {
             }),
           },
         );
-        this.touchSessionProactiveTick(sessionId, proactiveRunId);
         return suggested;
+      }
+    }
+
+    const strandedApprovalAction = actions.find(
+      (action) => action.status === "blocked" && typeof action.approvalId === "string",
+    );
+    if (strandedApprovalAction?.approvalId) {
+      const approval = this.ctx.storage.approvals.get(strandedApprovalAction.approvalId);
+      if (approval.status !== "pending") {
+        const resumed = await this.resumeBlockedApprovalAction(
+          run,
+          proactiveRun,
+          strandedApprovalAction.approvalId,
+          strandedApprovalAction.actionId,
+          context,
+        );
+        throwIfProactiveDurableRunAborted(context?.signal);
+        if (resumed !== "continue") {
+          return resumed;
+        }
+        run = this.updateProactiveDurableRunState(run, {
+          phase: "planning",
+          approvalId: undefined,
+          blockedActionId: undefined,
+        });
+        proactiveRun = this.readProactiveRun(proactiveRunId);
+        actions = this.listProactiveRunActions(proactiveRunId);
       }
     }
 
@@ -1987,45 +2196,55 @@ export class ChatProactiveService {
         remainingTurnBudget = Math.max(0, remainingTurnBudget - 1);
         continue;
       }
-      if (action.status === "failed" || action.status === "blocked") {
+      if (action.status === "failed") {
         continue;
       }
-      const resolution = this.resolveProactiveAction(action, policy.mode, remainingHourBudget, remainingTurnBudget);
-      if (!resolution.execute) {
-        this.updateProactiveAction(action.actionId, {
-          status: "blocked",
-          linkedDurableRunId: run.runId,
-          error: resolution.reason,
-        });
-        this.ctx.publishRealtime(
-          "proactive_action_blocked",
-          "chat",
-          {
-            sessionId,
-            runId: proactiveRunId,
-            actionId: action.actionId,
-            reason: resolution.reason,
-          },
-          {
-            eventClass: "operational_signal",
-            eventAuthority: "retained_stream",
-            links: buildProactiveRealtimeLinks({
+      let executed: ProactiveActionRecord;
+      if (action.status === "blocked") {
+        if (!action.approvalId) {
+          continue;
+        }
+        // A crash can occur after the action row records approval_required but
+        // before the proactive/durable wait linkage commits. Rebuild that wait
+        // from the terminal action row without invoking the tool again.
+        executed = action;
+      } else {
+        const resolution = this.resolveProactiveAction(action, policy.mode, remainingHourBudget, remainingTurnBudget);
+        if (!resolution.execute) {
+          this.updateProactiveAction(action.actionId, {
+            status: "blocked",
+            linkedDurableRunId: run.runId,
+            error: resolution.reason,
+          });
+          this.publishRealtimeSafely(
+            "proactive_action_blocked",
+            "chat",
+            {
               sessionId,
-              workspaceId: this.getSessionWorkspaceId(sessionId),
-              proactiveRunId,
-              durableRunId: run.runId,
-              taskId: linkedTaskId,
-            }),
-          },
-        );
-        continue;
-      }
+              runId: proactiveRunId,
+              actionId: action.actionId,
+              reason: resolution.reason,
+            },
+            {
+              eventClass: "operational_signal",
+              eventAuthority: "retained_stream",
+              links: buildProactiveRealtimeLinks({
+                sessionId,
+                workspaceId: this.getSessionWorkspaceId(sessionId),
+                proactiveRunId,
+                durableRunId: run.runId,
+                taskId: linkedTaskId,
+              }),
+            },
+          );
+          continue;
+        }
 
-      remainingHourBudget = Math.max(0, remainingHourBudget - 1);
-      remainingTurnBudget = Math.max(0, remainingTurnBudget - 1);
-      throwIfProactiveDurableRunAborted(context?.signal);
-      const executed = await this.executeProactiveToolAction(action, run.runId, context?.signal);
-      throwIfProactiveDurableRunAborted(context?.signal);
+        remainingHourBudget = Math.max(0, remainingHourBudget - 1);
+        remainingTurnBudget = Math.max(0, remainingTurnBudget - 1);
+        throwIfProactiveDurableRunAborted(context?.signal);
+        executed = await this.executeProactiveToolAction(action, run.runId, context?.signal, run.leaseOwnerId);
+      }
       if (executed.approvalId) {
         const waiting = this.refreshProactiveRunSummary(proactiveRunId, {
           status: "blocked",
@@ -2137,8 +2356,9 @@ export class ChatProactiveService {
         status: completed.status === "failed" || completed.status === "blocked" ? "blocked" : "in_progress",
       });
     }
+    this.touchSessionProactiveTick(sessionId, proactiveRunId);
     if (executedCount > 0) {
-      this.ctx.publishRealtime(
+      this.publishRealtimeSafely(
         "proactive_action_executed",
         "chat",
         {
@@ -2159,7 +2379,6 @@ export class ChatProactiveService {
         },
       );
     }
-    this.touchSessionProactiveTick(sessionId, proactiveRunId);
     return completed;
   }
 
@@ -2204,7 +2423,6 @@ export class ChatProactiveService {
     }
 
     await this.continueDurableProactiveExecution(run, payload, proactiveRun, context);
-    throwIfProactiveDurableRunAborted(context?.signal);
   }
 
   private touchSessionProactiveTick(sessionId: string, runId: string): void {
@@ -2263,7 +2481,7 @@ export class ChatProactiveService {
       reflectionMode: input.reflectionMode,
     });
     const policy = this.toProactivePolicy(sessionId, next);
-    this.ctx.publishRealtime("system", "chat", {
+    this.publishRealtimeSafely("system", "chat", {
       type: "proactive_policy_updated",
       sessionId,
       policy,
@@ -2333,7 +2551,7 @@ export class ChatProactiveService {
       startedAt: now,
     };
     this.insertProactiveRun(initialRun);
-    this.ctx.publishRealtime(
+    this.publishRealtimeSafely(
       "proactive_tick_started",
       "chat",
       {
@@ -2455,6 +2673,31 @@ function mapProactiveActionRow(row: ProactiveActionRow, mode?: ChatProactiveMode
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readProactiveToolExecutionFailure(result: ToolInvokeResult): string | undefined {
+  if (
+    result.outcome === "blocked" &&
+    (result.internalResult?.errorKind === "execution_error" || result.policyReason.startsWith("execution error:"))
+  ) {
+    return result.policyReason;
+  }
+  if (result.outcome !== "executed" || !isRecord(result.result)) {
+    return undefined;
+  }
+  return readToolDomainExecutionFailure(result.result, result.policyReason)?.message;
+}
+
+function readStoredProactiveToolExecutionFailure(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) {
+    return undefined;
+  }
+  const outcome = typeof result.outcome === "string" ? result.outcome : undefined;
+  const policyReason = typeof result.policyReason === "string" ? result.policyReason : "allowed";
+  if (outcome && outcome !== "executed") {
+    return policyReason === "allowed" ? `Approved tool action reported ${outcome}.` : policyReason;
+  }
+  return isRecord(result.result) ? readToolDomainExecutionFailure(result.result, policyReason)?.message : undefined;
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {

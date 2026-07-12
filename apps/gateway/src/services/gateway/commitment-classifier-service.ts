@@ -131,7 +131,25 @@ export class CommitmentClassifierService {
       return [];
     }
     const classifications = await this.classifyTurnForCommitments(input);
-    if (classifications.length === 0) {
+    return this.persistTurnCommitments(input, classifications);
+  }
+
+  /**
+   * Persists an already-classified result. Durable callers run this synchronous
+   * write inside their child-run receipt transaction so provider retries cannot
+   * create a second semantic set with different model-generated dedupe keys.
+   */
+  public persistTurnCommitments(
+    input: RecordTurnCommitmentsInput,
+    classifications: CommitmentClassification[],
+    options: { strict?: boolean } = {},
+  ): AgentCommitmentRecord[] {
+    if (
+      !input.autonomyEnabled ||
+      input.evalIntegrityTurn === true ||
+      input.humanSession === false ||
+      classifications.length === 0
+    ) {
       return [];
     }
     const nowIso = this.clockNow().toISOString();
@@ -159,7 +177,10 @@ export class CommitmentClassifierService {
           nowIso,
         );
         persisted.push(record);
-      } catch {
+      } catch (error) {
+        if (options.strict) {
+          throw error;
+        }
         // Intentionally continue: a single bad row never aborts the rest.
       }
     }

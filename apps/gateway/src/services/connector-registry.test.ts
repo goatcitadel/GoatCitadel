@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection, McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
 import { buildGatewayConnectorRecords } from "./connector-registry.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("buildGatewayConnectorRecords", () => {
   it("enables approval delivery for channel integrations with a configured default target", () => {
@@ -92,6 +96,7 @@ describe("buildGatewayConnectorRecords", () => {
   });
 
   it("advertises richer channel actions and diagnostics only when the configured bridge mode supports them", () => {
+    vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", "resolved-telegram-webhook-secret");
     const imessageRecords = buildGatewayConnectorRecords({
       integrationConnections: [
         createIntegrationConnection("channel", "imessage", {
@@ -167,6 +172,7 @@ describe("buildGatewayConnectorRecords", () => {
 
     const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(imessage?.metadata?.approvalInlineActionsReady).toBe(false);
     expect(imessage?.metadata?.supportedDeliveryActions).toEqual(
       expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
     );
@@ -180,6 +186,7 @@ describe("buildGatewayConnectorRecords", () => {
 
     const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(slack?.metadata?.approvalInlineActionsReady).toBe(false);
     expect(slack?.metadata?.supportedDeliveryActions).toEqual(
       expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
     );
@@ -193,6 +200,7 @@ describe("buildGatewayConnectorRecords", () => {
 
     const discordWebhook = discordWebhookRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(discordWebhook?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(discordWebhook?.metadata?.approvalInlineActionsReady).toBe(false);
     expect(discordWebhook?.metadata?.supportedDeliveryActions).toEqual([
       "channel.send",
       "channel.unsend",
@@ -227,6 +235,7 @@ describe("buildGatewayConnectorRecords", () => {
     );
 
     const telegram = telegramRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(telegram?.metadata?.approvalInlineActionsReady).toBe(true);
     expect(telegram?.metadata?.supportedDeliveryActions).toEqual(
       expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]),
     );
@@ -250,6 +259,42 @@ describe("buildGatewayConnectorRecords", () => {
         "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
       ]),
     );
+  });
+
+  it("does not advertise inline approval actions for outbound-only Telegram connections", () => {
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "telegram", {
+          botTokenEnv: "TELEGRAM_BOT_TOKEN",
+          defaultChatId: "-1001234567890",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const connector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(connector?.metadata?.approvalDeliveryReady).toBe(true);
+    expect(connector?.metadata?.approvalInlineActionsReady).toBe(false);
+  });
+
+  it("does not advertise inline approval actions when the configured Telegram webhook secret env is unresolved", () => {
+    vi.stubEnv("GOATCITADEL_TELEGRAM_REVIEW_WEBHOOK_SECRET", "");
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "telegram", {
+          botTokenEnv: "TELEGRAM_BOT_TOKEN",
+          webhookSecretEnv: "GOATCITADEL_TELEGRAM_REVIEW_WEBHOOK_SECRET",
+          defaultChatId: "-1001234567890",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const connector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(connector?.metadata?.approvalDeliveryReady).toBe(true);
+    expect(connector?.metadata?.approvalInlineActionsReady).toBe(false);
   });
 
   it("publishes setup diagnostics for incomplete channel bridge configs", () => {

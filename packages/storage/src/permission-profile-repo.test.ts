@@ -131,9 +131,7 @@ describe("PermissionProfileRepository", () => {
     `,
     ).run({ profileId: "scheduled-restricted", label: "Stored Shadow" });
 
-    const scheduledProfiles = repo
-      .listProfiles(true)
-      .filter((profile) => profile.profileId === "scheduled-restricted");
+    const scheduledProfiles = repo.listProfiles(true).filter((profile) => profile.profileId === "scheduled-restricted");
 
     assert.equal(scheduledProfiles.length, 1);
     const scheduledProfile = scheduledProfiles[0];
@@ -222,6 +220,50 @@ describe("PermissionProfileRepository", () => {
       repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a", surface: "code" }).permissionProfile
         .profileId,
       allProfile.profileId,
+    );
+  });
+
+  it("rolls back activation replacement when its owning transaction fails", () => {
+    const { db, repo } = createStore();
+    const original = repo.createProfile({
+      label: "Original Chat",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      createdBy: "operator-a",
+    });
+    const replacement = repo.createProfile({
+      label: "Replacement Chat",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_all",
+      createdBy: "operator-a",
+    });
+    repo.activateProfile({
+      profileId: original.profileId,
+      workspaceId: "workspace-a",
+      surface: "chat",
+      createdBy: "operator-a",
+    });
+
+    assert.throws(
+      () =>
+        db.transaction("immediate", () => {
+          repo.activateProfile({
+            profileId: replacement.profileId,
+            workspaceId: "workspace-a",
+            surface: "chat",
+            createdBy: "operator-a",
+          });
+          throw new Error("activation projection failed");
+        }),
+      /activation projection failed/,
+    );
+
+    assert.equal(
+      repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a", surface: "chat" }).permissionProfile
+        .profileId,
+      original.profileId,
     );
   });
 
@@ -322,6 +364,8 @@ describe("PermissionProfileRepository", () => {
       },
       "2099-05-17T20:00:00.000Z",
     );
+    assert.ok(Math.abs(Date.parse(runOverride.createdAt) - Date.now()) < 5_000);
+    assert.ok(Math.abs(Date.parse(runOverride.expiresAt) - Date.parse(runOverride.createdAt) - 60_000) < 1_000);
     repo.createLocalOperatorOverride(
       {
         operatorId: "operator-a",
@@ -342,6 +386,39 @@ describe("PermissionProfileRepository", () => {
       }).localOperatorOverride?.overrideId,
       runOverride.overrideId,
     );
+    assert.ok(repo.listActiveLocalOperatorOverrides("1900-01-01T00:00:00.000Z").length >= 2);
+    assert.ok(repo.listActiveLocalOperatorOverrides("2999-01-01T00:00:00.000Z").length >= 2);
+  });
+
+  it("fails closed for malformed override expiry and invalid TTL inputs", () => {
+    const { db, repo } = createStore();
+    assert.throws(
+      () =>
+        repo.createLocalOperatorOverride({
+          operatorId: "operator-a",
+          scope: "operator",
+          reason: "invalid ttl",
+          ttlSeconds: Number.NaN,
+          createdBy: "operator-a",
+        }),
+      /ttlSeconds/,
+    );
+    const override = repo.createLocalOperatorOverride({
+      operatorId: "operator-a",
+      scope: "operator",
+      reason: "malformed persisted expiry",
+      ttlSeconds: 60,
+      createdBy: "operator-a",
+    });
+    db.prepare("UPDATE local_operator_overrides SET expires_at = 'malformed' WHERE override_id = ?").run(
+      override.overrideId,
+    );
+
+    assert.equal(
+      repo.listActiveLocalOperatorOverrides().some((record) => record.overrideId === override.overrideId),
+      false,
+    );
+    assert.equal(repo.getLocalOperatorOverride(override.overrideId).status, "expired");
   });
 
   it("falls back to the provided defaultProfileId when no profile or activation resolves", () => {

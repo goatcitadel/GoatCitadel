@@ -235,6 +235,57 @@ describe("ApprovalInboxRepository", () => {
     assert.equal(second.lastError, undefined);
   });
 
+  it("reconciles canonical approval status only when the terminal inbox state agrees", () => {
+    const repo = createRepo();
+    const item = repo.receiveMcpApprovalDelivery({
+      connectorId: "mcp:server-1",
+      receiverId: "server-1",
+      approvalId: "approval-reconcile",
+      tokenId: "token-reconcile",
+      token: "grat_reconcile",
+      approvalKind: "tool.invoke",
+      riskLevel: "danger",
+      approvalStatus: "pending",
+      preview: {},
+      expiresAt: "2099-03-21T12:30:00.000Z",
+    });
+    repo.markResolved(item.inboxItemId, {
+      state: "expired",
+      approvalStatus: "pending",
+      resolvedAt: "2026-03-21T12:05:00.000Z",
+      resolvedBy: "system:token-expiry",
+    });
+
+    const reconciler = repo as unknown as {
+      reconcileResolution(
+        inboxItemId: string,
+        input: {
+          state: "expired" | "rejected";
+          approvalStatus: "rejected";
+          resolvedAt: string;
+          resolvedBy: string;
+        },
+      ): { state: string; approvalStatus: string; resolvedAt?: string };
+    };
+    const repaired = reconciler.reconcileResolution(item.inboxItemId, {
+      state: "expired",
+      approvalStatus: "rejected",
+      resolvedAt: "2026-03-21T12:06:00.000Z",
+      resolvedBy: "system:approval-expiry",
+    });
+    const conflicting = reconciler.reconcileResolution(item.inboxItemId, {
+      state: "rejected",
+      approvalStatus: "rejected",
+      resolvedAt: "2026-03-21T12:07:00.000Z",
+      resolvedBy: "operator:other",
+    });
+
+    assert.equal(repaired.state, "expired");
+    assert.equal(repaired.approvalStatus, "rejected");
+    assert.equal(repaired.resolvedAt, "2026-03-21T12:05:00.000Z");
+    assert.equal(conflicting.state, "expired");
+  });
+
   it("supports state-filtered listing, approval-token lookup, deletion, and validation failures", () => {
     const repo = createRepo();
     const item = repo.receiveMcpApprovalDelivery({
@@ -281,7 +332,6 @@ describe("ApprovalInboxRepository", () => {
       ["receiverId", { receiverId: " " }],
       ["approvalId", { approvalId: " " }],
       ["tokenId", { tokenId: " " }],
-      ["token", { token: " " }],
     ] as const) {
       assert.throws(
         () =>

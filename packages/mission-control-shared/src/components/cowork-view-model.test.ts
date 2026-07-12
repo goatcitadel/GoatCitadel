@@ -849,6 +849,46 @@ describe("deriveCoworkRunViewModel", () => {
     });
   });
 
+  it("renders canonical waiting reason and child turn provenance from the agentic run tree", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      agenticRunTree: {
+        runId: "run-waiting-tree",
+        generatedAt: "2026-07-11T00:00:00.000Z",
+        nodes: [
+          { id: "run:run-waiting-tree", kind: "run", label: "Waiting run", status: "running" },
+          {
+            id: "subagent:waiting-researcher",
+            kind: "subagent",
+            label: "Waiting researcher",
+            status: "paused",
+            parentId: "run:run-waiting-tree",
+            agentSessionId: "child-waiting-tree",
+            summary: "Approve read access to the project workspace.",
+            metadata: {
+              role: "researcher",
+              childTraceStatus: "waiting_for_approval",
+              childSessionId: "child-waiting-tree",
+              childTurnId: "turn-waiting-tree",
+              durableRunId: "durable-waiting-tree",
+              waitObservedAt: "2026-07-11T00:00:00.000Z",
+            },
+          },
+        ],
+        edges: [{ from: "run:run-waiting-tree", to: "subagent:waiting-researcher", kind: "spawned" }],
+        diagnostics: [],
+        controls: [],
+      },
+    });
+
+    expect(viewModel.childProgressItems.items[0]).toMatchObject({
+      title: "Waiting researcher",
+      status: "paused",
+      meta: "researcher · trace waiting for approval · session child-waiting-tree · turn turn-waiting-tree · durable durable-waiting-tree",
+      note: "Approve read access to the project workspace.",
+    });
+  });
+
   it("returns a pre-run board and resolves active workflow turns", () => {
     const empty = deriveCoworkRunViewModel({ items: [] });
 

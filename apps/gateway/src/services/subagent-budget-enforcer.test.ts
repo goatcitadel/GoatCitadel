@@ -98,6 +98,27 @@ describe("runWithChildTimeout", () => {
       }),
     ]);
   });
+  it("contains a synchronously thrown late-settle callback without an unhandled rejection", async () => {
+    let resolveRun: (value: string) => void = () => undefined;
+    let callbackCount = 0;
+    const result = runWithChildTimeout({
+      timeoutSeconds: 0.01,
+      run: async () =>
+        new Promise<string>((resolve) => {
+          resolveRun = resolve;
+        }),
+      onLateSettle: () => {
+        callbackCount += 1;
+        throw new Error("late callback failed synchronously");
+      },
+    });
+
+    await expect(result).rejects.toThrowError(/timeout_exceeded/);
+    resolveRun("late success");
+    await flushSettledPromises();
+
+    expect(callbackCount).toBe(1);
+  });
 });
 
 async function flushSettledPromises(): Promise<void> {

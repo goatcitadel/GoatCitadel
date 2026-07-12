@@ -128,6 +128,7 @@ import {
   toWeekKeyForTimezone,
 } from "./improvement-replay.js";
 import { resolveActiveUpdateTarget } from "./improvement-service-active-update.js";
+import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
@@ -135,6 +136,13 @@ const IMPROVEMENT_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
 const IMPROVEMENT_WEEKLY_SAMPLE_SIZE = 500;
 const IMPROVEMENT_JUDGE_SAMPLE_LIMIT = 120;
 const IMPROVEMENT_JUDGE_TIMEOUT_MS = 15_000;
+
+class ImprovementActivationCompensationError extends Error {}
+
+class ImprovementActivationClaimError extends Error {}
+
+class ImprovementActivationPostCommitError extends Error {}
+
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY = "improvement_weekly_last_week_key_v1";
 const IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE = "improvement_tune_blocker_template_v1";
@@ -904,8 +912,12 @@ export class ImprovementService {
   ): ImprovementCandidateLifecycleResult {
     this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
-    this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
-    this.clearCandidateSuppression(candidateId, actorId, "operator");
+    this.ctx.gatewaySql.runImmediateTransaction(() => {
+      this.lockCandidateForLifecycleMutation(candidateId);
+      this.assertCandidateHasNoAppliedActivation(candidateId);
+      this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
+      this.clearCandidateSuppression(candidateId, actorId, "operator");
+    });
     const review = this.getCuratorReviewItem(candidateId);
     this.emitLifecycleAuditSignal("candidate_rejected", {
       candidateId,
@@ -934,8 +946,12 @@ export class ImprovementService {
       input.snoozeUntil && Number.isFinite(Date.parse(input.snoozeUntil))
         ? new Date(input.snoozeUntil).toISOString()
         : new Date(Date.now() + IMPROVEMENT_SUPPRESSION_MS).toISOString();
-    this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
-    this.setCandidateSuppression(candidateId, snoozeUntil, actorId, "operator");
+    this.ctx.gatewaySql.runImmediateTransaction(() => {
+      this.lockCandidateForLifecycleMutation(candidateId);
+      this.assertCandidateHasNoAppliedActivation(candidateId);
+      this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
+      this.setCandidateSuppression(candidateId, snoozeUntil, actorId, "operator");
+    });
     const review = this.getCuratorReviewItem(candidateId);
     this.emitLifecycleAuditSignal("candidate_snoozed", {
       candidateId,
@@ -1625,11 +1641,21 @@ export class ImprovementService {
       return undefined;
     }
     this.ensureImprovementLedgerTables();
-    const pendingActivation = this.readPendingActivationByApprovalId(approval.approvalId);
-    if (!pendingActivation) {
+    const activation = this.readLatestActivationByApprovalId(approval.approvalId);
+    if (!activation) {
       return undefined;
     }
+    if (activation.status === "active" || activation.watchStartedAt) {
+      this.emitActivationAppliedAuditOrThrow(activation, approval);
+    }
+    if (activation.status === "active") {
+      return activation;
+    }
+    if (activation.status !== "pending") {
+      return activation;
+    }
 
+    const pendingActivation = activation;
     const candidate = this.readImprovementCandidate(pendingActivation.candidateId);
     const revision = this.readCurrentRevision(candidate.candidateId);
     const evaluation = this.readLatestEvaluation(candidate.candidateId);
@@ -1646,6 +1672,21 @@ export class ImprovementService {
         workspaceId: candidate.workspaceId,
         fingerprint: candidate.fingerprint,
         targetKey: candidate.targetKey,
+        expectedStatus: "pending",
+      });
+    }
+
+    if (!this.isPendingActivationCandidateEligible(candidate)) {
+      return this.markActivationFailed(pendingActivation.activationId, "candidate_no_longer_eligible", {
+        approvalId: approval.approvalId,
+        actorId,
+        actorType: "approval",
+        candidateId: candidate.candidateId,
+        revisionId: pendingActivation.revisionId,
+        workspaceId: candidate.workspaceId,
+        fingerprint: candidate.fingerprint,
+        targetKey: candidate.targetKey,
+        expectedStatus: "pending",
       });
     }
 
@@ -1668,12 +1709,20 @@ export class ImprovementService {
         workspaceId: candidate.workspaceId,
         fingerprint: candidate.fingerprint,
         targetKey: candidate.targetKey,
+        expectedStatus: "pending",
       });
     }
 
     try {
       return this.applyApprovedActivation(pendingActivation, approval);
     } catch (error) {
+      if (
+        error instanceof ImprovementActivationCompensationError ||
+        error instanceof ImprovementActivationClaimError ||
+        error instanceof ImprovementActivationPostCommitError
+      ) {
+        throw error;
+      }
       return this.markActivationFailed(
         pendingActivation.activationId,
         error instanceof Error ? error.message : String(error),
@@ -1686,6 +1735,7 @@ export class ImprovementService {
           workspaceId: candidate.workspaceId,
           fingerprint: candidate.fingerprint,
           targetKey: candidate.targetKey,
+          expectedStatus: "pending",
         },
       );
     }
@@ -1695,6 +1745,9 @@ export class ImprovementService {
     this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
     this.ensureImprovementLedgerTables();
     const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+    if (activation.status !== "active" || !activation.watchStartedAt) {
+      throw new Error(`Activation ${activationId} must be active before it can be paused.`);
+    }
     return this.restoreActivationSnapshot(activation, "paused", actorId, "operator");
   }
 
@@ -1702,6 +1755,12 @@ export class ImprovementService {
     this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
     this.ensureImprovementLedgerTables();
     const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+    if (
+      !activation.watchStartedAt ||
+      (activation.status !== "active" && activation.status !== "paused" && activation.status !== "failed")
+    ) {
+      throw new Error(`Activation ${activationId} must have been applied before it can be rolled back.`);
+    }
     const restored = this.restoreActivationSnapshot(activation, "rolled_back", actorId, "operator");
     this.applyCandidateSuppression(restored.candidateId);
     return restored;
@@ -3850,45 +3909,213 @@ export class ImprovementService {
       this.updateCandidateStatus(candidate.candidateId, "evaluating", approval.resolvedBy ?? "approval", "approval");
       throw new Error("candidate_drift");
     }
-    const activationTarget = this.applyActivationChange(candidate.kind, candidate.targetKey, revision);
     const now = new Date().toISOString();
-    this.ctx.gatewaySql
-      .prepare(
-        `
-        UPDATE improvement_activations
-        SET status = 'active',
-            activation_target_json = @activationTargetJson,
-            watch_status = 'watching',
-            watch_started_at = @watchStartedAt,
-            watch_ends_at = @watchEndsAt,
-            approved_by_actor_id = @approvedByActorId,
-            approved_by_actor_type = 'approval',
-            updated_at = @updatedAt
-        WHERE activation_id = @activationId
-      `,
-      )
-      .run({
-        activationId: activation.activationId,
-        activationTargetJson: JSON.stringify(activationTarget),
-        watchStartedAt: now,
-        watchEndsAt: new Date(Date.now() + IMPROVEMENT_WATCH_WINDOW_MS).toISOString(),
-        approvedByActorId: approval.resolvedBy ?? "approval",
-        updatedAt: now,
+    let mutationApplied = false;
+    try {
+      this.ctx.gatewaySql.runImmediateTransaction(() => {
+        const candidateClaim = this.ctx.gatewaySql
+          .prepare(
+            `
+            UPDATE improvement_candidates
+            SET updated_at = updated_at
+            WHERE candidate_id = @candidateId
+              AND status = 'approval_pending'
+              AND (suppression_until IS NULL OR suppression_until <= @claimAt)
+          `,
+          )
+          .run({
+            candidateId: activation.candidateId,
+            claimAt: now,
+          });
+        if (candidateClaim.changes !== 1) {
+          throw new Error("candidate_no_longer_eligible");
+        }
+        const claim = this.ctx.gatewaySql
+          .prepare(
+            `
+            UPDATE improvement_activations
+            SET updated_at = @claimAt
+            WHERE activation_id = @activationId
+              AND status = 'pending'
+          `,
+          )
+          .run({
+            activationId: activation.activationId,
+            claimAt: now,
+          });
+        if (claim.changes !== 1) {
+          return;
+        }
+        const claimedCandidate = this.readImprovementCandidate(activation.candidateId);
+        const claimedRevision = this.readCurrentRevision(claimedCandidate.candidateId);
+        const claimedEvaluation = this.readLatestEvaluation(claimedCandidate.candidateId);
+        if (!this.isPendingActivationCandidateEligible(claimedCandidate)) {
+          throw new Error("candidate_no_longer_eligible");
+        }
+        if (
+          !claimedRevision ||
+          !claimedEvaluation ||
+          claimedCandidate.currentRevisionId !== claimedEvaluation.revisionId ||
+          claimedEvaluation.revisionId !== activation.revisionId ||
+          claimedRevision.revisionId !== activation.revisionId ||
+          claimedEvaluation.changeHash !== claimedRevision.changeHash ||
+          activation.appliedChangeHash !== claimedRevision.changeHash
+        ) {
+          throw new Error("candidate_drift");
+        }
+        mutationApplied = true;
+        const activationTarget = this.applyActivationChange(
+          claimedCandidate.kind,
+          claimedCandidate.targetKey,
+          claimedRevision,
+        );
+        const activated = this.ctx.gatewaySql
+          .prepare(
+            `
+            UPDATE improvement_activations
+            SET status = 'active',
+                activation_target_json = @activationTargetJson,
+                watch_status = 'watching',
+                watch_started_at = @watchStartedAt,
+                watch_ends_at = @watchEndsAt,
+                approved_by_actor_id = @approvedByActorId,
+                approved_by_actor_type = 'approval',
+                updated_at = @updatedAt
+            WHERE activation_id = @activationId
+              AND status = 'pending'
+          `,
+          )
+          .run({
+            activationId: activation.activationId,
+            activationTargetJson: JSON.stringify(activationTarget),
+            watchStartedAt: now,
+            watchEndsAt: new Date(Date.now() + IMPROVEMENT_WATCH_WINDOW_MS).toISOString(),
+            approvedByActorId: approval.resolvedBy ?? "approval",
+            updatedAt: now,
+          });
+        if (activated.changes !== 1) {
+          throw new Error(`Activation ${activation.activationId} lost its pending-state claim before commit.`);
+        }
+        this.updateCandidateStatus(
+          claimedCandidate.candidateId,
+          "approved",
+          approval.resolvedBy ?? "approval",
+          "approval",
+        );
       });
-    this.updateCandidateStatus(candidate.candidateId, "approved", approval.resolvedBy ?? "approval", "approval");
-    const applied = this.readImprovementActivation(activation.activationId);
+    } catch (error) {
+      if (mutationApplied) {
+        this.compensateFailedActivationApply(activation, error);
+      }
+      throw error;
+    }
+    let applied: ImprovementActivationRecord;
+    try {
+      applied = this.readImprovementActivation(activation.activationId);
+    } catch (error) {
+      if (!mutationApplied) {
+        throw error;
+      }
+      throw new ImprovementActivationPostCommitError(
+        `Activation ${activation.activationId} was applied but its committed state could not be reloaded: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+    if (!mutationApplied) {
+      if (applied.status === "active") {
+        this.emitActivationAppliedAuditOrThrow(applied, approval);
+        return applied;
+      }
+      if (applied.status !== "pending") {
+        return applied;
+      }
+      throw new ImprovementActivationClaimError(
+        `Activation ${activation.activationId} could not acquire its pending-state claim.`,
+      );
+    }
+    this.emitActivationAppliedAuditOrThrow(applied, approval);
+    return applied;
+  }
+
+  private compensateFailedActivationApply(activation: ImprovementActivationRecord, failure: unknown): void {
+    try {
+      if (activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
+        this.callbacks.restoreSkillRevisionSnapshot(activation.preActivationSnapshot);
+      } else if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
+        this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
+      } else {
+        this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
+      }
+    } catch (restoreError) {
+      throw new ImprovementActivationCompensationError(
+        `Activation ${activation.activationId} failed and its pre-activation snapshot could not be restored: ${
+          restoreError instanceof Error ? restoreError.message : String(restoreError)
+        }`,
+        { cause: failure },
+      );
+    }
+  }
+
+  private emitActivationAppliedAudit(activation: ImprovementActivationRecord, approval: ApprovalRequest): void {
+    const candidate = this.readImprovementCandidate(activation.candidateId);
     this.emitLifecycleAuditSignal("activation_applied", {
       candidateId: candidate.candidateId,
-      revisionId: revision.revisionId,
+      revisionId: activation.revisionId,
       activationId: activation.activationId,
       approvalId: approval.approvalId,
       workspaceId: candidate.workspaceId,
       fingerprint: candidate.fingerprint,
       targetKey: candidate.targetKey,
-      status: applied.status,
-      watchStatus: applied.watchStatus,
+      status: "active",
+      watchStatus: "watching",
     });
-    return applied;
+  }
+
+  private emitActivationAppliedAuditOrThrow(activation: ImprovementActivationRecord, approval: ApprovalRequest): void {
+    try {
+      this.emitActivationAppliedAudit(activation, approval);
+    } catch (error) {
+      throw new ImprovementActivationPostCommitError(
+        `Activation ${activation.activationId} was applied but its lifecycle audit is still pending: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+  }
+
+  private isPendingActivationCandidateEligible(candidate: ImprovementCandidateRecord): boolean {
+    if (candidate.status !== "approval_pending") {
+      return false;
+    }
+    const suppressionUntil = candidate.suppressionUntil ? Date.parse(candidate.suppressionUntil) : Number.NaN;
+    return !Number.isFinite(suppressionUntil) || suppressionUntil <= Date.now();
+  }
+
+  private lockCandidateForLifecycleMutation(candidateId: string): void {
+    const lock = this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET updated_at = updated_at
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({ candidateId });
+    if (lock.changes !== 1) {
+      throw new Error(`Improvement candidate not found: ${candidateId}`);
+    }
+  }
+
+  private assertCandidateHasNoAppliedActivation(candidateId: string): void {
+    const activation = this.readLatestActivation(candidateId);
+    if (activation?.watchStartedAt && activation.status !== "paused" && activation.status !== "rolled_back") {
+      throw new Error(
+        `Candidate ${candidateId} has an applied activation; pause or roll it back before rejection or snooze.`,
+      );
+    }
   }
 
   private applyActivationChange(
@@ -4095,7 +4322,7 @@ export class ImprovementService {
     }
   }
 
-  private readPendingActivationByApprovalId(approvalId: string): ImprovementActivationRecord | undefined {
+  private readLatestActivationByApprovalId(approvalId: string): ImprovementActivationRecord | undefined {
     const row = toImprovementActivationRow(
       this.ctx.gatewaySql
         .prepare(
@@ -4103,7 +4330,6 @@ export class ImprovementService {
           SELECT *
           FROM improvement_activations
           WHERE approval_id = @approvalId
-            AND status = 'pending'
           ORDER BY created_at DESC, activation_id DESC
           LIMIT 1
         `,
@@ -4155,9 +4381,10 @@ export class ImprovementService {
       targetKey?: string;
       actorId?: string;
       actorType?: ImprovementActorType;
+      expectedStatus?: ImprovementActivationRecord["status"];
     } = {},
   ): ImprovementActivationRecord {
-    this.ctx.gatewaySql
+    const transition = this.ctx.gatewaySql
       .prepare(
         `
         UPDATE improvement_activations
@@ -4166,14 +4393,22 @@ export class ImprovementService {
             failure_reason = @failureReason,
             updated_at = @updatedAt
         WHERE activation_id = @activationId
+          AND (
+            CAST(@expectedStatus AS TEXT) IS NULL
+            OR status = CAST(@expectedStatus AS TEXT)
+          )
       `,
       )
       .run({
         activationId,
         failureReason,
+        expectedStatus: input.expectedStatus ?? null,
         updatedAt: new Date().toISOString(),
       });
     const failed = this.readImprovementActivation(activationId);
+    if ((transition.changes ?? 0) !== 1) {
+      return failed;
+    }
     const candidate = input.candidateId
       ? this.readImprovementCandidate(input.candidateId)
       : this.readImprovementCandidate(failed.candidateId);
@@ -4249,16 +4484,15 @@ export class ImprovementService {
         },
       });
     }
+    const lifecycleSignalKey = [signalKind, input.activationId, input.evaluationId, input.revisionId, input.candidateId]
+      .filter(Boolean)
+      .join(":");
     const signal = this.recordImprovementSignal({
       sourceService: "improvement-service",
       sourceType: "lifecycle",
       sourceId: input.activationId ?? input.evaluationId ?? input.revisionId ?? input.candidateId ?? signalKind,
-      sourceEventId: [signalKind, input.activationId, input.evaluationId, input.revisionId, input.candidateId]
-        .filter(Boolean)
-        .join(":"),
-      idempotencyKey: [signalKind, input.activationId, input.evaluationId, input.revisionId, input.candidateId]
-        .filter(Boolean)
-        .join(":"),
+      sourceEventId: lifecycleSignalKey,
+      idempotencyKey: lifecycleSignalKey,
       workspaceId: input.workspaceId ?? "default",
       origin: "improvement_internal",
       signalClass: signalKind.startsWith("evaluation_") ? "evaluation" : "runtime",
@@ -4283,6 +4517,10 @@ export class ImprovementService {
       },
     });
     this.ctx.publishRealtime(`improvement_${signalKind}`, "improvement", {
+      [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: {
+        deliveryId: `improvement-lifecycle:${signal?.signalId ?? lifecycleSignalKey}`,
+        occurredAt: signal?.occurredAt ?? new Date().toISOString(),
+      },
       signalId: signal?.signalId,
       candidateId: input.candidateId,
       revisionId: input.revisionId,

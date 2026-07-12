@@ -116,11 +116,19 @@ function createHarness(options: HarnessOptions = {}) {
     now: () => new Date("2026-06-22T00:00:00.000Z"),
   };
   const service = new BackgroundReviewService(deps);
-  return { service, createChatCompletion, recordOperatorProfileFacts, draftSkillMutation, recordedFacts, draftedSkills };
+  return {
+    service,
+    createChatCompletion,
+    recordOperatorProfileFacts,
+    draftSkillMutation,
+    recordedFacts,
+    draftedSkills,
+  };
 }
 
 const ELIGIBLE: BackgroundReviewTurnInput = {
   sessionId: "session-1",
+  sourceTurnId: "turn-current",
   workspaceId: "default",
   userText: "I always want concise answers and I'm building a SaaS for dentists.",
   assistantText: "Got it — I'll keep it concise.",
@@ -295,7 +303,7 @@ describe("BackgroundReviewService — skill authoring", () => {
     const result = await service.runBackgroundReview(ELIGIBLE);
     expect(draftSkillMutation).toHaveBeenCalledTimes(1);
     expect(draftedSkills[0]?.skillId).toBe("summarize-csv-exports");
-    expect(draftedSkills[0]?.sourceTurnId).toBe(ELIGIBLE.parentTurnId);
+    expect(draftedSkills[0]?.sourceTurnId).toBe("turn-current");
     expect(result.skillProposed).toBe(true);
     expect(result.skillMutation?.skillId).toBe("summarize-csv-exports");
     expect(result.summaryMarker).toContain('drafted skill "summarize-csv-exports"');
@@ -309,6 +317,31 @@ describe("BackgroundReviewService — skill authoring", () => {
     expect(draftSkillMutation).not.toHaveBeenCalled();
     expect(result.skillProposed).toBe(false);
     expect(result.skillMutation).toBeUndefined();
+  });
+
+  it("pins durable candidate authoring to the effect execution identity", async () => {
+    const { service, draftedSkills } = createHarness({
+      responses: [
+        modelResponse(factsPayload([])),
+        modelResponse(
+          JSON.stringify({
+            shouldAuthor: true,
+            skillId: "model-selected-id",
+            skillMarkdown:
+              "---\nname: Durable helper\ndescription: Replay-safe durable helper.\n---\n# Durable helper\n",
+          }),
+        ),
+      ],
+    });
+
+    await service.runBackgroundReview({ ...ELIGIBLE, effectExecutionId: "chat-post-commit-child-1" });
+
+    expect(draftedSkills[0]).toMatchObject({
+      skillId: expect.stringMatching(/^background-review-[a-f0-9]{24}$/),
+      evaluationRunId: "chat-post-commit-child-1",
+      sourceTurnId: "turn-current",
+    });
+    expect(draftedSkills[0]?.skillId).not.toBe("model-selected-id");
   });
 
   it("authors nothing when shouldAuthor=true but no markdown is provided", async () => {
@@ -370,12 +403,26 @@ describe("BackgroundReviewService — autonomy-off propose-only + best-effort sa
     expect(result.skillMutation).toBeUndefined();
   });
 
+  it("fails durable effect truth when candidate persistence is uncertain", async () => {
+    const { service } = createHarness({
+      draftThrows: true,
+      responses: [
+        modelResponse(factsPayload([])),
+        modelResponse(
+          JSON.stringify({ shouldAuthor: true, skillMarkdown: "---\nname: x\ndescription: y\n---\n# x\n" }),
+        ),
+      ],
+    });
+
+    await expect(
+      service.runBackgroundReview({ ...ELIGIBLE, effectExecutionId: "chat-post-commit-child-failed" }),
+    ).rejects.toThrow("skill rejected");
+  });
+
   it("tolerates prose around the JSON object", async () => {
     const { service, recordedFacts } = createHarness({
       responses: [
-        modelResponse(
-          'Sure: {"facts":[{"kind":"goal","content":"Launch the dentist SaaS","confidence":0.85}]} done',
-        ),
+        modelResponse('Sure: {"facts":[{"kind":"goal","content":"Launch the dentist SaaS","confidence":0.85}]} done'),
       ],
     });
     const result = await service.runBackgroundReview(ELIGIBLE);

@@ -257,7 +257,12 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
       orchestrationResolution,
       expect.objectContaining({ abortSignal: undefined }),
     );
-    expect(dispatchMocks.shouldUseDurableExecution).not.toHaveBeenCalled();
+    expect(dispatchMocks.shouldUseDurableExecution).toHaveBeenCalledWith(
+      host,
+      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ content: "plan this" }),
+      false,
+    );
   });
 
   it("routes durable-eligible prepared sends through the dispatch service without orchestration", async () => {
@@ -330,6 +335,7 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
           content: expect.stringContaining("the final assistant text was empty"),
         }),
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
       "turn-1",

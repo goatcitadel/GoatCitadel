@@ -4,8 +4,11 @@ import type {
   ApprovalEffectRecord,
   ApprovalEffectStatus,
   ApprovalEffectTargetKind,
+  ApprovalObservabilityAttribution,
+  ApprovalObservabilityDelivery,
+  ApprovalObservabilityEnvelope,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -38,16 +41,35 @@ export class ApprovalEffectRepository {
   private readonly getByIdempotencyKeyStmt;
   private readonly getByTargetStmt;
   private readonly listByApprovalStmt;
+  private readonly lockFreshClaimStmt;
+  private readonly lockApprovalForObservabilityStmt;
   private readonly upsertStmt;
   private readonly claimCandidatesStmt;
+  private readonly claimObservabilityCandidatesStmt;
   private readonly claimEffectStmt;
   private readonly renewLeaseStmt;
+  private readonly deferEffectStmt;
   private readonly completeEffectStmt;
   private readonly skipEffectStmt;
   private readonly failEffectStmt;
   private readonly recoverExpiredStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const databaseNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
+    const leaseExpiryInstant =
+      db.dialect === "postgres" ? "gc_try_parse_timestamptz(lease_expires_at)" : "julianday(lease_expires_at)";
+    const databaseNowText =
+      db.dialect === "postgres"
+        ? `to_char(statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+    const databaseLeaseExpiryText =
+      db.dialect === "postgres"
+        ? `to_char(
+            (statement_timestamp() + (CAST(@leaseDurationMs AS DOUBLE PRECISION) * INTERVAL '1 millisecond'))
+              AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          )`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', julianday('now') + (CAST(@leaseDurationMs AS REAL) / 86400000.0))";
     this.getByIdStmt = db.prepare(`
       SELECT *
       FROM approval_effects
@@ -72,6 +94,27 @@ export class ApprovalEffectRepository {
       WHERE approval_id = ?
       ORDER BY created_at ASC, effect_id ASC
     `);
+    this.lockFreshClaimStmt = db.prepare(`
+      SELECT *
+      FROM approval_effects
+      WHERE effect_id = @effectId
+        AND status = 'running'
+        AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at IS NOT NULL
+        AND ${leaseExpiryInstant} IS NOT NULL
+        AND ${leaseExpiryInstant} > ${databaseNowInstant}
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
+    this.lockApprovalForObservabilityStmt =
+      db.dialect === "postgres"
+        ? db.prepare(`
+            SELECT approval_id
+            FROM approvals
+            WHERE approval_id = ?
+            FOR UPDATE
+          `)
+        : undefined;
     this.upsertStmt = db.prepare(`
       INSERT INTO approval_effects (
         effect_id, approval_id, effect_kind, target_kind, target_id, idempotency_key, status,
@@ -82,28 +125,48 @@ export class ApprovalEffectRepository {
         @attemptCount, @payloadJson, @resultJson, @lastError, @claimedBy, @claimedAt,
         @leaseExpiresAt, @version, @createdAt, @updatedAt, @completedAt
       )
-      ON CONFLICT(idempotency_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        updated_at = excluded.updated_at
+      ON CONFLICT(idempotency_key) DO NOTHING
     `);
     this.claimCandidatesStmt = db.prepare(`
       SELECT *
       FROM approval_effects
       WHERE (
           status = 'pending'
-          OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= @now)
+          OR (
+            status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND (${leaseExpiryInstant} IS NULL OR ${leaseExpiryInstant} <= ${databaseNowInstant})
+          )
         )
+        AND effect_kind <> 'approval_observability'
       ORDER BY
         CASE effect_kind
-          WHEN 'pending_action_execute' THEN 0
-          WHEN 'approval_wait_wake' THEN 1
-          WHEN 'proactive_run_wake' THEN 2
-          WHEN 'linked_chat_turn_wake' THEN 3
-          WHEN 'orchestration_parent_wake' THEN 4
-          ELSE 5
+          WHEN 'approval_wait_materialize' THEN 0
+          WHEN 'approval_resolution_signals' THEN 1
+          WHEN 'pending_action_execute' THEN 2
+          WHEN 'approval_wait_wake' THEN 3
+          WHEN 'proactive_run_wake' THEN 4
+          WHEN 'linked_chat_turn_wake' THEN 5
+          WHEN 'orchestration_parent_wake' THEN 6
+          ELSE 7
         END ASC,
         created_at ASC,
         effect_id ASC
+      LIMIT @limit
+    `);
+    this.claimObservabilityCandidatesStmt = db.prepare(`
+      SELECT *
+      FROM approval_effects
+      WHERE (
+          status = 'pending'
+          OR (
+            status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND (${leaseExpiryInstant} IS NULL OR ${leaseExpiryInstant} <= ${databaseNowInstant})
+          )
+        )
+        AND effect_kind = 'approval_observability'
+      ORDER BY created_at ASC, effect_id ASC
       LIMIT @limit
     `);
     this.claimEffectStmt = db.prepare(`
@@ -111,26 +174,48 @@ export class ApprovalEffectRepository {
       SET status = 'running',
           attempt_count = attempt_count + 1,
           claimed_by = @workerId,
-          claimed_at = @claimedAt,
-          lease_expires_at = @leaseExpiresAt,
-          updated_at = @updatedAt,
+          claimed_at = ${databaseNowText},
+          lease_expires_at = ${databaseLeaseExpiryText},
+          updated_at = ${databaseNowText},
           last_error = NULL,
           version = version + 1
       WHERE effect_id = @effectId
         AND version = @expectedVersion
         AND (
           status = 'pending'
-          OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= @now)
+          OR (
+            status = 'running'
+            AND lease_expires_at IS NOT NULL
+            AND (${leaseExpiryInstant} IS NULL OR ${leaseExpiryInstant} <= ${databaseNowInstant})
+          )
         )
     `);
     this.renewLeaseStmt = db.prepare(`
       UPDATE approval_effects
-      SET lease_expires_at = @leaseExpiresAt,
-          updated_at = @updatedAt,
+      SET lease_expires_at = ${databaseLeaseExpiryText},
+          updated_at = ${databaseNowText}
+      WHERE effect_id = @effectId
+        AND status = 'running'
+        AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at IS NOT NULL
+        AND ${leaseExpiryInstant} IS NOT NULL
+        AND ${leaseExpiryInstant} > ${databaseNowInstant}
+    `);
+    this.deferEffectStmt = db.prepare(`
+      UPDATE approval_effects
+      SET result_json = @resultJson,
+          last_error = @lastError,
+          lease_expires_at = ${databaseLeaseExpiryText},
+          updated_at = ${databaseNowText},
           version = version + 1
       WHERE effect_id = @effectId
         AND status = 'running'
         AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at IS NOT NULL
+        AND ${leaseExpiryInstant} IS NOT NULL
+        AND ${leaseExpiryInstant} > ${databaseNowInstant}
     `);
     this.completeEffectStmt = db.prepare(`
       UPDATE approval_effects
@@ -146,6 +231,10 @@ export class ApprovalEffectRepository {
       WHERE effect_id = @effectId
         AND status = 'running'
         AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at IS NOT NULL
+        AND ${leaseExpiryInstant} IS NOT NULL
+        AND ${leaseExpiryInstant} > ${databaseNowInstant}
     `);
     this.skipEffectStmt = db.prepare(`
       UPDATE approval_effects
@@ -161,6 +250,10 @@ export class ApprovalEffectRepository {
       WHERE effect_id = @effectId
         AND status = 'running'
         AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at IS NOT NULL
+        AND ${leaseExpiryInstant} IS NOT NULL
+        AND ${leaseExpiryInstant} > ${databaseNowInstant}
     `);
     this.failEffectStmt = db.prepare(`
       UPDATE approval_effects
@@ -176,6 +269,10 @@ export class ApprovalEffectRepository {
       WHERE effect_id = @effectId
         AND status = 'running'
         AND claimed_by = @workerId
+        AND version = @expectedVersion
+        AND lease_expires_at IS NOT NULL
+        AND ${leaseExpiryInstant} IS NOT NULL
+        AND ${leaseExpiryInstant} > ${databaseNowInstant}
     `);
     this.recoverExpiredStmt = db.prepare(`
       UPDATE approval_effects
@@ -183,13 +280,13 @@ export class ApprovalEffectRepository {
           claimed_by = NULL,
           claimed_at = NULL,
           lease_expires_at = NULL,
-          updated_at = @updatedAt,
+          updated_at = ${databaseNowText},
           version = version + 1
       WHERE effect_id = @effectId
         AND version = @expectedVersion
         AND status = 'running'
         AND lease_expires_at IS NOT NULL
-        AND lease_expires_at <= @now
+        AND (${leaseExpiryInstant} IS NULL OR ${leaseExpiryInstant} <= ${databaseNowInstant})
     `);
   }
 
@@ -219,6 +316,15 @@ export class ApprovalEffectRepository {
   public listByApproval(approvalId: string): ApprovalEffectRecord[] {
     const rows = this.listByApprovalStmt.all(approvalId) as ApprovalEffectRow[];
     return rows.map(mapApprovalEffectRow);
+  }
+
+  public lockFreshClaimForUpdate(
+    effectId: string,
+    workerId: string,
+    expectedVersion: number,
+  ): ApprovalEffectRecord | undefined {
+    const row = this.lockFreshClaimStmt.get({ effectId, workerId, expectedVersion }) as ApprovalEffectRow | undefined;
+    return row ? mapApprovalEffectRow(row) : undefined;
   }
 
   public upsert(input: {
@@ -264,7 +370,90 @@ export class ApprovalEffectRepository {
       updatedAt,
       completedAt: input.completedAt ?? existing?.completedAt ?? null,
     });
-    return this.getByIdempotencyKey(idempotencyKey) as ApprovalEffectRecord;
+    const persisted = this.getByIdempotencyKey(idempotencyKey) as ApprovalEffectRecord;
+    assertApprovalEffectIdempotencyMatch(persisted, {
+      approvalId: input.approvalId,
+      effectKind: input.effectKind,
+      targetKind: input.targetKind,
+      targetId: input.targetId,
+      payload: input.payload ?? existing?.payload ?? {},
+    });
+    return persisted;
+  }
+
+  public upsertObservabilityBatch(input: {
+    approvalId: string;
+    occurredAt: string;
+    attribution?: ApprovalObservabilityAttribution;
+    items: readonly {
+      operationId: string;
+      delivery: ApprovalObservabilityDelivery;
+    }[];
+  }): ApprovalEffectRecord[] {
+    return this.db.transaction("immediate", () => {
+      if (this.lockApprovalForObservabilityStmt) {
+        const locked = this.lockApprovalForObservabilityStmt.get(input.approvalId);
+        if (!locked) {
+          throw new NotFoundError({ entity: "approval", id: input.approvalId });
+        }
+      }
+
+      const latestEntry = this.listByApproval(input.approvalId)
+        .filter((effect) => effect.effectKind === "approval_observability")
+        .map((effect) => ({ effect, envelope: readStoredApprovalObservabilityEnvelope(effect.payload) }))
+        .filter((entry): entry is { effect: ApprovalEffectRecord; envelope: ApprovalObservabilityEnvelope } =>
+          Boolean(entry.envelope),
+        )
+        .sort((left, right) => left.envelope.orderIndex - right.envelope.orderIndex)
+        .at(-1);
+      const latestEnvelope = latestEntry?.envelope;
+      let orderIndex = (latestEnvelope?.orderIndex ?? 0) + 1;
+      let predecessorDeliveryId = latestEnvelope?.deliveryId;
+      const occurredAtMs = Date.parse(input.occurredAt);
+      const latestCreatedAtMs = latestEntry ? Date.parse(latestEntry.effect.createdAt) : Number.NaN;
+      let nextCreatedAtMs = Math.max(
+        Number.isFinite(occurredAtMs) ? occurredAtMs : Date.now(),
+        Number.isFinite(latestCreatedAtMs) ? latestCreatedAtMs + 1 : Number.NEGATIVE_INFINITY,
+      );
+      const effects: ApprovalEffectRecord[] = [];
+
+      for (const item of input.items) {
+        const deliveryId = buildApprovalObservabilityDeliveryId(input.approvalId, item.operationId);
+        const existing = this.getByIdempotencyKey(deliveryId);
+        const existingEnvelope = existing ? readStoredApprovalObservabilityEnvelope(existing.payload) : undefined;
+        const envelope: ApprovalObservabilityEnvelope = existingEnvelope
+          ? { ...existingEnvelope, delivery: item.delivery }
+          : {
+              schemaVersion: "approval_observability.v1",
+              deliveryId,
+              operationId: item.operationId,
+              occurredAt: input.occurredAt,
+              orderIndex,
+              ...(predecessorDeliveryId ? { predecessorDeliveryId } : {}),
+              ...(input.attribution ? { attribution: input.attribution } : {}),
+              delivery: item.delivery,
+            };
+        const createdAt = new Date(nextCreatedAtMs).toISOString();
+        effects.push(
+          this.upsert({
+            approvalId: input.approvalId,
+            effectKind: "approval_observability",
+            targetKind: "approval",
+            targetId: item.operationId,
+            idempotencyKey: deliveryId,
+            payload: envelope as unknown as Record<string, unknown>,
+            ...(!existingEnvelope ? { createdAt, updatedAt: createdAt } : {}),
+          }),
+        );
+        if (!existingEnvelope) {
+          predecessorDeliveryId = deliveryId;
+          orderIndex += 1;
+          nextCreatedAtMs += 1;
+        }
+      }
+
+      return effects;
+    });
   }
 
   public claimNextPendingEffect(
@@ -273,19 +462,35 @@ export class ApprovalEffectRepository {
     leaseExpiresAt: string,
     limit = 25,
   ): ApprovalEffectRecord | undefined {
-    const candidates = this.claimCandidatesStmt.all({
-      now,
+    return this.claimNextEffectFrom(this.claimCandidatesStmt, workerId, now, leaseExpiresAt, limit);
+  }
+
+  public claimNextPendingObservabilityEffect(
+    workerId: string,
+    now: string,
+    leaseExpiresAt: string,
+    limit = 25,
+  ): ApprovalEffectRecord | undefined {
+    return this.claimNextEffectFrom(this.claimObservabilityCandidatesStmt, workerId, now, leaseExpiresAt, limit);
+  }
+
+  private claimNextEffectFrom(
+    candidatesStmt: { all(...params: unknown[]): unknown[] },
+    workerId: string,
+    now: string,
+    leaseExpiresAt: string,
+    limit: number,
+  ): ApprovalEffectRecord | undefined {
+    const leaseDurationMs = leaseDurationMsFromInstants(now, leaseExpiresAt);
+    const candidates = candidatesStmt.all({
       limit: Math.max(1, limit),
     }) as ApprovalEffectRow[];
     for (const candidate of candidates) {
       const update = this.claimEffectStmt.run({
         effectId: candidate.effect_id,
         workerId,
-        claimedAt: now,
-        leaseExpiresAt,
-        updatedAt: now,
+        leaseDurationMs,
         expectedVersion: Number(candidate.version ?? 1),
-        now,
       });
       if (Number(update.changes ?? 0) > 0) {
         return this.get(candidate.effect_id);
@@ -301,11 +506,36 @@ export class ApprovalEffectRepository {
     now: string,
     leaseExpiresAt: string,
   ): ApprovalEffectRecord | undefined {
+    const leaseDurationMs = leaseDurationMsFromInstants(now, leaseExpiresAt);
     const update = this.renewLeaseStmt.run({
       effectId,
       workerId,
-      leaseExpiresAt,
-      updatedAt: now,
+      expectedVersion: _expectedVersion,
+      leaseDurationMs,
+    });
+    return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
+  }
+
+  public deferEffectForRetry(
+    effectId: string,
+    workerId: string,
+    _expectedVersion: number,
+    input: {
+      result: Record<string, unknown>;
+      lastError: string;
+      retryAt: string;
+      updatedAt?: string;
+    },
+  ): ApprovalEffectRecord | undefined {
+    const updatedAt = input.updatedAt ?? new Date().toISOString();
+    const leaseDurationMs = leaseDurationMsFromInstants(updatedAt, input.retryAt);
+    const update = this.deferEffectStmt.run({
+      effectId,
+      workerId,
+      expectedVersion: _expectedVersion,
+      resultJson: JSON.stringify(input.result),
+      lastError: input.lastError,
+      leaseDurationMs,
     });
     return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
   }
@@ -325,6 +555,7 @@ export class ApprovalEffectRepository {
     const update = this.completeEffectStmt.run({
       effectId,
       workerId,
+      expectedVersion: _expectedVersion,
       resultJson: JSON.stringify(input.result ?? {}),
       updatedAt,
       completedAt,
@@ -347,6 +578,7 @@ export class ApprovalEffectRepository {
     const update = this.skipEffectStmt.run({
       effectId,
       workerId,
+      expectedVersion: _expectedVersion,
       resultJson: JSON.stringify(input.result ?? {}),
       updatedAt,
       completedAt,
@@ -370,6 +602,7 @@ export class ApprovalEffectRepository {
     const update = this.failEffectStmt.run({
       effectId,
       workerId,
+      expectedVersion: _expectedVersion,
       resultJson: JSON.stringify(input.result ?? {}),
       lastError: input.lastError,
       updatedAt,
@@ -383,14 +616,29 @@ export class ApprovalEffectRepository {
     expectedVersion: number,
     now: string,
   ): ApprovalEffectRecord | undefined {
+    // Preserve the caller timestamp parameter for source compatibility only.
+    // Reclaim authority is evaluated against the database clock in SQL.
+    void now;
     const update = this.recoverExpiredStmt.run({
       effectId,
       expectedVersion,
-      now,
-      updatedAt: now,
     });
     return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
   }
+}
+
+function leaseDurationMsFromInstants(now: string, leaseExpiresAt: string): number {
+  const nowMs = Date.parse(now);
+  const expiresAtMs = Date.parse(leaseExpiresAt);
+  const durationMs = expiresAtMs - nowMs;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "leaseExpiresAt",
+      message: "Approval effect lease expiry must be a valid instant after the observed time.",
+    });
+  }
+  return Math.ceil(durationMs);
 }
 
 export function buildApprovalEffectIdempotencyKey(input: {
@@ -400,6 +648,65 @@ export function buildApprovalEffectIdempotencyKey(input: {
   targetId: string;
 }): string {
   return `${input.approvalId}:${input.effectKind}:${input.targetKind}:${input.targetId}`;
+}
+
+export function buildApprovalObservabilityDeliveryId(approvalId: string, operationId: string): string {
+  return `approval-observability:${approvalId}:${operationId}`;
+}
+
+function assertApprovalEffectIdempotencyMatch(
+  persisted: ApprovalEffectRecord,
+  input: Pick<ApprovalEffectRecord, "approvalId" | "effectKind" | "targetKind" | "targetId" | "payload">,
+): void {
+  const identityMatches =
+    persisted.approvalId === input.approvalId &&
+    persisted.effectKind === input.effectKind &&
+    persisted.targetKind === input.targetKind &&
+    persisted.targetId === input.targetId;
+  const payloadMatches = stableJson(persisted.payload) === stableJson(input.payload);
+  if (identityMatches && payloadMatches) {
+    return;
+  }
+  throw new ConflictError({
+    code: "STATE_CONFLICT",
+    message: `Approval effect idempotency payload mismatch for ${persisted.idempotencyKey}.`,
+  });
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function readStoredApprovalObservabilityEnvelope(
+  payload: Record<string, unknown>,
+): ApprovalObservabilityEnvelope | undefined {
+  if (
+    payload.schemaVersion !== "approval_observability.v1" ||
+    typeof payload.deliveryId !== "string" ||
+    !payload.deliveryId.trim() ||
+    typeof payload.operationId !== "string" ||
+    !payload.operationId.trim() ||
+    typeof payload.occurredAt !== "string" ||
+    typeof payload.orderIndex !== "number" ||
+    !Number.isInteger(payload.orderIndex) ||
+    payload.orderIndex < 1 ||
+    !payload.delivery ||
+    typeof payload.delivery !== "object" ||
+    Array.isArray(payload.delivery)
+  ) {
+    return undefined;
+  }
+  return payload as unknown as ApprovalObservabilityEnvelope;
 }
 
 function mapApprovalEffectRow(row: ApprovalEffectRow): ApprovalEffectRecord {

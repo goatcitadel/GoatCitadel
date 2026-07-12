@@ -12,6 +12,7 @@ import {
   streamSseReply,
   sendChatWriteError,
 } from "./chat.shared.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -297,8 +298,10 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         params.data.sessionId,
         stampChatOperatorContext(request, body.data),
       );
+      markMutationCommitted(request);
       return reply.send(sent);
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendChatWriteError(reply, error);
     }
   });
@@ -362,12 +365,18 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return sendChatWriteError(reply, error);
     }
 
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.agentSendChatMessageStream(
-        params.data.sessionId,
-        stampChatOperatorContext(request, body.data),
-        signal,
-      ),
+    return streamSseReply(
+      reply,
+      request,
+      params.data.sessionId,
+      (signal, lifecycle) =>
+        fastify.services.chatMessages.agentSendChatMessageStream(
+          params.data.sessionId,
+          stampChatOperatorContext(request, body.data),
+          signal,
+          lifecycle,
+        ),
+      { trackMutation: true },
     );
   });
 
@@ -434,15 +443,16 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         });
       }
       try {
-        return reply.send(
-          await fastify.services.chatMessages.answerChatUserInputPrompt(
-            params.data.sessionId,
-            params.data.turnId,
-            params.data.promptId,
-            body.data.response,
-          ),
+        const result = await fastify.services.chatMessages.answerChatUserInputPrompt(
+          params.data.sessionId,
+          params.data.turnId,
+          params.data.promptId,
+          body.data.response,
         );
+        markMutationCommitted(request);
+        return reply.send(result);
       } catch (error) {
+        markMutationCommittedFromError(request, error);
         return sendChatWriteError(reply, error);
       }
     },
@@ -454,11 +464,15 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(
-        await fastify.services.chatMessages.selectChatBranchTurn(params.data.sessionId, params.data.turnId),
+      const result = await fastify.services.chatMessages.selectChatBranchTurn(
+        params.data.sessionId,
+        params.data.turnId,
       );
+      markMutationCommitted(request);
+      return reply.send(result);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      markMutationCommittedFromError(request, error);
+      return sendChatWriteError(reply, error);
     }
   });
 
@@ -483,14 +497,15 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       if (decisionRejected) {
         return;
       }
-      return reply.send(
-        await fastify.services.chatMessages.retryChatTurn(
-          params.data.sessionId,
-          params.data.turnId,
-          stampChatOperatorContext(request, body.data),
-        ),
+      const result = await fastify.services.chatMessages.retryChatTurn(
+        params.data.sessionId,
+        params.data.turnId,
+        stampChatOperatorContext(request, body.data),
       );
+      markMutationCommitted(request);
+      return reply.send(result);
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendChatWriteError(reply, error);
     }
   });
@@ -519,13 +534,19 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return sendChatWriteError(reply, error);
     }
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.retryChatTurnStream(
-        params.data.sessionId,
-        params.data.turnId,
-        stampChatOperatorContext(request, body.data),
-        signal,
-      ),
+    return streamSseReply(
+      reply,
+      request,
+      params.data.sessionId,
+      (signal, lifecycle) =>
+        fastify.services.chatMessages.retryChatTurnStream(
+          params.data.sessionId,
+          params.data.turnId,
+          stampChatOperatorContext(request, body.data),
+          signal,
+          lifecycle,
+        ),
+      { trackMutation: true },
     );
   });
 
@@ -550,14 +571,15 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       if (decisionRejected) {
         return;
       }
-      return reply.send(
-        await fastify.services.chatMessages.editChatTurn(
-          params.data.sessionId,
-          params.data.turnId,
-          stampChatOperatorContext(request, body.data),
-        ),
+      const result = await fastify.services.chatMessages.editChatTurn(
+        params.data.sessionId,
+        params.data.turnId,
+        stampChatOperatorContext(request, body.data),
       );
+      markMutationCommitted(request);
+      return reply.send(result);
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return sendChatWriteError(reply, error);
     }
   });
@@ -586,13 +608,19 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return sendChatWriteError(reply, error);
     }
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.editChatTurnStream(
-        params.data.sessionId,
-        params.data.turnId,
-        stampChatOperatorContext(request, body.data),
-        signal,
-      ),
+    return streamSseReply(
+      reply,
+      request,
+      params.data.sessionId,
+      (signal, lifecycle) =>
+        fastify.services.chatMessages.editChatTurnStream(
+          params.data.sessionId,
+          params.data.turnId,
+          stampChatOperatorContext(request, body.data),
+          signal,
+          lifecycle,
+        ),
+      { trackMutation: true },
     );
   });
 
@@ -608,15 +636,16 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(
-        await fastify.services.chatMessages.cancelChatTurn(
-          params.data.sessionId,
-          params.data.turnId,
-          body.data.cancelledBy,
-        ),
+      const result = await fastify.services.chatMessages.cancelChatTurn(
+        params.data.sessionId,
+        params.data.turnId,
+        body.data.cancelledBy,
       );
+      markMutationCommitted(request);
+      return reply.send(result);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      markMutationCommittedFromError(request, error);
+      return sendChatWriteError(reply, error);
     }
   });
 }

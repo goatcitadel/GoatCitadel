@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { RemoteActionTokenRepository } from "./remote-action-token-repo.js";
+import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
 
 const createdFiles: string[] = [];
 
@@ -47,6 +48,60 @@ describe("RemoteActionTokenRepository", () => {
     assert.deepEqual(found?.mutation, { approvalId: "apr-1" });
   });
 
+  it("owns relative token issuance and expiry on the database clock under host skew", () => {
+    const repo = createRepo();
+    const realDateNow = Date.now;
+    const databaseNow = realDateNow();
+    try {
+      Date.now = () => Date.parse("2100-01-01T00:00:00.000Z");
+      const fastHost = repo.createWithTtl({
+        tokenHash: "hash-db-issued-fast-host",
+        actionType: "approval.resolve",
+        connectorId: "mission-control",
+        expiresInMs: 60_000,
+      });
+      Date.now = () => Date.parse("2000-01-01T00:00:00.000Z");
+      const slowHost = repo.createWithTtl({
+        tokenHash: "hash-db-issued-slow-host",
+        actionType: "approval.resolve",
+        connectorId: "mission-control",
+        expiresInMs: 60_000,
+      });
+
+      for (const record of [fastHost, slowHost]) {
+        assert.ok(Math.abs(Date.parse(record.createdAt) - databaseNow) < 5_000);
+        assert.ok(Math.abs(Date.parse(record.expiresAt) - Date.parse(record.createdAt) - 60_000) < 5);
+      }
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
+  it("rejects a sub-millisecond relative token TTL before database issuance", () => {
+    const repo = createRepo();
+
+    assert.throws(
+      () =>
+        repo.createWithTtl({
+          tokenHash: "hash-sub-millisecond-ttl",
+          actionType: "approval.resolve",
+          connectorId: "mission-control",
+          expiresInMs: 0.5,
+        }),
+      /positive duration/,
+    );
+    assert.throws(
+      () =>
+        repo.createWithTtl({
+          tokenHash: "hash-overlong-ttl",
+          actionType: "approval.resolve",
+          connectorId: "mission-control",
+          expiresInMs: 24 * 60 * 60 * 1000 + 1,
+        }),
+      /cannot exceed 24 hours/,
+    );
+  });
+
   it("updates token state and consumption metadata", () => {
     const repo = createRepo();
     const created = repo.create({
@@ -75,7 +130,7 @@ describe("RemoteActionTokenRepository", () => {
       tokenHash: "hash-atomic",
       actionType: "approval.resolve",
       connectorId: "mission-control",
-      expiresAt: "2026-03-21T00:00:00.000Z",
+      expiresAt: "2099-03-21T00:00:00.000Z",
     });
 
     const first = repo.consumePending(created.tokenId, {
@@ -90,8 +145,372 @@ describe("RemoteActionTokenRepository", () => {
     assert.equal(first?.state, "consumed");
     assert.equal(second, undefined);
     const persisted = repo.get(created.tokenId);
-    assert.equal(persisted.consumedAt, "2026-03-20T10:00:00.000Z");
+    assert.ok(persisted.consumedAt);
+    assert.equal(persisted.consumedAt, first?.consumedAt);
     assert.equal(persisted.consumedBy, "connector:first");
+  });
+
+  it("binds the first claim fingerprint and resumes only an identical claim", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      tokenHash: "hash-resumable",
+      actionType: "approval.resolve",
+      approvalId: "apr-resumable",
+      connectorId: "mission-control",
+      mutation: { approvalId: "apr-resumable", decisionHint: "approve" },
+      expiresAt: "2099-03-21T00:00:00.000Z",
+    });
+
+    const first = repo.claimPending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:00.000Z",
+      consumedBy: "connector:first",
+      claimFingerprint: "sha256:request-a",
+    });
+    const resumed = repo.claimPending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:01.000Z",
+      consumedBy: "connector:retry",
+      claimFingerprint: "sha256:request-a",
+    });
+    const mismatch = repo.claimPending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:02.000Z",
+      consumedBy: "connector:attacker",
+      claimFingerprint: "sha256:request-b",
+    });
+
+    assert.equal(first.outcome, "claimed");
+    assert.equal(resumed.outcome, "resumed");
+    assert.equal(mismatch.outcome, "fingerprint_mismatch");
+    assert.ok(first.record?.consumedAt);
+    assert.equal(resumed.record?.consumedAt, first.record?.consumedAt);
+    assert.equal(resumed.record?.consumedBy, "connector:first");
+    assert.equal(repo.readClaimFingerprint(resumed.record), "sha256:request-a");
+    assert.deepEqual(resumed.record?.mutation, {
+      approvalId: "apr-resumable",
+      decisionHint: "approve",
+      __remoteActionClaimFingerprint: "sha256:request-a",
+    });
+  });
+
+  it("keeps a request claim single-winner when competing fingerprints race", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      tokenHash: "hash-race",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2099-03-21T00:00:00.000Z",
+    });
+
+    const first = repo.claimPending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:00.000Z",
+      consumedBy: "connector:first",
+      claimFingerprint: "sha256:first",
+    });
+    const competitor = repo.claimPending(created.tokenId, {
+      consumedAt: "2026-03-20T10:00:00.000Z",
+      consumedBy: "connector:second",
+      claimFingerprint: "sha256:second",
+    });
+
+    assert.equal(first.outcome, "claimed");
+    assert.equal(competitor.outcome, "fingerprint_mismatch");
+    const persisted = repo.get(created.tokenId);
+    assert.equal(repo.readClaimFingerprint(persisted), "sha256:first");
+    assert.equal(persisted.consumedBy, "connector:first");
+  });
+
+  it("rejects empty claim fingerprints without changing pending state", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      tokenHash: "hash-empty-claim",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-21T00:00:00.000Z",
+    });
+
+    assert.throws(
+      () =>
+        repo.claimPending(created.tokenId, {
+          consumedAt: "2026-03-20T10:00:00.000Z",
+          consumedBy: "connector:first",
+          claimFingerprint: "   ",
+        }),
+      /claimFingerprint is required/,
+    );
+    assert.equal(repo.get(created.tokenId).state, "pending");
+  });
+
+  it("expires only pending tokens and cannot overwrite a concurrent claim", () => {
+    const repo = createRepo();
+    const pending = repo.create({
+      tokenHash: "hash-expire-pending",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-20T09:59:59.000Z",
+    });
+    const claimed = repo.create({
+      tokenHash: "hash-expire-claimed",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2099-03-20T10:00:01.000Z",
+    });
+    repo.claimPending(claimed.tokenId, {
+      consumedAt: "2026-03-20T10:00:00.000Z",
+      consumedBy: "connector:first",
+      claimFingerprint: "sha256:first",
+    });
+
+    assert.equal(repo.expirePending(pending.tokenId)?.state, "expired");
+    assert.equal(repo.expirePending(claimed.tokenId), undefined);
+    assert.equal(repo.get(claimed.tokenId).state, "consumed");
+    assert.equal(repo.readClaimFingerprint(repo.get(claimed.tokenId)), "sha256:first");
+  });
+
+  it("lists every token for an approval and expires only its pending tokens", () => {
+    const repo = createRepo();
+    const approvalId = "apr-many-tokens";
+    const pendingA = repo.create({
+      tokenHash: "hash-many-a",
+      actionType: "approval.resolve",
+      approvalId,
+      connectorId: "integration:a",
+      expiresAt: "2099-03-21T00:00:00.000Z",
+    });
+    const consumed = repo.create({
+      tokenHash: "hash-many-consumed",
+      actionType: "approval.resolve",
+      approvalId,
+      connectorId: "integration:b",
+      expiresAt: "2099-03-21T00:00:00.000Z",
+    });
+    const pendingB = repo.create({
+      tokenHash: "hash-many-b",
+      actionType: "approval.resolve",
+      approvalId,
+      connectorId: "mcp:server-1",
+      expiresAt: "2099-03-21T00:00:00.000Z",
+    });
+    repo.create({
+      tokenHash: "hash-other-approval",
+      actionType: "approval.resolve",
+      approvalId: "apr-other",
+      connectorId: "integration:other",
+      expiresAt: "2099-03-21T00:00:00.000Z",
+    });
+    repo.claimPending(consumed.tokenId, {
+      consumedAt: "2026-03-20T10:00:00.000Z",
+      consumedBy: "connector:integration:b",
+      claimFingerprint: "sha256:winner",
+    });
+
+    const listed = (repo as unknown as { listByApprovalId(id: string): Array<{ tokenId: string }> }).listByApprovalId(
+      approvalId,
+    );
+    assert.deepEqual(
+      new Set(listed.map((token) => token.tokenId)),
+      new Set([pendingA.tokenId, consumed.tokenId, pendingB.tokenId]),
+    );
+    assert.equal(
+      (repo as unknown as { expirePendingByApprovalId(id: string): number }).expirePendingByApprovalId(approvalId),
+      2,
+    );
+    assert.equal(repo.get(pendingA.tokenId).state, "expired");
+    assert.equal(repo.get(pendingB.tokenId).state, "expired");
+    assert.equal(repo.get(consumed.tokenId).state, "consumed");
+  });
+
+  it("does not consume a token at or beyond its expiry boundary", () => {
+    const repo = createRepo();
+    const resumable = repo.create({
+      tokenHash: "hash-expiry-boundary-resumable",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-20T10:00:00.000Z",
+    });
+    const legacy = repo.create({
+      tokenHash: "hash-expiry-boundary-legacy",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-20T10:00:00.000Z",
+    });
+
+    assert.equal(
+      repo.claimPending(resumable.tokenId, {
+        consumedAt: "2026-03-20T10:00:00.000Z",
+        consumedBy: "connector:first",
+        claimFingerprint: "sha256:first",
+      }).outcome,
+      "unavailable",
+    );
+    assert.equal(
+      repo.consumePending(legacy.tokenId, {
+        consumedAt: "2026-03-20T10:00:00.000Z",
+        consumedBy: "connector:first",
+      }),
+      undefined,
+    );
+    assert.equal(repo.expirePendingAtOrBefore(resumable.tokenId, "2026-03-20T10:00:00.000Z").state, "expired");
+    assert.equal(repo.expirePendingAtOrBefore(legacy.tokenId, "2026-03-20T10:00:00.000Z").state, "expired");
+  });
+
+  it("rejects an invalid expiry boundary without mutating a pending token", () => {
+    const repo = createRepo();
+    const pending = repo.create({
+      tokenHash: "hash-invalid-expiry-boundary",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2099-03-20T10:00:00.000Z",
+    });
+
+    assert.throws(() => repo.expirePendingAtOrBefore(pending.tokenId, "not-a-date"), /valid timestamp/);
+    assert.equal(repo.get(pending.tokenId).state, "pending");
+  });
+
+  it("lists bounded pending expiry candidates without returning terminal tokens", () => {
+    const repo = createRepo();
+    const first = repo.create({
+      tokenHash: "hash-expiry-sweep-first",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-20T09:00:00.000Z",
+    });
+    const second = repo.create({
+      tokenHash: "hash-expiry-sweep-second",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2026-03-20T09:30:00.000Z",
+    });
+    const future = repo.create({
+      tokenHash: "hash-expiry-sweep-future",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt: "2099-03-20T09:00:00.000Z",
+    });
+    repo.updateState(first.tokenId, "consumed", {
+      consumedAt: "2026-03-20T08:30:00.000Z",
+      consumedBy: "connector:mission-control",
+    });
+
+    assert.deepEqual(
+      repo.listPendingExpiredAtOrBefore("2026-03-20T10:00:00.000Z", 10).map((token) => token.tokenId),
+      [second.tokenId],
+    );
+    assert.equal(repo.get(future.tokenId).state, "pending");
+    assert.throws(() => repo.listPendingExpiredAtOrBefore("not-a-date"), /valid timestamp/);
+  });
+
+  it("selects expiry-cleanup candidates with the database clock instead of the host clock", () => {
+    const repo = createRepo();
+    const expired = repo.createWithTtl({
+      tokenHash: "hash-database-expiry-cleanup",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresInMs: 60_000,
+    });
+    const fresh = repo.createWithTtl({
+      tokenHash: "hash-database-expiry-cleanup-fresh",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresInMs: 60_000,
+    });
+    (repo as unknown as { db: DatabaseClient }).db
+      .prepare(
+        "UPDATE remote_action_tokens SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') WHERE token_id = ?",
+      )
+      .run(expired.tokenId);
+    const realDateNow = Date.now;
+    try {
+      Date.now = () => Date.parse("2100-01-01T00:00:00.000Z");
+      assert.deepEqual(
+        repo.listPendingExpired(10).map((token) => token.tokenId),
+        [expired.tokenId],
+      );
+      assert.equal(repo.findPendingFresh(fresh.tokenId)?.tokenId, fresh.tokenId);
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
+  it("does not let a stale caller timestamp cross the database-clock expiry boundary", () => {
+    const repo = createRepo();
+    const now = Date.now();
+    const expiresAt = new Date(now - 1_000).toISOString();
+    const staleConsumedAt = new Date(now - 2_000).toISOString();
+    const resumable = repo.create({
+      tokenHash: "hash-stale-db-clock-resumable",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt,
+    });
+    const legacy = repo.create({
+      tokenHash: "hash-stale-db-clock-legacy",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt,
+    });
+
+    assert.equal(
+      repo.claimPending(resumable.tokenId, {
+        consumedAt: staleConsumedAt,
+        consumedBy: "connector:first",
+        claimFingerprint: "sha256:first",
+      }).outcome,
+      "unavailable",
+    );
+    assert.equal(
+      repo.consumePending(legacy.tokenId, {
+        consumedAt: staleConsumedAt,
+        consumedBy: "connector:first",
+      }),
+      undefined,
+    );
+  });
+
+  it("does not let a fast caller clock reject a token that is fresh on the database clock", () => {
+    const repo = createRepo();
+    const databaseNow = Date.now();
+    const expiresAt = new Date(databaseNow + 60_000).toISOString();
+    const fastConsumedAt = new Date(databaseNow + 60 * 60 * 1_000).toISOString();
+    const resumable = repo.create({
+      tokenHash: "hash-fast-db-clock-resumable",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt,
+    });
+    const legacy = repo.create({
+      tokenHash: "hash-fast-db-clock-legacy",
+      actionType: "approval.resolve",
+      connectorId: "mission-control",
+      expiresAt,
+    });
+
+    const claimed = repo.claimPending(resumable.tokenId, {
+      consumedAt: fastConsumedAt,
+      consumedBy: "connector:first",
+      claimFingerprint: "sha256:first",
+    });
+    const consumed = repo.consumePending(legacy.tokenId, {
+      consumedAt: fastConsumedAt,
+      consumedBy: "connector:first",
+    });
+
+    assert.equal(claimed.outcome, "claimed");
+    assert.equal(consumed?.state, "consumed");
+    assert.ok(Math.abs(Date.parse(claimed.record?.consumedAt ?? "") - databaseNow) < 5_000);
+    assert.ok(Math.abs(Date.parse(consumed?.consumedAt ?? "") - databaseNow) < 5_000);
+  });
+
+  it("uses a volatile database-clock expiry fence for PostgreSQL token claims", () => {
+    const db = new RecordingDatabase("postgres");
+    new RemoteActionTokenRepository(db);
+    const claimStatements = db.statements.filter((sql) => sql.includes("UPDATE remote_action_tokens"));
+
+    assert.equal(claimStatements.length >= 2, true);
+    const consumedStatements = claimStatements.filter((sql) => sql.includes("state = 'consumed'"));
+    assert.equal(consumedStatements.length >= 2, true);
+    assert.equal(
+      consumedStatements.every((sql) => /gc_try_parse_timestamptz\(expires_at\) > clock_timestamp\(\)/.test(sql)),
+      true,
+    );
   });
 
   it("validates required token fields and reports missing reads", () => {
@@ -121,3 +540,26 @@ describe("RemoteActionTokenRepository", () => {
     assert.throws(() => repo.updateState("missing-token", "consumed"), /Remote action token missing-token not found/);
   });
 });
+
+class RecordingDatabase implements DatabaseClient {
+  public readonly statements: string[] = [];
+
+  public constructor(public readonly dialect: DatabaseClient["dialect"]) {}
+
+  public prepare(sql: string): DbStatement {
+    this.statements.push(sql);
+    return {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+  }
+
+  public exec(): void {}
+
+  public close(): void {}
+
+  public transaction<T>(_mode: DbTransactionMode, callback: () => T): T {
+    return callback();
+  }
+}

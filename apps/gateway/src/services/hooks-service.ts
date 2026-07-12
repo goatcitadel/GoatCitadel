@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto";
-import type { DurableRunCreateRequest } from "@goatcitadel/contracts";
+import type { DurableRunCreateRequest, DurableRunRecord } from "@goatcitadel/contracts";
 import {
   ConflictError,
   type HookCreateInput,
@@ -13,6 +13,7 @@ import {
   type HookTrigger,
   type HookUpdateInput,
   type HookWebhookResponse,
+  NotFoundError,
   ValidationError,
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
@@ -51,6 +52,15 @@ interface CircuitBreakerState {
   trippedAt?: number;
 }
 
+interface AfterHookMaterialization {
+  run: HookRunRecord;
+  durableRun?: DurableRunRecord;
+  durableRunCreated: boolean;
+  hookRunCreated: boolean;
+  durableLinkAttached: boolean;
+  skippedNow: boolean;
+}
+
 export interface HooksServiceContext {
   readonly storage: Storage;
   publishRealtime(
@@ -70,7 +80,10 @@ export class HooksService {
   public constructor(
     private readonly ctx: HooksServiceContext,
     private readonly deps: {
-      createDurableRun: (input: DurableRunCreateRequest) => { runId: string; status: string };
+      createDurableRun: (
+        input: DurableRunCreateRequest,
+        options: { publishRealtime: false; idempotentIfExists: true },
+      ) => DurableRunRecord;
       requestDurableRunProcessing: (runId: string) => void;
       fetchImpl?: typeof fetch;
     },
@@ -98,7 +111,7 @@ export class HooksService {
     state.consecutiveFailures += 1;
     if (state.consecutiveFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD && !state.trippedAt) {
       state.trippedAt = Date.now();
-      this.ctx.publishRealtime(
+      this.publishRealtimeSafely(
         "hook_circuit_breaker_tripped",
         "hooks",
         {
@@ -152,7 +165,7 @@ export class HooksService {
       trigger: created.trigger,
       mode: created.mode,
     });
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_created",
       hookId: created.hookId,
       workspaceId,
@@ -180,7 +193,7 @@ export class HooksService {
       mode: updated.mode,
       enabled: updated.enabled,
     });
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_updated",
       hookId: updated.hookId,
       workspaceId: normalizedWorkspaceId,
@@ -210,7 +223,7 @@ export class HooksService {
         hookId,
         workspaceId: normalizedWorkspaceId,
       });
-      this.ctx.publishRealtime("system", "hooks", {
+      this.publishRealtimeSafely("system", "hooks", {
         type: "hook_deleted",
         hookId,
         workspaceId: normalizedWorkspaceId,
@@ -284,6 +297,7 @@ export class HooksService {
     trigger: HookTrigger;
     entityType: string;
     entityId: string;
+    idempotencyDiscriminator?: string;
     payload: Record<string, unknown>;
   }): HookRunRecord[] {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
@@ -292,67 +306,206 @@ export class HooksService {
       return [];
     }
     return hooks.map((hook) => {
-      const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(input.trigger, input.entityType, input.entityId);
-      const existing = this.ctx.storage.hookRuns.findByIdempotency(hook.hookId, idempotencyKey);
-      if (existing) {
-        if (existing.status === "queued" && existing.durableRunId) {
-          this.deps.requestDurableRunProcessing(existing.durableRunId);
-        }
-        return existing;
-      }
-      const run = this.ctx.storage.hookRuns.create({
-        hookId: hook.hookId,
-        workspaceId,
-        trigger: input.trigger,
-        entityType: input.entityType,
-        entityId: input.entityId,
-        mode: hook.mode,
-        status: "queued",
-        idempotencyKey,
-        attemptCount: 0,
-        requestPayload: input.payload,
-      });
-      if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
-        const skipped = this.ctx.storage.hookRuns.markOutcome(run.runId, {
-          status: "skipped",
-          errorText: "durable_kernel_disabled",
-          completedAt: new Date().toISOString(),
-        });
-        this.ctx.publishRealtime("system", "hooks", {
+      const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(
+        input.trigger,
+        input.entityType,
+        input.entityId,
+        input.idempotencyDiscriminator,
+      );
+      const materialized = this.ctx.storage.runImmediateTransaction(() =>
+        this.materializeAfterHook({
+          hook,
+          workspaceId,
+          input,
+          idempotencyKey,
+        }),
+      );
+      if (materialized.skippedNow) {
+        this.publishRealtimeSafely("system", "hooks", {
           type: "hook_delivery_skipped",
           hookId: hook.hookId,
-          hookRunId: skipped.runId,
+          hookRunId: materialized.run.runId,
           workspaceId,
           trigger: hook.trigger,
           reason: "durable_kernel_disabled",
         });
-        return skipped;
       }
-      const durableRun = this.deps.createDurableRun({
-        workflowKey: "hook.delivery",
-        payload: {
-          version: "hook.delivery.v1",
-          hookRunId: run.runId,
+      if (materialized.durableRunCreated && materialized.durableRun) {
+        this.publishRealtimeSafely(
+          "system",
+          "durable",
+          {
+            type: "durable_run_created",
+            runId: materialized.durableRun.runId,
+            workflowKey: materialized.durableRun.workflowKey,
+            status: materialized.durableRun.status,
+          },
+          {
+            eventClass: "domain_fact",
+            eventAuthority: "retained_stream",
+            links: { runId: materialized.durableRun.runId },
+          },
+        );
+      }
+      if (materialized.durableRun && (materialized.hookRunCreated || materialized.durableLinkAttached)) {
+        this.publishRealtimeSafely("system", "hooks", {
+          type: "hook_delivery_queued",
           hookId: hook.hookId,
+          hookRunId: materialized.run.runId,
+          durableRunId: materialized.durableRun.runId,
           workspaceId,
           trigger: hook.trigger,
-          entityType: input.entityType,
-          entityId: input.entityId,
-        },
-        retryPolicy: DEFAULT_HOOK_DELIVERY_RETRY_POLICY,
-      });
-      this.ctx.storage.hookRuns.attachDurableRun(run.runId, durableRun.runId);
-      this.deps.requestDurableRunProcessing(durableRun.runId);
-      this.ctx.publishRealtime("system", "hooks", {
-        type: "hook_delivery_queued",
-        hookId: hook.hookId,
-        hookRunId: run.runId,
-        durableRunId: durableRun.runId,
-        workspaceId,
-        trigger: hook.trigger,
-      });
-      return this.ctx.storage.hookRuns.get(run.runId);
+        });
+      }
+      if (materialized.run.status === "queued" && materialized.run.durableRunId) {
+        this.deps.requestDurableRunProcessing(materialized.run.durableRunId);
+      }
+      return materialized.run;
     });
+  }
+
+  private materializeAfterHook(input: {
+    hook: HookRecord;
+    workspaceId: string;
+    input: {
+      trigger: HookTrigger;
+      entityType: string;
+      entityId: string;
+      payload: Record<string, unknown>;
+    };
+    idempotencyKey: string;
+  }): AfterHookMaterialization {
+    const { hook, workspaceId, idempotencyKey } = input;
+    const existing = this.ctx.storage.hookRuns.findByIdempotencyForUpdate(hook.hookId, idempotencyKey);
+    let hookRunCreated = false;
+    let run = existing;
+    if (!run) {
+      try {
+        run = this.ctx.storage.runImmediateTransaction(() =>
+          this.ctx.storage.hookRuns.create({
+            hookId: hook.hookId,
+            workspaceId,
+            trigger: input.input.trigger,
+            entityType: input.input.entityType,
+            entityId: input.input.entityId,
+            mode: hook.mode,
+            status: "queued",
+            idempotencyKey,
+            attemptCount: 0,
+            requestPayload: input.input.payload,
+          }),
+        );
+        hookRunCreated = true;
+      } catch (error) {
+        // A second Gateway may win the unique (hook_id, idempotency_key)
+        // insert. The nested transaction/savepoint clears PostgreSQL's failed
+        // statement state so the owner transaction can lock and adopt it.
+        run = this.ctx.storage.hookRuns.findByIdempotencyForUpdate(hook.hookId, idempotencyKey);
+        if (!run) {
+          throw error;
+        }
+      }
+    }
+    assertAfterHookRunIdentity(run, {
+      hookId: hook.hookId,
+      workspaceId,
+      trigger: input.input.trigger,
+      entityType: input.input.entityType,
+      entityId: input.input.entityId,
+      mode: hook.mode,
+      idempotencyKey,
+    });
+
+    if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
+      if (run.status === "queued" && !run.durableRunId) {
+        run = this.ctx.storage.hookRuns.markOutcome(run.runId, {
+          status: "skipped",
+          errorText: "durable_kernel_disabled",
+          completedAt: new Date().toISOString(),
+        });
+        return {
+          run,
+          durableRunCreated: false,
+          hookRunCreated,
+          durableLinkAttached: false,
+          skippedNow: true,
+        };
+      }
+      const durableRun = run.durableRunId
+        ? this.readAndValidateHookDeliveryRun(run, buildHookDeliveryDurableRunId(run.runId))
+        : undefined;
+      return {
+        run,
+        durableRun,
+        durableRunCreated: false,
+        hookRunCreated,
+        durableLinkAttached: false,
+        skippedNow: false,
+      };
+    }
+
+    if (run.status === "skipped" && !run.durableRunId) {
+      return {
+        run,
+        durableRunCreated: false,
+        hookRunCreated,
+        durableLinkAttached: false,
+        skippedNow: false,
+      };
+    }
+
+    const expectedDurableRunId = buildHookDeliveryDurableRunId(run.runId);
+    if (run.durableRunId && run.durableRunId !== expectedDurableRunId) {
+      throw new Error(
+        `Hook run ${run.runId} has foreign durable linkage ${run.durableRunId}; expected ${expectedDurableRunId}.`,
+      );
+    }
+    const durableInput = buildHookDeliveryDurableRunInput(run, expectedDurableRunId);
+    let durableRun = this.findDurableRun(expectedDurableRunId);
+    let durableRunCreated = false;
+    if (!durableRun) {
+      durableRun = this.deps.createDurableRun(durableInput, {
+        publishRealtime: false,
+        idempotentIfExists: true,
+      });
+      durableRunCreated = true;
+    }
+    assertHookDeliveryDurableRun(durableRun, durableInput);
+    const persistedDurableRun = this.ctx.storage.durableRuns.getRun(expectedDurableRunId);
+    assertHookDeliveryDurableRun(persistedDurableRun, durableInput);
+
+    const durableLinkAttached = !run.durableRunId;
+    run = this.ctx.storage.hookRuns.attachDurableRun(run.runId, expectedDurableRunId);
+    return {
+      run,
+      durableRun: persistedDurableRun,
+      durableRunCreated,
+      hookRunCreated,
+      durableLinkAttached,
+      skippedNow: false,
+    };
+  }
+
+  private findDurableRun(runId: string): DurableRunRecord | undefined {
+    try {
+      return this.ctx.storage.durableRuns.getRun(runId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private readAndValidateHookDeliveryRun(run: HookRunRecord, expectedDurableRunId: string): DurableRunRecord {
+    if (run.durableRunId !== expectedDurableRunId) {
+      throw new Error(
+        `Hook run ${run.runId} has foreign durable linkage ${run.durableRunId ?? "<missing>"}; expected ${expectedDurableRunId}.`,
+      );
+    }
+    const durableRun = this.ctx.storage.durableRuns.getRun(expectedDurableRunId);
+    assertHookDeliveryDurableRun(durableRun, buildHookDeliveryDurableRunInput(run, expectedDurableRunId));
+    return durableRun;
   }
 
   public async executeHookDelivery(
@@ -361,6 +514,14 @@ export class HooksService {
     options?: { signal?: AbortSignal },
   ): Promise<HookRunRecord> {
     const run = this.ctx.storage.hookRuns.get(hookRunId);
+    if (
+      run.status === "completed" ||
+      run.status === "blocked" ||
+      run.status === "skipped" ||
+      run.status === "dead_lettered"
+    ) {
+      return run;
+    }
     const hook = this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
     const delivered = await this.executeRecordedHookRun(
       hook,
@@ -381,7 +542,7 @@ export class HooksService {
       errorText,
       completedAt: new Date().toISOString(),
     });
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_delivery_dead_lettered",
       hookId: run.hookId,
       hookRunId: run.runId,
@@ -424,7 +585,15 @@ export class HooksService {
       attemptCount,
       requestPayload: payload,
     });
-    const executionKey = `${hook.hookId}:${current.trigger}:${current.entityType}:${current.entityId}`;
+    const entityExecutionKey = `${hook.hookId}:${current.trigger}:${current.entityType}:${current.entityId}`;
+    // agent_end is a lifecycle stream, not a single immutable event. Keep true
+    // retry/recursion suppression for one semantic status while allowing a
+    // waiting-for-approval delivery and a later completed delivery for the same
+    // turn to overlap without dropping the terminal status.
+    const executionKey =
+      current.trigger === "agent_end"
+        ? `${entityExecutionKey}:${current.idempotencyKey ?? current.runId}`
+        : entityExecutionKey;
     if (this.activeExecutions.has(executionKey)) {
       return this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status: "skipped",
@@ -437,7 +606,6 @@ export class HooksService {
     const startedAt = Date.now();
     try {
       const response = await this.postWebhook(hook, current, payload, options);
-      throwIfHookExecutionAborted(options?.signal);
       const decision = normalizeDecision(response.decision);
       const patchSummary = summarizePatch(response.patch);
       const status = decision?.type === "block" ? "blocked" : "completed";
@@ -553,7 +721,7 @@ export class HooksService {
   }
 
   private publishRunRealtime(hook: HookRecord, run: HookRunRecord): void {
-    this.ctx.publishRealtime("system", "hooks", {
+    this.publishRealtimeSafely("system", "hooks", {
       type: "hook_run_updated",
       hookId: hook.hookId,
       hookRunId: run.runId,
@@ -563,6 +731,20 @@ export class HooksService {
       latencyMs: run.latencyMs,
       error: run.errorText,
     });
+  }
+
+  private publishRealtimeSafely(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void {
+    try {
+      this.ctx.publishRealtime(eventType, source, payload, options);
+    } catch {
+      // Retained realtime is a projection; it cannot roll back canonical hook state
+      // or turn a webhook that already returned success into a replayable failure.
+    }
   }
 
   private assertModeAllowed(workspaceId: string, mode: HookMode): void {
@@ -656,8 +838,74 @@ function buildDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, e
   return `${trigger}:${entityType}:${entityId}:${randomUUID()}`;
 }
 
-function buildAfterHookDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, entityId: string): string {
-  return `${trigger}:${entityType}:${entityId}`;
+function buildAfterHookDeliveryIdempotencyKey(
+  trigger: HookTrigger,
+  entityType: string,
+  entityId: string,
+  discriminator?: string,
+): string {
+  const base = `${trigger}:${entityType}:${entityId}`;
+  const normalizedDiscriminator = discriminator?.trim();
+  return normalizedDiscriminator ? `${base}:${normalizedDiscriminator}` : base;
+}
+
+function buildHookDeliveryDurableRunId(hookRunId: string): string {
+  return `hook-delivery-${hookRunId}`;
+}
+
+function buildHookDeliveryDurableRunInput(
+  run: HookRunRecord,
+  runId: string,
+): DurableRunCreateRequest & { runId: string; payload: Record<string, unknown> } {
+  return {
+    runId,
+    workflowKey: "hook.delivery",
+    payload: {
+      version: "hook.delivery.v1",
+      hookRunId: run.runId,
+      hookId: run.hookId,
+      workspaceId: run.workspaceId,
+      trigger: run.trigger,
+      entityType: run.entityType,
+      entityId: run.entityId,
+    },
+    retryPolicy: DEFAULT_HOOK_DELIVERY_RETRY_POLICY,
+  };
+}
+
+function assertHookDeliveryDurableRun(
+  durableRun: DurableRunRecord,
+  expected: DurableRunCreateRequest & { runId: string; payload: Record<string, unknown> },
+): void {
+  if (
+    durableRun.runId !== expected.runId ||
+    durableRun.workflowKey !== expected.workflowKey ||
+    JSON.stringify(durableRun.payload) !== JSON.stringify(expected.payload)
+  ) {
+    throw new Error(
+      `Durable run ${durableRun.runId} does not match hook delivery owner ${expected.runId}/${String(expected.payload.hookRunId)}.`,
+    );
+  }
+}
+
+function assertAfterHookRunIdentity(
+  run: HookRunRecord,
+  expected: Pick<
+    HookRunRecord,
+    "hookId" | "workspaceId" | "trigger" | "entityType" | "entityId" | "mode" | "idempotencyKey"
+  >,
+): void {
+  if (
+    run.hookId !== expected.hookId ||
+    run.workspaceId !== expected.workspaceId ||
+    run.trigger !== expected.trigger ||
+    run.entityType !== expected.entityType ||
+    run.entityId !== expected.entityId ||
+    run.mode !== expected.mode ||
+    run.idempotencyKey !== expected.idempotencyKey
+  ) {
+    throw new Error(`Hook run ${run.runId} does not match its idempotent after-hook owner.`);
+  }
 }
 
 function normalizeDecision(value: unknown): HookDecision | undefined {

@@ -19,6 +19,51 @@ vi.mock("./chat-turn-helpers.js", () => ({
     failure?.failureClass === "tool_run_budget_exceeded",
   isChatTurnCancelledError: () => false,
   mergeExecutionPlanStepStatuses: (_steps: unknown, next: unknown) => next,
+  patchChatTurnTraceIfStatus: (
+    repository: {
+      get(turnId: string): ChatTurnTraceRecord;
+      patch(turnId: string, input: Partial<ChatTurnTraceRecord>): ChatTurnTraceRecord;
+      patchIfStatus?: (
+        turnId: string,
+        expected: ChatTurnTraceRecord["status"][],
+        input: Partial<ChatTurnTraceRecord>,
+      ) => ChatTurnTraceRecord | undefined;
+    },
+    turnId: string,
+    expected: ChatTurnTraceRecord["status"][],
+    input: Partial<ChatTurnTraceRecord>,
+  ) => {
+    const patched = repository.patchIfStatus
+      ? repository.patchIfStatus(turnId, expected, input)
+      : repository.patch(turnId, input);
+    if (!patched) {
+      throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership.`);
+    }
+    return patched;
+  },
+  tryPatchChatTurnTraceIfStatus: (
+    repository: {
+      get(turnId: string): ChatTurnTraceRecord;
+      patch(turnId: string, input: Partial<ChatTurnTraceRecord>): ChatTurnTraceRecord;
+      patchIfStatus?: (
+        turnId: string,
+        expected: ChatTurnTraceRecord["status"][],
+        input: Partial<ChatTurnTraceRecord>,
+      ) => ChatTurnTraceRecord | undefined;
+    },
+    turnId: string,
+    expected: ChatTurnTraceRecord["status"][],
+    input: Partial<ChatTurnTraceRecord>,
+  ) => {
+    const current = repository.get(turnId);
+    if (!expected.includes(current.status)) {
+      return { patched: false, trace: current };
+    }
+    const patched = repository.patchIfStatus
+      ? repository.patchIfStatus(turnId, expected, input)
+      : repository.patch(turnId, input);
+    return patched ? { patched: true, trace: patched } : { patched: false, trace: repository.get(turnId) };
+  },
   renderExecutionPlanAsMarkdown: () => "execution plan",
   splitIntoChunks: (value: string) => [value],
   toTitleCase: (value: string) => value,
@@ -216,6 +261,24 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it("rethrows durable workflow timeouts from delegated steps before fallback or synthesis", async () => {
+    const host = createHost();
+    const timeout = Object.assign(new Error("durable workflow timed out"), {
+      name: "DurableWorkflowTimeoutError",
+    });
+    host.agentSendChatMessage = vi.fn(async () => {
+      throw timeout;
+    }) as never;
+
+    await expect(
+      executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), createDelegatedStepInput() as never),
+    ).rejects.toBe(timeout);
+
+    expect(host.recordDevDiagnostic).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "orchestration.step.timeout_without_provider_result" }),
+    );
+  });
+
   it("converts delegated child failure responses into failed step results with guidance", async () => {
     const host = createHost();
     host.agentSendChatMessage = vi.fn(async () => ({
@@ -334,6 +397,31 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it.each(["DurableWorkerInterruptionError", "DurableRunPausedError", "DurableRunCancelledError"])(
+    "rethrows %s from the delegated canonical write fence",
+    async (errorName) => {
+      const host = createHost();
+      const controlError = new Error(`delegated control signal: ${errorName}`);
+      controlError.name = errorName;
+      let fenceCalls = 0;
+      const canonicalWriteFence = <T>(work: () => T): T => {
+        fenceCalls += 1;
+        if (fenceCalls === 2) {
+          throw controlError;
+        }
+        return work();
+      };
+
+      await expect(
+        executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+          ...createDelegatedStepInput(),
+          canonicalWriteFence,
+        } as never),
+      ).rejects.toBe(controlError);
+      expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("marks empty-output stream recovery as repaired in both the trace and message_done", async () => {
     const host = createHost();
     const chunks = [];
@@ -419,6 +507,31 @@ describe("streamPreparedAgentChatTurn", () => {
         type: "done",
       }),
     );
+  });
+
+  it("rethrows durable control aborts without marking the Chat turn cancelled", async () => {
+    const host = createHost();
+    const abortController = new AbortController();
+    const interruption = Object.assign(new Error("lease ownership transferred"), {
+      name: "DurableWorkerInterruptionError",
+    });
+    abortController.abort(interruption);
+    const drain = async () => {
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "hello", mode: "chat" } as never,
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+        undefined,
+        { abortSignal: abortController.signal },
+      )) {
+        // drain
+      }
+    };
+
+    await expect(drain()).rejects.toBe(interruption);
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
   });
 
   it("registers a turn-scoped agent.fanout executor around the direct runtime stream and disposes it afterwards", async () => {
@@ -768,6 +881,107 @@ describe("streamPreparedAgentChatTurn", () => {
         content: "## Dinner Party Plan\n\nFinal host-ready checklist.",
       }),
     );
+    const persistedPlanSteps = (host.storage.chatDelegationSteps.create as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([step]) => step,
+    );
+    const planner = persistedPlanSteps.find((step) => step.role === "planner");
+    const synthesizer = persistedPlanSteps.find((step) => step.role === "synthesizer");
+    expect(planner).toEqual(expect.objectContaining({ parallelizable: false, dependsOnStepIds: [] }));
+    expect(synthesizer).toEqual(expect.objectContaining({ parallelizable: false, dependsOnStepIds: [planner.stepId] }));
+  });
+
+  it("fences orchestration assistant truth when the durable lease changes immediately before ingest", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createModeOrchestrationResolution()) as never;
+    host.createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [{ index: 0, message: { content: "Planner output" }, finish_reason: "stop" }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [{ index: 0, message: { content: "Final answer from stale worker A." }, finish_reason: "stop" }],
+      }) as never;
+    let leaseOwned = true;
+    const originalIngest = host.ingestEvent;
+    host.ingestEvent = vi.fn(async (idempotencyKey, payload, options) => {
+      leaseOwned = false;
+      return originalIngest(idempotencyKey, payload, options);
+    });
+    const canonicalWriteFence = <T>(work: () => T): T => {
+      if (!leaseOwned) {
+        const error = new Error("worker A lost the durable lease");
+        error.name = "DurableWorkerInterruptionError";
+        throw error;
+      }
+      return work();
+    };
+    const drain = async () => {
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "plan dinner", mode: "cowork" } as never,
+        createPreparedTurn({ mode: "cowork" }),
+        "chat_thread_turn_appended",
+        createModeOrchestrationResolution(),
+        { canonicalWriteFence },
+      )) {
+        // drain
+      }
+    };
+
+    await expect(drain()).rejects.toMatchObject({ name: "DurableWorkerInterruptionError" });
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({ status: "running" });
+    expect(host.storage.chatTurnTraces.get("turn-1").assistantMessageId).toBeUndefined();
+    expect(host.updateActiveLeafOrThrow).not.toHaveBeenCalled();
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
+  });
+
+  it("stops post-commit mutations when the durable lease changes after assistant truth commits", async () => {
+    const host = createHost();
+    let leaseOwned = true;
+    host.collectCapabilityUpgradeSuggestions = vi.fn(async () => {
+      leaseOwned = false;
+      return [];
+    }) as never;
+    const canonicalWriteFence = <T>(work: () => T): T => {
+      if (!leaseOwned) {
+        const error = new Error("worker A lost the durable lease after assistant commit");
+        error.name = "DurableWorkerInterruptionError";
+        throw error;
+      }
+      return work();
+    };
+    const drain = async () => {
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "answer once", mode: "chat" } as never,
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+        undefined,
+        { canonicalWriteFence },
+      )) {
+        // drain
+      }
+    };
+
+    await expect(drain()).rejects.toMatchObject({ name: "DurableWorkerInterruptionError" });
+    expect(host.ingestEvent).toHaveBeenCalledTimes(1);
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+      status: "completed",
+      assistantMessageId: "assistant-1",
+    });
+    expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
+    expect(host.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleChatMemoryContextPrewarm).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+    expect(host.hooksService.enqueueAfterHooks).not.toHaveBeenCalled();
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
   });
 
   it("emits capability_upgrade_suggestion in-band on a normal completion", async () => {
@@ -822,7 +1036,40 @@ describe("streamPreparedAgentChatTurn", () => {
       // drain
     }
     expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
+    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        autonomous: false,
+        turnId: "turn-1",
+        delegatedChild: false,
+      }),
+    );
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      delegatedChild: false,
+    });
+  });
+
+  it("marks delegated-child post-turn schedules explicitly", async () => {
+    const host = createHost();
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "delegated work", mode: "chat", parentDelegationStepId: "run-1:step-1" } as never,
+      createPreparedTurn({ parentDelegationStepId: "run-1:step-1" }),
+      "chat_thread_turn_appended",
+    )) {
+      // drain
+    }
+
+    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: "turn-1", delegatedChild: true }),
+    );
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      delegatedChild: true,
+    });
   });
 
   it("flags post-turn hooks autonomous:true for a heartbeat-restricted turn (P1-F2/F3 loop guard)", async () => {
@@ -963,6 +1210,47 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it("defers approval-wait post-commit consumers to the durable reconciler", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "approval_required",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-durable",
+      };
+    }) as never;
+    host.storage.chatToolRuns.listByTurn = vi.fn(() => [
+      {
+        toolRunId: "tool-durable",
+        turnId: "turn-1",
+        sessionId: "session-1",
+        toolName: "shell.exec",
+        status: "approval_required",
+        approvalId: "approval-durable",
+        startedAt: "2026-07-11T00:00:00.000Z",
+      },
+    ]) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "run command", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      { deferGeneralPostCommit: true },
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.some((chunk) => chunk.type === "trace_update")).toBe(true);
+    expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+    expect(host.hooksService.enqueueAfterHooks).not.toHaveBeenCalled();
+  });
+
   it("finalizes user-input-required streams without done or assistant persistence", async () => {
     const host = createHost();
     const prompt = {
@@ -1062,6 +1350,68 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
     expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
   });
+
+  it("does not resurrect a turn cancelled after the provider's terminal chunk", async () => {
+    const host = createHost();
+    let controller: AbortController | undefined;
+    host.beginActiveChatTurnExecution = vi.fn(() => {
+      controller = new AbortController();
+      return controller;
+    }) as never;
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Provider finished before cancellation.",
+      };
+      controller?.abort();
+    }) as never;
+    const cancelledTrace = {
+      ...createPreparedTurn().turnTrace,
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      parentTurnId: "turn-0",
+      branchKind: "append",
+      status: "cancelled",
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: "2026-04-18T00:00:00.000Z",
+      toolRuns: [],
+      citations: [],
+      routing: {},
+    } as ChatTurnTraceRecord;
+    host.markChatTurnCancelled = vi.fn(() => cancelledTrace) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "cancel after terminal chunk", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      { skipMessageStart: true },
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(host.ingestEvent).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ actor: { type: "agent", id: "assistant" } }),
+    );
+    expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+      "turn-1",
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(chunks.some((chunk) => chunk.type === "done")).toBe(false);
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "trace_update", trace: cancelledTrace }));
+  });
 });
 
 describe("isTerminalSynthesisStep", () => {
@@ -1155,6 +1505,7 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
       expect.objectContaining({
         message: expect.objectContaining({ role: "assistant", content: finalText }),
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
   });
 
@@ -1283,6 +1634,7 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
       expect.objectContaining({
         message: expect.objectContaining({ content: "Recovered authoritative final answer." }),
       }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
     );
   });
 });
@@ -1498,6 +1850,7 @@ function createHost(): ChatTurnStreamHost & {
     chatTurnTraces: {
       get: (turnId: string) => ChatTurnTraceRecord;
       patch: ReturnType<typeof vi.fn>;
+      patchIfStatus: ReturnType<typeof vi.fn>;
     };
   };
   hooksService: {
@@ -1526,6 +1879,10 @@ function createHost(): ChatTurnStreamHost & {
     trace = { ...trace, ...patch };
     return trace;
   });
+  const patchTraceIfStatus = vi.fn(
+    (_turnId: string, expected: ChatTurnTraceRecord["status"][], patch: Partial<ChatTurnTraceRecord>) =>
+      expected.includes(trace.status) ? patchTrace(_turnId, patch) : undefined,
+  );
 
   return {
     storage: {
@@ -1568,6 +1925,7 @@ function createHost(): ChatTurnStreamHost & {
       chatTurnTraces: {
         create: vi.fn(() => trace),
         patch: patchTrace,
+        patchIfStatus: patchTraceIfStatus,
         get: vi.fn((_turnId: string) => trace),
       },
     },
@@ -1638,7 +1996,10 @@ function createHost(): ChatTurnStreamHost & {
     })),
     createHydratedChatTurnTrace: vi.fn((_turnId: string, nextTrace: ChatTurnTraceRecord) => nextTrace),
     steerService: new ChatSteerService(),
-    ingestEvent: vi.fn(async () => undefined),
+    ingestEvent: vi.fn(async (_idempotencyKey, _payload, options?: { onCommit?: () => void }) => {
+      options?.onCommit?.();
+      return undefined;
+    }),
     updateActiveLeafOrThrow: vi.fn(),
     collectCapabilityUpgradeSuggestions: vi.fn(async () => []),
     collectSpecialistCandidateSuggestions: vi.fn(() => []),
@@ -1655,6 +2016,7 @@ function createHost(): ChatTurnStreamHost & {
       chatTurnTraces: {
         get: (turnId: string) => ChatTurnTraceRecord;
         patch: ReturnType<typeof vi.fn>;
+        patchIfStatus: ReturnType<typeof vi.fn>;
       };
     };
     hooksService: {
@@ -1669,6 +2031,7 @@ function createPreparedTurn(
     mode?: "chat" | "cowork" | "code";
     normalizationProfile?: string;
     subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
+    parentDelegationStepId?: string;
   } = {},
 ) {
   const mode = overrides.mode ?? "chat";
@@ -1682,6 +2045,7 @@ function createPreparedTurn(
     parentTurnId: "turn-0",
     branchKind: "append",
     sourceTurnId: undefined,
+    parentDelegationStepId: overrides.parentDelegationStepId,
     content: "hello",
     route: {
       provider: "openai",

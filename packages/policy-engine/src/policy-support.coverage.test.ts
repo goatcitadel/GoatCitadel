@@ -464,6 +464,15 @@ function createStorageWithPendingApproval(
     },
     pendingApprovalActions: {
       find: vi.fn(() => pending),
+      findFreshPending: vi.fn((_approvalId: string, defaultTtlMs: number) => {
+        if (pending.resolutionStatus !== "pending") {
+          return undefined;
+        }
+        const expiresAt = pending.expiresAt
+          ? Date.parse(pending.expiresAt)
+          : Date.parse(pending.createdAt) + defaultTtlMs;
+        return Number.isFinite(expiresAt) && expiresAt > Date.now() ? pending : undefined;
+      }),
     },
   } as unknown as Storage;
 }

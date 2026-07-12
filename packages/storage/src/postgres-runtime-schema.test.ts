@@ -327,6 +327,29 @@ describe("Postgres runtime schema generation", () => {
     assert.match(degradedMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS degraded_handoff_step_ids_json TEXT/);
   });
 
+  it("adds delegation dependency-plan columns as a new forward migration", () => {
+    const planMigration = POSTGRES_MIGRATIONS.find((migration) => migration.name === "chat_delegation_step_plan_truth");
+
+    assert.equal(planMigration?.version, 83);
+    assert.match(planMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
+    assert.match(planMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS parallelizable BIGINT NOT NULL DEFAULT 0/);
+    assert.match(
+      planMigration?.sql ?? "",
+      /ADD COLUMN IF NOT EXISTS depends_on_step_ids_json TEXT NOT NULL DEFAULT '\[\]'/,
+    );
+  });
+
+  it("adds private delegation dispatch-claim columns as a new forward migration", () => {
+    const claimMigration = POSTGRES_MIGRATIONS.find(
+      (migration) => migration.name === "chat_delegation_dispatch_claim_lease",
+    );
+
+    assert.equal(claimMigration?.version, 84);
+    assert.match(claimMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS dispatch_claim_token TEXT/);
+    assert.match(claimMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS dispatch_claim_expires_at TEXT/);
+    assert.match(claimMigration?.sql ?? "", /idx_chat_delegation_steps_dispatch_claim/);
+  });
+
   it("adds Citadel parent scope as a NEW migration for already-migrated Postgres runtimes", () => {
     const citadelMigration = POSTGRES_MIGRATIONS.find(
       (migration) => migration.name === "citadel_operating_model_parent_scope",
@@ -615,6 +638,66 @@ describe("Postgres runtime schema generation", () => {
     assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS capability_scope_assignments/);
     assert.match(migration.sql, /idx_capability_scope_assignments_unique/);
     assert.match(migration.sql, /idx_capability_scope_assignments_lookup/);
+  });
+
+  it("ships an idempotent Postgres scrub for legacy device-token plaintext", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "scrub_legacy_device_token_plaintext");
+    assert.ok(migration, "expected Postgres legacy device-token scrub migration");
+    assert.match(migration.sql, /UPDATE auth_device_grants AS device_grant/);
+    assert.match(migration.sql, /device_grant\.revoked_at IS NULL/);
+    assert.match(migration.sql, /request\.delivered_at IS NULL/);
+    assert.match(migration.sql, /approved_token_plaintext = NULL/);
+    assert.match(migration.sql, /THEN 'expired'/);
+  });
+
+  it("ships the indexed Postgres approval expiry sweep migration", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "approval_expiry_sweep_index_parity");
+    assert.ok(migration, "expected Postgres approval expiry sweep index migration");
+    assert.match(migration.sql, /idx_approvals_status_expires_at/);
+    assert.match(migration.sql, /ON approvals\(status, expires_at_ts ASC, approval_id ASC\)/);
+    assert.match(migration.sql, /WHERE expires_at_ts IS NOT NULL/);
+  });
+
+  it("ships a Postgres scrub for legacy remote approval bearer persistence", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "scrub_legacy_remote_approval_bearers");
+    assert.ok(migration, "expected Postgres legacy remote approval bearer scrub migration");
+    assert.equal(migration.sql, "");
+    assert.equal(migration.batchedStatements?.length, 17);
+    const batchSql = migration.batchedStatements?.map((statement) => statement.sql).join("\n") ?? "";
+    assert.match(batchSql, /UPDATE durable_runs AS target/);
+    assert.match(batchSql, /UPDATE comms_deliveries AS target/);
+    assert.match(batchSql, /UPDATE approval_inbox_items AS target/);
+    assert.match(batchSql, /UPDATE tool_invocations AS target/);
+    assert.match(batchSql, /UPDATE audit_events AS target/);
+    assert.match(batchSql, /regexp_replace/);
+    assert.match(batchSql, /Legacy remote approval bearer was removed/);
+    for (const statement of migration.batchedStatements ?? []) {
+      assert.match(statement.sql, /LIMIT 250/);
+      assert.match(statement.sql, /FOR UPDATE/);
+      assert.match(statement.sql, /UPDATE \w+ AS target/);
+    }
+    assert.ok(batchSql.includes("token ~ 'grat_[A-Za-z0-9_-]{43}'"));
+    assert.ok(batchSql.includes("~ 'grat_[A-Za-z0-9_-]{43}'"));
+    assert.equal(batchSql.includes("\\M"), false);
+    assert.doesNotMatch(batchSql, /LIKE '%grat_%'/);
+    assert.doesNotMatch(batchSql, /SKIP LOCKED/);
+  });
+
+  it("ships a forward Postgres scrub for approval effect result and legacy detail truth", () => {
+    const migration = POSTGRES_MIGRATIONS.find(
+      (item) => item.name === "scrub_legacy_remote_approval_bearers_from_effect_results",
+    );
+    assert.ok(migration, "expected approval-effect bearer forward scrub migration");
+    assert.equal(migration.version, 85);
+    assert.equal(migration.sql, "");
+    assert.equal(migration.batchedStatements?.length, 1);
+    assert.match(migration.integritySha256 ?? "", /^[a-f0-9]{64}$/);
+    const sql = migration.batchedStatements?.[0]?.sql ?? "";
+    for (const column of ["result_json", "detail", "details_json", "outcome"]) {
+      assert.match(sql, new RegExp(`regexp_replace\\(${column}`));
+    }
+    assert.match(sql, /LIMIT 250/);
+    assert.match(sql, /FOR UPDATE/);
   });
 
   it("auto-derives capability_scope_assignments into the runtime schema", () => {

@@ -34,6 +34,24 @@ export interface DurableOperatorServiceDeps {
   resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string;
 }
 
+export class DurableOperatorPostCommitError extends Error {
+  public readonly mutationCommitted = true;
+
+  public constructor(
+    operation: string,
+    public readonly canonicalResult: DurableRunRecord | DurableWakeResult,
+    cause: unknown,
+  ) {
+    super(
+      `${operation} committed, but a post-commit consumer failed: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+    this.name = "DurableOperatorPostCommitError";
+  }
+}
+
 export class DurableOperatorService {
   public constructor(private readonly deps: DurableOperatorServiceDeps) {}
 
@@ -55,10 +73,11 @@ export class DurableOperatorService {
 
   public createRun(input: DurableRunCreateRequest): DurableRunRecord {
     const run = this.deps.durableRunService.createDurableRun(input);
-    if (run.status === "queued") {
-      this.deps.durableRunService.requestRunProcessing(run.runId);
-    }
-    return run;
+    return this.afterRunCommit("Durable run creation", run, [
+      () => {
+        if (run.status === "queued") this.deps.durableRunService.requestRunProcessing(run.runId);
+      },
+    ]);
   }
 
   public getRun(runId: string): DurableRunRecord {
@@ -75,37 +94,41 @@ export class DurableOperatorService {
 
   public resumeRun(runId: string, actorId = "operator"): DurableRunRecord {
     const run = this.deps.durableRunService.resumeDurableRun(runId, actorId);
-    this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-    this.deps.durableRunService.requestRunProcessing(runId);
-    return run;
+    return this.afterRunCommit("Durable run resume", run, [
+      () => this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run),
+      () => this.deps.durableRunService.requestRunProcessing(runId),
+    ]);
   }
 
   public cancelRun(runId: string, actorId = "operator"): DurableRunRecord {
     const run = this.deps.durableRunService.cancelDurableRun(runId, actorId);
-    this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-    return run;
+    return this.afterRunCommit("Durable run cancellation", run, [
+      () => this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run),
+    ]);
   }
 
   public retryRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
     const run = this.deps.durableRunService.retryDurableRun(runId, reason, actorId);
-    this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-    if (run.status === "queued") {
-      this.deps.durableRunService.requestRunProcessing(runId);
-    }
-    this.deps.hooksService.enqueueAfterHooks({
-      workspaceId: this.deps.resolveDurableRunHookWorkspaceId(run),
-      trigger: "orchestration.retry.scheduled",
-      entityType: "durable_run",
-      entityId: runId,
-      payload: {
-        runId,
-        reason,
-        actorId,
-        status: run.status,
-        attemptCount: run.attemptCount,
+    return this.afterRunCommit("Durable run retry", run, [
+      () => this.deps.memoryLifecycleService.syncMaintenanceFromDurableRun(run),
+      () => {
+        if (run.status === "queued") this.deps.durableRunService.requestRunProcessing(runId);
       },
-    });
-    return run;
+      () =>
+        this.deps.hooksService.enqueueAfterHooks({
+          workspaceId: this.deps.resolveDurableRunHookWorkspaceId(run),
+          trigger: "orchestration.retry.scheduled",
+          entityType: "durable_run",
+          entityId: runId,
+          payload: {
+            runId,
+            reason,
+            actorId,
+            status: run.status,
+            attemptCount: run.attemptCount,
+          },
+        }),
+    ]);
   }
 
   public wakeRun(
@@ -118,21 +141,64 @@ export class DurableOperatorService {
   ): DurableWakeResult {
     const result = this.deps.durableRunService.wakeDurableRun(runId, event);
     if (result.outcome === "woke" && result.run) {
-      this.deps.durableRunService.requestRunProcessing(runId);
-      this.deps.hooksService.enqueueAfterHooks({
-        workspaceId: this.deps.resolveDurableRunHookWorkspaceId(result.run),
-        trigger: "orchestration.run.woken",
-        entityType: "durable_run",
-        entityId: runId,
-        payload: {
-          runId,
-          eventKey: event.eventKey,
-          correlationId: event.correlationId,
-          payload: event.payload ?? {},
-        },
-      });
+      return this.afterWakeCommit("Durable run wake", result, [
+        () => this.deps.durableRunService.requestRunProcessing(runId),
+        () =>
+          this.deps.hooksService.enqueueAfterHooks({
+            workspaceId: this.deps.resolveDurableRunHookWorkspaceId(result.run!),
+            trigger: "orchestration.run.woken",
+            entityType: "durable_run",
+            entityId: runId,
+            payload: {
+              runId,
+              eventKey: event.eventKey,
+              correlationId: event.correlationId,
+              payload: event.payload ?? {},
+            },
+          }),
+      ]);
     }
     return result;
+  }
+
+  private afterRunCommit(
+    operation: string,
+    run: DurableRunRecord,
+    postCommitConsumers: ReadonlyArray<() => void>,
+  ): DurableRunRecord {
+    try {
+      this.runPostCommitConsumers(postCommitConsumers);
+      return run;
+    } catch (error) {
+      throw new DurableOperatorPostCommitError(operation, run, error);
+    }
+  }
+
+  private afterWakeCommit(
+    operation: string,
+    result: DurableWakeResult,
+    postCommitConsumers: ReadonlyArray<() => void>,
+  ): DurableWakeResult {
+    try {
+      this.runPostCommitConsumers(postCommitConsumers);
+      return result;
+    } catch (error) {
+      throw new DurableOperatorPostCommitError(operation, result, error);
+    }
+  }
+
+  private runPostCommitConsumers(consumers: ReadonlyArray<() => void>): void {
+    const failures: unknown[] = [];
+    for (const consume of consumers) {
+      try {
+        consume();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `${failures.length} durable post-commit consumer(s) failed`);
+    }
   }
 
   public recoverDeadLetter(

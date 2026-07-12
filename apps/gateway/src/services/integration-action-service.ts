@@ -12,6 +12,7 @@ import { readBoundedResponseText } from "./bounded-response-reader.js";
 import {
   buildExternalSideEffectReplayOutput,
   type ExternalSideEffectRunStore,
+  fingerprintExternalSideEffectDestination,
   type IdempotentExternalSideEffectRunInput,
   recordAuditOnlyExternalSideEffectIntent,
 } from "./external-side-effect-runner-service.js";
@@ -36,6 +37,8 @@ export interface IntegrationActionHost {
     integrationConnections: {
       get(connectionId: string): IntegrationConnection;
     };
+    /** Canonical transaction owner required by durable external-side-effect replay. */
+    runImmediateTransaction?<T>(work: () => T): T;
     /**
      * Optional Citadel Ward inputs (workspaces + citadels). Hosts that omit
      * them (narrow test hosts) skip ward evaluation entirely — identical to
@@ -366,6 +369,7 @@ export function buildActivepiecesTriggerWebhookRunInput(
       actionId: "trigger_webhook",
       checkedAt,
       workspaceId: connection.workspaceId,
+      externalDestinationFingerprint: fingerprintExternalSideEffectDestination(target),
       idempotencyKey,
       ...(actorScope ? { actorScope } : {}),
       payload: {

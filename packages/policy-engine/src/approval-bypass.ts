@@ -20,11 +20,14 @@ export function getVerifiedApprovalBypassId(
   if (!approvalId) {
     return undefined;
   }
-  const pending = storage.pendingApprovalActions.find(approvalId);
-  if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
+  const pendingActions = storage.pendingApprovalActions as Storage["pendingApprovalActions"] & {
+    findFreshPending?: Storage["pendingApprovalActions"]["findFreshPending"];
+  };
+  if (typeof pendingActions.findFreshPending !== "function") {
     return undefined;
   }
-  if (!isPendingApprovalStillFresh(pending.createdAt, pending.expiresAt)) {
+  const pending = pendingActions.findFreshPending(approvalId, DEFAULT_APPROVAL_TTL_MS);
+  if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
     return undefined;
   }
   try {
@@ -83,22 +86,6 @@ function governanceField(
   }
   const contextValue = request.policyContext?.[key];
   return typeof contextValue === "string" ? contextValue : undefined;
-}
-
-function isPendingApprovalStillFresh(createdAt: string, expiresAt?: string): boolean {
-  if (expiresAt) {
-    const explicitExpiry = Date.parse(expiresAt);
-    if (!Number.isFinite(explicitExpiry)) {
-      return false;
-    }
-    return explicitExpiry > Date.now();
-  }
-
-  const createdAtMs = Date.parse(createdAt);
-  if (!Number.isFinite(createdAtMs)) {
-    return false;
-  }
-  return createdAtMs + DEFAULT_APPROVAL_TTL_MS > Date.now();
 }
 
 function stableStringify(value: unknown): string {

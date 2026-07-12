@@ -113,6 +113,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           }
           const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
             token: approval.token,
+            connectorId: `integration:${connectionId}`,
             decision: approval.decision,
             resolvedBy: `telegram:${parsed.actorId}`,
           });
@@ -219,6 +220,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               resolveApprovalToken: async (token, decision) => {
                 const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
                   token,
+                  connectorId: `integration:${connectionId}`,
                   decision,
                   resolvedBy: `telegram:${parsed.actorId}`,
                 });

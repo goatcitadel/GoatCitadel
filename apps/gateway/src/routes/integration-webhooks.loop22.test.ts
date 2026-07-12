@@ -163,11 +163,13 @@ describe("integration webhook route tails", () => {
       token: "token-approve",
       decision: "approve",
       resolvedBy: "telegram:777",
+      connectorId: `integration:${CONNECTION_ID}`,
     });
     expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
       token: "token-reject",
       decision: "reject",
       resolvedBy: "telegram:777",
+      connectorId: `integration:${CONNECTION_ID}`,
     });
 
     connection = createTelegramConnection({});

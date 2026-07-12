@@ -43,6 +43,7 @@ export interface TurnRuntimeRequest {
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
+  canonicalWriteFence?: <T>(work: () => T) => T;
 }
 
 export interface TurnRuntimeResult {

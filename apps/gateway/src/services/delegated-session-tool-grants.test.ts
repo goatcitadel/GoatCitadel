@@ -50,13 +50,6 @@ describe("buildDelegatedSessionToolGrantCopies", () => {
           grantType: "one_time",
           usesRemaining: 1,
         }),
-        createGrant({
-          grantId: "expired-code-search",
-          toolPattern: "code.search",
-          decision: "allow",
-          grantType: "ttl",
-          expiresAt: "2020-03-16T19:00:00.000Z",
-        }),
       ],
       childGrants: [
         createGrant({

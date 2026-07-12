@@ -35,6 +35,13 @@ type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
 type ChannelDeliverySender = (input: ChannelSendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
 
 export function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey: string): Record<string, unknown> {
+  const interactiveApprovalPayload = JSON.stringify({
+    interactiveActions: input.interactiveActions ?? null,
+    interactiveActionTemplate: input.interactiveActionTemplate ?? null,
+  });
+  if (/grat_[A-Za-z0-9_-]{43}/.test(interactiveApprovalPayload)) {
+    throw new Error("Raw remote approval bearer cannot be queued; use an interactive action secret reference.");
+  }
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "");
   const chunkLimit = getChannelDeliveryChunkLimit(channelKey);
   const messageParts = splitChannelOutboundMessage(sanitized.message, chunkLimit);
@@ -48,6 +55,7 @@ export function buildChannelDeliveryPayload(input: ChannelSendInput, channelKey:
     attachments: input.attachments,
     attachmentIds: input.attachmentIds,
     interactiveActions: input.interactiveActions,
+    interactiveActionTemplate: input.interactiveActionTemplate,
     replyToMessageId: input.replyToMessageId,
     replyToPartIndex: input.replyToPartIndex,
     effectId: input.effectId,
@@ -140,6 +148,10 @@ export function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeS
       typeof payload.interactiveActions === "object" && payload.interactiveActions !== null
         ? (payload.interactiveActions as ChannelSendInput["interactiveActions"])
         : undefined,
+    interactiveActionTemplate:
+      typeof payload.interactiveActionTemplate === "object" && payload.interactiveActionTemplate !== null
+        ? (payload.interactiveActionTemplate as ChannelSendInput["interactiveActionTemplate"])
+        : undefined,
     replyToMessageId: typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : undefined,
     replyToPartIndex: typeof payload.replyToPartIndex === "number" ? payload.replyToPartIndex : undefined,
     effectId: typeof payload.effectId === "string" ? payload.effectId : undefined,
@@ -215,6 +227,7 @@ export async function sendQueuedChannelDelivery(
         attachments: index === 0 ? baseInput.attachments : undefined,
         attachmentIds: index === 0 ? baseInput.attachmentIds : undefined,
         interactiveActions: index === messageParts.length - 1 ? baseInput.interactiveActions : undefined,
+        interactiveActionTemplate: index === messageParts.length - 1 ? baseInput.interactiveActionTemplate : undefined,
         replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
         replyToPartIndex: index,
       });

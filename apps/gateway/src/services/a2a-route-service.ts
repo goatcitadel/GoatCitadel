@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- A2A protocol routing, binding truth, push delivery, and governed cancellation remain one release-bearing boundary. */
 import { randomUUID } from "node:crypto";
 import type {
   A2ABridgeArtifact,
@@ -17,6 +18,8 @@ import type {
   A2ATaskBindingRecord,
   A2ATaskExportPreviewRequest,
   A2ATaskExportPreviewResponse,
+  TaskActivityRecord,
+  TaskRecord,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
@@ -87,9 +90,19 @@ export interface A2ARouteServiceDependencies {
   storage: Storage;
   tasks: Pick<
     TaskLifecycleService,
-    "appendTaskActivity" | "createTask" | "getTask" | "invokeAgenticControl" | "listTaskDeliverables" | "updateTask"
+    | "appendTaskActivity"
+    | "createTask"
+    | "getTask"
+    | "invokeAgenticControl"
+    | "listTaskDeliverables"
+    | "persistDelegationActivityOnce"
+    | "persistA2ADurableRunLink"
+    | "publishDelegationActivity"
+    | "publishA2ADurableRunLink"
+    | "updateTask"
   >;
   createChatSession: (input: {
+    stableKey?: string;
     workspaceId?: string;
     title?: string;
     tags?: string[];
@@ -103,6 +116,44 @@ export interface A2ARouteServiceDependencies {
   pushDeliveryFetch?: typeof fetchAllowlisted;
   grpcClient?: A2AGrpcClientPort;
 }
+
+interface A2ATurnIdentity {
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
+interface StableA2ADispatchIdentity {
+  activityId: string;
+  attemptId: string;
+  localTaskId: string;
+  resourceAttemptId: string;
+  sessionStableKey: string;
+  turnIdentity: A2ATurnIdentity;
+}
+
+type A2AResourceInitializationClaimResult =
+  | { binding: A2ATaskBindingRecord; status: "ready" }
+  | { binding: A2ATaskBindingRecord; status: "waiting" }
+  | {
+      binding: A2ATaskBindingRecord;
+      status: "owned";
+      attemptId: string;
+      claimToken: string;
+    };
+
+type A2ADispatchClaimResult =
+  | { binding: A2ATaskBindingRecord; owned: false }
+  | {
+      binding: A2ATaskBindingRecord;
+      owned: true;
+      attemptId: string;
+      claimToken: string;
+      turnIdentity: A2ATurnIdentity;
+    };
+
+const A2A_DISPATCH_LEASE_MS = 60_000;
+const A2A_RESOURCE_INITIALIZATION_LEASE_MS = 60_000;
 
 export class A2ARouteService {
   private readonly pushNotifications: A2APushNotificationService;
@@ -721,116 +772,554 @@ export class A2ARouteService {
     const message = normalizeInboundMessage(params);
     const contextId = readString(params.contextId) ?? message.contextId ?? `ctx-${peer.peerId}`;
     const idempotencyKey = buildInboundIdempotencyKey(peer.peerId, contextId, message, params);
-    const existing = this.deps.storage.a2aTaskBindings.findByIdempotency(peer.peerId, idempotencyKey);
-    if (existing) {
-      return this.buildTaskFromBinding(existing, checkedAt);
-    }
-
     const a2aTaskId = readString(params.taskId) ?? `a2a_${hashStableJson({ peerId: peer.peerId, idempotencyKey })}`;
     const workspaceId = readString(params.workspaceId) ?? "default";
-    const session = this.deps.createChatSession({
-      workspaceId,
-      title: `A2A: ${peer.label ?? peer.peerId}`,
-      tags: ["a2a", `a2a:${peer.peerId}`],
-      origin: "system",
-      mode: "chat",
-      includeInHistory: false,
-    });
-    const task = this.deps.tasks.createTask({
-      workspaceId,
-      title: buildTaskTitle(message, peer.peerId),
-      description: "Peer-authenticated A2A message mapped into GoatCitadel durable task truth.",
-      status: "in_progress",
-      priority: "normal",
-      createdBy: `a2a:${peer.peerId}`,
-      agenticContext: {
-        runId: a2aTaskId,
-        parentSessionId: session.sessionId,
-        surface: "chat",
-        status: "running",
-        providerId: "a2a",
-        model: peer.peerId,
-      },
-    });
-    let binding = this.deps.storage.a2aTaskBindings.createOrGet(
-      {
-        a2aTaskId,
-        contextId,
-        peerId: peer.peerId,
-        workspaceId,
-        sessionId: session.sessionId,
-        localTaskId: task.taskId,
-        state: "working",
-        lastEventSequence: streaming ? 1 : 0,
-        idempotencyKey,
-        metadata: {
-          inboundMessage: message,
-          streaming,
-          source,
-          createdByPeerLabel: peer.label,
-        },
-      },
-      checkedAt,
-    );
-
-    this.deps.tasks.appendTaskActivity(task.taskId, {
-      agentId: `a2a:${peer.peerId}`,
-      activityType: "spawned",
-      message: "A2A peer message accepted and bound to a GoatCitadel task.",
-      metadata: {
-        a2aTaskId,
-        contextId,
-        idempotencyKey,
-      },
-    });
-
-    try {
-      const response = await this.deps.chatTurnRuntime.agentSendChatMessage(session.sessionId, {
-        content: partsToText(message.parts),
-        parts: [],
-        mode: "chat",
-        useMemory: true,
-        operatorId: `a2a:${peer.peerId}`,
-        authActorId: `a2a:${peer.peerId}`,
-        authActorSource: "a2a_peer",
-        policyTaskId: task.taskId,
-      });
-      const durableRunId = readDurableRunId(response);
-      if (durableRunId) {
-        binding = this.deps.storage.a2aTaskBindings.update(binding.a2aTaskId, {
-          durableRunId,
+    const identity = buildStableA2ADispatchIdentity(peer.peerId, idempotencyKey);
+    let binding =
+      this.deps.storage.a2aTaskBindings.findByIdempotency(peer.peerId, idempotencyKey) ??
+      this.deps.storage.a2aTaskBindings.find(a2aTaskId);
+    if (binding) {
+      this.assertInboundRequestOwnsBinding(peer, binding, { a2aTaskId, contextId, workspaceId, idempotencyKey });
+    } else {
+      binding = this.deps.storage.a2aTaskBindings.createOrGet(
+        {
+          a2aTaskId,
+          contextId,
+          peerId: peer.peerId,
+          workspaceId,
+          state: "submitted",
+          lastEventSequence: streaming ? 1 : 0,
+          idempotencyKey,
           metadata: {
-            ...binding.metadata,
-            chatTurnId: response.turnId,
-            durableRunId,
-          },
-        });
-      }
-    } catch (error) {
-      this.deps.tasks.updateTask(task.taskId, {
-        status: "blocked",
-        agenticContext: {
-          ...(task.agenticContext ?? {}),
-          status: "failed",
-          failureClass: "other",
-          diagnostics: [
-            {
-              signalId: `a2a-dispatch-${binding.a2aTaskId}`,
-              code: "provider_fallback_loop",
-              severity: "critical",
-              title: "A2A dispatch failed",
-              summary: error instanceof Error ? error.message : "A2A dispatch failed.",
-              createdAt: checkedAt,
+            inboundMessage: message,
+            streaming,
+            source,
+            createdByPeerLabel: peer.label,
+            resourceInitialization: {
+              status: "pending",
+              attemptId: identity.resourceAttemptId,
             },
-          ],
+            dispatch: {
+              status: "pending",
+              attemptId: identity.attemptId,
+              turnIdentity: identity.turnIdentity,
+            },
+          },
         },
+        checkedAt,
+      );
+      this.assertInboundRequestOwnsBinding(peer, binding, { a2aTaskId, contextId, workspaceId, idempotencyKey });
+    }
+
+    const resources = this.ensureA2ABindingResources({
+      binding,
+      identity,
+      message,
+      peer,
+      contextId,
+      idempotencyKey,
+    });
+    binding = resources.binding;
+    if (!resources.ready) {
+      return this.buildTaskFromBinding(binding, checkedAt);
+    }
+
+    const claim = this.claimA2ADispatch(binding.a2aTaskId, identity);
+    binding = claim.binding;
+    if (!claim.owned) {
+      return this.buildTaskFromBinding(binding, checkedAt);
+    }
+    const ownedBinding = claim.binding;
+    if (!ownedBinding.sessionId || !ownedBinding.localTaskId) {
+      throw new Error(`A2A task binding ${ownedBinding.a2aTaskId} lost canonical resource linkage.`);
+    }
+    const bindingId = ownedBinding.a2aTaskId;
+    const canonicalMessage = readInboundMessageFromBinding(ownedBinding) ?? message;
+    try {
+      const response = await this.deps.chatTurnRuntime.agentSendChatMessage(
+        ownedBinding.sessionId,
+        {
+          content: partsToText(canonicalMessage.parts),
+          parts: [],
+          mode: "chat",
+          useMemory: true,
+          operatorId: `a2a:${peer.peerId}`,
+          authActorId: `a2a:${peer.peerId}`,
+          authActorSource: "a2a_peer",
+          policyTaskId: ownedBinding.localTaskId,
+          policyRunId: bindingId,
+        },
+        {
+          turnIdentity: claim.turnIdentity,
+          assertDispatchOwnership: () => this.assertA2ADispatchOwnership(bindingId, claim.attemptId, claim.claimToken),
+        },
+      );
+      const durableRunId = this.resolveA2ADurableRunId(response, claim.turnIdentity.turnId);
+      if (!durableRunId) {
+        throw new Error(`A2A dispatch ${bindingId} has no canonical durable-run linkage yet.`);
+      }
+      const completed = this.completeA2ADispatch({
+        a2aTaskId: bindingId,
+        attemptId: claim.attemptId,
+        claimToken: claim.claimToken,
+        durableRunId,
+        turnId: response.turnId ?? claim.turnIdentity.turnId,
       });
-      binding = this.deps.storage.a2aTaskBindings.update(binding.a2aTaskId, { state: "failed" });
+      binding = completed.binding;
+      if (completed.linkedTask) {
+        this.publishA2ADurableRunLinkSafely(completed.linkedTask);
+      }
+    } catch {
+      // A thrown Chat dispatch is ambiguous: the provider or canonical turn may
+      // already have advanced. Keep the owned attempt intact for DB-clock lease
+      // takeover, which re-enters the same stable turn identity.
+      binding = this.deps.storage.a2aTaskBindings.get(bindingId);
     }
 
     const nextTask = this.buildTaskFromBinding(binding, checkedAt);
     await this.pushNotifications.deliverForTask(peer, binding, nextTask, checkedAt);
     return nextTask;
+  }
+
+  private resolveA2ADurableRunId(
+    response: Awaited<ReturnType<ChatTurnRuntimeService["agentSendChatMessage"]>>,
+    canonicalTurnId: string,
+  ): string | undefined {
+    const responseRunId = readDurableRunId(response);
+    if (responseRunId) {
+      return responseRunId;
+    }
+    const turnIds = [...new Set([response.turnId?.trim(), canonicalTurnId.trim()].filter(Boolean))] as string[];
+    for (const turnId of turnIds) {
+      try {
+        const persistedRunId = this.deps.storage.chatTurnTraces.get(turnId).durable?.runId?.trim();
+        if (persistedRunId) {
+          return persistedRunId;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  private assertInboundRequestOwnsBinding(
+    peer: A2APeerAuthResult,
+    binding: A2ATaskBindingRecord,
+    expected: { a2aTaskId: string; contextId: string; workspaceId: string; idempotencyKey: string },
+  ): void {
+    this.assertPeerOwnsBinding(peer, binding);
+    if (
+      binding.a2aTaskId !== expected.a2aTaskId ||
+      binding.contextId !== expected.contextId ||
+      binding.workspaceId !== expected.workspaceId ||
+      binding.idempotencyKey !== expected.idempotencyKey
+    ) {
+      throw new A2AJsonRpcServiceError(-32023, "A2A task request conflicts with persisted binding identity.");
+    }
+  }
+
+  private ensureA2ABindingResources(input: {
+    binding: A2ATaskBindingRecord;
+    identity: StableA2ADispatchIdentity;
+    message: ReturnType<typeof normalizeInboundMessage>;
+    peer: A2APeerAuthResult;
+    contextId: string;
+    idempotencyKey: string;
+  }): { binding: A2ATaskBindingRecord; ready: boolean } {
+    const claim = this.claimA2AResourceInitialization(input.binding.a2aTaskId, input.identity);
+    if (claim.status === "waiting") {
+      return { binding: claim.binding, ready: false };
+    }
+    if (claim.status === "ready") {
+      this.validateA2ABindingResources(claim.binding);
+      this.ensureA2AAcceptanceActivity(claim.binding, input.identity);
+      return { binding: claim.binding, ready: true };
+    }
+
+    let sessionId = claim.binding.sessionId;
+    let existingTask = claim.binding.localTaskId
+      ? this.requireA2ALocalTask(claim.binding, claim.binding.localTaskId)
+      : undefined;
+    if (!sessionId && existingTask) {
+      sessionId = existingTask.agenticContext?.parentSessionId?.trim();
+      if (!sessionId) {
+        throw new Error(`A2A task ${existingTask.taskId} has no canonical parent session.`);
+      }
+    }
+    if (sessionId) {
+      this.validateA2ASession(sessionId, claim.binding.workspaceId);
+    } else {
+      this.assertA2AResourceInitializationOwnership(claim.binding.a2aTaskId, claim.attemptId, claim.claimToken);
+      sessionId = this.deps.createChatSession({
+        stableKey: input.identity.sessionStableKey,
+        workspaceId: claim.binding.workspaceId,
+        title: `A2A: ${input.peer.label ?? input.peer.peerId}`,
+        tags: ["a2a", `a2a:${input.peer.peerId}`],
+        origin: "system",
+        mode: "chat",
+        includeInHistory: false,
+      }).sessionId;
+      this.validateA2ASession(sessionId, claim.binding.workspaceId);
+    }
+
+    this.assertA2AResourceInitializationOwnership(claim.binding.a2aTaskId, claim.attemptId, claim.claimToken);
+    const ensuredTask = existingTask
+      ? {
+          task: this.validateA2ALocalTask(existingTask, {
+            a2aTaskId: claim.binding.a2aTaskId,
+            localTaskId: existingTask.taskId,
+            sessionId,
+            workspaceId: claim.binding.workspaceId,
+          }),
+          created: false,
+        }
+      : this.ensureA2ALocalTask({
+          a2aTaskId: claim.binding.a2aTaskId,
+          localTaskId: input.identity.localTaskId,
+          message: input.message,
+          peer: input.peer,
+          sessionId,
+          workspaceId: claim.binding.workspaceId,
+        });
+    existingTask = ensuredTask.task;
+    const completed = this.completeA2AResourceInitialization({
+      a2aTaskId: claim.binding.a2aTaskId,
+      attemptId: claim.attemptId,
+      claimToken: claim.claimToken,
+      localTaskId: existingTask.taskId,
+      sessionId,
+    });
+    if (!completed.sessionId || !completed.localTaskId) {
+      return { binding: completed, ready: false };
+    }
+    this.validateA2ABindingResources(completed);
+    this.ensureA2AAcceptanceActivity(completed, input.identity);
+    return { binding: completed, ready: true };
+  }
+
+  private ensureA2AAcceptanceActivity(binding: A2ATaskBindingRecord, identity: StableA2ADispatchIdentity): void {
+    if (!binding.localTaskId) {
+      return;
+    }
+    const persisted = this.deps.tasks.persistDelegationActivityOnce(
+      identity.activityId,
+      binding.localTaskId,
+      {
+        agentId: `a2a:${binding.peerId}`,
+        activityType: "spawned",
+        message: "A2A peer message accepted and bound to a GoatCitadel task.",
+        metadata: {
+          a2aTaskId: binding.a2aTaskId,
+          contextId: binding.contextId,
+          idempotencyKey: binding.idempotencyKey,
+        },
+      },
+      binding.createdAt,
+    );
+    if (persisted.created) {
+      this.publishA2AAcceptanceActivitySafely(persisted.activity);
+    }
+  }
+
+  private publishA2AAcceptanceActivitySafely(activity: TaskActivityRecord): void {
+    try {
+      this.deps.tasks.publishDelegationActivity(activity);
+    } catch (error) {
+      process.stderr.write(
+        `[a2a-route] acceptance activity committed but realtime publication failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
+  }
+
+  private claimA2AResourceInitialization(
+    a2aTaskId: string,
+    identity: StableA2ADispatchIdentity,
+  ): A2AResourceInitializationClaimResult {
+    return this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
+      if (current.sessionId && current.localTaskId) {
+        return { binding: current, status: "ready" as const };
+      }
+      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      const initialization = readA2AResourceInitializationState(current);
+      if (
+        initialization.status === "owned" &&
+        initialization.claimToken &&
+        initialization.claimExpiresAt &&
+        Date.parse(initialization.claimExpiresAt) > Date.parse(databaseNow)
+      ) {
+        return { binding: current, status: "waiting" as const };
+      }
+      const attemptId = initialization.attemptId ?? identity.resourceAttemptId;
+      const claimToken = randomUUID();
+      const claimExpiresAt = new Date(Date.parse(databaseNow) + A2A_RESOURCE_INITIALIZATION_LEASE_MS).toISOString();
+      const claimed = this.deps.storage.a2aTaskBindings.update(
+        a2aTaskId,
+        {
+          metadata: {
+            ...current.metadata,
+            resourceInitialization: {
+              status: "owned",
+              attemptId,
+              claimToken,
+              claimedAt: databaseNow,
+              claimExpiresAt,
+            },
+          },
+        },
+        databaseNow,
+      );
+      return { binding: claimed, status: "owned" as const, attemptId, claimToken };
+    });
+  }
+
+  private assertA2AResourceInitializationOwnership(a2aTaskId: string, attemptId: string, claimToken: string): void {
+    const current = this.deps.storage.a2aTaskBindings.get(a2aTaskId);
+    const initialization = readA2AResourceInitializationState(current);
+    if (
+      initialization.status !== "owned" ||
+      initialization.attemptId !== attemptId ||
+      initialization.claimToken !== claimToken
+    ) {
+      throw new Error(`A2A resource initialization ownership for ${a2aTaskId} was lost.`);
+    }
+  }
+
+  private completeA2AResourceInitialization(input: {
+    a2aTaskId: string;
+    attemptId: string;
+    claimToken: string;
+    sessionId: string;
+    localTaskId: string;
+  }): A2ATaskBindingRecord {
+    return this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.a2aTaskBindings.getForUpdate(input.a2aTaskId);
+      if (current.sessionId && current.localTaskId) {
+        return current;
+      }
+      const initialization = readA2AResourceInitializationState(current);
+      if (
+        initialization.status !== "owned" ||
+        initialization.attemptId !== input.attemptId ||
+        initialization.claimToken !== input.claimToken
+      ) {
+        return current;
+      }
+      if (
+        (current.sessionId && current.sessionId !== input.sessionId) ||
+        (current.localTaskId && current.localTaskId !== input.localTaskId)
+      ) {
+        throw new Error(`A2A task ${input.a2aTaskId} has conflicting canonical resource linkage.`);
+      }
+      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      return this.deps.storage.a2aTaskBindings.update(
+        input.a2aTaskId,
+        {
+          sessionId: input.sessionId,
+          localTaskId: input.localTaskId,
+          state: "working",
+          metadata: {
+            ...current.metadata,
+            resourceInitialization: {
+              ...initialization.raw,
+              status: "applied",
+              attemptId: input.attemptId,
+              claimToken: input.claimToken,
+              completedAt: databaseNow,
+            },
+          },
+        },
+        databaseNow,
+      );
+    });
+  }
+
+  private validateA2ABindingResources(binding: A2ATaskBindingRecord): void {
+    if (!binding.sessionId || !binding.localTaskId) {
+      throw new Error(`A2A task binding ${binding.a2aTaskId} has incomplete canonical resource linkage.`);
+    }
+    this.validateA2ASession(binding.sessionId, binding.workspaceId);
+    this.requireA2ALocalTask(binding, binding.localTaskId, binding.sessionId);
+  }
+
+  private validateA2ASession(sessionId: string, workspaceId: string): void {
+    const meta = this.deps.storage.chatSessionMeta.get(sessionId);
+    if (!meta || meta.workspaceId !== workspaceId) {
+      throw new Error(`A2A session ${sessionId} conflicts with canonical workspace identity.`);
+    }
+  }
+
+  private requireA2ALocalTask(binding: A2ATaskBindingRecord, localTaskId: string, sessionId?: string): TaskRecord {
+    const task = this.deps.tasks.getTask(localTaskId, { workspaceId: binding.workspaceId });
+    return this.validateA2ALocalTask(task, {
+      a2aTaskId: binding.a2aTaskId,
+      localTaskId,
+      sessionId,
+      workspaceId: binding.workspaceId,
+    });
+  }
+
+  private validateA2ALocalTask(
+    task: TaskRecord,
+    expected: { a2aTaskId: string; localTaskId: string; sessionId?: string; workspaceId: string },
+  ): TaskRecord {
+    if (
+      task.taskId !== expected.localTaskId ||
+      task.workspaceId !== expected.workspaceId ||
+      task.agenticContext?.runId !== expected.a2aTaskId ||
+      (expected.sessionId && task.agenticContext?.parentSessionId !== expected.sessionId)
+    ) {
+      throw new Error(`Stable A2A task ${expected.localTaskId} conflicts with canonical task identity.`);
+    }
+    return task;
+  }
+
+  private ensureA2ALocalTask(input: {
+    a2aTaskId: string;
+    localTaskId: string;
+    message: ReturnType<typeof normalizeInboundMessage>;
+    peer: A2APeerAuthResult;
+    sessionId: string;
+    workspaceId: string;
+  }): { task: TaskRecord; created: boolean } {
+    const validate = (task: TaskRecord): TaskRecord => this.validateA2ALocalTask(task, input);
+    const existing = this.deps.storage.tasks.find(input.localTaskId);
+    if (existing) {
+      return { task: validate(existing), created: false };
+    }
+    try {
+      const task = this.deps.tasks.createTask(
+        {
+          workspaceId: input.workspaceId,
+          title: buildTaskTitle(input.message, input.peer.peerId),
+          description: "Peer-authenticated A2A message mapped into GoatCitadel durable task truth.",
+          status: "in_progress",
+          priority: "normal",
+          createdBy: `a2a:${input.peer.peerId}`,
+          agenticContext: {
+            runId: input.a2aTaskId,
+            parentSessionId: input.sessionId,
+            surface: "chat",
+            status: "running",
+            providerId: "a2a",
+            model: input.peer.peerId,
+          },
+        },
+        { taskId: input.localTaskId },
+      );
+      return { task: validate(task), created: true };
+    } catch (error) {
+      const raced = this.deps.storage.tasks.find(input.localTaskId);
+      if (!raced) {
+        throw error;
+      }
+      return { task: validate(raced), created: false };
+    }
+  }
+
+  private claimA2ADispatch(a2aTaskId: string, identity: StableA2ADispatchIdentity): A2ADispatchClaimResult {
+    return this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
+      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      const dispatch = readA2ADispatchState(current);
+      if (current.durableRunId || dispatch.status === "applied") {
+        return { binding: current, owned: false as const };
+      }
+      if (!dispatch.status && current.state === "failed") {
+        return { binding: current, owned: false as const };
+      }
+      if (
+        dispatch.status === "owned" &&
+        dispatch.claimToken &&
+        dispatch.claimExpiresAt &&
+        Date.parse(dispatch.claimExpiresAt) > Date.parse(databaseNow)
+      ) {
+        return { binding: current, owned: false as const };
+      }
+      const attemptId = dispatch.attemptId ?? identity.attemptId;
+      const turnIdentity = dispatch.turnIdentity ?? identity.turnIdentity;
+      const claimToken = randomUUID();
+      const claimExpiresAt = new Date(Date.parse(databaseNow) + A2A_DISPATCH_LEASE_MS).toISOString();
+      const claimed = this.deps.storage.a2aTaskBindings.update(
+        a2aTaskId,
+        {
+          state: current.state === "failed" ? "working" : current.state,
+          metadata: {
+            ...current.metadata,
+            dispatch: {
+              status: "owned",
+              attemptId,
+              turnIdentity,
+              claimToken,
+              claimedAt: databaseNow,
+              claimExpiresAt,
+            },
+          },
+        },
+        databaseNow,
+      );
+      return { binding: claimed, owned: true as const, attemptId, turnIdentity, claimToken };
+    });
+  }
+
+  private assertA2ADispatchOwnership(a2aTaskId: string, attemptId: string, claimToken: string): void {
+    const current = this.deps.storage.a2aTaskBindings.get(a2aTaskId);
+    const dispatch = readA2ADispatchState(current);
+    if (dispatch.status !== "owned" || dispatch.attemptId !== attemptId || dispatch.claimToken !== claimToken) {
+      throw new Error(`A2A dispatch ownership for ${a2aTaskId} was lost before provider dispatch.`);
+    }
+  }
+
+  private completeA2ADispatch(input: {
+    a2aTaskId: string;
+    attemptId: string;
+    claimToken: string;
+    durableRunId: string;
+    turnId: string;
+  }): { binding: A2ATaskBindingRecord; linkedTask?: TaskRecord } {
+    return this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.a2aTaskBindings.getForUpdate(input.a2aTaskId);
+      const dispatch = readA2ADispatchState(current);
+      if (current.durableRunId || dispatch.status === "applied") {
+        return { binding: current };
+      }
+      if (
+        dispatch.status !== "owned" ||
+        dispatch.attemptId !== input.attemptId ||
+        dispatch.claimToken !== input.claimToken
+      ) {
+        return { binding: current };
+      }
+      const databaseNow = this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      if (!current.localTaskId) {
+        throw new Error(`A2A task ${input.a2aTaskId} lost canonical local-task linkage before completion.`);
+      }
+      const linkedTask = this.deps.tasks.persistA2ADurableRunLink(current.localTaskId, input.durableRunId);
+      const binding = this.deps.storage.a2aTaskBindings.update(
+        input.a2aTaskId,
+        {
+          durableRunId: input.durableRunId,
+          state: current.state === "failed" ? "working" : current.state,
+          metadata: {
+            ...current.metadata,
+            chatTurnId: input.turnId,
+            durableRunId: input.durableRunId,
+            dispatch: {
+              ...dispatch.raw,
+              status: "applied",
+              attemptId: input.attemptId,
+              claimToken: input.claimToken,
+              completedAt: databaseNow,
+            },
+          },
+        },
+        databaseNow,
+      );
+      return { binding, linkedTask };
+    });
   }
 
   private getA2ATask(peer: A2APeerAuthResult, params: Record<string, unknown>, checkedAt: string): A2ABridgeTask {
@@ -847,40 +1336,263 @@ export class A2ARouteService {
     if (!taskId) {
       throw new A2AJsonRpcServiceError(-32602, "taskId is required.");
     }
-    const binding = this.deps.storage.a2aTaskBindings.find(taskId);
+    let binding = this.deps.storage.a2aTaskBindings.find(taskId);
     if (!binding) {
       throw new A2AJsonRpcServiceError(-32004, "A2A task binding was not found.");
     }
     this.assertPeerOwnsBinding(peer, binding);
-    if (binding.localTaskId) {
-      this.deps.tasks.updateTask(binding.localTaskId, { status: "blocked" });
-      this.deps.tasks.appendTaskActivity(binding.localTaskId, {
-        agentId: `a2a:${peer.peerId}`,
-        activityType: "control",
-        message: "A2A peer requested task cancellation.",
-        metadata: { a2aTaskId: taskId },
+    if (this.isCanonicalA2ACancellationApplied(binding)) {
+      binding = this.persistCanonicalA2ACancellation(binding.a2aTaskId, checkedAt);
+      return this.buildTaskFromBinding(binding, checkedAt);
+    }
+    const claimedAttempt = this.deps.storage.runImmediateTransaction(() => {
+      const lockedBinding = this.deps.storage.a2aTaskBindings.getForUpdate(taskId);
+      if (this.isCanonicalA2ACancellationApplied(lockedBinding)) {
+        const previous = readA2ACancellationState(lockedBinding);
+        const reconciled = this.deps.storage.a2aTaskBindings.update(
+          taskId,
+          {
+            state: "canceled",
+            metadata: {
+              ...lockedBinding.metadata,
+              cancellation: {
+                status: "applied",
+                attempt: previous.attempt,
+                controlId: previous.controlId,
+                requestedAt: checkedAt,
+                resultStatus: "canonical_reconciled",
+                runtimeEffect: "runtime_cancel",
+              },
+            },
+          },
+          checkedAt,
+        );
+        return { binding: reconciled, terminal: true as const };
+      }
+      const previous = readA2ACancellationState(lockedBinding);
+      const reusesPendingAttempt = previous.status === "pending" && Boolean(previous.controlId);
+      const attempt = reusesPendingAttempt ? previous.attempt : previous.attempt + 1;
+      const controlId =
+        (reusesPendingAttempt ? previous.controlId : undefined) ??
+        `a2a-cancel-${hashStableJson({
+          peerId: peer.peerId,
+          a2aTaskId: lockedBinding.a2aTaskId,
+          durableRunId: lockedBinding.durableRunId,
+          attempt,
+        }).slice(0, 32)}`;
+      const claimedBinding =
+        reusesPendingAttempt && lockedBinding.state !== "canceled"
+          ? lockedBinding
+          : this.deps.storage.a2aTaskBindings.update(
+              taskId,
+              {
+                ...(lockedBinding.state === "canceled" ? { state: "working" as const } : {}),
+                metadata: {
+                  ...lockedBinding.metadata,
+                  cancellation: { status: "pending", attempt, controlId, requestedAt: checkedAt },
+                },
+              },
+              checkedAt,
+            );
+      return { binding: claimedBinding, terminal: false as const, attempt, controlId };
+    });
+    binding = claimedAttempt.binding;
+    if (claimedAttempt.terminal) {
+      return this.buildTaskFromBinding(binding, checkedAt);
+    }
+    const { attempt, controlId } = claimedAttempt;
+    const failOrConverge = (status: "pending" | "failed", message: string): A2ABridgeTask => {
+      const reconciled = this.persistA2ACancellationOutcome({
+        taskId,
+        attempt,
+        controlId,
+        status,
+        checkedAt,
+        error: message,
       });
+      if (isA2ACancellationApplied(reconciled)) {
+        return this.buildTaskFromBinding(reconciled, checkedAt);
+      }
+      throw new A2AJsonRpcServiceError(-32025, `A2A task cancellation was not applied: ${message}`);
+    };
+    try {
+      if (!binding.localTaskId) {
+        throw new Error("A2A task binding has no canonical local task.");
+      }
+      if (binding.durableRunId) {
+        const localTask = this.deps.tasks.getTask(binding.localTaskId, { workspaceId: binding.workspaceId });
+        const linkedDurableRunId = localTask.agenticContext?.durableRunId?.trim();
+        if (linkedDurableRunId && linkedDurableRunId !== binding.durableRunId) {
+          throw new Error(
+            `A2A task durable linkage conflicts with binding truth (${linkedDurableRunId} != ${binding.durableRunId}).`,
+          );
+        }
+        if (!linkedDurableRunId) {
+          const repairedTask = this.deps.storage.runImmediateTransaction(() =>
+            this.deps.tasks.persistA2ADurableRunLink(binding.localTaskId!, binding.durableRunId!),
+          );
+          this.publishA2ADurableRunLinkSafely(repairedTask);
+        }
+      }
+    } catch (error) {
+      return failOrConverge(
+        "failed",
+        error instanceof Error ? error.message : "Canonical A2A cancellation preflight failed.",
+      );
     }
-    if (binding.durableRunId) {
-      await Promise.resolve(
-        this.deps.tasks.invokeAgenticControl(binding.durableRunId, {
-          action: "cancel",
-          reason: "A2A peer requested cancellation.",
-          actorId: `a2a:${peer.peerId}`,
-        }),
-      ).catch(() => undefined);
+
+    let controlResult: ReturnType<TaskLifecycleService["invokeAgenticControl"]>;
+    try {
+      controlResult = await Promise.resolve(
+        this.deps.tasks.invokeAgenticControl(
+          binding.a2aTaskId,
+          {
+            action: "cancel",
+            controlId,
+            reason: "A2A peer requested cancellation.",
+            actorId: `a2a:${peer.peerId}`,
+          },
+          { workspaceId: binding.workspaceId },
+        ),
+      );
+    } catch (error) {
+      return failOrConverge(
+        "pending",
+        error instanceof Error ? error.message : "Canonical A2A cancellation outcome is ambiguous.",
+      );
     }
-    const updated = this.deps.storage.a2aTaskBindings.update(
+    if (controlResult.status !== "applied" || controlResult.runtimeEffect !== "runtime_cancel") {
+      return failOrConverge(
+        "failed",
+        `Canonical agentic control did not cancel the runtime (${controlResult.status}/${controlResult.runtimeEffect}): ${controlResult.message}`,
+      );
+    }
+    const updated = this.persistA2ACancellationOutcome({
       taskId,
-      {
-        state: "canceled",
-        lastEventSequence: binding.lastEventSequence + 1,
-      },
+      attempt,
+      controlId,
+      status: "applied",
       checkedAt,
-    );
+      resultStatus: controlResult.status,
+      runtimeEffect: controlResult.runtimeEffect,
+    });
+    if (!isA2ACancellationApplied(updated)) {
+      throw new A2AJsonRpcServiceError(
+        -32025,
+        "A2A task cancellation applied at runtime but lost binding transition ownership; inspect canonical task truth.",
+      );
+    }
     const task = this.buildTaskFromBinding(updated, checkedAt);
     await this.pushNotifications.deliverForTask(peer, updated, task, checkedAt);
     return task;
+  }
+
+  private isCanonicalA2ACancellationApplied(binding: A2ATaskBindingRecord): boolean {
+    if (binding.durableRunId) {
+      try {
+        return this.deps.storage.durableRuns.getRun(binding.durableRunId).status === "cancelled";
+      } catch {
+        // Missing canonical durable truth cannot prove cancellation, and an
+        // attached task projection is not allowed to override that authority.
+        return false;
+      }
+    }
+    if (binding.localTaskId) {
+      try {
+        const task = this.deps.tasks.getTask(binding.localTaskId, { workspaceId: binding.workspaceId });
+        return task.agenticContext?.status === "cancelled";
+      } catch {
+        // Missing or cross-workspace task truth cannot prove cancellation.
+        return false;
+      }
+    }
+    return false;
+  }
+
+  private persistCanonicalA2ACancellation(a2aTaskId: string, checkedAt: string): A2ATaskBindingRecord {
+    return this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
+      if (!this.isCanonicalA2ACancellationApplied(current)) {
+        return current;
+      }
+      if (current.state === "canceled" && isA2ACancellationApplied(current)) {
+        return current;
+      }
+      const previous = readA2ACancellationState(current);
+      return this.deps.storage.a2aTaskBindings.update(
+        a2aTaskId,
+        {
+          state: "canceled",
+          metadata: {
+            ...current.metadata,
+            cancellation: {
+              status: "applied",
+              attempt: previous.attempt,
+              controlId: previous.controlId,
+              requestedAt: checkedAt,
+              resultStatus: "canonical_reconciled",
+              runtimeEffect: "runtime_cancel",
+            },
+          },
+        },
+        checkedAt,
+      );
+    });
+  }
+
+  private persistA2ACancellationOutcome(input: {
+    taskId: string;
+    attempt: number;
+    controlId: string;
+    status: "pending" | "failed" | "applied";
+    checkedAt: string;
+    error?: string;
+    resultStatus?: string;
+    runtimeEffect?: string;
+  }): A2ATaskBindingRecord {
+    return this.deps.storage.runImmediateTransaction(() => {
+      const current = this.deps.storage.a2aTaskBindings.getForUpdate(input.taskId);
+      if (isA2ACancellationApplied(current)) {
+        return current;
+      }
+      const cancellation = readA2ACancellationState(current);
+      if (cancellation.controlId !== input.controlId || cancellation.attempt !== input.attempt) {
+        return current;
+      }
+      return this.deps.storage.a2aTaskBindings.update(
+        input.taskId,
+        {
+          ...(input.status === "applied"
+            ? { state: "canceled" as const, lastEventSequence: current.lastEventSequence + 1 }
+            : {}),
+          metadata: {
+            ...current.metadata,
+            cancellation: {
+              status: input.status,
+              attempt: input.attempt,
+              controlId: input.controlId,
+              requestedAt: input.checkedAt,
+              ...(input.error ? { error: input.error } : {}),
+              ...(input.resultStatus ? { resultStatus: input.resultStatus } : {}),
+              ...(input.runtimeEffect ? { runtimeEffect: input.runtimeEffect } : {}),
+            },
+          },
+        },
+        input.checkedAt,
+      );
+    });
+  }
+
+  private publishA2ADurableRunLinkSafely(task: TaskRecord): void {
+    try {
+      this.deps.tasks.publishA2ADurableRunLink(task);
+    } catch (error) {
+      process.stderr.write(
+        `[a2a-route] durable link committed but realtime publication failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
   }
 
   private buildTaskFromBinding(binding: A2ATaskBindingRecord, checkedAt: string): A2ABridgeTask {
@@ -1016,6 +1728,119 @@ export class A2ARouteService {
     });
     return { jsonRpcUrl: jsonRpc.url };
   }
+}
+
+function buildStableA2ADispatchIdentity(peerId: string, idempotencyKey: string): StableA2ADispatchIdentity {
+  const identityHash = hashStableJson({ boundary: "a2a_inbound_dispatch", peerId, idempotencyKey });
+  return {
+    activityId: `activity_a2a_${identityHash}`,
+    attemptId: `dispatch_a2a_${identityHash}`,
+    localTaskId: `task_a2a_${identityHash}`,
+    resourceAttemptId: `resource_a2a_${identityHash}`,
+    sessionStableKey: `a2a:${peerId}:${idempotencyKey}`,
+    turnIdentity: {
+      turnId: `turn_a2a_${identityHash}`,
+      userMessageId: `msg_a2a_user_${identityHash}`,
+      assistantMessageId: `msg_a2a_assistant_${identityHash}`,
+    },
+  };
+}
+
+function readA2AResourceInitializationState(binding: A2ATaskBindingRecord): {
+  raw: Record<string, unknown>;
+  status?: "pending" | "owned" | "applied" | "failed";
+  attemptId?: string;
+  claimToken?: string;
+  claimExpiresAt?: string;
+} {
+  const value = binding.metadata.resourceInitialization;
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const rawStatus = readString(raw.status);
+  const status =
+    rawStatus === "pending" || rawStatus === "owned" || rawStatus === "applied" || rawStatus === "failed"
+      ? rawStatus
+      : undefined;
+  if (rawStatus && !status) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has an invalid persisted resource initialization status.`);
+  }
+  const attemptId = readString(raw.attemptId);
+  const claimToken = readString(raw.claimToken);
+  const claimExpiresAt = readString(raw.claimExpiresAt);
+  if (claimExpiresAt && !Number.isFinite(Date.parse(claimExpiresAt))) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has an invalid persisted resource initialization lease.`);
+  }
+  if (status === "owned" && (!attemptId || !claimToken || !claimExpiresAt)) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has incomplete persisted resource initialization ownership.`);
+  }
+  return { raw, status, attemptId, claimToken, claimExpiresAt };
+}
+
+function readA2ADispatchState(binding: A2ATaskBindingRecord): {
+  raw: Record<string, unknown>;
+  status?: "pending" | "owned" | "applied" | "failed";
+  attemptId?: string;
+  claimToken?: string;
+  claimExpiresAt?: string;
+  turnIdentity?: A2ATurnIdentity;
+} {
+  const value = binding.metadata.dispatch;
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const rawStatus = readString(raw.status);
+  const status =
+    rawStatus === "pending" || rawStatus === "owned" || rawStatus === "applied" || rawStatus === "failed"
+      ? rawStatus
+      : undefined;
+  if (rawStatus && !status) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has an invalid persisted dispatch status.`);
+  }
+  const turnValue = raw.turnIdentity;
+  const turnRaw =
+    turnValue && typeof turnValue === "object" && !Array.isArray(turnValue)
+      ? (turnValue as Record<string, unknown>)
+      : undefined;
+  const turnId = readString(turnRaw?.turnId);
+  const userMessageId = readString(turnRaw?.userMessageId);
+  const assistantMessageId = readString(turnRaw?.assistantMessageId);
+  const hasPartialTurnIdentity = Boolean(turnRaw && (turnId || userMessageId || assistantMessageId));
+  if (hasPartialTurnIdentity && (!turnId || !userMessageId || !assistantMessageId)) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has an invalid persisted turn identity.`);
+  }
+  const attemptId = readString(raw.attemptId);
+  const claimToken = readString(raw.claimToken);
+  const claimExpiresAt = readString(raw.claimExpiresAt);
+  if (claimExpiresAt && !Number.isFinite(Date.parse(claimExpiresAt))) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has an invalid persisted dispatch lease.`);
+  }
+  if (status === "owned" && (!attemptId || !claimToken || !claimExpiresAt)) {
+    throw new Error(`A2A task ${binding.a2aTaskId} has incomplete persisted dispatch ownership.`);
+  }
+  return {
+    raw,
+    status,
+    attemptId,
+    claimToken,
+    claimExpiresAt,
+    turnIdentity:
+      turnId && userMessageId && assistantMessageId ? { turnId, userMessageId, assistantMessageId } : undefined,
+  };
+}
+
+function readA2ACancellationState(binding: A2ATaskBindingRecord): {
+  status?: string;
+  attempt: number;
+  controlId?: string;
+} {
+  const raw = binding.metadata.cancellation;
+  const cancellation = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    status: readString(cancellation.status),
+    attempt: readNumber(cancellation.attempt) ?? 0,
+    controlId: readString(cancellation.controlId),
+  };
+}
+
+function isA2ACancellationApplied(binding: A2ATaskBindingRecord): boolean {
+  return readA2ACancellationState(binding).status === "applied";
 }
 
 function normalizeOutboundTransport(value: A2AOutboundTransport | undefined): A2AOutboundTransport {

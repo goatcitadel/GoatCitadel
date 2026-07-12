@@ -144,9 +144,10 @@ function composeDurableOwnership(source: ChatTurnRuntimeHost): ChatTurnDurableRu
     get backgroundTasks() {
       return source.backgroundTasks;
     },
-    beginDurableChatRun: (prepared, input, threadEventType) =>
-      source.beginDurableChatRun(prepared, input, threadEventType),
-    finalizeDurableChatRun: (runId, prepared, trace) => source.finalizeDurableChatRun(runId, prepared, trace),
+    beginDurableChatRun: (prepared, input, threadEventType, options) =>
+      source.beginDurableChatRun(prepared, input, threadEventType, options),
+    finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
+      source.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
     isFeatureEnabled: (flag) => source.isFeatureEnabled(flag),
     cancelDurableChatRun: source.cancelDurableChatRun
       ? (runId, actorId) => source.cancelDurableChatRun?.(runId, actorId)
@@ -161,8 +162,7 @@ function composeMemorySideEffects(source: ChatTurnRuntimeHost): ChatTurnMemorySi
     recordTurnCommitments: (input) => source.recordTurnCommitments(input),
     recordCapabilityGapFromTrace: (input) => source.recordCapabilityGapFromTrace(input),
     scheduleChatMemoryContextPrewarm: (input) => source.scheduleChatMemoryContextPrewarm(input),
-    scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
-      source.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+    scheduleMemoryMaintenancePostTurnEvaluation: (input) => source.scheduleMemoryMaintenancePostTurnEvaluation(input),
     scheduleBackgroundReviewIfDue: (input) => source.scheduleBackgroundReviewIfDue(input),
   };
 }
@@ -183,7 +183,7 @@ function composeSteerCollaborator(source: ChatTurnRuntimeHost): ChatTurnSteerCol
 
 function composeTranscriptIngress(source: ChatTurnRuntimeHost): ChatTurnTranscriptIngress {
   return {
-    ingestEvent: (idempotencyKey, payload) => source.ingestEvent(idempotencyKey, payload),
+    ingestEvent: (idempotencyKey, payload, options) => source.ingestEvent(idempotencyKey, payload, options),
   };
 }
 

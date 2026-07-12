@@ -9,6 +9,7 @@ import * as ts from "typescript";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
+  ApprovalResolveInput,
   AutonomousActivationGrantCreateInput,
   AutonomousActivationGrantEvaluationInput,
   AutonomousActivationGrantRevokeInput,
@@ -68,6 +69,7 @@ import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { validateSkillContent } from "./skill-content-validation.js";
+import type { ApprovalResolveResult } from "./approval-types.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
@@ -112,6 +114,7 @@ export interface CapabilitySystemServiceOptions {
   readSkillStates: () => Map<string, SkillStateRecord>;
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
+  resolveApproval: (approvalId: string, input: ApprovalResolveInput) => Promise<ApprovalResolveResult>;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
   readPolicySnapshot: () => Record<string, unknown>;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
@@ -1014,7 +1017,9 @@ export class CapabilitySystemService {
       });
     } catch (error) {
       const lateApprovalId = approvalIdFromApprovalCreateFailure(error);
-      const cleanup = lateApprovalId ? this.terminalizeLateFailedCodeModeApproval(lateApprovalId, error) : undefined;
+      const cleanup = lateApprovalId
+        ? await this.terminalizeLateFailedCodeModeApproval(lateApprovalId, error)
+        : undefined;
       publishCreationFailure(
         buildFailedRunRecord(error, "approval_create_failed", "approval_create", lateApprovalId, cleanup),
       );
@@ -1116,7 +1121,7 @@ export class CapabilitySystemService {
         void pendingResolveError;
       }
       try {
-        this.options.storage.approvals.resolve(approval.approvalId, {
+        await this.options.resolveApproval(approval.approvalId, {
           decision: "reject",
           resolvedBy: "system",
           resolutionNote: "Code Mode approval registration failed before execution could be queued.",
@@ -1914,11 +1919,14 @@ export class CapabilitySystemService {
     return undefined;
   }
 
-  private terminalizeLateFailedCodeModeApproval(approvalId: string, error: unknown): LateCodeModeApprovalCleanupResult {
+  private async terminalizeLateFailedCodeModeApproval(
+    approvalId: string,
+    error: unknown,
+  ): Promise<LateCodeModeApprovalCleanupResult> {
     const normalized = normalizeCodeModeIpcError(error);
     const cleanupErrors: string[] = [];
     try {
-      this.options.storage.approvals.resolve(approvalId, {
+      await this.options.resolveApproval(approvalId, {
         decision: "reject",
         resolvedBy: "system",
         resolutionNote: `Code Mode approval creation failed after the approval row was created: ${normalized.message}`,

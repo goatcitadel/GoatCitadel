@@ -409,11 +409,12 @@ describe("approvals routes", () => {
       method: "POST",
       url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/remote-token",
       payload: {
-        connectorId: "mission-control",
+        connectorId: "  mission-control  ",
       },
     });
 
     expect(response.statusCode).toBe(201);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
     expect(response.json()).toMatchObject({
       tokenId: "rat_123",
       token: "grat_token",
@@ -423,7 +424,7 @@ describe("approvals routes", () => {
     expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
       "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
       expect.objectContaining({
-        connectorId: "mission-control",
+        connectorId: "browser:mission-control",
       }),
     );
   });
@@ -459,6 +460,7 @@ describe("approvals routes", () => {
     expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
       token: "grat_token",
       decision: "approve",
+      connectorId: "browser:mission-control",
     });
     expect(built.requireOperatorAuth).not.toHaveBeenCalled();
   });
@@ -677,7 +679,7 @@ describe("approvals routes", () => {
     expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
       "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
       expect.objectContaining({
-        connectorId: "mission-control",
+        connectorId: "browser:mission-control",
         issuedBy: "ip:127.0.0.1",
       }),
     );

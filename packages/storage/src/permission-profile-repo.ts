@@ -170,6 +170,22 @@ export class PermissionProfileRepository {
   private readonly listActiveOverridesStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const optionalSurface = db.dialect === "postgres" ? "CAST(@surface AS TEXT)" : "@surface";
+    const overrideNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
+    const overrideExpiryInstant =
+      db.dialect === "postgres" ? "gc_try_parse_timestamptz(expires_at)" : "julianday(expires_at)";
+    const overrideNowText =
+      db.dialect === "postgres"
+        ? `to_char(statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+    const overrideExpiresText =
+      db.dialect === "postgres"
+        ? `to_char(
+            (statement_timestamp() + (CAST(@ttlSeconds AS DOUBLE PRECISION) * INTERVAL '1 second'))
+              AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          )`
+        : "strftime('%Y-%m-%dT%H:%M:%fZ', julianday('now') + (CAST(@ttlSeconds AS REAL) / 86400.0))";
     this.createProfileStmt = db.prepare(`
       INSERT INTO permission_profiles (
         profile_id, label, description, builtin, status, scope, scope_ref, approval_mode, legacy_tool_profile,
@@ -227,7 +243,7 @@ export class PermissionProfileRepository {
         AND COALESCE(operator_id, '') = COALESCE(@operatorId, '')
         AND COALESCE(workspace_id, '') = COALESCE(@workspaceId, '')
         AND COALESCE(session_id, '') = COALESCE(@sessionId, '')
-        AND (@surface IS NULL OR COALESCE(surface, 'all') = COALESCE(@surface, 'all'))
+        AND (${optionalSurface} IS NULL OR COALESCE(surface, 'all') = COALESCE(${optionalSurface}, 'all'))
     `);
     this.createActivationStmt = db.prepare(`
       INSERT INTO permission_profile_activations (
@@ -248,7 +264,8 @@ export class PermissionProfileRepository {
       INSERT INTO local_operator_overrides (
         override_id, operator_id, scope, scope_ref, reason, status, created_by, created_at, expires_at, revoked_at, revoked_by
       ) VALUES (
-        @overrideId, @operatorId, @scope, @scopeRef, @reason, 'active', @createdBy, @createdAt, @expiresAt, NULL, NULL
+        @overrideId, @operatorId, @scope, @scopeRef, @reason, 'active', @createdBy,
+        ${overrideNowText}, ${overrideExpiresText}, NULL, NULL
       )
     `);
     this.getOverrideStmt = db.prepare("SELECT * FROM local_operator_overrides WHERE override_id = ?");
@@ -262,11 +279,14 @@ export class PermissionProfileRepository {
     this.expireOverridesStmt = db.prepare(`
       UPDATE local_operator_overrides
       SET status = 'expired'
-      WHERE status = 'active' AND expires_at <= @now
+      WHERE status = 'active'
+        AND (${overrideExpiryInstant} IS NULL OR ${overrideExpiryInstant} <= ${overrideNowInstant})
     `);
     this.listActiveOverridesStmt = db.prepare(`
       SELECT * FROM local_operator_overrides
-      WHERE status = 'active' AND expires_at > @now
+      WHERE status = 'active'
+        AND ${overrideExpiryInstant} IS NOT NULL
+        AND ${overrideExpiryInstant} > ${overrideNowInstant}
       ORDER BY expires_at DESC, created_at DESC
       LIMIT 1000
     `);
@@ -439,12 +459,14 @@ export class PermissionProfileRepository {
     if (input.scope !== "operator" && !input.scopeRef?.trim()) {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "scopeRef" });
     }
+    if (!Number.isFinite(input.ttlSeconds)) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "ttlSeconds" });
+    }
     const ttlSeconds = Math.max(60, Math.min(60 * 60, Math.floor(input.ttlSeconds)));
     const overrideId = `local-override-${randomUUID()}`;
-    const createdAtMs = Date.parse(now);
-    const expiresAt = new Date(
-      (Number.isFinite(createdAtMs) ? createdAtMs : Date.now()) + ttlSeconds * 1000,
-    ).toISOString();
+    // The database owns the bypass window. `now` remains accepted only for
+    // source compatibility so a skewed Gateway cannot mint a long-lived grant.
+    void now;
     this.createOverrideStmt.run({
       overrideId,
       operatorId,
@@ -452,8 +474,7 @@ export class PermissionProfileRepository {
       scopeRef: normalizeNullable(input.scopeRef?.trim()),
       reason,
       createdBy: input.createdBy,
-      createdAt: now,
-      expiresAt,
+      ttlSeconds,
     });
     return this.getLocalOperatorOverride(overrideId);
   }
@@ -482,8 +503,9 @@ export class PermissionProfileRepository {
   }
 
   public listActiveLocalOperatorOverrides(now = new Date().toISOString()): LocalOperatorOverrideRecord[] {
-    this.expireOverrides(now);
-    return (this.listActiveOverridesStmt.all({ now }) as LocalOperatorOverrideRow[]).map(mapOverrideRow);
+    void now;
+    this.expireOverrides();
+    return (this.listActiveOverridesStmt.all() as LocalOperatorOverrideRow[]).map(mapOverrideRow);
   }
 
   private resolveProfile(input: PermissionProfileContextQuery): PermissionProfileRecord {
@@ -530,7 +552,8 @@ export class PermissionProfileRepository {
   }
 
   private expireOverrides(now = new Date().toISOString()): void {
-    this.expireOverridesStmt.run({ now });
+    void now;
+    this.expireOverridesStmt.run();
   }
 }
 

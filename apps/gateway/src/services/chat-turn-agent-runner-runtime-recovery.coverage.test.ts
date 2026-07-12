@@ -13,6 +13,55 @@ import {
 } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner runtime recovery coverage", () => {
+  it("passes the durable lease fence through to the real tool execution boundary", async () => {
+    let leaseOwned = true;
+    let sideEffectStarted = false;
+    const leaseError = new Error("worker A no longer owns the durable lease");
+    leaseError.name = "DurableWorkerInterruptionError";
+    const canonicalWriteFence = vi.fn(<T>(work: () => T): T => {
+      if (!leaseOwned) {
+        throw leaseError;
+      }
+      return work();
+    });
+    const invokeTool = vi.fn(
+      async (_request: ToolInvokeRequest, options?: { executionFence?: () => void }): Promise<ToolInvokeResult> => {
+        leaseOwned = false;
+        options?.executionFence?.();
+        sideEffectStarted = true;
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-stale-worker-copy",
+          result: { copied: true },
+        };
+      },
+    );
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      toolNames: ["fs.copy"],
+    });
+
+    await expect(
+      executeToolCall({
+        input: turnInput({
+          sessionId: "sess-stale-worker-copy",
+          content: "Copy the file once.",
+          mode: "code",
+          canonicalWriteFence,
+        }),
+        turnId: "turn-stale-worker-copy",
+        toolName: "fs.copy",
+        rawArgs: { from: "source.txt", to: "destination.txt" },
+        localFileIntent: true,
+      }),
+    ).rejects.toBe(leaseError);
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(sideEffectStarted).toBe(false);
+    expect(canonicalWriteFence.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("returns deterministic partial extraction output when final synthesis fails after tool evidence", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
@@ -189,12 +238,14 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
       contentType: input.contentType,
       snippet: input.snippet,
     }));
+    const canonicalWriteFence = vi.fn(<T>(work: () => T): T => work());
     const executeToolCall = createExecuteToolCall({ invokeTool, persistToolArtifact });
 
     const result = await executeToolCall({
       input: turnInput({
         content: "Interact with https://example.com/report and summarize the page.",
         webMode: "auto",
+        canonicalWriteFence,
       }),
       turnId: "turn-large-browser-output",
       toolName: "browser.interact",
@@ -206,8 +257,10 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
         toolName: "browser.interact",
         content: largeText,
         contentType: "text/plain; charset=utf-8",
+        canonicalWriteFence,
       }),
     );
+    expect(canonicalWriteFence).toHaveBeenCalled();
     expect(result.record.result).toMatchObject({
       artifactId: "artifact-large-browser-output",
       artifactPath: "artifacts/chat/large-browser-output.txt",

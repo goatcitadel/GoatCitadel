@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import type { SkillLifecycleRecord } from "@goatcitadel/contracts";
 import { normalizeSkillId } from "./skill-import-service.js";
@@ -80,6 +80,46 @@ export interface SkillMutationResult {
   readonly snapshot: SkillMutationSnapshot;
   readonly validation: SkillContentValidationResult;
   readonly changeHash: string;
+  /** True when a durable replay returned the already-committed mutation. */
+  readonly replayed?: boolean;
+}
+
+/**
+ * Exact, validated intent persisted by a durable post-commit child before any
+ * filesystem mutation. Artifact paths and prior bytes are intentionally not
+ * serialized: a durable plan is valid only for a previously unused target,
+ * and every recovery resolves the jailed paths from the current runtime root.
+ */
+export interface PreparedSkillMutationPlan {
+  readonly version: 1;
+  readonly skillId: string;
+  readonly evaluationRunId: string;
+  readonly sourceTurnId?: string;
+  readonly summary?: string;
+  readonly skillMarkdown: string;
+  readonly preparedAt: string;
+  readonly changeHash: string;
+}
+
+interface MaterializedPreparedSkillMutation {
+  readonly plan: PreparedSkillMutationPlan;
+  readonly skillDir: string;
+  readonly skillFilePath: string;
+  readonly sourceJsonPath: string;
+  readonly sourceJson: string;
+  readonly lifecycle: SkillLifecycleRecord;
+  readonly validation: SkillContentValidationResult;
+  readonly snapshot: SkillMutationSnapshot;
+}
+
+interface SkillMutationWritePlan {
+  readonly skillId: string;
+  readonly skillDir: string;
+  readonly skillFilePath: string;
+  readonly sourceJsonPath: string;
+  readonly sourceJson: string;
+  readonly lifecycle: SkillLifecycleRecord;
+  readonly result: SkillMutationResult;
 }
 
 export class SkillMutationService {
@@ -115,7 +155,176 @@ export class SkillMutationService {
    * lifecycle row and a reversible snapshot. Does not promote to callable.
    */
   public async draftSkillMutation(input: DraftSkillMutationInput): Promise<SkillMutationResult> {
+    const replay = await this.readCommittedDraftReplay(input);
+    if (replay) {
+      return replay;
+    }
     return this.applySkillMutation(input);
+  }
+
+  /** Synchronous replay-aware variant used by existing synchronous activation callers. */
+  public draftSkillMutationSync(input: DraftSkillMutationInput): SkillMutationResult {
+    const replay = this.readCommittedDraftReplaySync(input);
+    return replay ?? this.applySkillMutationSync(input);
+  }
+
+  /**
+   * Validate and freeze one deterministic durable skill intent without touching
+   * either the filesystem or lifecycle store. The target must be unused before
+   * this plan is persisted; only the persisted plan may later create it.
+   */
+  public prepareDurableSkillMutation(input: DraftSkillMutationInput): PreparedSkillMutationPlan {
+    const evaluationRunId = input.evaluationRunId?.trim();
+    const requestedSkillId = input.skillId?.trim();
+    if (!evaluationRunId || !requestedSkillId) {
+      throw new Error("Durable skill mutation requires deterministic skillId and evaluationRunId values.");
+    }
+    const planned = this.planMutation({ ...input, skillId: requestedSkillId, evaluationRunId });
+    if (
+      planned.result.snapshot.existed ||
+      planned.result.snapshot.priorSourceJson !== undefined ||
+      planned.result.snapshot.priorLifecycle !== undefined
+    ) {
+      throw new Error(`Durable skill mutation target ${planned.skillId} conflicts with pre-existing state.`);
+    }
+    const provenance = parseSkillMutationProvenance(planned.sourceJson);
+    return {
+      version: 1,
+      skillId: planned.skillId,
+      evaluationRunId,
+      ...(input.sourceTurnId?.trim() ? { sourceTurnId: input.sourceTurnId.trim() } : {}),
+      ...(input.summary?.trim() ? { summary: input.summary.trim() } : {}),
+      skillMarkdown: input.skillMarkdown,
+      preparedAt: provenance.authoredAt,
+      changeHash: planned.result.changeHash,
+    };
+  }
+
+  /**
+   * Materialize a persisted durable plan outside the database transaction.
+   * Existing exact bytes are a replay; missing companion bytes are repaired;
+   * any different bytes or foreign lifecycle ownership fail closed.
+   */
+  public applyPreparedSkillMutationFilesSync(prepared: PreparedSkillMutationPlan): void {
+    const plan = this.materializePreparedSkillMutation(prepared);
+    this.assertPreparedLifecycleCompatible(plan);
+    fsSync.mkdirSync(plan.skillDir, { recursive: true });
+    const createdPaths: string[] = [];
+    try {
+      if (createOrVerifyExactFileSync(plan.skillFilePath, prepared.skillMarkdown)) {
+        createdPaths.push(plan.skillFilePath);
+      }
+      if (createOrVerifyExactFileSync(plan.sourceJsonPath, plan.sourceJson)) {
+        createdPaths.push(plan.sourceJsonPath);
+      }
+    } catch (error) {
+      const rollbackErrors = rollbackCreatedExactFilesSync(createdPaths, plan);
+      if (rollbackErrors.length > 0) {
+        throw buildSkillMutationRollbackError(error, rollbackErrors);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Commit only database lifecycle state for an already-materialized durable
+   * plan. Callers wrap this with the child stage receipt transaction.
+   */
+  public commitPreparedSkillMutation(prepared: PreparedSkillMutationPlan): SkillMutationResult {
+    const plan = this.materializePreparedSkillMutation(prepared);
+    assertExactPreparedArtifact(plan.skillFilePath, prepared.skillMarkdown, prepared.evaluationRunId);
+    assertExactPreparedArtifact(plan.sourceJsonPath, plan.sourceJson, prepared.evaluationRunId);
+    const existing = this.assertPreparedLifecycleCompatible(plan);
+    const lifecycle = existing ?? this.skillLifecycle.upsert(plan.lifecycle);
+    return {
+      skillId: prepared.skillId,
+      skillDir: plan.skillDir,
+      skillFilePath: plan.skillFilePath,
+      lifecycle,
+      snapshot: plan.snapshot,
+      validation: plan.validation,
+      changeHash: prepared.changeHash,
+      ...(existing ? { replayed: true } : {}),
+    };
+  }
+
+  private async readCommittedDraftReplay(input: DraftSkillMutationInput): Promise<SkillMutationResult | undefined> {
+    const replay = this.resolveCommittedDraftReplay(input);
+    if (!replay) {
+      return undefined;
+    }
+    let committedMarkdown: string;
+    try {
+      committedMarkdown = await fs.readFile(replay.skillFilePath, "utf8");
+    } catch (error) {
+      throw new Error(`Committed replay identity ${input.evaluationRunId} is missing its skill artifact.`, {
+        cause: error,
+      });
+    }
+    return this.buildCommittedDraftReplay(input, replay, committedMarkdown);
+  }
+
+  private readCommittedDraftReplaySync(input: DraftSkillMutationInput): SkillMutationResult | undefined {
+    const replay = this.resolveCommittedDraftReplay(input);
+    if (!replay) {
+      return undefined;
+    }
+    let committedMarkdown: string;
+    try {
+      committedMarkdown = fsSync.readFileSync(replay.skillFilePath, "utf8");
+    } catch (error) {
+      throw new Error(`Committed replay identity ${input.evaluationRunId} is missing its skill artifact.`, {
+        cause: error,
+      });
+    }
+    return this.buildCommittedDraftReplay(input, replay, committedMarkdown);
+  }
+
+  private resolveCommittedDraftReplay(input: DraftSkillMutationInput):
+    | {
+        skillId: string;
+        skillDir: string;
+        skillFilePath: string;
+        sourceJsonPath: string;
+        existing: SkillLifecycleRecord;
+      }
+    | undefined {
+    if (!input.evaluationRunId?.trim() || !input.skillId?.trim()) {
+      return undefined;
+    }
+    const skillId = normalizeSkillId(input.skillId);
+    const existing = this.skillLifecycle.find(skillId);
+    if (existing?.provenance?.sourceRef !== input.evaluationRunId) {
+      return undefined;
+    }
+    const skillDir = this.resolveSkillDir(skillId);
+    const skillFilePath = path.join(skillDir, "SKILL.md");
+    const sourceJsonPath = path.join(skillDir, "source.json");
+    assertWritePathInJail(skillFilePath, [this.selfSkillsRoot]);
+    return { skillId, skillDir, skillFilePath, sourceJsonPath, existing };
+  }
+
+  private buildCommittedDraftReplay(
+    input: DraftSkillMutationInput,
+    replay: NonNullable<ReturnType<SkillMutationService["resolveCommittedDraftReplay"]>>,
+    committedMarkdown: string,
+  ): SkillMutationResult {
+    const validation = validateSkillContent({ skillMarkdown: committedMarkdown });
+    if (!validation.valid) {
+      throw new Error(
+        `Committed replay identity ${input.evaluationRunId} has an invalid skill artifact: ${validation.errors.join("; ")}`,
+      );
+    }
+    return {
+      skillId: replay.skillId,
+      skillDir: replay.skillDir,
+      skillFilePath: replay.skillFilePath,
+      lifecycle: replay.existing,
+      snapshot: this.captureSnapshot(replay.skillId, replay.skillFilePath, replay.sourceJsonPath),
+      validation,
+      changeHash: createHash("sha256").update(committedMarkdown, "utf8").digest("hex"),
+      replayed: true,
+    };
   }
 
   /**
@@ -124,11 +333,19 @@ export class SkillMutationService {
    */
   public async applySkillMutation(input: DraftSkillMutationInput): Promise<SkillMutationResult> {
     const plan = this.planMutation(input);
-    await fs.mkdir(plan.skillDir, { recursive: true });
-    await fs.writeFile(plan.skillFilePath, input.skillMarkdown, "utf8");
-    await fs.writeFile(plan.sourceJsonPath, plan.sourceJson, "utf8");
-    const stored = this.skillLifecycle.upsert(plan.lifecycle);
-    return { ...plan.result, lifecycle: stored };
+    try {
+      await fs.mkdir(plan.skillDir, { recursive: true });
+      await fs.writeFile(plan.skillFilePath, input.skillMarkdown, "utf8");
+      await fs.writeFile(plan.sourceJsonPath, plan.sourceJson, "utf8");
+      const stored = this.skillLifecycle.upsert(plan.lifecycle);
+      return { ...plan.result, lifecycle: stored };
+    } catch (error) {
+      const rollbackErrors = await this.rollbackFailedMutation(plan);
+      if (rollbackErrors.length > 0) {
+        throw buildSkillMutationRollbackError(error, rollbackErrors);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -138,11 +355,19 @@ export class SkillMutationService {
    */
   public applySkillMutationSync(input: DraftSkillMutationInput): SkillMutationResult {
     const plan = this.planMutation(input);
-    fsSync.mkdirSync(plan.skillDir, { recursive: true });
-    fsSync.writeFileSync(plan.skillFilePath, input.skillMarkdown, "utf8");
-    fsSync.writeFileSync(plan.sourceJsonPath, plan.sourceJson, "utf8");
-    const stored = this.skillLifecycle.upsert(plan.lifecycle);
-    return { ...plan.result, lifecycle: stored };
+    try {
+      fsSync.mkdirSync(plan.skillDir, { recursive: true });
+      fsSync.writeFileSync(plan.skillFilePath, input.skillMarkdown, "utf8");
+      fsSync.writeFileSync(plan.sourceJsonPath, plan.sourceJson, "utf8");
+      const stored = this.skillLifecycle.upsert(plan.lifecycle);
+      return { ...plan.result, lifecycle: stored };
+    } catch (error) {
+      const rollbackErrors = this.rollbackFailedMutationSync(plan);
+      if (rollbackErrors.length > 0) {
+        throw buildSkillMutationRollbackError(error, rollbackErrors);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -155,16 +380,136 @@ export class SkillMutationService {
     return this.captureSnapshot(skillId, path.join(skillDir, "SKILL.md"), path.join(skillDir, "source.json"));
   }
 
+  private materializePreparedSkillMutation(prepared: PreparedSkillMutationPlan): MaterializedPreparedSkillMutation {
+    assertPreparedSkillMutationShape(prepared);
+    const validation = this.validateDraft({
+      skillMarkdown: prepared.skillMarkdown,
+      skillId: prepared.skillId,
+      evaluationRunId: prepared.evaluationRunId,
+      sourceTurnId: prepared.sourceTurnId,
+      summary: prepared.summary,
+    });
+    const skillId = this.resolveSkillId(
+      { skillMarkdown: prepared.skillMarkdown, skillId: prepared.skillId },
+      validation,
+    );
+    if (skillId !== prepared.skillId) {
+      throw new Error(`Durable skill plan identity ${prepared.skillId} does not match its validated skill id.`);
+    }
+    const changeHash = createHash("sha256").update(prepared.skillMarkdown, "utf8").digest("hex");
+    if (changeHash !== prepared.changeHash) {
+      throw new Error(`Durable skill plan ${prepared.evaluationRunId} failed its content hash check.`);
+    }
+    const skillDir = this.resolveSkillDir(skillId);
+    const skillFilePath = path.join(skillDir, "SKILL.md");
+    const sourceJsonPath = path.join(skillDir, "source.json");
+    assertWritePathInJail(skillFilePath, [this.selfSkillsRoot]);
+    assertWritePathInJail(sourceJsonPath, [this.selfSkillsRoot]);
+    const provenance: SkillMutationProvenance = {
+      source: "self_generated",
+      evaluationRunId: prepared.evaluationRunId,
+      sourceTurnId: prepared.sourceTurnId,
+      summary: prepared.summary,
+      authoredAt: prepared.preparedAt,
+    };
+    const lifecycle: SkillLifecycleRecord = {
+      skillId,
+      category: "self_generated",
+      lifecycleState: "candidate",
+      trustLabel: "Self-authored (candidate)",
+      reviewWarning: "Self-authored skill is non-callable until governed activation.",
+      provenance: {
+        source: "self_generated",
+        sourceRef: prepared.evaluationRunId,
+        sourceProvider: "self_generated",
+      },
+      createdAt: prepared.preparedAt,
+      updatedAt: prepared.preparedAt,
+    };
+    return {
+      plan: prepared,
+      skillDir,
+      skillFilePath,
+      sourceJsonPath,
+      sourceJson: `${JSON.stringify(provenance, null, 2)}\n`,
+      lifecycle,
+      validation,
+      snapshot: {
+        skillId,
+        skillFilePath,
+        existed: false,
+        capturedAt: prepared.preparedAt,
+      },
+    };
+  }
+
+  private assertPreparedLifecycleCompatible(plan: MaterializedPreparedSkillMutation): SkillLifecycleRecord | undefined {
+    const existing = this.skillLifecycle.find(plan.plan.skillId);
+    if (!existing) {
+      return undefined;
+    }
+    if (
+      existing.category !== "self_generated" ||
+      existing.provenance?.sourceRef !== plan.plan.evaluationRunId ||
+      existing.provenance?.sourceProvider !== "self_generated" ||
+      existing.lifecycleState === "revoked"
+    ) {
+      throw new Error(`Durable skill mutation target ${plan.plan.skillId} has conflicting lifecycle ownership.`);
+    }
+    return existing;
+  }
+
+  private async rollbackFailedMutation(plan: SkillMutationWritePlan): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    try {
+      await restoreMutationFiles(plan, plan.result.snapshot);
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.restoreFailedMutationLifecycle(plan);
+    } catch (error) {
+      errors.push(error);
+    }
+    return errors;
+  }
+
+  private rollbackFailedMutationSync(plan: SkillMutationWritePlan): unknown[] {
+    const errors: unknown[] = [];
+    try {
+      restoreMutationFilesSync(plan, plan.result.snapshot);
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.restoreFailedMutationLifecycle(plan);
+    } catch (error) {
+      errors.push(error);
+    }
+    return errors;
+  }
+
+  private restoreFailedMutationLifecycle(plan: SkillMutationWritePlan): void {
+    const prior = plan.result.snapshot.priorLifecycle;
+    if (prior) {
+      this.skillLifecycle.upsert(prior);
+      return;
+    }
+    const current = this.skillLifecycle.find(plan.skillId);
+    if (!current || current.provenance?.sourceRef !== plan.lifecycle.provenance?.sourceRef) {
+      return;
+    }
+    this.skillLifecycle.upsert({
+      ...current,
+      lifecycleState: "revoked",
+      trustLabel: "Self-authored (incomplete mutation)",
+      reviewWarning: "Skill mutation rolled back after an incomplete persistence boundary.",
+      updatedAt: this.now().toISOString(),
+    });
+  }
+
   /** Validate, jail-resolve, and assemble all write artifacts without touching disk. */
-  private planMutation(input: DraftSkillMutationInput): {
-    skillId: string;
-    skillDir: string;
-    skillFilePath: string;
-    sourceJsonPath: string;
-    sourceJson: string;
-    lifecycle: SkillLifecycleRecord;
-    result: SkillMutationResult;
-  } {
+  private planMutation(input: DraftSkillMutationInput): SkillMutationWritePlan {
     const validation = this.validateDraft(input);
     const skillId = this.resolveSkillId(input, validation);
     const skillDir = this.resolveSkillDir(skillId);
@@ -358,6 +703,179 @@ export class SkillMutationService {
     assertWritePathInJail(skillDir, [this.selfSkillsRoot]);
     return skillDir;
   }
+}
+
+function assertPreparedSkillMutationShape(prepared: PreparedSkillMutationPlan): void {
+  if (
+    prepared.version !== 1 ||
+    typeof prepared.skillId !== "string" ||
+    !prepared.skillId.trim() ||
+    typeof prepared.evaluationRunId !== "string" ||
+    !prepared.evaluationRunId.trim() ||
+    typeof prepared.skillMarkdown !== "string" ||
+    typeof prepared.preparedAt !== "string" ||
+    !Number.isFinite(Date.parse(prepared.preparedAt)) ||
+    typeof prepared.changeHash !== "string" ||
+    !/^[a-f0-9]{64}$/.test(prepared.changeHash) ||
+    (prepared.sourceTurnId !== undefined && typeof prepared.sourceTurnId !== "string") ||
+    (prepared.summary !== undefined && typeof prepared.summary !== "string")
+  ) {
+    throw new Error("Persisted durable skill mutation plan is malformed.");
+  }
+}
+
+function parseSkillMutationProvenance(sourceJson: string): SkillMutationProvenance {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(sourceJson);
+  } catch (error) {
+    throw new Error("Prepared skill provenance is malformed.", { cause: error });
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    (parsed as { source?: unknown }).source !== "self_generated" ||
+    typeof (parsed as { authoredAt?: unknown }).authoredAt !== "string"
+  ) {
+    throw new Error("Prepared skill provenance is malformed.");
+  }
+  return parsed as SkillMutationProvenance;
+}
+
+function createOrVerifyExactFileSync(filePath: string, expected: string): boolean {
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+  let createdTarget: boolean | undefined;
+  let operationError: unknown;
+  try {
+    fsSync.writeFileSync(tempPath, expected, { encoding: "utf8", flag: "wx" });
+    try {
+      fsSync.linkSync(tempPath, filePath);
+      createdTarget = true;
+    } catch (error) {
+      if (!isNodeErrorCode(error, "EEXIST")) {
+        throw error;
+      }
+      assertExactPreparedArtifact(filePath, expected, "persisted plan");
+      createdTarget = false;
+    }
+  } catch (error) {
+    operationError = error;
+  }
+  let cleanupError: unknown;
+  try {
+    fsSync.rmSync(tempPath, { force: true });
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (operationError) {
+    throw cleanupError ? buildSkillMutationRollbackError(operationError, [cleanupError]) : operationError;
+  }
+  if (createdTarget === undefined) {
+    throw cleanupError ?? new Error(`Durable skill artifact ${path.basename(filePath)} was not published.`);
+  }
+  // The exact target has already been atomically published or verified. A
+  // hidden, non-callable temp file is cleanup debt, not a reason to make the
+  // caller lose ownership of the successfully published target.
+  return createdTarget;
+}
+
+function assertExactPreparedArtifact(filePath: string, expected: string, planId: string): void {
+  let actual: string;
+  try {
+    actual = fsSync.readFileSync(filePath, "utf8");
+  } catch (error) {
+    throw new Error(`Durable skill plan ${planId} is missing required artifact ${path.basename(filePath)}.`, {
+      cause: error,
+    });
+  }
+  if (actual !== expected) {
+    throw new Error(`Durable skill plan ${planId} conflicts with existing ${path.basename(filePath)} bytes.`);
+  }
+}
+
+function rollbackCreatedExactFilesSync(
+  createdPaths: readonly string[],
+  plan: MaterializedPreparedSkillMutation,
+): unknown[] {
+  const errors: unknown[] = [];
+  for (const filePath of [...createdPaths].reverse()) {
+    const expected = filePath === plan.skillFilePath ? plan.plan.skillMarkdown : plan.sourceJson;
+    try {
+      assertExactPreparedArtifact(filePath, expected, plan.plan.evaluationRunId);
+      fsSync.rmSync(filePath, { force: true });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  tryRemoveEmptyDirectorySync(plan.skillDir, errors);
+  return errors;
+}
+
+async function restoreMutationFiles(plan: SkillMutationWritePlan, snapshot: SkillMutationSnapshot): Promise<void> {
+  await fs.mkdir(plan.skillDir, { recursive: true });
+  if (snapshot.priorSkillMarkdown !== undefined) {
+    await fs.writeFile(plan.skillFilePath, snapshot.priorSkillMarkdown, "utf8");
+  } else {
+    await fs.rm(plan.skillFilePath, { force: true });
+  }
+  if (snapshot.priorSourceJson !== undefined) {
+    await fs.writeFile(plan.sourceJsonPath, snapshot.priorSourceJson, "utf8");
+  } else {
+    await fs.rm(plan.sourceJsonPath, { force: true });
+  }
+  if (!snapshot.existed && snapshot.priorSourceJson === undefined) {
+    try {
+      await fs.rmdir(plan.skillDir);
+    } catch (error) {
+      if (!isNodeErrorCode(error, "ENOENT") && !isNodeErrorCode(error, "ENOTEMPTY")) {
+        throw error;
+      }
+    }
+  }
+}
+
+function restoreMutationFilesSync(plan: SkillMutationWritePlan, snapshot: SkillMutationSnapshot): void {
+  fsSync.mkdirSync(plan.skillDir, { recursive: true });
+  if (snapshot.priorSkillMarkdown !== undefined) {
+    fsSync.writeFileSync(plan.skillFilePath, snapshot.priorSkillMarkdown, "utf8");
+  } else {
+    fsSync.rmSync(plan.skillFilePath, { force: true });
+  }
+  if (snapshot.priorSourceJson !== undefined) {
+    fsSync.writeFileSync(plan.sourceJsonPath, snapshot.priorSourceJson, "utf8");
+  } else {
+    fsSync.rmSync(plan.sourceJsonPath, { force: true });
+  }
+  if (!snapshot.existed && snapshot.priorSourceJson === undefined) {
+    const errors: unknown[] = [];
+    tryRemoveEmptyDirectorySync(plan.skillDir, errors);
+    if (errors.length > 0) {
+      throw errors[0];
+    }
+  }
+}
+
+function tryRemoveEmptyDirectorySync(skillDir: string, errors: unknown[]): void {
+  try {
+    fsSync.rmdirSync(skillDir);
+  } catch (error) {
+    if (!isNodeErrorCode(error, "ENOENT") && !isNodeErrorCode(error, "ENOTEMPTY")) {
+      errors.push(error);
+    }
+  }
+}
+
+function buildSkillMutationRollbackError(original: unknown, rollbackErrors: readonly unknown[]): AggregateError {
+  const message = original instanceof Error ? original.message : "Skill mutation failed.";
+  return new AggregateError(
+    [original, ...rollbackErrors],
+    `${message} Rollback also failed; manual reconciliation is required.`,
+  );
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === code);
 }
 
 /**

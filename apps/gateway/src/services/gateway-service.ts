@@ -19,6 +19,7 @@ const durableRunLogger: DurableRunServiceLogger = {
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
+  type ApprovalCreateAuthority,
   ToolPolicyEngine,
   assertWritePathInJail,
   describeBrowserSessionState,
@@ -47,6 +48,7 @@ import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
+import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
@@ -359,6 +361,7 @@ import { MemoryContextService } from "./memory-context-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
+import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
@@ -416,8 +419,9 @@ import {
   restoreRoutingPolicySnapshot,
   restoreSkillRevisionSnapshot,
 } from "./improvement-snapshot-service.js";
-import { BackgroundReviewService } from "./background-review-service.js";
-import { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import type { BackgroundReviewService } from "./background-review-service.js";
+import type { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import { createChatPostCommitRuntime } from "./gateway/chat-post-commit-runtime.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -480,7 +484,10 @@ import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
-import { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
+import {
+  ToolInvocationCoordinatorService,
+  type ToolInvocationRuntimeOptions,
+} from "./tool-invocation-coordinator-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -516,20 +523,15 @@ import {
 } from "./gateway/runtime-settings-guards.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 import {
-  approvedExternalRuntimeRequestMatches,
+  executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
   isApprovedExternalRuntimePendingAction,
   readAuthActorSource,
   readPermissionSurfaceValue,
-  toApprovedMcpInvokeRequest,
-  toolInvokeResultFromMcpApproval,
   toolInvokeResultRecord,
-  toToolInvokeRequest,
-  withExternalRuntimePolicyContext,
 } from "./gateway/external-runtime-approval-adapter.js";
 import {
   canMutatePermissionProfile,
   grantPatternMatches,
-  isActiveToolGrant,
   isSystemOwnedRestrictedPermissionProfileRequest,
 } from "./gateway/tool-grant-policy.js";
 import { durableChatTurnPayloadToRecord } from "./gateway/chat-stream-codecs.js";
@@ -598,7 +600,8 @@ import {
   policyContextHasOperatorApproval,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
-import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import { isTelegramApprovalActionConnectorReady } from "./channel-secret-resolution.js";
+import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
 import {
   commsActivity as commsActivityImpl,
   commsSend as commsSendImpl,
@@ -723,6 +726,7 @@ export class GatewayService {
   private readonly eventIngestService: EventIngestService;
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
+  public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
   private readonly skillsService: SkillsService;
   private readonly capabilityScopeResolver: CapabilityScopeResolver;
   public readonly orchestrationEngine: OrchestrationEngine;
@@ -917,7 +921,15 @@ export class GatewayService {
       describeState: describeBrowserSessionState,
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
+      // Tool-policy approval creation must enter the canonical lifecycle. A
+      // direct policy-engine storage write would omit the durable wait run and
+      // retryable approval observability envelope.
+      createApproval: (input, onCreated, authority) => this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
+      deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
+      isApprovalActionConnectorReady: (connectionId) =>
+        isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -932,6 +944,10 @@ export class GatewayService {
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
+    this.approvalRemoteTokenSecrets = new ApprovalRemoteTokenSecretService(
+      secretStore,
+      this.storage.remoteActionTokens,
+    );
     this.mcpOAuthTokenService = new McpOAuthTokenService({
       secretStore,
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -964,6 +980,7 @@ export class GatewayService {
       readSkillStates: () => this.skillStateService.readSkillStates(),
       invokeTool: (request) => this.invokeTool(request),
       createApproval: (input) => this.createApproval(input),
+      resolveApproval: (approvalId, input) => this.resolveApproval(approvalId, input),
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
       },
@@ -1053,22 +1070,16 @@ export class GatewayService {
         this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
-    this.commitmentClassifier = new CommitmentClassifierService({
-      storage: this.storage,
-      createChatCompletion: (request) => this.createChatCompletion(request),
-      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
-      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-    });
     this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       createChatCompletion: (request) => this.createChatCompletion(request),
       createChatCompletionStream: (request) => this.createChatCompletionStream(request),
       generateImage: (request) => this.llmService.generateImage(request),
-      invokeTool: (request) => this.invokeTool(request),
+      invokeTool: (request, options) => this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: (request) => this.evaluateToolAccess(request),
-      invokeMcpTool: (request) => this.invokeMcpTool(request),
+      invokeMcpTool: (request, options) => this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
@@ -1087,32 +1098,6 @@ export class GatewayService {
     this.skillMutationService = new SkillMutationService({
       rootDir: config.rootDir,
       skillLifecycle: this.storage.skillLifecycle,
-    });
-    // P2-S1 self-improvement learning loop. Structured-extraction post-turn
-    // service: two cheap read-only model calls (memory + skill) → persist via the
-    // governed operator-profile + skill-mutation services. Auto-apply/secret/
-    // candidate governance lives entirely in those services. Never promotes a
-    // skill to callable (governed activation owns promotion).
-    this.backgroundReviewService = new BackgroundReviewService({
-      createChatCompletion: (request) => this.createChatCompletion(request),
-      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
-      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-      recordOperatorProfileFacts: (workspaceId, facts) => {
-        const result = this.operatorProfileService.recordOperatorProfileFacts(workspaceId, { facts });
-        // Unified audit: only an applied write (full autonomy) yields a
-        // priorSnapshot — that snapshot is value-carrying (storage keeps only the
-        // current revision) so it doubles as the restoreRef. Proposed/blocked
-        // writes persist nothing, so there is nothing to audit. Best-effort.
-        if (result.outcome === "applied" && result.priorSnapshot) {
-          this.autonomyControlService.recordAutonomousMutation({
-            kind: "memory",
-            targetKey: result.record.operatorProfileId,
-            restoreRef: { kind: "memory", priorSnapshot: result.priorSnapshot },
-          });
-        }
-        return result;
-      },
-      draftSkillMutation: (input) => this.skillMutationService.draftSkillMutation(input),
     });
     this.addonSlotService = new AddonSlotService();
     this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
@@ -1251,23 +1236,25 @@ export class GatewayService {
     this.chatProjectService = new ChatProjectService(serviceCtx);
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
-      workflowRegistry: {
-        executeWorkflow: (run) => this.durableWorkflowRegistry.executeWorkflow(run),
-        isWorkflowRecoverable: (run) => this.durableWorkflowRegistry.isWorkflowRecoverable(run),
-        markWorkflowUnrecoverable: (run, reason) => this.durableWorkflowRegistry.markWorkflowUnrecoverable(run, reason),
-      },
+      workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
+        () => this.durableWorkflowRegistry,
+      ),
       onRunFailed: async (run, message) => {
         this.improvementService.recordDurableRunFailureSignal({
           run,
           message,
         });
       },
+      onAutonomousChatPostCommit: (run, context) =>
+        durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, context),
+      onGeneralChatPostCommit: (run, progress) =>
+        durableExecutionService.executeGeneralChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, progress),
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
       taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
     });
     this.hooksService = new HooksService(serviceCtx, {
-      createDurableRun: (input) => this.durableRunService.createDurableRun(input),
+      createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
     });
     this.approvalWaitRunService = new ApprovalWaitRunService(serviceCtx, {
@@ -1296,7 +1283,7 @@ export class GatewayService {
       hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
       getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
       listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
-      invokeTool: (request) => this.invokeTool(request),
+      invokeTool: (request, options) => this.invokeTool(request, options),
       resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
       detectDelegationRoles: (text) => detectDelegationRoles(text),
       createDurableRun: (input) => this.createDurableRun(input),
@@ -1321,6 +1308,24 @@ export class GatewayService {
       executeApprovedPendingAction: (approvalId, signal) => this.executeApprovedPendingAction(approvalId, signal),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
+      recordDurableTimelineEvent: (runId, eventType, payload) =>
+        this.recordDurableTimelineEvent(runId, eventType, payload),
+      recordApprovalResolutionSignals: (approval) => {
+        this.improvementService.recordApprovalResolutionSignal(approval);
+        this.improvementService.handleActivationApprovalResolution(approval);
+      },
+      materializeApprovalWaitRun: (approvalId) => {
+        this.approvalWaitRunService.primeApprovalLifecycle(approvalId);
+        const runId = this.storage.approvalWaitRuns.getRunId(approvalId);
+        return runId ? this.getDurableRun(runId) : undefined;
+      },
+      reconcileExpiredApprovals: (limit) => this.approvalRuntime.expirePendingApprovals(limit),
+      reconcileExpiredDeviceAccessRequests: (limit) =>
+        settingsAuthService.expirePendingDeviceAccessRequests(
+          createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+          limit,
+        ),
+      approvalRemoteTokenSecrets: this.approvalRemoteTokenSecrets,
     });
     this.approvalRuntime = new ApprovalRuntimeService({
       storage: this.storage,
@@ -1339,27 +1344,30 @@ export class GatewayService {
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),
-      consumeRemoteActionToken: (token, actionType) => this.consumeRemoteActionToken(token, actionType),
-      consumeRemoteActionTokenById: (tokenId, actionType) => this.consumeRemoteActionTokenById(tokenId, actionType),
-      resolveApproval: (approvalId, input) => this.approvalRuntime.resolveApproval(approvalId, input),
-      resolveDeviceAccessApproval: (current, input) =>
+      consumeRemoteActionToken: (token, actionType, options) =>
+        this.consumeRemoteActionToken(token, actionType, options),
+      consumeRemoteActionTokenById: (tokenId, actionType, options) =>
+        this.consumeRemoteActionTokenById(tokenId, actionType, options),
+      resolveApproval: (approvalId, input, context) => this.approvalRuntime.resolveApproval(approvalId, input, context),
+      resolveDeviceAccessApproval: (current, input, context) =>
         settingsAuthService.resolveDeviceAccessApproval(
           createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
           current,
           input,
+          context,
         ),
       executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       scheduleApprovalExplanation: (approval) => this.scheduleApprovalExplanation(approval),
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
       wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
-      recordApprovalResolution: (approval, input) =>
-        settingsAuthService.recordApprovalResolution(
-          createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-          approval,
-          input,
-        ),
-      enqueueApprovalResolutionEffects: (approval, input) => this.enqueueApprovalResolutionEffects(approval, input),
+      enqueueApprovalObservabilityEffects: (approvalId, items) =>
+        this.approvalEffectsService.enqueueObservabilityEffects(approvalId, items),
+      enqueueApprovalWaitMaterialization: (approval) =>
+        this.approvalEffectsService.enqueueApprovalWaitMaterialization(approval),
+      enqueueApprovalResolutionEffects: (approval, input, options) =>
+        this.enqueueApprovalResolutionEffects(approval, input, options),
+      awaitApprovalResolutionEffects: (approvalId) => this.approvalEffectsService.awaitResolutionEffects(approvalId),
       enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
@@ -1384,7 +1392,14 @@ export class GatewayService {
       listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
-      createChatSession: (input) => this.createChatSession(input),
+      createChatSession: (input) =>
+        input.stableKey
+          ? chatSessionService.ensureChatSessionWithStableKey(
+              this.buildChatSessionDependencies(),
+              input.stableKey,
+              input,
+            )
+          : this.createChatSession(input),
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
@@ -1467,8 +1482,6 @@ export class GatewayService {
           }),
         ),
       scheduleApprovalExplanationById: (approvalId) => this.scheduleApprovalExplanationById(approvalId),
-      recordApprovedExternalRuntimeToolResult: (input) =>
-        this.recordApprovedExternalRuntimeToolResult(input.approvalId, input.request, input.result),
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       requireMcpServer: (serverId) => this.requireMcpServer(serverId),
@@ -1622,9 +1635,31 @@ export class GatewayService {
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
-      createDurableRun: (input) => this.createDurableRun(input),
+      createDurableRun: (input, options) =>
+        options?.deferRealtime
+          ? this.durableRunService.createDurableRun(input, { publishRealtime: false })
+          : this.createDurableRun(input),
       getDurableRun: (runId) => this.getDurableRun(runId),
     });
+    const chatPostCommitRuntime = createChatPostCommitRuntime({
+      storage: this.storage,
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
+      resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
+      operatorProfileService: this.operatorProfileService,
+      autonomyControlService: this.autonomyControlService,
+      skillMutationService: this.skillMutationService,
+      memoryMaintenanceService: this.memoryMaintenanceService,
+      isAutonomyDisabled: () => this.isFeatureEnabled("autonomyV1Disabled"),
+      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
+      publishRealtime,
+      requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      recordDurableTimelineEvent: (runId, eventType, payload) =>
+        this.recordDurableTimelineEvent(runId, eventType, payload),
+      recordImprovementDurableRunCompletion: (run, state) => this.recordImprovementDurableRunCompletion(run, state),
+    });
+    this.commitmentClassifier = chatPostCommitRuntime.commitmentClassifier;
+    this.backgroundReviewService = chatPostCommitRuntime.backgroundReviewService;
     this.memoryLifecycleService = new MemoryLifecycleService({
       context: this.memoryContextService,
       learned: this.chatLearnedMemoryService,
@@ -1718,6 +1753,7 @@ export class GatewayService {
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
         chatTurn: this.buildDurableChatTurnWorkflowHost(),
+        chatPostCommitEffect: chatPostCommitRuntime.effectExecutor,
         proactiveTick: {
           chatProactiveService: this.chatProactiveService,
           gatewaySql: this.gatewaySql,
@@ -1749,6 +1785,7 @@ export class GatewayService {
           commsActivity: (input) => this.commsActivity(input),
           isFeatureEnabled: (feature) => this.isFeatureEnabled(feature as keyof RuntimeSettings["features"]),
           invokeMcpTool: (input) => this.invokeMcpTool(input),
+          approvalRemoteTokenSecrets: this.approvalRemoteTokenSecrets,
           resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
           publishRealtime: (eventType, source, payload, options) => {
             this.publishRealtime(eventType, source, payload, options);
@@ -1805,8 +1842,15 @@ export class GatewayService {
           executeDurableOrchestrationRun: (run, context) => this.executeDurableOrchestrationRun(run, context),
         },
         curatorTick: {
+          storage: this.storage,
           curatorService: this.curatorService,
-          publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
       }),
     );
@@ -1891,10 +1935,10 @@ export class GatewayService {
         this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options),
       beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
-      beginDurableChatRun: (prepared, input, threadEventType) =>
-        this.beginDurableChatRun(prepared, input, threadEventType),
+      beginDurableChatRun: (prepared, input, threadEventType, options) =>
+        this.beginDurableChatRun(prepared, input, threadEventType, options),
       cancelDurableChatRun: (runId, actorId) => {
-        this.cancelDurableRun(runId, actorId);
+        return this.cancelDurableRun(runId, actorId);
       },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
@@ -1918,14 +1962,15 @@ export class GatewayService {
         this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
-      finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
+      finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
+        this.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
       getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
       getActiveChatTurnStream: (turnId) => this.getActiveChatTurnStream(turnId),
       getSession: (sessionId) => this.getSession(sessionId),
       getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
       inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
         this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
-      ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
+      ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
       listLlmModels: (providerId) => this.listLlmModels(providerId),
@@ -1959,8 +2004,7 @@ export class GatewayService {
       resolveThreadKnowledgeContext: (sessionId, query) => this.resolveThreadKnowledgeContext(sessionId, query),
       routeFromSession: (session) => this.routeFromSession(session),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
-      scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
-        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleMemoryMaintenancePostTurnEvaluation: (input) => this.scheduleMemoryMaintenancePostTurnEvaluation(input),
       scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       subagentFanout: this.subagentFanout,
@@ -2041,7 +2085,7 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
       getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
-      ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
+      ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
       updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
         this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
@@ -2052,8 +2096,7 @@ export class GatewayService {
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       recordTurnCommitments: (input) => this.recordTurnCommitments(input),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
-      scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
-        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      scheduleMemoryMaintenancePostTurnEvaluation: (input) => this.scheduleMemoryMaintenancePostTurnEvaluation(input),
       scheduleBackgroundReviewIfDue: (input) => this.scheduleBackgroundReviewIfDue(input),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       markChatTurnCancelled: (sessionId, turnId) => this.markChatTurnCancelled(sessionId, turnId),
@@ -2068,13 +2111,14 @@ export class GatewayService {
         this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId, streamRegistration);
       },
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
-      finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
+      finalizeDurableChatRun: (runId, prepared, trace, expectedLeaseOwnerId) =>
+        this.finalizeDurableChatRun(runId, prepared, trace, expectedLeaseOwnerId),
       completeActiveChatTurnStream: (turnId, registrationId) =>
         this.completeActiveChatTurnStream(turnId, registrationId),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       getActiveChatTurnStream: (turnId) => this.getActiveChatTurnStream(turnId),
-      beginDurableChatRun: (prepared, input, threadEventType) =>
-        this.beginDurableChatRun(prepared, input, threadEventType),
+      beginDurableChatRun: (prepared, input, threadEventType, options) =>
+        this.beginDurableChatRun(prepared, input, threadEventType, options),
       registerActiveChatTurnStream: (sessionId, turnId, durableRunId, options) =>
         this.registerActiveChatTurnStream(sessionId, turnId, durableRunId, options),
       ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
@@ -2084,6 +2128,8 @@ export class GatewayService {
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
       enqueueAutonomousChannelDelivery: (input) => this.enqueueAutonomousChannelDelivery(input),
       cleanupSilentHeartbeatTurn: (input) => this.cleanupSilentHeartbeatTurn(input),
+      reconcileAutonomousChatPostCommit: (runId) => this.durableRunService.reconcileAutonomousChatPostCommit(runId),
+      reconcileGeneralChatPostCommit: (runId) => this.durableRunService.reconcileGeneralChatPostCommit(runId),
     };
   }
 
@@ -2330,11 +2376,17 @@ export class GatewayService {
     );
   }
 
-  public async ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<GatewayEventResult> {
+  public async ingestEvent(
+    idempotencyKey: string,
+    payload: GatewayEventInput,
+    options?: { onCommit?: () => void; afterCommit?: () => void },
+  ): Promise<GatewayEventResult> {
     const result = await this.eventIngestService.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey,
       payload,
+      ...(options?.onCommit ? { onCommit: options.onCommit } : {}),
+      ...(options?.afterCommit ? { afterCommit: options.afterCommit } : {}),
     });
 
     this.publishRealtime(
@@ -2447,8 +2499,10 @@ export class GatewayService {
     return chatSessionService.searchChatSessions(this.buildChatSessionDependencies(), query);
   }
 
-  public createChatSession(input: ChatSessionCreateInput = {}): ChatSessionRecord {
-    return chatSessionService.createChatSession(this.buildChatSessionDependencies(), input);
+  public createChatSession(input: ChatSessionCreateInput & { stableKey?: string } = {}): ChatSessionRecord {
+    return input.stableKey
+      ? chatSessionService.ensureChatSessionWithStableKey(this.buildChatSessionDependencies(), input.stableKey, input)
+      : chatSessionService.createChatSession(this.buildChatSessionDependencies(), input);
   }
 
   public updateChatSession(
@@ -2995,23 +3049,27 @@ export class GatewayService {
     });
   }
 
-  public scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
-    if (this.closing || parentTurnId) {
+  public scheduleMemoryMaintenancePostTurnEvaluation(input: {
+    sessionId: string;
+    turnId: string;
+    delegatedChild: boolean;
+  }): void {
+    if (this.closing || input.delegatedChild) {
       return;
     }
-    const task = this.memoryLifecycleService.noteSuccessfulRootTurn(sessionId).catch((error) => {
+    const task = this.memoryLifecycleService.noteSuccessfulRootTurn(input.sessionId).catch((error) => {
       log.error("memory maintenance post-turn evaluation failed", error);
     });
     this.registerBackgroundTask(task);
   }
 
   /**
-   * P2-S1 — schedule the self-improvement background review for a successful root
+   * P2-S1 — schedule the self-improvement background review for a successful eligible
    * turn, counter-gated to run every {@link BACKGROUND_REVIEW_TURN_INTERVAL}
    * eligible turns. Sibling of {@link scheduleMemoryMaintenancePostTurnEvaluation}
-   * — skips child turns and runs fire-and-forget after a successful root turn.
+   * — skips delegated child turns and runs fire-and-forget after a successful turn.
    *
-   * Guards (master-autonomy / eval-integrity / non-human / closing / child-turn)
+   * Guards (master-autonomy / eval-integrity / non-human / closing / delegated-child)
    * are resolved here and re-asserted inside the service; the counter only
    * advances for eligible turns. The review is a tracked background task that can
    * never throw out of the turn path.
@@ -3019,14 +3077,15 @@ export class GatewayService {
   public scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
     workspaceId: string;
+    turnId: string;
     userText: string;
     assistantText: string;
-    parentTurnId?: string;
+    delegatedChild: boolean;
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
   }): void {
-    // Skip child turns (mirror the memory-maintenance sibling) and a closing gateway.
-    if (this.closing || input.parentTurnId) {
+    // Skip delegated children (mirror the memory-maintenance sibling) and a closing gateway.
+    if (this.closing || input.delegatedChild) {
       return;
     }
     // Skip autonomous turns: a cron/heartbeat/commitment self-wake runs inside a
@@ -3057,10 +3116,10 @@ export class GatewayService {
     const task = this.backgroundReviewService
       .runBackgroundReview({
         sessionId: input.sessionId,
+        sourceTurnId: input.turnId,
         workspaceId: input.workspaceId,
         userText: input.userText,
         assistantText: input.assistantText,
-        parentTurnId: input.parentTurnId,
         autonomyEnabled,
         evalIntegrityTurn,
         humanSession,
@@ -3237,8 +3296,15 @@ export class GatewayService {
               !this.isDurableRunTerminalStatus(initialDurableStatus) &&
               finalDurableStatus === "cancelled",
             );
+      const cancellationWon =
+        result.cancelled === true ||
+        (result.cancelled === undefined &&
+          result.trace.status === "cancelled" &&
+          finalDurableStatus !== "completed" &&
+          finalDurableStatus !== "failed" &&
+          finalDurableStatus !== "dead_lettered");
       return {
-        status: "cancelled",
+        status: cancellationWon ? "cancelled" : "no_active_run",
         sessionId,
         turnId,
         durableRunId,
@@ -4013,6 +4079,7 @@ export class GatewayService {
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
     grant?: ToolGrantRecord;
+    grantError?: string;
     resumed: boolean;
     resumedTurnId?: string;
     resumedRunId?: string;
@@ -4032,7 +4099,7 @@ export class GatewayService {
     const sessionState = state ?? (await this.loadChatTurnSessionState(sessionId));
     const trace = sessionState.traces.find((item) => item.turnId === turnId);
     if (!trace) {
-      throw new Error(`Chat turn ${turnId} not found in session ${sessionId}`);
+      throw new NotFoundError({ entity: "Chat turn", id: turnId });
     }
     const userMessage = sessionState.messagesById.get(trace.userMessageId);
     if (!userMessage) {
@@ -4116,8 +4183,10 @@ export class GatewayService {
       existingUserMessage?: ChatMessageRecord;
       ingestUserMessage?: boolean;
       extraSystemInstruction?: string;
+      userMessageId?: string;
       turnId?: string;
       assistantMessageId?: string;
+      mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
     },
   ): Promise<chatTurnPrepService.PreparedAgentChatTurn> {
     return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
@@ -4242,7 +4311,10 @@ export class GatewayService {
   public agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: {
+      abortSignal?: AbortSignal;
+      mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
+    },
   ): AsyncGenerator<ChatStreamChunk> {
     return this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options);
   }
@@ -4863,6 +4935,7 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    options?: { mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle; runId?: string },
   ): DurableRunRecord | undefined {
     return chatDurableRunService.beginDurableChatRun(
       {
@@ -4877,6 +4950,7 @@ export class GatewayService {
       prepared,
       input,
       threadEventType,
+      options,
     );
   }
 
@@ -4884,9 +4958,11 @@ export class GatewayService {
     runId: string,
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     trace: ChatTurnTraceRecord,
+    expectedLeaseOwnerId?: string,
   ): void {
     chatDurableRunService.finalizeDurableChatRun(
       {
+        runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
         durableRuns: this.storage.durableRuns,
         chatToolRuns: this.storage.chatToolRuns,
         chatToolArtifacts: this.storage.chatToolArtifacts,
@@ -4898,6 +4974,7 @@ export class GatewayService {
       runId,
       prepared,
       trace,
+      expectedLeaseOwnerId,
     );
   }
 
@@ -4911,6 +4988,7 @@ export class GatewayService {
     options: {
       streamRegistration: ActiveChatTurnStreamExecution;
       skipMessageStart?: boolean;
+      durableLeaseOwnerId?: string;
     },
   ): Promise<void> {
     return chatTurnDispatchService.executePreparedAgentChatTurnBackground(
@@ -5035,39 +5113,11 @@ export class GatewayService {
     return this.databaseCutoverService.verify(input);
   }
 
-  public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
-    return this.toolInvocationCoordinator.invokeTool(request);
-  }
-
-  private recordApprovedExternalRuntimeToolResult(
-    approvalId: string,
+  public async invokeTool(
     request: ToolInvokeRequest,
-    result: ToolInvokeResult,
-  ): void {
-    const pending = this.storage.pendingApprovalActions.find(approvalId);
-    if (
-      !isApprovedExternalRuntimePendingAction(pending) ||
-      !approvedExternalRuntimeRequestMatches(pending.request, request)
-    ) {
-      return;
-    }
-    this.storage.pendingApprovalActions.markResolved(
-      approvalId,
-      result.outcome === "executed" ? "executed" : "failed",
-      toolInvokeResultRecord(result),
-    );
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "approved_action_executed",
-      actorId: "system",
-      payload: {
-        toolName: request.toolName,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        auditEventId: result.auditEventId,
-        externalRuntime: true,
-      },
-    });
+    options?: ToolInvocationRuntimeOptions,
+  ): Promise<ToolInvokeResult> {
+    return this.toolInvocationCoordinator.invokeTool(request, options);
   }
 
   private async executeApprovedPendingAction(
@@ -5078,12 +5128,14 @@ export class GatewayService {
       this.refreshApprovedPendingToolPolicyContext(approvalId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Approved action policy context could not be refreshed.";
-      this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
-      this.storage.approvalEvents.append({
-        approvalId,
-        eventType: "approved_action_executed",
-        actorId: "system",
-        payload: { outcome: "blocked", reason },
+      this.storage.runImmediateTransaction(() => {
+        this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+        this.storage.approvalEvents.append({
+          approvalId,
+          eventType: "approved_action_executed",
+          actorId: "system",
+          payload: { outcome: "blocked", reason },
+        });
       });
       return undefined;
     }
@@ -5193,43 +5245,21 @@ export class GatewayService {
     pending: PendingApprovalAction,
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
-    const policyResult = await this.policyEngine.executeApprovedAction(approvalId, signal, {
-      deferResolution: true,
-      externalRuntimeReplay: true,
-    });
-    if (!policyResult || policyResult.outcome !== "executed") {
-      return policyResult;
-    }
-
-    const request = withExternalRuntimePolicyContext(toToolInvokeRequest(pending.request, signal), policyResult);
-    let runtimeResult: ToolInvokeResult;
-    if (request.toolName === "mcp.invoke") {
-      const mcpResult = await this.toolInvocationCoordinator.invokeApprovedMcpRuntime(
-        this.enrichMcpInvokePolicyContext(toApprovedMcpInvokeRequest(request, signal)),
-      );
-      runtimeResult = toolInvokeResultFromMcpApproval(policyResult, mcpResult);
-    } else {
-      runtimeResult = await this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request);
-    }
-
-    this.storage.pendingApprovalActions.markResolved(
-      approvalId,
-      runtimeResult.outcome === "executed" ? "executed" : "failed",
-      toolInvokeResultRecord(runtimeResult),
-    );
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "approved_action_executed",
-      actorId: "system",
-      payload: {
-        toolName: request.toolName,
-        outcome: runtimeResult.outcome,
-        policyReason: runtimeResult.policyReason,
-        auditEventId: runtimeResult.auditEventId,
-        externalRuntime: true,
+    return executeApprovedExternalRuntimePendingActionWithPort(
+      {
+        storage: this.storage,
+        executeApprovedAction: (id, abortSignal, options) =>
+          this.policyEngine.executeApprovedAction(id, abortSignal, options),
+        enrichMcpInvokePolicyContext: (input) => this.enrichMcpInvokePolicyContext(input),
+        invokeApprovedMcpRuntime: (input, markStarted) =>
+          this.toolInvocationCoordinator.invokeApprovedMcpRuntime(input, markStarted),
+        invokeApprovedExternalRuntimeTool: (request, markStarted) =>
+          this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request, markStarted),
       },
-    });
-    return runtimeResult;
+      approvalId,
+      pending,
+      signal,
+    );
   }
 
   private refreshApprovedPendingToolPolicyContext(approvalId: string): void {
@@ -5575,11 +5605,14 @@ export class GatewayService {
 
   public createPermissionProfile(input: PermissionProfileCreateInput): PermissionProfileRecord {
     this.assertPermissionProfileApprovalModeAllowed(input.approvalMode);
-    const profile = this.storage.permissionProfiles.createProfile(input);
-    if (profile.defaultForSurfaces?.length) {
-      this.reconcilePermissionProfileDefaultActivations(profile);
-    }
-    this.publishRealtime("permission_profile_created", "tools", {
+    let profile!: PermissionProfileRecord;
+    this.storage.gatewaySql.runImmediateTransaction(() => {
+      profile = this.storage.permissionProfiles.createProfile(input);
+      if (profile.defaultForSurfaces?.length) {
+        this.reconcilePermissionProfileDefaultActivations(profile);
+      }
+    });
+    this.publishToolConfigurationRealtimeSafely("permission_profile_created", {
       profileId: profile.profileId,
       label: profile.label,
       approvalMode: profile.approvalMode,
@@ -5595,11 +5628,14 @@ export class GatewayService {
       throw new ConflictError({ message: `Permission profile ${profileId} is not editable by this operator.` });
     }
     this.assertPermissionProfileApprovalModeAllowed(input.approvalMode ?? existing.approvalMode);
-    const profile = this.storage.permissionProfiles.updateProfile(profileId, input);
-    if (input.defaultForSurfaces !== undefined) {
-      this.reconcilePermissionProfileDefaultActivations(profile);
-    }
-    this.publishRealtime("permission_profile_updated", "tools", {
+    let profile!: PermissionProfileRecord;
+    this.storage.gatewaySql.runImmediateTransaction(() => {
+      profile = this.storage.permissionProfiles.updateProfile(profileId, input);
+      if (input.defaultForSurfaces !== undefined) {
+        this.reconcilePermissionProfileDefaultActivations(profile);
+      }
+    });
+    this.publishToolConfigurationRealtimeSafely("permission_profile_updated", {
       profileId: profile.profileId,
       label: profile.label,
       approvalMode: profile.approvalMode,
@@ -5639,7 +5675,7 @@ export class GatewayService {
     }
     const archived = this.storage.permissionProfiles.archiveProfile(profileId);
     if (archived) {
-      this.publishRealtime("permission_profile_archived", "tools", { profileId });
+      this.publishToolConfigurationRealtimeSafely("permission_profile_archived", { profileId });
     }
     return archived;
   }
@@ -5647,11 +5683,13 @@ export class GatewayService {
   public activatePermissionProfile(input: PermissionProfileActivationInput): PermissionProfileActivationRecord {
     const profile = this.storage.permissionProfiles.getProfile(input.profileId);
     this.assertPermissionProfileApprovalModeAllowed(profile.approvalMode);
-    const activation = this.storage.permissionProfiles.activateProfile({
-      ...input,
-      operatorId: profile.scope === "workspace" ? undefined : input.operatorId,
-    });
-    this.publishRealtime("permission_profile_activated", "tools", {
+    const activation = this.storage.gatewaySql.runImmediateTransaction(() =>
+      this.storage.permissionProfiles.activateProfile({
+        ...input,
+        operatorId: profile.scope === "workspace" ? undefined : input.operatorId,
+      }),
+    );
+    this.publishToolConfigurationRealtimeSafely("permission_profile_activated", {
       profileId: activation.profileId,
       operatorId: activation.operatorId,
       workspaceId: activation.workspaceId,
@@ -5673,8 +5711,10 @@ export class GatewayService {
         message: "Local Operator Override is unavailable in remote_hardened deployment profile.",
       });
     }
-    const override = this.storage.permissionProfiles.createLocalOperatorOverride(input);
-    this.publishRealtime("local_operator_override_started", "tools", {
+    const override = this.storage.gatewaySql.runImmediateTransaction(() =>
+      this.storage.permissionProfiles.createLocalOperatorOverride(input),
+    );
+    this.publishToolConfigurationRealtimeSafely("local_operator_override_started", {
       overrideId: override.overrideId,
       operatorId: override.operatorId,
       scope: override.scope,
@@ -5697,12 +5737,17 @@ export class GatewayService {
     if (existing.operatorId !== revokedBy) {
       return undefined;
     }
-    const revoked = this.storage.permissionProfiles.revokeLocalOperatorOverride(overrideId, undefined, revokedBy);
-    if (!revoked) {
+    let record: LocalOperatorOverrideRecord | undefined;
+    this.storage.gatewaySql.runImmediateTransaction(() => {
+      const revoked = this.storage.permissionProfiles.revokeLocalOperatorOverride(overrideId, undefined, revokedBy);
+      if (revoked) {
+        record = this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
+      }
+    });
+    if (!record) {
       return undefined;
     }
-    const record = this.storage.permissionProfiles.getLocalOperatorOverride(overrideId);
-    this.publishRealtime("local_operator_override_revoked", "tools", {
+    this.publishToolConfigurationRealtimeSafely("local_operator_override_revoked", {
       overrideId,
       revokedBy: record.revokedBy,
       revokedAt: record.revokedAt,
@@ -5711,21 +5756,36 @@ export class GatewayService {
     return record;
   }
 
+  private publishToolConfigurationRealtimeSafely(eventType: string, payload: Record<string, unknown>): void {
+    try {
+      this.publishRealtime(eventType, "tools", payload);
+    } catch (error) {
+      try {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "tools",
+          event: "tools.configuration.realtime_projection_failed",
+          message: "Tool configuration committed before retained realtime publication failed",
+          runtimeKind: "tools.configuration",
+          runtimeStatus: "failed",
+          runtimeError: {
+            message: error instanceof Error ? error.message : String(error),
+            retryable: true,
+          },
+          context: { eventType, mutationCommitted: true },
+        });
+      } catch {
+        // Configuration truth is already durable; diagnostics are advisory.
+      }
+    }
+  }
+
   public listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
     return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
   }
 
   private listActiveToolGrants(scope?: ToolGrantScope, scopeRef?: string): ToolGrantRecord[] {
-    const grantRepo = this.storage.toolGrants as
-      | {
-          listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
-        }
-      | undefined;
-    if (grantRepo?.listActive) {
-      return grantRepo.listActive(scope, scopeRef);
-    }
-    const grants = this.listToolGrants(scope, scopeRef, Number.MAX_SAFE_INTEGER);
-    return Array.isArray(grants) ? grants.filter(isActiveToolGrant) : [];
+    return this.storage.toolGrants.listActive(scope, scopeRef);
   }
 
   public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
@@ -5739,8 +5799,14 @@ export class GatewayService {
     return this.approvalRuntime.revokeToolGrant(grantId, revokedBy);
   }
 
-  public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    const approval = await this.approvalRuntime.createApproval(input);
+  public async createApproval(
+    input: ApprovalCreateInput,
+    onCreated?: ApprovalCreateCommitHook,
+    authority?: ApprovalCreateAuthority,
+  ): Promise<ApprovalRequest> {
+    const approval = authority
+      ? await this.approvalRuntime.createApproval(input, onCreated, authority)
+      : await this.approvalRuntime.createApproval(input, onCreated);
     this.recordRuntimeDecision({
       kind: "approval_requested",
       scope: this.buildApprovalDecisionScope(approval),
@@ -5792,6 +5858,7 @@ export class GatewayService {
 
   public async resolveApprovalWithRemoteToken(input: {
     token: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -5802,6 +5869,7 @@ export class GatewayService {
 
   public async resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
+    connectorId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
@@ -5857,33 +5925,14 @@ export class GatewayService {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       return undefined;
     }
-    const requestAttribution = this.getCurrentRequestAttribution();
-    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
-      approval,
-      connector,
-      token: tokenRecord.token,
-      tokenId: tokenRecord.tokenId,
-      expiresAt: tokenRecord.expiresAt,
-    });
-    if (!payload) {
-      return undefined;
-    }
-    return this.createDurableRun({
-      workflowKey: "connector.delivery",
-      payload:
-        toPlainRecord({
-          ...payload,
-          traceId: requestAttribution.traceId,
-          originSurface: payload.originSurface ?? requestAttribution.originSurface,
-        }) ?? {},
-      metadata: {
-        approvalId: approval.approvalId,
-        connectorId: connector.connectorId,
-        connectorType: connector.connectorType,
-        deliveryKind: "approval.remote_token",
-        tokenId: tokenRecord.tokenId,
+    return enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets: this.approvalRemoteTokenSecrets,
+        requestAttribution: this.getCurrentRequestAttribution(),
+        createDurableRun: (input) => this.createDurableRun(input),
       },
-    });
+      { approval, connector, tokenRecord },
+    );
   }
 
   /**
@@ -5898,6 +5947,11 @@ export class GatewayService {
   /** @internal */ public enqueueAutonomousChannelDelivery(
     input: durableExecutionService.AutonomousChannelDeliveryRequest,
   ): string | undefined {
+    const deliveryRunId = `autonomous-delivery:${input.runId}`;
+    const existing = this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
+    if (existing) {
+      return existing.runId;
+    }
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       return undefined;
     }
@@ -5925,7 +5979,8 @@ export class GatewayService {
     }
     const operatorId = input.systemActorId ?? "system-cron";
     const workspaceId = this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
-    const run = this.createDurableRun({
+    const createInput: DurableRunCreateRequest = {
+      runId: deliveryRunId,
       workflowKey: "connector.delivery",
       payload: {
         version: "connector.delivery.v1",
@@ -5951,38 +6006,122 @@ export class GatewayService {
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
       },
-    });
+    };
+    let run: DurableRunRecord;
+    try {
+      run = this.createDurableRun(createInput);
+    } catch (error) {
+      const raced = this.findAutonomousChannelDeliveryRun(deliveryRunId, input.runId);
+      if (!raced) {
+        throw error;
+      }
+      run = raced;
+    }
     return run.runId;
+  }
+
+  private findAutonomousChannelDeliveryRun(deliveryRunId: string, sourceRunId: string): DurableRunRecord | undefined {
+    let existing: DurableRunRecord;
+    try {
+      existing = this.storage.durableRuns.getRun(deliveryRunId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (
+      existing.workflowKey !== "connector.delivery" ||
+      existing.metadata?.deliveryKind !== "autonomous.assistant_message" ||
+      existing.metadata?.sourceRunId !== sourceRunId ||
+      existing.payload?.runId !== sourceRunId
+    ) {
+      throw new ConflictError({
+        message: `Durable run id ${deliveryRunId} is already owned by a different workflow handoff.`,
+      });
+    }
+    return existing;
   }
 
   /**
    * Prune a silent heartbeat turn from a human transcript (P1-F4 invisibility).
    * Removes the seed user message + `{notify:false}` assistant message and the
    * turn trace, reverting the active branch leaf to the pre-heartbeat leaf, in a
-   * single transaction (mirroring the undo path). Best-effort: a heartbeat is a
-   * silent background tick, so cleanup failures must never surface — they are
-   * logged and swallowed. Only invoked for non-notifying heartbeat turns.
+   * single transaction (mirroring the undo path). Returns explicit recovery
+   * truth so retryable storage failures remain pending while an advanced branch
+   * becomes operator-visible manual reconciliation instead of being rewound.
    */
   /** @internal */ public cleanupSilentHeartbeatTurn(
     input: durableExecutionService.SilentHeartbeatCleanupRequest,
-  ): void {
+  ): durableExecutionService.SilentHeartbeatCleanupResult {
+    let removed = false;
+    let resolution: durableExecutionService.SilentHeartbeatCleanupResult = { status: "already_completed" };
     try {
       const messageIds = [input.userMessageId, input.assistantMessageId].filter(
         (id): id is string => typeof id === "string" && id.trim().length > 0,
       );
       this.storage.runImmediateTransaction(() => {
+        const activeLeafTurnId = this.storage.chatSessionBranchState.get(input.sessionId)?.activeLeafTurnId;
+        const hasMessages = messageIds.some((messageId) => Boolean(this.storage.chatMessages.get(messageId)));
+        let hasTrace = true;
+        try {
+          this.storage.chatTurnTraces.get(input.turnId);
+        } catch (error) {
+          if (error instanceof NotFoundError) {
+            hasTrace = false;
+          } else {
+            throw error;
+          }
+        }
+        if (!hasMessages && !hasTrace) {
+          return;
+        }
+        if (activeLeafTurnId !== input.turnId) {
+          resolution = {
+            status: "manual_reconciliation",
+            reason:
+              `Silent heartbeat ${input.turnId} was retained because the active leaf advanced to ` +
+              `${activeLeafTurnId ?? "none"}; automatic cleanup would corrupt newer branch truth.`,
+          };
+          return;
+        }
         this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
         this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
         if (input.parentTurnId) {
-          this.storage.chatSessionBranchState.setActiveLeaf(
+          const reverted = this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
             input.sessionId,
+            input.turnId,
             input.parentTurnId,
             new Date().toISOString(),
           );
+          if (!reverted) {
+            throw new Error(`Silent heartbeat ${input.turnId} lost active-leaf ownership during cleanup.`);
+          }
         } else {
           this.storage.chatSessionBranchState.clear(input.sessionId);
         }
+        removed = true;
+        resolution = { status: "completed" };
       });
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "chat.heartbeat.cleanup_failed",
+        message: "Failed to prune a silent heartbeat turn from the transcript.",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+      return {
+        status: "retryable_failure",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (!removed) {
+      return resolution;
+    }
+    try {
       this.publishRealtime(
         "chat_thread_updated",
         "chat",
@@ -6006,13 +6145,14 @@ export class GatewayService {
       this.recordDevDiagnostic({
         level: "warn",
         category: "chat",
-        event: "chat.heartbeat.cleanup_failed",
-        message: "Failed to prune a silent heartbeat turn from the transcript.",
+        event: "chat.heartbeat.cleanup_projection_failed",
+        message: "Silent heartbeat cleanup committed, but its realtime projection failed.",
         sessionId: input.sessionId,
         turnId: input.turnId,
         context: { error: error instanceof Error ? error.message : String(error) },
       });
     }
+    return { status: "completed" };
   }
 
   /** @internal */ public getCurrentRequestAttribution(): {
@@ -6041,8 +6181,9 @@ export class GatewayService {
   /** @internal */ public enqueueApprovalResolutionEffects(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
+    options?: import("./approval-resolution-effects-service.js").ApprovalResolutionEffectEnqueueOptions,
   ): ApprovalEffectRecord[] {
-    const effects = this.approvalEffectsService.enqueueResolutionEffects(approval, input);
+    const effects = this.approvalEffectsService.enqueueResolutionEffects(approval, input, options);
     this.recordRuntimeDecision({
       kind: "approval_resolved",
       scope: this.buildApprovalDecisionScope(approval),
@@ -6132,15 +6273,21 @@ export class GatewayService {
   /** @internal */ public consumeRemoteActionToken(
     token: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
+    options?: approvalRemoteTokenService.RemoteActionTokenClaimOptions,
   ): RemoteActionTokenRecord {
-    return approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
+    return options
+      ? approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType, options)
+      : approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
   }
 
   /** @internal */ public consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
+    options?: approvalRemoteTokenService.RemoteActionTokenClaimOptions,
   ): RemoteActionTokenRecord {
-    return approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
+    return options
+      ? approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType, options)
+      : approvalRemoteTokenService.consumeRemoteActionTokenById(this, tokenId, expectedActionType);
   }
 
   public listSkills(): SkillListItem[] {
@@ -6642,11 +6789,14 @@ export class GatewayService {
     );
   }
 
-  public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
+  public async invokeMcpTool(
+    input: McpInvokeRequest,
+    options?: ToolInvocationRuntimeOptions,
+  ): Promise<McpInvokeResponse> {
     // Capability-scope enforcement happens at the coordinator's executeMcpRuntime choke point
     // (via host.assertMcpServerInScope), which also covers the model approval-replay path and
     // internal servers. Enrich here so the gate sees the resolved workspaceId.
-    return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input));
+    return this.toolInvocationCoordinator.invokeMcpTool(this.enrichMcpInvokePolicyContext(input), options);
   }
 
   private assertMcpServerInCapabilityScope(request: McpInvokeRequest): void {
@@ -7069,6 +7219,8 @@ export class GatewayService {
     clearLastError?: boolean;
     finishedAt?: string;
     clearFinishedAt?: boolean;
+    clearLease?: boolean;
+    expectedLeaseOwnerId?: string;
   }): DurableRunRecord {
     return this.durableRunService.updateRunState(input);
   }
@@ -7501,22 +7653,22 @@ export class GatewayService {
     if (hasActiveAllow) {
       return;
     }
-    const expiresAt = new Date(Date.now() + INTERNAL_TOOL_GRANT_TTL_MS).toISOString();
-    this.policyEngine.createGrant({
-      toolPattern: toolName,
-      decision: "allow",
-      scope: "session",
-      scopeRef: sessionId,
-      grantType: "ttl",
-      createdBy,
-      expiresAt,
-    });
+    const grant = this.storage.toolGrants.createTtlForDuration(
+      {
+        toolPattern: toolName,
+        decision: "allow",
+        scope: "session",
+        scopeRef: sessionId,
+        createdBy,
+      },
+      INTERNAL_TOOL_GRANT_TTL_MS,
+    );
     this.publishRealtime("system", "tools", {
       type: "internal_tool_grant_created",
       sessionId,
       toolName,
       createdBy,
-      expiresAt,
+      expiresAt: grant.expiresAt,
     });
   }
 

@@ -3,6 +3,27 @@ import { describe, expect, it, vi } from "vitest";
 import { EvidenceEnvelopeService, evidenceDigestHex, sha256, stableStringify } from "./evidence-envelope-service.js";
 
 describe("evidence-envelope-service digest helpers", () => {
+  it("returns canonical evidence when retained realtime publication fails", () => {
+    const create = vi.fn((input) => input);
+    const service = new EvidenceEnvelopeService({
+      storage: {
+        evidenceEnvelopes: {
+          latest: vi.fn(() => undefined),
+          create,
+          list: vi.fn(() => []),
+        },
+      } as never,
+      publishRealtime: () => {
+        throw new Error("retained stream unavailable");
+      },
+    });
+
+    const envelope = service.createEnvelope({ eventKind: "continuation_gate", runId: "run-1" });
+
+    expect(envelope).toMatchObject({ eventKind: "continuation_gate", runId: "run-1" });
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it("produces deterministic 64-character evidence digests without mutating canonical payloads", () => {
     const canonicalPayload = stableStringify({
       beta: ["second", "third"],

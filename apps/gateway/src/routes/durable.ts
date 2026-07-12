@@ -1,8 +1,9 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
 import { projectDurableRouteResponse } from "../services/durable-public-projection.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
@@ -56,6 +57,37 @@ const deadLetterRecoverBodySchema = z
     maxAttempts: z.number().int().min(1).max(20).optional(),
   })
   .strict();
+
+function sendDurableMutationError(
+  reply: FastifyReply,
+  request: FastifyRequest,
+  error: unknown,
+  fallbackStatus: number,
+) {
+  markMutationCommittedFromError(request, error);
+  const message = error instanceof Error ? error.message : "Durable operation failed";
+  if (!request.mutationCommitted) {
+    return reply.code(fallbackStatus).send(projectDurableRouteResponse({ error: message }));
+  }
+
+  reply.log.error(
+    projectDurableRouteResponse({
+      error: message,
+      errorName: error instanceof Error ? error.name : "Error",
+      mutationCommitted: true,
+    }),
+    "durable mutation failed after commit",
+  );
+  const response: Record<string, unknown> = {
+    error: message,
+    code: "mutation_committed",
+    retryable: false,
+  };
+  if (error !== null && typeof error === "object" && "canonicalResult" in error) {
+    response.canonicalResult = (error as { canonicalResult?: unknown }).canonicalResult;
+  }
+  return reply.code(500).send(projectDurableRouteResponse(response));
+}
 
 export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: {
@@ -115,9 +147,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send(projectDurableRouteResponse({ error: body.error.flatten() }));
     }
     try {
-      return reply.code(201).send(projectDurableRouteResponse(durable.createRun(body.data)));
+      const run = durable.createRun(body.data);
+      markMutationCommitted(request);
+      return reply.code(201).send(projectDurableRouteResponse(run));
     } catch (error) {
-      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 
@@ -173,9 +207,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      return reply.send(projectDurableRouteResponse(durable.pauseRun(params.data.runId, resolveActorId(request))));
+      const run = durable.pauseRun(params.data.runId, resolveActorId(request));
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
-      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 
@@ -193,9 +229,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      return reply.send(projectDurableRouteResponse(durable.resumeRun(params.data.runId, resolveActorId(request))));
+      const run = durable.resumeRun(params.data.runId, resolveActorId(request));
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
-      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 
@@ -213,9 +251,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      return reply.send(projectDurableRouteResponse(durable.cancelRun(params.data.runId, resolveActorId(request))));
+      const run = durable.cancelRun(params.data.runId, resolveActorId(request));
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
-      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 
@@ -233,11 +273,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      return reply.send(
-        projectDurableRouteResponse(durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request))),
-      );
+      const run = durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request));
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
-      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 
@@ -255,9 +295,14 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      return reply.send(projectDurableRouteResponse(durable.wakeRun(params.data.runId, body.data)));
+      const result = durable.wakeRun(params.data.runId, body.data);
+      if (result.outcome === "failed") {
+        return reply.code(503).send(projectDurableRouteResponse(result));
+      }
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(result));
     } catch (error) {
-      return reply.code(409).send(projectDurableRouteResponse({ error: (error as Error).message }));
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 
@@ -275,19 +320,17 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       );
     }
     try {
-      return reply.send(
-        projectDurableRouteResponse(
-          durable.recoverDeadLetter(
-            params.data.entryId,
-            resolveActorId(request),
-            body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,
-          ),
-        ),
+      const run = durable.recoverDeadLetter(
+        params.data.entryId,
+        resolveActorId(request),
+        body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,
       );
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(run));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
+      return sendDurableMutationError(reply, request, error, notFound ? 404 : 409);
     }
   });
 };

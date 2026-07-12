@@ -1,17 +1,120 @@
+import { randomUUID } from "node:crypto";
 import {
   redactStructuredSecrets,
   type ApprovalRequest,
   type ConnectorDeliveryWorkflowPayload,
   type ConnectorCapabilityId,
   type ConnectorRecord,
+  type DurableRunCreateRequest,
+  type DurableRunRecord,
 } from "@goatcitadel/contracts";
+import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 
 const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
+
+export interface ApprovalRemoteTokenDeliveryRuntime {
+  readonly tokenSecrets: Pick<ApprovalRemoteTokenSecretService, "store" | "delete">;
+  readonly requestAttribution: { traceId?: string; originSurface?: string };
+  createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
+}
+
+export function enqueueApprovalRemoteTokenConnectorDelivery(
+  runtime: ApprovalRemoteTokenDeliveryRuntime,
+  input: {
+    approval: ApprovalRequest;
+    connector: ConnectorRecord;
+    tokenRecord: { token: string; tokenId: string; expiresAt: string };
+  },
+): DurableRunRecord | undefined {
+  const needsSecret =
+    input.connector.connectorType === "browser" ||
+    (input.connector.connectorType === "integration_connection" && supportsInlineApprovalActions(input.connector));
+  let tokenRef: string | undefined;
+  try {
+    tokenRef = needsSecret ? runtime.tokenSecrets.store(input.tokenRecord.tokenId, input.tokenRecord.token) : undefined;
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: input.approval,
+      connector: input.connector,
+      tokenRef,
+      tokenId: input.tokenRecord.tokenId,
+      expiresAt: input.tokenRecord.expiresAt,
+    });
+    if (!payload) {
+      if (tokenRef) {
+        try {
+          runtime.tokenSecrets.delete(tokenRef);
+        } catch {
+          // Token issuance already committed before connector fan-out. Leave
+          // the orphaned keychain value for expiry reconciliation instead of
+          // turning a benign no-delivery result into a failed issuance.
+        }
+      }
+      return undefined;
+    }
+    return runtime.createDurableRun({
+      runId: randomUUID(),
+      workflowKey: "connector.delivery",
+      payload: stripUndefined({
+        ...payload,
+        traceId: runtime.requestAttribution.traceId,
+        originSurface: payload.originSurface ?? runtime.requestAttribution.originSurface,
+      }),
+      metadata: {
+        approvalId: input.approval.approvalId,
+        connectorId: input.connector.connectorId,
+        connectorType: input.connector.connectorType,
+        deliveryKind: "approval.remote_token",
+        tokenId: input.tokenRecord.tokenId,
+      },
+    });
+  } catch (error) {
+    const committedRun = readCommittedDurableRun(error);
+    if (committedRun) {
+      return committedRun;
+    }
+    if (tokenRef && !isCommittedMutationError(error)) {
+      try {
+        runtime.tokenSecrets.delete(tokenRef);
+      } catch {
+        // Preserve the enqueue error; an orphaned keychain value is safer than
+        // copying the bearer into durable state.
+      }
+    }
+    throw error;
+  }
+}
+
+function isCommittedMutationError(error: unknown): error is { mutationCommitted: true } {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "mutationCommitted" in error &&
+    (error as { mutationCommitted?: unknown }).mutationCommitted === true
+  );
+}
+
+function readCommittedDurableRun(error: unknown): DurableRunRecord | undefined {
+  if (!isCommittedMutationError(error)) {
+    return undefined;
+  }
+  const durableRun =
+    "durableRun" in error
+      ? (error as { durableRun?: unknown }).durableRun
+      : "canonicalResult" in error
+        ? (error as { canonicalResult?: unknown }).canonicalResult
+        : undefined;
+  return durableRun !== null &&
+    typeof durableRun === "object" &&
+    "runId" in durableRun &&
+    typeof (durableRun as { runId?: unknown }).runId === "string"
+    ? (durableRun as DurableRunRecord)
+    : undefined;
+}
 
 export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
   approval: ApprovalRequest;
   connector: ConnectorRecord;
-  token: string;
+  tokenRef?: string;
   tokenId: string;
   expiresAt: string;
 }): ConnectorDeliveryWorkflowPayload | undefined {
@@ -26,13 +129,18 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
       ) {
         return undefined;
       }
+      if (!input.tokenRef) {
+        return undefined;
+      }
       return {
         version: "connector.delivery.v1",
         connectorId: input.connector.connectorId,
         connectorType: input.connector.connectorType,
         action: "realtime.emit",
         correlationId: input.approval.approvalId,
+        approvalAction: { tokenId: input.tokenId, expiresAt: input.expiresAt },
         ...buildApprovalDeliveryGovernance(input.approval),
+        secretRefs: { approvalActionToken: input.tokenRef },
         payload: {
           eventType: "approval_remote_action_ready",
           source: "approvals",
@@ -51,27 +159,32 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
       if (!target) {
         return undefined;
       }
-      const interactiveActions = hasEnabledCapability(input.connector, "interactive_actions")
-        ? {
-            platform: readIntegrationActionPlatform(input.connector),
-            tokenId: input.tokenId,
-            buttons: [
-              { label: "Approve", callbackData: `gca:${input.token}:a` },
-              { label: "Deny", callbackData: `gca:${input.token}:r` },
-            ],
-          }
-        : undefined;
+      const interactiveActionTemplate =
+        supportsInlineApprovalActions(input.connector) && input.tokenRef
+          ? {
+              platform: readIntegrationActionPlatform(input.connector),
+              tokenId: input.tokenId,
+              tokenRef: input.tokenRef,
+              expiresAt: input.expiresAt,
+              buttons: [
+                { label: "Approve", decision: "a" as const },
+                { label: "Deny", decision: "r" as const },
+              ],
+            }
+          : undefined;
       return {
         version: "connector.delivery.v1",
         connectorId: input.connector.connectorId,
         connectorType: input.connector.connectorType,
         action: "channel.send",
         correlationId: input.approval.approvalId,
+        approvalAction: { tokenId: input.tokenId, expiresAt: input.expiresAt },
         ...buildApprovalDeliveryGovernance(input.approval),
+        ...(interactiveActionTemplate && input.tokenRef ? { secretRefs: { approvalActionToken: input.tokenRef } } : {}),
         payload: {
           target,
-          message: buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActions)),
-          interactiveActions,
+          message: buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActionTemplate)),
+          interactiveActionTemplate,
         },
       };
     }
@@ -89,6 +202,7 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
         connectorType: input.connector.connectorType,
         action: "mcp.invoke",
         correlationId: input.approval.approvalId,
+        approvalAction: { tokenId: input.tokenId, expiresAt: input.expiresAt },
         ...buildApprovalDeliveryGovernance(input.approval),
         payload: {
           approvalId: input.approval.approvalId,
@@ -104,8 +218,48 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
   }
 }
 
+/**
+ * Hydrate a protected browser approval bearer only in the transient realtime
+ * event. Integration deliveries must retain their template plus keychain
+ * reference through the durable channel queue, policy, and hooks; the native
+ * provider adapter owns their final secret resolution.
+ */
+export function hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
+  payload: ConnectorDeliveryWorkflowPayload,
+  rawToken: string,
+): ConnectorDeliveryWorkflowPayload {
+  const token = rawToken.trim();
+  if (!/^grat_[A-Za-z0-9_-]{43}$/.test(token)) {
+    throw new Error("Approval remote-action token is unavailable or invalid.");
+  }
+  const actionPayload = payload.payload ?? {};
+  if (payload.connectorType !== "browser") {
+    throw new Error("Only browser approval deliveries can hydrate before connector dispatch.");
+  }
+  const eventPayload =
+    actionPayload.payload && typeof actionPayload.payload === "object" && !Array.isArray(actionPayload.payload)
+      ? (actionPayload.payload as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    payload: {
+      ...actionPayload,
+      payload: {
+        ...eventPayload,
+        token,
+      },
+    },
+  };
+}
+
 function hasEnabledCapability(connector: ConnectorRecord, capabilityId: ConnectorCapabilityId): boolean {
   return connector.capabilities.some((item) => item.id === capabilityId && item.enabled);
+}
+
+function supportsInlineApprovalActions(connector: ConnectorRecord): boolean {
+  return (
+    hasEnabledCapability(connector, "interactive_actions") && connector.metadata?.approvalInlineActionsReady === true
+  );
 }
 
 function readMetadataString(connector: ConnectorRecord, key: string): string | undefined {
@@ -123,7 +277,6 @@ function readIntegrationActionPlatform(connector: ConnectorRecord): string {
 
 function buildApprovalDeliveryEnvelope(input: {
   approval: ApprovalRequest;
-  token: string;
   tokenId: string;
   expiresAt: string;
 }): Record<string, unknown> {
@@ -138,7 +291,6 @@ function buildApprovalDeliveryEnvelope(input: {
     linkage: buildApprovalDeliveryLinkage(publicApproval),
     governance,
     tokenId: input.tokenId,
-    token: input.token,
     actionType: "approval.resolve",
     expiresAt: input.expiresAt,
   };
@@ -229,7 +381,6 @@ function stripUndefined<T extends Record<string, unknown>>(input: T): T {
 function buildIntegrationApprovalDeliveryMessage(
   input: {
     approval: ApprovalRequest;
-    token: string;
     tokenId: string;
     expiresAt: string;
   },

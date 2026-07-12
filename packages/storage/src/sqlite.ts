@@ -48,6 +48,10 @@ import {
 import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
+const LEGACY_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN = /grat_[A-Za-z0-9_-]{43}/g;
+const LEGACY_REMOTE_APPROVAL_BEARER_VALUE_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
+const LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE = 250;
 
 /**
  * Quote a SQLite identifier (table/index name) for safe interpolation into
@@ -1622,11 +1626,389 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           addColumnIfMissingIfTableExists(db, "prompt_packs", "content_sha256", "TEXT");
         },
       },
+      {
+        version: 137,
+        name: "scrub_legacy_device_token_plaintext",
+        up: scrubLegacyDeviceTokenPlaintext,
+      },
+      {
+        version: 138,
+        name: "approval_expiry_sweep_index_parity",
+        up: (db) => {
+          if (tableExists(db, "approvals")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_approvals_status_expires_at
+                ON approvals(status, julianday(expires_at), approval_id)
+                WHERE expires_at IS NOT NULL;
+            `);
+          }
+        },
+      },
+      {
+        version: 139,
+        name: "scrub_legacy_remote_approval_bearers",
+        up: scrubLegacyRemoteApprovalBearers,
+      },
+      {
+        version: 140,
+        name: "mutation_idempotency_claim_lease_parity",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "mutation_idempotency", "claim_token", "TEXT");
+          addColumnIfMissingIfTableExists(db, "mutation_idempotency", "claim_expires_at", "TEXT");
+          if (tableExists(db, "mutation_idempotency")) {
+            db.exec(`
+              UPDATE mutation_idempotency
+              SET claim_token = COALESCE(claim_token, 'legacy-' || lower(hex(randomblob(16)))),
+                  claim_expires_at = COALESCE(claim_expires_at, updated_at)
+              WHERE status = 'pending';
+
+              CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_pending_lease
+                ON mutation_idempotency(status, claim_expires_at, updated_at);
+            `);
+          }
+        },
+      },
+      {
+        version: 141,
+        name: "chat_delegation_step_plan_truth",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "parallelizable", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissingIfTableExists(
+            db,
+            "chat_delegation_steps",
+            "depends_on_step_ids_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+          );
+        },
+      },
+      {
+        version: 142,
+        name: "chat_delegation_dispatch_claim_lease",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "dispatch_claim_token", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "dispatch_claim_expires_at", "TEXT");
+          if (tableExists(db, "chat_delegation_steps")) {
+            db.exec(`
+              UPDATE chat_delegation_steps
+              SET dispatch_claim_token = child_session_id,
+                  dispatch_claim_expires_at = COALESCE(
+                    strftime(
+                      '%Y-%m-%dT%H:%M:%fZ',
+                      CAST(
+                        substr(
+                          child_session_id,
+                          length('delegation-claim:v1:') + 1,
+                          instr(substr(child_session_id, length('delegation-claim:v1:') + 1), ':') - 1
+                        ) AS REAL
+                      ) / 1000.0,
+                      'unixepoch'
+                    ),
+                    '1970-01-01T00:00:00.000Z'
+                  ),
+                  child_session_id = NULL
+              WHERE child_session_id LIKE 'delegation-claim:v1:%';
+
+              UPDATE chat_delegation_steps
+              SET dispatch_claim_token = child_turn_id,
+                  dispatch_claim_expires_at = COALESCE(
+                    strftime(
+                      '%Y-%m-%dT%H:%M:%fZ',
+                      CAST(
+                        substr(
+                          child_turn_id,
+                          length('delegation-dispatch:v1:') + 1,
+                          instr(substr(child_turn_id, length('delegation-dispatch:v1:') + 1), ':') - 1
+                        ) AS REAL
+                      ) / 1000.0,
+                      'unixepoch'
+                    ),
+                    '1970-01-01T00:00:00.000Z'
+                  ),
+                  child_turn_id = NULL
+              WHERE child_turn_id LIKE 'delegation-dispatch:v1:%';
+
+              CREATE INDEX IF NOT EXISTS idx_chat_delegation_steps_dispatch_claim
+                ON chat_delegation_steps(status, dispatch_claim_expires_at, step_id);
+            `);
+          }
+        },
+      },
+      {
+        version: 143,
+        name: "scrub_legacy_remote_approval_bearers_from_effect_results",
+        up: (db) => {
+          // v139 intentionally remains frozen. This forward correction covers
+          // current result truth plus legacy effect detail columns that v139
+          // did not inspect.
+          scrubLegacyRemoteApprovalBearerColumns(db, "approval_effects", [
+            "result_json",
+            "detail",
+            "details_json",
+            "outcome",
+          ]);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function scrubLegacyDeviceTokenPlaintext(db: DatabaseSync): void {
+  if (!tableExists(db, "auth_device_requests")) {
+    return;
+  }
+  const scrubbedAt = new Date().toISOString();
+  const resolutionNote =
+    "Legacy device credential was revoked because its plaintext handoff predated secure in-memory delivery. Request access again.";
+  if (tableExists(db, "auth_device_grants")) {
+    db.prepare(
+      `
+      UPDATE auth_device_grants
+      SET revoked_at = COALESCE(revoked_at, @scrubbedAt)
+      WHERE revoked_at IS NULL
+        AND request_id IN (
+          SELECT request_id
+          FROM auth_device_requests
+          WHERE approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+        )
+    `,
+    ).run({ scrubbedAt });
+  }
+  db.prepare(
+    `
+    UPDATE auth_device_requests
+    SET status = CASE
+          WHEN approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+          THEN 'expired'
+          ELSE status
+        END,
+        resolution_note = CASE
+          WHEN approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+          THEN COALESCE(NULLIF(TRIM(resolution_note), ''), @resolutionNote)
+          ELSE resolution_note
+        END,
+        approved_token_expires_at = CASE
+          WHEN approved_token_plaintext IS NOT NULL
+            AND TRIM(approved_token_plaintext) <> ''
+            AND delivered_at IS NULL
+          THEN NULL
+          ELSE approved_token_expires_at
+        END,
+        approved_token_plaintext = NULL
+    WHERE approved_token_plaintext IS NOT NULL
+  `,
+  ).run({ resolutionNote });
+}
+
+function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {
+  const now = new Date().toISOString();
+  if (tableExists(db, "durable_runs")) {
+    const listCandidates = db.prepare(`
+      SELECT rowid AS row_id, run_id, payload_json
+      FROM durable_runs
+      WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+        AND workflow_key = 'connector.delivery'
+        AND payload_json LIKE '%grat\\_%' ESCAPE '\\'
+        AND status IN ('queued', 'running', 'waiting', 'paused')
+      ORDER BY rowid
+      LIMIT @limit
+    `);
+    const failRun = db.prepare(
+      `
+      UPDATE durable_runs
+      SET status = 'failed',
+          finished_at = COALESCE(finished_at, @now),
+          last_error = COALESCE(
+            last_error,
+            'Legacy remote approval bearer was removed from durable state; issue a new remote action token.'
+          ),
+          lease_owner_id = NULL,
+          lease_expires_at = NULL,
+          lease_heartbeat_at = NULL,
+          updated_at = @now,
+          version = version + 1
+      WHERE run_id = @runId
+        AND workflow_key = 'connector.delivery'
+        AND status IN ('queued', 'running', 'waiting', 'paused')
+    `,
+    );
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const candidates = listCandidates.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; run_id: string; payload_json: string }>;
+      if (candidates.length === 0) {
+        break;
+      }
+      for (const candidate of candidates) {
+        if (LEGACY_REMOTE_APPROVAL_BEARER_PATTERN.test(candidate.payload_json)) {
+          failRun.run({ runId: candidate.run_id, now });
+        }
+      }
+      afterRowId = candidates.at(-1)!.row_id;
+    }
+  }
+  if (tableExists(db, "comms_deliveries")) {
+    const listCandidates = db.prepare(`
+      SELECT rowid AS row_id, delivery_id, payload_json
+      FROM comms_deliveries
+      WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+        AND payload_json LIKE '%grat\\_%' ESCAPE '\\'
+        AND status IN ('queued', 'running', 'retrying')
+      ORDER BY rowid
+      LIMIT @limit
+    `);
+    const failDelivery = db.prepare(
+      `
+      UPDATE comms_deliveries
+      SET status = 'failed',
+          delivery_status = 'manual_reconciliation_required',
+          next_attempt_at = NULL,
+          error = COALESCE(
+            error,
+            'Legacy remote approval bearer was removed before delivery; issue a new remote action token.'
+          ),
+          updated_at = @now
+      WHERE delivery_id = @deliveryId
+        AND status IN ('queued', 'running', 'retrying')
+    `,
+    );
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const candidates = listCandidates.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; delivery_id: string; payload_json: string }>;
+      if (candidates.length === 0) {
+        break;
+      }
+      for (const candidate of candidates) {
+        if (LEGACY_REMOTE_APPROVAL_BEARER_PATTERN.test(candidate.payload_json)) {
+          failDelivery.run({ deliveryId: candidate.delivery_id, now });
+        }
+      }
+      afterRowId = candidates.at(-1)!.row_id;
+    }
+  }
+
+  const textColumns: ReadonlyArray<{ table: string; columns: readonly string[] }> = [
+    { table: "durable_runs", columns: ["payload_json", "metadata_json", "last_error"] },
+    { table: "durable_checkpoints", columns: ["state_json"] },
+    { table: "durable_run_events", columns: ["payload_json"] },
+    { table: "comms_deliveries", columns: ["payload_json", "error", "stale_reason"] },
+    { table: "realtime_events", columns: ["payload_json"] },
+    { table: "approval_events", columns: ["payload_json"] },
+    {
+      table: "approvals",
+      columns: [
+        "linkage_json",
+        "payload_json",
+        "preview_json",
+        "explanation_json",
+        "explanation_error",
+        "resolution_note",
+        "shell_explanations_json",
+      ],
+    },
+    { table: "pending_approval_actions", columns: ["request_json", "result_json"] },
+    { table: "tool_invocations", columns: ["args_json", "result_json", "policy_reason"] },
+    { table: "policy_blocks", columns: ["details_json", "reason"] },
+    { table: "approval_effects", columns: ["payload_json", "last_error"] },
+    {
+      table: "external_side_effect_runs",
+      columns: ["request_payload_json", "response_payload_json", "error_text"],
+    },
+    { table: "runtime_decision_traces", columns: ["payload_json"] },
+  ];
+  for (const target of textColumns) {
+    scrubLegacyRemoteApprovalBearerColumns(db, target.table, target.columns);
+  }
+  if (tableExists(db, "approval_inbox_items")) {
+    const listCandidates = db.prepare(
+      `SELECT rowid AS row_id, inbox_item_id, token
+       FROM approval_inbox_items
+       WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+         AND token LIKE '%grat\\_%' ESCAPE '\\'
+       ORDER BY rowid
+       LIMIT @limit`,
+    );
+    const redactToken = db.prepare(
+      `UPDATE approval_inbox_items SET token = 'redacted:' || token_id WHERE inbox_item_id = ?`,
+    );
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const candidates = listCandidates.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; inbox_item_id: string; token: string }>;
+      if (candidates.length === 0) {
+        break;
+      }
+      for (const candidate of candidates) {
+        if (LEGACY_REMOTE_APPROVAL_BEARER_VALUE_PATTERN.test(candidate.token)) {
+          redactToken.run(candidate.inbox_item_id);
+        }
+      }
+      afterRowId = candidates.at(-1)!.row_id;
+    }
+  }
+}
+
+function scrubLegacyRemoteApprovalBearerColumns(
+  db: DatabaseSync,
+  tableName: string,
+  columnNames: readonly string[],
+): void {
+  if (!tableExists(db, tableName)) {
+    return;
+  }
+  const existingColumns = new Set(
+    (db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  );
+  for (const columnName of columnNames) {
+    if (!existingColumns.has(columnName)) {
+      continue;
+    }
+    const table = quoteSqliteIdentifier(tableName);
+    const column = quoteSqliteIdentifier(columnName);
+    const listRows = db.prepare(
+      `SELECT rowid AS row_id, ${column} AS value
+       FROM ${table}
+       WHERE (@afterRowId IS NULL OR rowid > @afterRowId)
+         AND ${column} LIKE '%grat\\_%' ESCAPE '\\'
+       ORDER BY rowid
+       LIMIT @limit`,
+    );
+    const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
+    let afterRowId: number | bigint | null = null;
+    while (true) {
+      const rows = listRows.all({
+        afterRowId,
+        limit: LEGACY_REMOTE_APPROVAL_SCRUB_BATCH_SIZE,
+      }) as Array<{ row_id: number | bigint; value: string }>;
+      if (rows.length === 0) {
+        break;
+      }
+      for (const row of rows) {
+        const scrubbed = row.value.replace(LEGACY_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN, "[REDACTED]");
+        if (scrubbed !== row.value) {
+          update.run(scrubbed, row.row_id);
+        }
+      }
+      afterRowId = rows.at(-1)!.row_id;
+    }
+  }
+}
 
 function createDryRunCommitSchema(db: DatabaseSync): void {
   db.exec(`

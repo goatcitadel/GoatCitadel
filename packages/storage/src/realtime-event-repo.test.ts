@@ -136,6 +136,129 @@ describe("RealtimeEventRepository", () => {
     assert.equal(event.payload.grantId, "grant-1");
   });
 
+  it("persists a delivery id once and keeps captured attribution across retries", () => {
+    const repo = createRepo();
+    const input = {
+      deliveryId: "approval-observability:approval-1:resolve-realtime",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+      attribution: {
+        correlationId: "corr-original",
+        traceId: "trace-original",
+        actorId: "operator-original",
+      },
+    };
+    const first = runWithRequestAttribution({ actorId: "wrong-first-context" }, () =>
+      repo.appendIdempotent(
+        "approval_resolved",
+        "approvals",
+        { approvalId: "approval-1" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+        input,
+      ),
+    );
+    const retry = runWithRequestAttribution({ actorId: "wrong-retry-context" }, () =>
+      repo.appendIdempotent(
+        "approval_resolved",
+        "approvals",
+        { approvalId: "approval-1" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+        input,
+      ),
+    );
+
+    assert.equal(first.inserted, true);
+    assert.equal(retry.inserted, false);
+    assert.equal(retry.event.eventId, first.event.eventId);
+    assert.equal(repo.list(10).length, 1);
+    assert.equal(first.event.timestamp, input.occurredAt);
+    assert.equal(first.event.correlationId, "corr-original");
+    assert.equal(first.event.traceId, "trace-original");
+    assert.equal(first.event.payload.actorId, "operator-original");
+    assert.equal(first.event.payload.deliveryId, input.deliveryId);
+  });
+
+  it("does not derive idempotent delivery attribution from changing ambient request context", () => {
+    const repo = createRepo();
+    const input = {
+      deliveryId: "approval-observability:approval-1:resolve-realtime-no-attribution",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+    };
+    const first = runWithRequestAttribution({ actorId: "ambient-first" }, () =>
+      repo.appendIdempotent(
+        "approval_resolved",
+        "approvals",
+        { approvalId: "approval-1" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+        input,
+      ),
+    );
+    const retry = runWithRequestAttribution({ actorId: "ambient-retry" }, () =>
+      repo.appendIdempotent(
+        "approval_resolved",
+        "approvals",
+        { approvalId: "approval-1" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: { approvalId: "approval-1" },
+        },
+        input,
+      ),
+    );
+
+    assert.equal(first.inserted, true);
+    assert.equal(retry.inserted, false);
+    assert.equal(first.event.payload.actorId, undefined);
+    assert.equal(retry.event.payload.actorId, undefined);
+  });
+
+  it("rejects delivery-id reuse with a different realtime payload", () => {
+    const repo = createRepo();
+    const input = {
+      deliveryId: "approval-observability:approval-1:create-realtime",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+    };
+    repo.appendIdempotent(
+      "approval_created",
+      "approvals",
+      { approvalId: "approval-1" },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: { approvalId: "approval-1" },
+      },
+      input,
+    );
+
+    assert.throws(
+      () =>
+        repo.appendIdempotent(
+          "approval_created",
+          "approvals",
+          { approvalId: "approval-2" },
+          {
+            eventClass: "domain_fact",
+            eventAuthority: "retained_stream",
+            links: { approvalId: "approval-1" },
+          },
+          input,
+        ),
+      /reused with a different payload/i,
+    );
+  });
+
   it("round-trips top-level event metadata without leaking the storage envelope", () => {
     const repo = createRepo();
     const event = repo.append(

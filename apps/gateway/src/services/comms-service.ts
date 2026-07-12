@@ -103,7 +103,8 @@ export async function commsSend(
         target: input.target,
         message: sanitized.message,
         attachments,
-        interactiveActions: input.interactiveActions,
+        interactiveActions: input.interactiveActionTemplate ? undefined : input.interactiveActions,
+        interactiveActionTemplate: input.interactiveActionTemplate,
         outboundSanitizer: hasOutboundSanitizerEffect(sanitized)
           ? {
               removedBlockCount: sanitized.removedBlockCount,
@@ -123,6 +124,12 @@ export async function commsSend(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      authContext: input.interactiveActionTemplate
+        ? {
+            boundary: "tool_host_boundary",
+            secretRefs: [input.interactiveActionTemplate.tokenRef],
+          }
+        : undefined,
       ...buildChannelToolGovernance(input),
       signal: input.signal,
     },

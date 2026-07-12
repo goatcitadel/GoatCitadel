@@ -108,6 +108,7 @@ export type IntegrationWebhookRouteLike = {
   }>;
   resolveApprovalWithRemoteTokenId: (input: {
     tokenId: string;
+    connectorId: string;
     decision: "approve" | "reject";
     resolvedBy?: string;
   }) => Promise<{
@@ -118,6 +119,7 @@ export type IntegrationWebhookRouteLike = {
   }>;
   resolveApprovalWithRemoteToken: (input: {
     token: string;
+    connectorId: string;
     decision: "approve" | "reject";
     resolvedBy?: string;
   }) => Promise<{

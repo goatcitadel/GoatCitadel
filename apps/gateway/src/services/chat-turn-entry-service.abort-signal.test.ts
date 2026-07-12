@@ -79,7 +79,7 @@ function createIntegrationHost(
   commsSend: ReturnType<typeof vi.fn>;
   ingestEvent: ReturnType<typeof vi.fn>;
 } {
-  const trace = {
+  let trace = {
     turnId: "turn-1",
     sessionId: "session-1",
     userMessageId: "user-1",
@@ -103,7 +103,19 @@ function createIntegrationHost(
     storage: {
       chatTurnTraces: {
         create: vi.fn(() => trace),
-        patch: vi.fn(() => trace),
+        patch: vi.fn((_turnId: string, input: Partial<ChatTurnTraceRecord>) => {
+          trace = { ...trace, ...input } as ChatTurnTraceRecord;
+          return trace;
+        }),
+        patchIfStatus: vi.fn(
+          (_turnId: string, expected: ChatTurnTraceRecord["status"][], input: Partial<ChatTurnTraceRecord>) => {
+            if (!expected.includes(trace.status)) {
+              return undefined;
+            }
+            trace = { ...trace, ...input } as ChatTurnTraceRecord;
+            return trace;
+          },
+        ),
         get: vi.fn(() => trace),
       },
     } as never,
@@ -161,11 +173,11 @@ describe("agentSendChatMessage abort signal coverage", () => {
       );
 
       expect(observedSignal).toBeInstanceOf(AbortSignal);
-      expect(observedSignal).toBe(controller.signal);
+      expect(observedSignal).not.toBe(controller.signal);
       expect(host.commsSend).toHaveBeenCalledWith(
         expect.objectContaining({
           message: "hello",
-          signal: controller.signal,
+          signal: observedSignal,
         }),
       );
     });
@@ -195,10 +207,52 @@ describe("agentSendChatMessage abort signal coverage", () => {
       setTimeout(() => controller.abort(), 5);
 
       await expect(pending).rejects.toThrow(/aborted/);
-      expect(host.storage.chatTurnTraces.patch).toHaveBeenLastCalledWith(
+      expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
         "turn-1",
         expect.objectContaining({ status: "failed" }),
       );
+    });
+
+    it("preserves cancellation truth when external delivery commits before operator cancellation", async () => {
+      const host = createIntegrationHost();
+      const activeController = new AbortController();
+      host.beginActiveChatTurnExecution = vi.fn(() => activeController);
+      host.commsSend.mockImplementationOnce(async () => {
+        host.storage.chatTurnTraces.patch("turn-1", {
+          status: "cancelled",
+          completion: { status: "interrupted", repaired: false },
+        });
+        activeController.abort();
+        return { outcome: "delivered", deliveryId: "msg-1", status: "sent" };
+      });
+
+      await expect(
+        sendPreparedIntegrationChatTurn(
+          host,
+          "session-1",
+          { mode: "chat" },
+          createPrepared("chat"),
+          createBinding(),
+          "chat_thread_turn_appended",
+        ),
+      ).rejects.toMatchObject({
+        name: "IntegrationDeliveryPostCommitError",
+        mutationCommitted: true,
+        turnId: "turn-1",
+        message: expect.stringMatching(/integration delivery.*committed/i),
+      });
+
+      expect(host.ingestEvent).not.toHaveBeenCalled();
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({ status: "completed" }),
+      );
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({ status: "failed" }),
+      );
+      expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", activeController);
     });
   });
 

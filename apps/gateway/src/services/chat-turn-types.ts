@@ -15,6 +15,25 @@ export type PersistableChatStreamChunk = ChatStreamChunkDraft extends infer T
 
 export type InspectableChatStreamChunk = ChatStreamChunk | ChatStreamChunkDraft;
 
+/**
+ * Request-scoped signal from the canonical Chat write owner back to the HTTP
+ * stream/idempotency boundary. Calls are idempotent; the first successful
+ * durable mutation permanently owns the request key.
+ */
+export interface ChatStreamMutationLifecycle {
+  commitAlongsideCanonicalWrite?(): void;
+  markCommitted(): void;
+}
+
+export interface PreparedAgentChatTurnDispatchOptions {
+  abortSignal?: AbortSignal;
+  onChildDurableRunLaunched?: (runId: string) => void;
+  assertDispatchOwnership?: () => void;
+  durableRunId?: string;
+  mutationLifecycle?: ChatStreamMutationLifecycle;
+  requireDurableExecution?: boolean;
+}
+
 export interface PreparedChatExecutionPlanResolution {
   routerInput: OrchestrationRouterInput;
   orchestrationPlan: ModeOrchestrationPlan;

@@ -58,6 +58,128 @@ describe("PendingApprovalActionRepository", () => {
     assert.equal(secondResolve.result?.ok, true);
   });
 
+  it("reclassifies only the matching executed result as failed domain truth", () => {
+    const repo = createRepo();
+    repo.upsertPending({
+      approvalId: "ap-domain-failure",
+      actionType: "tool.invoke",
+      request: { toolName: "http.post" },
+    });
+    const executedResult = {
+      outcome: "executed",
+      policyReason: "execution outcome unknown",
+      result: { status: "failed", externalOutcome: "unknown_after_send" },
+    };
+    repo.markResolved("ap-domain-failure", "executed", executedResult);
+
+    const corrected = repo.reclassifyExecutedAsFailed("ap-domain-failure", executedResult, {
+      ...executedResult,
+      failureKind: "manual_reconciliation",
+    });
+
+    assert.equal(corrected.resolutionStatus, "failed");
+    assert.equal(corrected.result?.failureKind, "manual_reconciliation");
+    const replay = repo.reclassifyExecutedAsFailed("ap-domain-failure", executedResult, {
+      ...executedResult,
+      failureKind: "manual_reconciliation",
+    });
+    assert.equal(replay.resolutionStatus, "failed");
+  });
+
+  it("does not reopen or overwrite a terminal action during a stale pending refresh", () => {
+    const repo = createRepo();
+    repo.upsertPending({
+      approvalId: "ap-terminal-refresh",
+      actionType: "tool.invoke",
+      request: { toolName: "plugin.send", args: { before: true } },
+      createdAt: "2026-07-10T00:00:00.000Z",
+      expiresAt: "2026-07-10T00:10:00.000Z",
+    });
+    const resolved = repo.markResolved("ap-terminal-refresh", "executed", {
+      outcome: "executed",
+      auditEventId: "audit-terminal",
+    });
+
+    const refreshed = repo.upsertPending({
+      approvalId: "ap-terminal-refresh",
+      actionType: "tool.invoke",
+      request: { toolName: "plugin.send", args: { after: true } },
+      createdAt: "2026-07-10T00:01:00.000Z",
+      expiresAt: "2026-07-10T00:20:00.000Z",
+    });
+
+    assert.equal(refreshed.resolutionStatus, "executed");
+    assert.equal(refreshed.resolvedAt, resolved.resolvedAt);
+    assert.deepEqual(refreshed.result, { outcome: "executed", auditEventId: "audit-terminal" });
+    assert.deepEqual(refreshed.request, { toolName: "plugin.send", args: { before: true } });
+    assert.equal(refreshed.createdAt, "2026-07-10T00:00:00.000Z");
+    assert.equal(refreshed.expiresAt, "2026-07-10T00:10:00.000Z");
+  });
+
+  it("finds only database-fresh pending actions regardless of host-clock skew", () => {
+    const { repo, db } = createRepoWithDb();
+    const databaseNow = Date.now();
+    repo.upsertPending({
+      approvalId: "ap-fresh-explicit",
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+      createdAt: new Date(databaseNow).toISOString(),
+      expiresAt: new Date(databaseNow + 60_000).toISOString(),
+    });
+    repo.upsertPending({
+      approvalId: "ap-expired-explicit",
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+      createdAt: new Date(databaseNow - 120_000).toISOString(),
+      expiresAt: new Date(databaseNow - 60_000).toISOString(),
+    });
+    repo.upsertPending({
+      approvalId: "ap-fresh-legacy",
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+      createdAt: new Date(databaseNow - 60_000).toISOString(),
+    });
+    repo.upsertPending({
+      approvalId: "ap-expired-legacy",
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+      createdAt: new Date(databaseNow - 20 * 60_000).toISOString(),
+    });
+    repo.upsertPending({
+      approvalId: "ap-malformed-expiry",
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+      createdAt: new Date(databaseNow).toISOString(),
+      expiresAt: new Date(databaseNow + 120_000).toISOString(),
+    });
+    db.prepare("UPDATE pending_approval_actions SET expires_at = 'not-a-timestamp' WHERE approval_id = ?").run(
+      "ap-malformed-expiry",
+    );
+    repo.upsertPending({
+      approvalId: "ap-resolved",
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+      createdAt: new Date(databaseNow).toISOString(),
+      expiresAt: new Date(databaseNow + 120_000).toISOString(),
+    });
+    repo.markResolved("ap-resolved", "executed");
+    const originalDateNow = Date.now;
+
+    try {
+      for (const skewedNow of [0, Date.parse("2099-01-01T00:00:00.000Z")]) {
+        Date.now = () => skewedNow;
+        assert.equal(repo.findFreshPending("ap-fresh-explicit", 15 * 60_000)?.approvalId, "ap-fresh-explicit");
+        assert.equal(repo.findFreshPending("ap-fresh-legacy", 15 * 60_000)?.approvalId, "ap-fresh-legacy");
+        assert.equal(repo.findFreshPending("ap-expired-explicit", 15 * 60_000), undefined);
+        assert.equal(repo.findFreshPending("ap-expired-legacy", 15 * 60_000), undefined);
+        assert.equal(repo.findFreshPending("ap-malformed-expiry", 15 * 60_000), undefined);
+        assert.equal(repo.findFreshPending("ap-resolved", 15 * 60_000), undefined);
+      }
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   it("creates the SQLite expiry column", () => {
     const { db } = createRepoWithDb();
     const columns = db.prepare("PRAGMA table_info(pending_approval_actions)").all() as Array<{ name: string }>;

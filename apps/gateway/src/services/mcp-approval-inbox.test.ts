@@ -38,6 +38,9 @@ describe("mcp approval inbox", () => {
     expect(
       tools.find((tool) => tool.toolName === MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME)?.inputSchema.properties,
     ).not.toHaveProperty("resolvedBy");
+    const deliveryTool = tools.find((tool) => tool.toolName === MCP_APPROVAL_DELIVERY_TOOL_NAME);
+    expect(deliveryTool?.inputSchema.properties).not.toHaveProperty("token");
+    expect(deliveryTool?.inputSchema.required).not.toContain("token");
     const respondTool = tools.find((tool) => tool.toolName === MCP_APPROVAL_INBOX_ELICITATION_RESPOND_TOOL_NAME);
     expect(respondTool?.inputSchema.required).toEqual(["elicitationId", "action"]);
     expect(respondTool?.inputSchema.properties).toHaveProperty("content");
@@ -79,7 +82,6 @@ describe("mcp approval inbox", () => {
           status: "pending",
           preview: { summary: "Approve deploy" },
           tokenId: "tok-1",
-          token: "grat_tok_1",
           actionType: "approval.resolve",
           expiresAt: "2026-03-21T12:30:00.000Z",
         },
@@ -136,6 +138,7 @@ describe("mcp approval inbox", () => {
 
     expect(resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith({
       tokenId: "tok-1",
+      connectorId: "mcp:srv-1",
       decision: "approve",
       editedPayload: undefined,
       resolutionNote: undefined,

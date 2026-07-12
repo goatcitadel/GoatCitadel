@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { DatabaseClient } from "./db.js";
 import type { TaskActivityCreateInput, TaskActivityRecord } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -15,6 +16,8 @@ interface TaskActivityRow {
 
 export class TaskActivityRepository {
   private readonly insertStmt;
+  private readonly insertOnceStmt;
+  private readonly getStmt;
   private readonly listByTaskStmt;
   private readonly listControlsByTaskStmt;
 
@@ -26,6 +29,15 @@ export class TaskActivityRepository {
         @activityId, @taskId, @agentId, @activityType, @message, @metadataJson, @createdAt
       )
     `);
+    this.insertOnceStmt = db.prepare(`
+      INSERT INTO task_activities (
+        activity_id, task_id, agent_id, activity_type, message, metadata_json, created_at
+      ) VALUES (
+        @activityId, @taskId, @agentId, @activityType, @message, @metadataJson, @createdAt
+      )
+      ON CONFLICT(activity_id) DO NOTHING
+    `);
+    this.getStmt = db.prepare("SELECT * FROM task_activities WHERE activity_id = ?");
 
     this.listByTaskStmt = db.prepare(`
       SELECT * FROM task_activities
@@ -73,6 +85,43 @@ export class TaskActivityRepository {
     return rows.map(mapTaskActivityRow);
   }
 
+  public appendOnce(
+    activityId: string,
+    taskId: string,
+    input: TaskActivityCreateInput,
+    createdAt = new Date().toISOString(),
+  ): { activity: TaskActivityRecord; created: boolean } {
+    const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
+    const result = this.insertOnceStmt.run({
+      activityId,
+      taskId,
+      agentId: input.agentId ?? null,
+      activityType: input.activityType,
+      message: input.message,
+      metadataJson,
+      createdAt,
+    });
+    const row = toTaskActivityRow(this.getStmt.get(activityId));
+    if (!row) {
+      throw new Error(`Task activity ${activityId} was not persisted`);
+    }
+    const activity = mapTaskActivityRow(row);
+    const created = Number(result.changes ?? 0) > 0;
+    if (!created) {
+      const requestedMetadata = metadataJson ? safeJsonParse<Record<string, unknown>>(metadataJson, {}) : undefined;
+      const payloadMatches =
+        activity.taskId === taskId &&
+        activity.agentId === (input.agentId ?? undefined) &&
+        activity.activityType === input.activityType &&
+        activity.message === input.message &&
+        isDeepStrictEqual(activity.metadata, requestedMetadata);
+      if (!payloadMatches) {
+        throw new Error(`Task activity ${activityId} already exists with conflicting payload`);
+      }
+    }
+    return { activity, created };
+  }
+
   public findControlByTaskAndControlId(taskId: string, controlId: string): TaskActivityRecord | undefined {
     const rows = toTaskActivityRows(this.listControlsByTaskStmt.all(taskId));
     return rows.map(mapTaskActivityRow).find((activity) => activity.metadata?.controlId === controlId);
@@ -93,6 +142,10 @@ function mapTaskActivityRow(row: TaskActivityRow): TaskActivityRecord {
 
 function toTaskActivityRows(value: unknown): TaskActivityRow[] {
   return Array.isArray(value) ? value.filter(isTaskActivityRow) : [];
+}
+
+function toTaskActivityRow(value: unknown): TaskActivityRow | undefined {
+  return isTaskActivityRow(value) ? value : undefined;
 }
 
 function isTaskActivityRow(value: unknown): value is TaskActivityRow {

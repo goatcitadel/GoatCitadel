@@ -275,8 +275,30 @@ export function createChatSession(
   deps: ChatSessionDependencies,
   input: ChatSessionCreateInput = {},
 ): ChatSessionRecord {
-  const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  return upsertChatSessionForPeer(deps, peer, input);
+}
+
+/** Internal orchestration seam: the same stable key always resolves to one upserted child session. */
+export function ensureChatSessionWithStableKey(
+  deps: ChatSessionDependencies,
+  stableKey: string,
+  input: ChatSessionCreateInput = {},
+): ChatSessionRecord {
+  const normalizedStableKey = stableKey.trim();
+  if (!normalizedStableKey) {
+    throw new Error("stable chat session key is required");
+  }
+  const peer = `chat_${createHash("sha256").update(`stable:${normalizedStableKey}`).digest("hex").slice(0, 24)}`;
+  return upsertChatSessionForPeer(deps, peer, input);
+}
+
+function upsertChatSessionForPeer(
+  deps: ChatSessionDependencies,
+  peer: string,
+  input: ChatSessionCreateInput,
+): ChatSessionRecord {
+  const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const route = {
     channel: "mission",
     account: "operator",

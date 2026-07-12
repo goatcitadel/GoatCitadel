@@ -212,6 +212,12 @@ describe("GatewayService loop 27 large service coverage", () => {
             state: "consumed",
             ...patch,
           })),
+          expirePendingAtOrBefore: vi.fn((tokenId: string) =>
+            tokenId === "expired-token" ? { ...pending, tokenId, state: "expired" } : { ...pending, tokenId },
+          ),
+          expirePendingIfExpired: vi.fn((tokenId: string) =>
+            tokenId === "expired-token" ? { ...pending, tokenId, state: "expired" } : { ...pending, tokenId },
+          ),
           updateState: vi.fn((tokenId: string, state: string, patch?: Record<string, unknown>) => ({
             ...pending,
             tokenId,
@@ -223,14 +229,18 @@ describe("GatewayService loop 27 large service coverage", () => {
     });
 
     expect(
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " raw-token ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, " raw-token ", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toMatchObject({
       tokenId: "token-1",
       state: "consumed",
       consumedBy: "connector:conn-1",
     });
     expect(
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-2 ", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, " token-2 ", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toMatchObject({
       tokenId: "token-2",
       state: "consumed",
@@ -248,7 +258,9 @@ describe("GatewayService loop 27 large service coverage", () => {
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => pending);
     gateway.storage.remoteActionTokens.consumePending = vi.fn(() => undefined);
     expect(() =>
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "raw-token", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toThrow("already been consumed");
 
     gateway.storage.remoteActionTokens.get = vi.fn(() => ({
@@ -257,9 +269,11 @@ describe("GatewayService loop 27 large service coverage", () => {
       tokenId: "expired-token",
     }));
     expect(() =>
-      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "expired-token", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionTokenById.call(gateway, "expired-token", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toThrow("expired");
-    expect(gateway.storage.remoteActionTokens.updateState).toHaveBeenCalledWith("expired-token", "expired");
+    expect(gateway.storage.remoteActionTokens.expirePendingIfExpired).toHaveBeenCalledWith("expired-token");
   });
 
   it("rejects remote action tokens that are empty, unknown, mismatched, or already consumed (security invariants)", () => {
@@ -307,7 +321,9 @@ describe("GatewayService loop 27 large service coverage", () => {
       tokenId: "token-y",
     }));
     expect(() =>
-      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "replayed-token", "approval.resolve"),
+      GatewayService.prototype.consumeRemoteActionToken.call(gateway, "replayed-token", "approval.resolve", {
+        expectedConnectorId: "conn-1",
+      }),
     ).toThrow(/already been consumed/i);
   });
 
@@ -948,7 +964,29 @@ describe("GatewayService loop 27 large service coverage", () => {
   });
 
   it("creates internal tool grants, respects deny-wins, and reports failed tool payloads precisely", async () => {
-    const createdGrant = vi.fn();
+    const createdGrant = vi.fn((input, ttlMs) => ({
+      ...input,
+      grantId: "grant-internal",
+      grantType: "ttl",
+      createdAt: "2026-05-15T00:00:00.000Z",
+      expiresAt: "2026-05-15T00:05:00.000Z",
+      ttlMs,
+    }));
+    const listActive = vi.fn((scope: string) =>
+      scope === "global"
+        ? []
+        : [
+            {
+              decision: "allow",
+              expiresAt: "2099-05-15T00:05:00.000Z",
+              grantId: "existing",
+              grantType: "persistent",
+              scope: "session",
+              scopeRef: "other",
+              toolPattern: "shell.exec",
+            },
+          ],
+    );
     const publishRealtime = vi.fn();
     const { gateway } = createGatewayHarness({
       listToolGrants: vi.fn((scope: string) =>
@@ -967,9 +1005,12 @@ describe("GatewayService loop 27 large service coverage", () => {
             ],
       ),
       invokeTool: vi.fn(async () => ({ outcome: "executed", result: undefined })),
-      policyEngine: { createGrant: createdGrant },
       publishRealtime,
     });
+    gateway.storage = {
+      toolGrants: { listActive, createTtlForDuration: createdGrant },
+      chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+    };
 
     GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "runtime");
     expect(createdGrant).toHaveBeenCalledWith(
@@ -978,8 +1019,8 @@ describe("GatewayService loop 27 large service coverage", () => {
         decision: "allow",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "ttl",
       }),
+      5 * 60 * 1000,
     );
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",
@@ -987,7 +1028,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       expect.objectContaining({ type: "internal_tool_grant_created", toolName: "browser.search" }),
     );
 
-    gateway.listToolGrants = vi.fn((scope: string) =>
+    listActive.mockImplementation((scope: string) =>
       scope === "global"
         ? [
             {
@@ -1008,7 +1049,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       expect.objectContaining({ type: "internal_tool_grant_blocked", reason: "deny-wins" }),
     );
 
-    gateway.listToolGrants = vi.fn((scope: string) =>
+    listActive.mockImplementation((scope: string) =>
       scope === "workspace"
         ? [
             {
@@ -1020,9 +1061,12 @@ describe("GatewayService loop 27 large service coverage", () => {
           ]
         : [],
     );
+    const createPersistentGrant = vi.fn();
+    gateway.approvalRuntime = { createToolGrant: createPersistentGrant };
     createdGrant.mockClear();
     GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
     expect(createdGrant).not.toHaveBeenCalled();
+    expect(createPersistentGrant).not.toHaveBeenCalled();
     expect(() =>
       GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "runtime"),
     ).toThrow("deny policy");

@@ -70,9 +70,15 @@ describe("Loop 19 route service delegate tails", () => {
       approvalId: "approval-1",
       input: { ttlSeconds: 60 },
     });
-    await expect(service.resolveApprovalWithRemoteToken({ token: "remote-token" } as never)).resolves.toEqual({
+    await expect(
+      service.resolveApprovalWithRemoteToken({
+        token: "remote-token",
+        connectorId: "browser:mission-control",
+        decision: "approve",
+      }),
+    ).resolves.toEqual({
       method: "resolveApprovalWithRemoteToken",
-      input: { token: "remote-token" },
+      input: { token: "remote-token", connectorId: "browser:mission-control", decision: "approve" },
     });
     expect(service.getApprovalReplay("approval-1", "operator")).toEqual({
       method: "getApprovalReplay",

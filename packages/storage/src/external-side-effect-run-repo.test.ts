@@ -106,7 +106,7 @@ describe("ExternalSideEffectRunRepository", () => {
       "2026-05-31T10:00:03.000Z",
     );
     assert.equal(failed.status, "unknown_external_outcome");
-    assert.equal(failed.resumeState, "not_resumable");
+    assert.equal(failed.resumeState, "manual_review_unknown_external_outcome");
     assert.equal(failed.reversibility?.status, "manual_reconciliation");
     assert.equal(failed.errorText, "connection reset after request started");
     assert.deepEqual(failed.responsePayload, { provider: "trello" });
@@ -126,6 +126,18 @@ describe("ExternalSideEffectRunRepository", () => {
     assert.equal(completed.reversibility?.status, "irreversible");
     assert.equal(completed.envelopeId, "env-1");
     assert.equal(completed.externalReferenceId, "id:card-1");
+
+    const staleReconciliation = repo.markFailureIfStatus(
+      run.runId,
+      "external_call_started",
+      {
+        status: "unknown_external_outcome",
+        errorText: "stale reconciler must not overwrite completion",
+      },
+      "2026-05-31T10:00:04.500Z",
+    );
+    assert.equal(staleReconciliation.status, "completed");
+    assert.equal(staleReconciliation.resumeState, "completed");
 
     const attached = repo.attachEnvelope(run.runId, "env-2", "2026-05-31T10:00:05.000Z");
     assert.equal(attached.envelopeId, "env-2");
@@ -215,5 +227,29 @@ describe("ExternalSideEffectRunRepository", () => {
     // to the irreversible default.
     assert.equal(run.reversibility?.status, "irreversible");
     assert.equal(run.reversibility?.label, "Cannot undo");
+  });
+
+  it("uses database time for stale status eligibility and transition", () => {
+    const repo = createRepo();
+    const run = repo.createOrGet(
+      {
+        workspaceId: "workspace-clock",
+        boundary: "approved_external_runtime",
+        routePath: "external_side_effect:approved_external_runtime:plugin.mutate:unknown_connection:approval-clock",
+        catalogId: "plugin.mutate",
+        actionId: "approval-clock",
+        actorScope: "workspace-clock",
+        idempotencyKey: "approved-external-runtime:approval-clock",
+        payloadHash: "payload-hash-clock",
+      },
+      "1900-01-01T00:00:00.000Z",
+    );
+
+    assert.equal(repo.isStatusStale(run.runId, "claimed_not_sent", 5 * 60 * 1000), false);
+    const fresh = repo.markFailureIfStatusStale(run.runId, "claimed_not_sent", 5 * 60 * 1000, {
+      status: "unknown_external_outcome",
+      errorText: "must remain fresh",
+    });
+    assert.equal(fresh.status, "claimed_not_sent");
   });
 });

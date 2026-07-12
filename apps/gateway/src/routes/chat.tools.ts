@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CodeModeApprovalQueueItem } from "../services/capability-system-service.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const chatToolDecisionSchema = z.object({
   sessionId: z.string().min(1),
@@ -76,16 +77,19 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
           resolvedBy: resolveActorId(request),
         },
       );
+      markMutationCommitted(request);
       return reply.send({
         ok: true,
         approvalId: body.data.approvalId,
         allowScope: result.allowScope,
         grant: result.grant,
+        grantError: result.grantError,
         resumed: result.resumed,
         resumedTurnId: result.resumedTurnId,
         resumedRunId: result.resumedRunId,
       });
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
@@ -99,8 +103,10 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       await fastify.services.chatTools.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "reject", {
         resolvedBy: resolveActorId(request),
       });
+      markMutationCommitted(request);
       return reply.send({ ok: true, approvalId: body.data.approvalId });
     } catch (error) {
+      markMutationCommittedFromError(request, error);
       return reply.code(400).send({ error: (error as Error).message });
     }
   });

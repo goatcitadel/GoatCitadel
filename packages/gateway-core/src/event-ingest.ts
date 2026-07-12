@@ -17,6 +17,10 @@ export interface EventIngestOptions {
   endpoint: string;
   idempotencyKey: string;
   payload: GatewayEventInput;
+  /** Runs inside the ingest transaction for writes that must commit atomically with the message. */
+  onCommit?: () => void;
+  /** Runs only after a newly accepted ingest transaction has committed successfully. */
+  afterCommit?: () => void;
 }
 
 /**
@@ -107,6 +111,7 @@ export class EventIngestService {
       });
 
       this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
+      options.onCommit?.();
 
       this.storage.sessions.applyUsage({
         sessionId: route.sessionId,
@@ -156,6 +161,7 @@ export class EventIngestService {
     if (ingestResult.deduped) {
       return ingestResult;
     }
+    options.afterCommit?.();
 
     const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
       sessionId: route.sessionId,

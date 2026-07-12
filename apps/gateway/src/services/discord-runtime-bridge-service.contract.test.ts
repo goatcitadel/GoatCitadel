@@ -298,6 +298,7 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       token: "grat_secret",
       decision: "approve",
       resolvedBy: "discord:user-1",
+      connectorId: "integration:discord-1",
     });
     expect(host.parseChatCommand).not.toHaveBeenCalled();
     expect(response).toContain("Approved approval-1");

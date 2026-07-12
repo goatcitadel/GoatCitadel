@@ -91,21 +91,10 @@ export function createInternalMcpApprovalInboxTools(serverId: string): McpToolRe
           status: { type: "string" },
           preview: { type: "object" },
           tokenId: { type: "string" },
-          token: { type: "string" },
           actionType: { type: "string" },
           expiresAt: { type: "string" },
         },
-        required: [
-          "approvalId",
-          "kind",
-          "riskLevel",
-          "status",
-          "preview",
-          "tokenId",
-          "token",
-          "actionType",
-          "expiresAt",
-        ],
+        required: ["approvalId", "kind", "riskLevel", "status", "preview", "tokenId", "actionType", "expiresAt"],
       },
     },
     {
@@ -182,6 +171,7 @@ export async function handleInternalMcpApprovalInboxInvoke(
     approvalInbox: ApprovalInboxPort;
     resolveApprovalWithRemoteTokenId: (input: {
       tokenId: string;
+      connectorId: string;
       decision: "approve" | "reject" | "edit";
       editedPayload?: Record<string, unknown>;
       resolutionNote?: string;
@@ -279,7 +269,6 @@ function parseDeliveryEnvelope(
   receiverId: string;
   approvalId: string;
   tokenId: string;
-  token: string;
   approvalKind: string;
   riskLevel: ApprovalRequest["riskLevel"];
   approvalStatus: ApprovalRequest["status"];
@@ -288,7 +277,6 @@ function parseDeliveryEnvelope(
 } {
   const approvalId = requireNonEmptyString(args?.approvalId, "approvalId");
   const tokenId = requireNonEmptyString(args?.tokenId, "tokenId");
-  const token = requireNonEmptyString(args?.token, "token");
   const actionType = requireNonEmptyString(args?.actionType, "actionType");
   if (actionType !== "approval.resolve") {
     throw new ValidationError({ message: `Unsupported approval inbox action type ${actionType}.` });
@@ -300,7 +288,6 @@ function parseDeliveryEnvelope(
     receiverId: serverId,
     approvalId,
     tokenId,
-    token,
     approvalKind: requireNonEmptyString(args?.kind, "kind"),
     riskLevel,
     approvalStatus,
@@ -387,6 +374,7 @@ async function resolveInboxItem(
     approvalInbox: ApprovalInboxPort;
     resolveApprovalWithRemoteTokenId: (input: {
       tokenId: string;
+      connectorId: string;
       decision: "approve" | "reject" | "edit";
       editedPayload?: Record<string, unknown>;
       resolutionNote?: string;
@@ -412,6 +400,7 @@ async function resolveInboxItem(
   try {
     const result = await deps.resolveApprovalWithRemoteTokenId({
       tokenId: item.tokenId,
+      connectorId: item.connectorId,
       decision,
       editedPayload: normalizeOptionalObject(args?.editedPayload),
       resolutionNote: optionalString(args?.resolutionNote),

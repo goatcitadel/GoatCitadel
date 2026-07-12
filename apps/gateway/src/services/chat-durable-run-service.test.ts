@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ChatSendMessageRequest,
   ChatStreamChunkDraft,
@@ -41,11 +41,13 @@ describe("chat-durable-run-service", () => {
       prepared,
       input,
       "chat_thread_turn_appended",
+      { runId: "run-1" },
     );
 
     expect(created).toEqual(run);
     expect(createInputs).toEqual([
       expect.objectContaining({
+        runId: "run-1",
         workflowKey: "chat.turn.execute",
         payload: {
           requestContent: input.content,
@@ -98,6 +100,30 @@ describe("chat-durable-run-service", () => {
 
     expect(run).toBeUndefined();
     expect(created).toBe(false);
+  });
+
+  it("signals durable commit before a pre-yield stream persistence failure escapes", () => {
+    const markCommitted = vi.fn();
+
+    expect(() =>
+      beginDurableChatRun(
+        {
+          shouldUseDurableExecution: true,
+          createDurableRun: () => createRun("run-commit-signal", "queued"),
+          buildDurablePayloadRecord: () => ({}),
+          persistChatStreamChunk: () => {
+            throw new Error("stream chunk persistence unavailable");
+          },
+          requestDurableRunProcessing: vi.fn(),
+        },
+        createPreparedTurn(),
+        createSendRequest(),
+        "chat_thread_turn_retried",
+        { mutationLifecycle: { markCommitted } },
+      ),
+    ).toThrow("stream chunk persistence unavailable");
+
+    expect(markCommitted).toHaveBeenCalledTimes(1);
   });
 
   it("marks waiting traces as durable waiting checkpoints", () => {
@@ -520,6 +546,28 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("does not finalize after the database reports that the expected lease expired", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    state.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-04-10T00:00:00.000Z",
+      leaseExpiresAt: "2999-04-10T00:05:00.000Z",
+    });
+    const lockFreshActiveLeaseForUpdate = vi.fn(() => undefined);
+    Object.assign(state.deps.durableRuns, { lockFreshActiveLeaseForUpdate });
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace, "worker-a");
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith("run-complete", "worker-a");
+    expect(state.runs.get("run-complete")?.status).toBe("running");
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([]);
+  });
+
   it("records completed checkpoints with tool and artifact summaries", () => {
     const prepared = createPreparedTurn({ content: "Ship the patch" });
     const trace = createTrace({
@@ -616,6 +664,82 @@ describe("chat-durable-run-service", () => {
         },
       },
     ]);
+  });
+
+  it("commits autonomous post-commit recovery truth with the winning Chat completion", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    state.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      metadata: {
+        surface: "chat",
+        autonomous: {
+          kind: "scheduled",
+          deliverMode: "always",
+          deliveryChannel: { channelKey: "telegram", target: "42" },
+        },
+      },
+    });
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")).toMatchObject({
+      status: "completed",
+      metadata: {
+        surface: "chat",
+        autonomous: expect.objectContaining({ kind: "scheduled" }),
+        autonomousChatPostCommitPending: {
+          version: 1,
+          requestedAt: expect.any(String),
+        },
+      },
+    });
+  });
+
+  it("rolls back every finalization projection when a late transaction write fails", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    const before = state.runs.get("run-complete");
+    const patchTrace = state.deps.chatTurnTraces.patch;
+    state.deps.chatTurnTraces.patch = (turnId, patch) => {
+      patchTrace(turnId, patch);
+      throw new Error("injected trace commit failure");
+    };
+
+    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+      "injected trace commit failure",
+    );
+
+    expect(state.runs.get("run-complete")).toEqual(before);
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([]);
+
+    state.deps.chatTurnTraces.patch = patchTrace;
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")?.status).toBe("completed");
+    expect(state.checkpoints).toHaveLength(1);
+    expect(state.timelineEvents).toHaveLength(1);
+    expect(state.tracePatches).toHaveLength(1);
+  });
+
+  it("does not create autonomous post-commit work for failed or human Chat finalization", () => {
+    const prepared = createPreparedTurn();
+    const failed = createFinalizeState();
+    failed.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      metadata: { autonomous: { kind: "scheduled" } },
+    });
+    finalizeDurableChatRun(failed.deps, "run-complete", prepared, createTrace({ status: "failed" }));
+
+    const human = createFinalizeState();
+    finalizeDurableChatRun(human.deps, "run-complete", prepared, createTrace({ status: "completed" }));
+
+    expect(failed.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
+    expect(human.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
   });
 
   it("records completed checkpoints when older traces do not include completion metadata", () => {
@@ -825,6 +949,24 @@ function createFinalizeState(options?: {
   }> = [];
   const tracePatches: Array<{ turnId: string; patch: Record<string, unknown> }> = [];
   const deps: ChatDurableRunFinalizeDeps = {
+    runImmediateTransaction: (callback) => {
+      const runSnapshot = new Map(runs);
+      const checkpointSnapshot = [...checkpoints];
+      const timelineSnapshot = [...timelineEvents];
+      const tracePatchSnapshot = [...tracePatches];
+      try {
+        return callback();
+      } catch (error) {
+        runs.clear();
+        for (const [runId, run] of runSnapshot) {
+          runs.set(runId, run);
+        }
+        checkpoints.splice(0, checkpoints.length, ...checkpointSnapshot);
+        timelineEvents.splice(0, timelineEvents.length, ...timelineSnapshot);
+        tracePatches.splice(0, tracePatches.length, ...tracePatchSnapshot);
+        throw error;
+      }
+    },
     durableRuns: {
       getRun: (runId) => {
         const current = runs.get(runId);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
-import { getRequestAttribution } from "./request-attribution.js";
+import { getRequestAttribution, type RequestAttribution } from "./request-attribution.js";
 
 const REALTIME_EVENT_CLASS_KEY = "__gcEventClass";
 const REALTIME_EVENT_AUTHORITY_KEY = "__gcEventAuthority";
@@ -19,6 +19,7 @@ interface RealtimeEventRow {
 
 export class RealtimeEventRepository {
   private readonly insertStmt;
+  private readonly getByIdStmt;
   private readonly allocateSequenceStmt;
   private readonly listLatestStmt;
   private readonly listBySequenceStmt;
@@ -31,6 +32,7 @@ export class RealtimeEventRepository {
   private appendCount = 0;
 
   public constructor(private readonly db: DatabaseClient) {
+    const optionalCursorCreatedAt = db.dialect === "postgres" ? "CAST(@cursorCreatedAt AS TEXT)" : "@cursorCreatedAt";
     this.allocateSequenceStmt = db.prepare(`
       UPDATE realtime_event_sequence_state
       SET last_sequence = last_sequence + 1
@@ -43,6 +45,13 @@ export class RealtimeEventRepository {
       ) VALUES (
         @eventId, @sequence, @eventType, @source, @payloadJson, @createdAt
       )
+      ON CONFLICT(event_id) DO NOTHING
+    `);
+    this.getByIdStmt = db.prepare(`
+      SELECT *
+      FROM realtime_events
+      WHERE event_id = ?
+      LIMIT 1
     `);
 
     this.listLatestStmt = db.prepare(`
@@ -75,7 +84,7 @@ export class RealtimeEventRepository {
     this.listStmt = db.prepare(`
       SELECT * FROM realtime_events
       WHERE (
-        @cursorCreatedAt IS NULL
+        ${optionalCursorCreatedAt} IS NULL
         OR created_at < @cursorCreatedAt
         OR (created_at = @cursorCreatedAt AND event_id < @cursorEventId)
       )
@@ -109,8 +118,38 @@ export class RealtimeEventRepository {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
     createdAt = new Date().toISOString(),
   ): RealtimeEvent {
+    return this.appendInternal(eventType, source, payload, options, createdAt, randomUUID(), undefined).event;
+  }
+
+  public appendIdempotent(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId"> | undefined,
+    input: { deliveryId: string; occurredAt: string; attribution?: RequestAttribution },
+  ): { event: RealtimeEvent; inserted: boolean } {
+    return this.appendInternal(
+      eventType,
+      source,
+      { ...payload, deliveryId: input.deliveryId },
+      options,
+      input.occurredAt,
+      input.deliveryId,
+      input.attribution ?? {},
+    );
+  }
+
+  private appendInternal(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId"> | undefined,
+    createdAt: string,
+    eventId: string,
+    capturedAttribution: RequestAttribution | undefined,
+  ): { event: RealtimeEvent; inserted: boolean } {
     const normalizedOptions = normalizeRealtimeEventOptions(eventType, source, payload, options);
-    const attribution = getRequestAttribution();
+    const attribution = capturedAttribution ?? getRequestAttribution();
     const attributedPayload = {
       ...embedRealtimeEnvelope(payload, normalizedOptions),
       correlationId: options?.correlationId ?? payload.correlationId ?? attribution?.correlationId,
@@ -119,12 +158,16 @@ export class RealtimeEventRepository {
       actorId: payload.actorId ?? attribution?.actorId,
       deviceId: payload.deviceId ?? attribution?.deviceId,
       grantId: payload.grantId ?? attribution?.grantId,
+      companionSessionId: payload.companionSessionId ?? attribution?.companionSessionId,
     };
-    const eventId = randomUUID();
-    const sequence = this.db.transaction("immediate", () => {
+    const write = this.db.transaction("immediate", () => {
+      const existing = this.getByIdStmt.get(eventId) as RealtimeEventRow | undefined;
+      if (existing) {
+        return { row: existing, inserted: false };
+      }
       const nextSequenceRow = toSequenceStateRow(this.allocateSequenceStmt.get());
       const allocatedSequence = Number(nextSequenceRow?.last_sequence ?? 1);
-      this.insertStmt.run({
+      const insert = this.insertStmt.run({
         eventId,
         sequence: allocatedSequence,
         eventType,
@@ -132,22 +175,23 @@ export class RealtimeEventRepository {
         payloadJson: JSON.stringify(attributedPayload),
         createdAt,
       });
-      return allocatedSequence;
+      const row = this.getByIdStmt.get(eventId) as RealtimeEventRow | undefined;
+      if (!row) {
+        throw new Error(`Realtime event ${eventId} was not persisted.`);
+      }
+      return { row, inserted: Number(insert.changes ?? 0) > 0 };
     });
-    this.appendCount += 1;
-    if (this.appendCount % 100 === 0) {
+    const event = mapRealtimeEventRow(write.row);
+    if (!write.inserted) {
+      assertRealtimeIdempotencyMatch(event, { eventType, source, payload: stripRealtimeEnvelope(attributedPayload) });
+    }
+    if (write.inserted) {
+      this.appendCount += 1;
+    }
+    if (write.inserted && this.appendCount % 100 === 0) {
       this.pruneToMaxRows(10000);
     }
-
-    return {
-      eventId,
-      sequence,
-      eventType,
-      source,
-      timestamp: createdAt,
-      ...extractRealtimeMetadata(attributedPayload),
-      payload: stripRealtimeEnvelope(attributedPayload),
-    };
+    return { event, inserted: write.inserted };
   }
 
   public list(limit: number, cursor?: string): RealtimeEvent[] {
@@ -226,6 +270,39 @@ export class RealtimeEventRepository {
 interface CompositeCursor {
   timestamp: string;
   key: string;
+}
+
+function assertRealtimeIdempotencyMatch(
+  persisted: RealtimeEvent,
+  input: { eventType: string; source: string; payload: Record<string, unknown> },
+): void {
+  if (
+    persisted.eventType === input.eventType &&
+    persisted.source === input.source &&
+    stableJson(persisted.payload) === stableJson(input.payload)
+  ) {
+    return;
+  }
+  throw new Error(`Realtime delivery id ${persisted.eventId} was reused with a different payload.`);
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortJson(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, sortJson(entry)]),
+  );
 }
 
 function parseCompositeCursor(cursor?: string): CompositeCursor | undefined {

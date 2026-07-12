@@ -19,13 +19,27 @@ interface A2ATaskBindingRow {
 }
 
 export class A2ATaskBindingRepository {
+  private readonly databaseNowStmt;
   private readonly insertStmt;
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly findByIdempotencyStmt;
   private readonly updateStmt;
   private readonly listByPeerStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.databaseNowStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          SELECT to_char(
+            clock_timestamp() AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          ) AS now_iso
+        `
+        : `
+          SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now_iso
+        `,
+    );
     this.insertStmt = db.prepare(`
       INSERT INTO a2a_task_bindings (
         a2a_task_id, context_id, peer_id, workspace_id, session_id, local_task_id,
@@ -34,8 +48,14 @@ export class A2ATaskBindingRepository {
         @a2aTaskId, @contextId, @peerId, @workspaceId, @sessionId, @localTaskId,
         @durableRunId, @state, @lastEventSequence, @idempotencyKey, @metadataJson, @createdAt, @updatedAt
       )
+      ON CONFLICT DO NOTHING
     `);
     this.getStmt = db.prepare("SELECT * FROM a2a_task_bindings WHERE a2a_task_id = ?");
+    this.getForUpdateStmt = db.prepare(
+      db.dialect === "postgres"
+        ? "SELECT * FROM a2a_task_bindings WHERE a2a_task_id = ? FOR UPDATE"
+        : "SELECT * FROM a2a_task_bindings WHERE a2a_task_id = ?",
+    );
     this.findByIdempotencyStmt = db.prepare(`
       SELECT *
       FROM a2a_task_bindings
@@ -81,26 +101,39 @@ export class A2ATaskBindingRepository {
     },
     now = new Date().toISOString(),
   ): A2ATaskBindingRecord {
-    const existing = this.findByIdempotency(input.peerId, input.idempotencyKey) ?? this.find(input.a2aTaskId);
-    if (existing) {
-      return existing;
-    }
-    this.insertStmt.run({
-      a2aTaskId: input.a2aTaskId,
-      contextId: input.contextId,
-      peerId: input.peerId,
-      workspaceId: input.workspaceId ?? "default",
-      sessionId: input.sessionId ?? null,
-      localTaskId: input.localTaskId ?? null,
-      durableRunId: input.durableRunId ?? null,
-      state: input.state ?? "submitted",
-      lastEventSequence: input.lastEventSequence ?? 0,
-      idempotencyKey: input.idempotencyKey,
-      metadataJson: stringifyJson(input.metadata ?? {}),
-      createdAt: now,
-      updatedAt: now,
+    return this.db.transaction("immediate", () => {
+      const existingByIdempotency = this.findByIdempotency(input.peerId, input.idempotencyKey);
+      if (existingByIdempotency) {
+        assertCompatibleReplay(existingByIdempotency, input);
+        return existingByIdempotency;
+      }
+      const existingByTaskId = this.find(input.a2aTaskId);
+      if (existingByTaskId) {
+        assertCompatibleReplay(existingByTaskId, input);
+        return existingByTaskId;
+      }
+      this.insertStmt.run({
+        a2aTaskId: input.a2aTaskId,
+        contextId: input.contextId,
+        peerId: input.peerId,
+        workspaceId: input.workspaceId ?? "default",
+        sessionId: input.sessionId ?? null,
+        localTaskId: input.localTaskId ?? null,
+        durableRunId: input.durableRunId ?? null,
+        state: input.state ?? "submitted",
+        lastEventSequence: input.lastEventSequence ?? 0,
+        idempotencyKey: input.idempotencyKey,
+        metadataJson: stringifyJson(input.metadata ?? {}),
+        createdAt: now,
+        updatedAt: now,
+      });
+      const canonical = this.findByIdempotency(input.peerId, input.idempotencyKey) ?? this.find(input.a2aTaskId);
+      if (!canonical) {
+        throw new Error(`A2A task binding ${input.a2aTaskId} was not persisted.`);
+      }
+      assertCompatibleReplay(canonical, input);
+      return canonical;
     });
-    return this.get(input.a2aTaskId);
   }
 
   public get(a2aTaskId: string): A2ATaskBindingRecord {
@@ -109,6 +142,14 @@ export class A2ATaskBindingRepository {
       throw new Error(`Unknown A2A task binding ${a2aTaskId}`);
     }
     return record;
+  }
+
+  public getForUpdate(a2aTaskId: string): A2ATaskBindingRecord {
+    const row = toA2ATaskBindingRow(this.getForUpdateStmt.get(a2aTaskId));
+    if (!row) {
+      throw new Error(`Unknown A2A task binding ${a2aTaskId}`);
+    }
+    return mapA2ATaskBindingRow(row);
   }
 
   public find(a2aTaskId: string): A2ATaskBindingRecord | undefined {
@@ -124,6 +165,14 @@ export class A2ATaskBindingRepository {
       }),
     );
     return row ? mapA2ATaskBindingRow(row) : undefined;
+  }
+
+  public readDatabaseNow(): string {
+    const row = this.databaseNowStmt.get<{ now_iso?: unknown }>();
+    if (typeof row?.now_iso !== "string" || !Number.isFinite(Date.parse(row.now_iso))) {
+      throw new Error("Database did not return a valid A2A dispatch clock.");
+    }
+    return row.now_iso;
   }
 
   public update(
@@ -143,26 +192,28 @@ export class A2ATaskBindingRepository {
     >,
     now = new Date().toISOString(),
   ): A2ATaskBindingRecord {
-    const current = this.get(a2aTaskId);
-    const next: A2ATaskBindingRecord = {
-      ...current,
-      ...patch,
-      metadata: patch.metadata ?? current.metadata,
-      updatedAt: now,
-    };
-    this.updateStmt.run({
-      a2aTaskId: next.a2aTaskId,
-      contextId: next.contextId,
-      workspaceId: next.workspaceId,
-      sessionId: next.sessionId ?? null,
-      localTaskId: next.localTaskId ?? null,
-      durableRunId: next.durableRunId ?? null,
-      state: next.state,
-      lastEventSequence: next.lastEventSequence,
-      metadataJson: stringifyJson(next.metadata),
-      updatedAt: next.updatedAt,
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(a2aTaskId);
+      const next: A2ATaskBindingRecord = {
+        ...current,
+        ...patch,
+        metadata: patch.metadata ?? current.metadata,
+        updatedAt: now,
+      };
+      this.updateStmt.run({
+        a2aTaskId: next.a2aTaskId,
+        contextId: next.contextId,
+        workspaceId: next.workspaceId,
+        sessionId: next.sessionId ?? null,
+        localTaskId: next.localTaskId ?? null,
+        durableRunId: next.durableRunId ?? null,
+        state: next.state,
+        lastEventSequence: next.lastEventSequence,
+        metadataJson: stringifyJson(next.metadata),
+        updatedAt: next.updatedAt,
+      });
+      return this.get(a2aTaskId);
     });
-    return this.get(a2aTaskId);
   }
 
   public listByPeer(peerId: string, limit = 100): A2ATaskBindingRecord[] {
@@ -171,6 +222,28 @@ export class A2ATaskBindingRepository {
       .map(toA2ATaskBindingRow)
       .filter((row): row is A2ATaskBindingRow => Boolean(row));
     return rows.map((row) => mapA2ATaskBindingRow(row));
+  }
+}
+
+function assertCompatibleReplay(
+  existing: A2ATaskBindingRecord,
+  input: {
+    a2aTaskId: string;
+    contextId: string;
+    peerId: string;
+    workspaceId?: string;
+    idempotencyKey: string;
+  },
+): void {
+  const workspaceId = input.workspaceId ?? "default";
+  const conflicts =
+    existing.a2aTaskId !== input.a2aTaskId ||
+    existing.peerId !== input.peerId ||
+    existing.idempotencyKey !== input.idempotencyKey ||
+    existing.contextId !== input.contextId ||
+    existing.workspaceId !== workspaceId;
+  if (conflicts) {
+    throw new Error(`A2A task ${input.a2aTaskId} conflicts with the persisted A2A binding owner or request identity.`);
   }
 }
 

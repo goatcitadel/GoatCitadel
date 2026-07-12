@@ -92,6 +92,74 @@ afterEach(() => {
 });
 
 describe("comms mutation boundary tracking", () => {
+  it("does not report a BlueBubbles read-only POST lookup as the message-send boundary", async () => {
+    const calls: FetchCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = recordFetchCall(calls, input, init);
+        if (url === "https://bluebubbles.example/api/v1/chat/query?password=bb-password") {
+          return new Response("lookup unavailable", { status: 503 });
+        }
+        throw new Error(`unexpected provider mutation ${url}`);
+      }),
+    );
+    const markFailed = vi.fn();
+    const storage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-bluebubbles-lookup",
+          key: "imessage",
+          enabled: true,
+          status: "connected",
+          config: {
+            provider: "bluebubbles",
+            bridgeUrl: "https://bluebubbles.example",
+            password: "bb-password",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn(() => ({
+          deliveryId: "delivery-bluebubbles-lookup",
+          status: "queued",
+          channelKey: "imessage",
+          target: "chat:123",
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+    const beforeExternalSideEffect = vi.fn();
+
+    const result = await executeCommsTool(
+      {
+        toolName: "imessage.send",
+        args: { connectionId: "conn-bluebubbles-lookup", target: "chat:123", message: "hello" },
+        agentId: "operator",
+        sessionId: "sess-bluebubbles-lookup",
+      },
+      policyConfig(["bluebubbles.example"]),
+      storage,
+      undefined,
+      { beforeExternalSideEffect },
+    );
+
+    expect(calls).toEqual([
+      { method: "POST", url: "https://bluebubbles.example/api/v1/chat/query?password=bb-password" },
+    ]);
+    expect(beforeExternalSideEffect).not.toHaveBeenCalled();
+    expect(markFailed).toHaveBeenCalledWith(
+      "delivery-bluebubbles-lookup",
+      expect.not.stringMatching(/unknown_after_send|manual reconciliation/i),
+      expect.any(String),
+      "not_available",
+    );
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
+  });
+
   it("keeps an attachment 404 pre-dispatch and never contacts a provider mutation endpoint", async () => {
     const calls: FetchCall[] = [];
     vi.stubGlobal(
