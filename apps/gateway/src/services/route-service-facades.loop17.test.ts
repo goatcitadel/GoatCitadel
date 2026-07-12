@@ -124,7 +124,12 @@ describe("route service facades", () => {
     });
     expect(service.forgetItem("item-1", "operator")).toEqual({
       method: "forgetMemoryItem",
-      args: ["item-1", "operator"],
+      args: ["item-1", "operator", undefined],
+    });
+    const forgetHooks = { onCommit: vi.fn(), afterCommit: vi.fn() };
+    expect(service.forgetItem("item-1", "operator", forgetHooks)).toEqual({
+      method: "forgetMemoryItem",
+      args: ["item-1", "operator", forgetHooks],
     });
     expect(service.listItemHistory("item-1", 5)).toEqual({
       method: "listMemoryItemHistory",
@@ -132,7 +137,11 @@ describe("route service facades", () => {
     });
     expect(service.forget({ workspaceId: "workspace-1", query: "old" } as never)).toEqual({
       method: "forgetMemory",
-      args: [{ workspaceId: "workspace-1", query: "old" }],
+      args: [{ workspaceId: "workspace-1", query: "old" }, undefined],
+    });
+    expect(service.forget({ workspaceId: "workspace-1", query: "old" } as never, forgetHooks)).toEqual({
+      method: "forgetMemory",
+      args: [{ workspaceId: "workspace-1", query: "old" }, forgetHooks],
     });
   });
 

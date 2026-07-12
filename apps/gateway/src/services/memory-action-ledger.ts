@@ -26,8 +26,32 @@ export interface BuildMemoryActionLedgerInput {
   failureReason?: string;
 }
 
+export interface BuildMemoryActionContextInput {
+  actionId?: string;
+  ownerId: string;
+  source?: string;
+  defaultSource?: string;
+  timestamp?: string;
+}
+
+export interface MemoryActionContext {
+  actionId: string;
+  ownerId: string;
+  source: string;
+  timestamp: string;
+}
+
+export function buildMemoryActionContext(input: BuildMemoryActionContextInput): MemoryActionContext {
+  return {
+    actionId: normalizeLedgerActionId(input.actionId),
+    ownerId: safeLedgerText(input.ownerId, "operator"),
+    source: safeLedgerText(input.source, input.defaultSource ?? DEFAULT_MEMORY_ACTION_SOURCE),
+    timestamp: input.timestamp ?? new Date().toISOString(),
+  };
+}
+
 export function buildMemoryActionLedgerEntry(input: BuildMemoryActionLedgerInput): MemoryActionLedgerEntry {
-  const actionId = normalizeLedgerActionId(input.actionId);
+  const context = buildMemoryActionContext(input);
   const operations = input.operations.map((operation) => ({
     ...operation,
     itemId: operation.itemId.trim(),
@@ -43,10 +67,7 @@ export function buildMemoryActionLedgerEntry(input: BuildMemoryActionLedgerInput
   const hasChangedFields = Object.keys(changedFields).length > 0;
 
   return {
-    actionId,
-    ownerId: safeLedgerText(input.ownerId, "operator"),
-    source: safeLedgerText(input.source, DEFAULT_MEMORY_ACTION_SOURCE),
-    timestamp: input.timestamp ?? new Date().toISOString(),
+    ...context,
     status: input.status,
     targetItemIds,
     operationKind,
@@ -55,7 +76,8 @@ export function buildMemoryActionLedgerEntry(input: BuildMemoryActionLedgerInput
     reapply: buildReapplyNote(operationKind, hasChangedFields),
     evidence: {
       storesRawContent: false,
-      redactionNote: "Ledger evidence records item ids, operation kinds, and field names only; raw memory content is excluded.",
+      redactionNote:
+        "Ledger evidence records item ids, operation kinds, and field names only; raw memory content is excluded.",
       ...(hasChangedFields ? { changedFields } : {}),
       ...(input.failureReason ? { failureReason: safeLedgerText(input.failureReason, "redacted failure") } : {}),
     },
@@ -136,7 +158,10 @@ function normalizeChangedFields(fields: string[] | undefined): string[] {
 }
 
 function normalizeLedgerActionId(value: string | undefined): string {
-  const normalized = value?.trim().replace(/[^a-zA-Z0-9._:-]/gu, "").slice(0, 120);
+  const normalized = value
+    ?.trim()
+    .replace(/[^a-zA-Z0-9._:-]/gu, "")
+    .slice(0, 120);
   if (!normalized || SECRET_LIKE_LEDGER_PATTERN.test(normalized)) {
     return randomUUID();
   }

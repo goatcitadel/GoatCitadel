@@ -46,6 +46,31 @@ describe("memory routes", () => {
     expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", status: "active" }));
   });
 
+  it("forwards canonical commit callbacks, provenance, and authenticated actor for single-item forget", async () => {
+    const forgetItem = vi.fn(() => ({ itemId: "memory-1", status: "forgotten" }));
+    const built = buildApp({ forgetItem });
+    app = built.app;
+    app.decorateRequest("authActorId", "operator:single-forget");
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/items/memory-1/forget",
+      payload: {
+        actionId: "single-forget-action",
+        source: "route-proof",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(forgetItem).toHaveBeenCalledWith("memory-1", "operator:single-forget", {
+      actionId: "single-forget-action",
+      source: "route-proof",
+      onCommit: expect.any(Function),
+      afterCommit: expect.any(Function),
+    });
+  });
+
   it("rejects bulk forget without any criteria", async () => {
     const forgetMemory = vi.fn();
     const built = buildApp({
@@ -76,14 +101,87 @@ describe("memory routes", () => {
     });
   });
 
-  it("forgets matching memory rows when criteria are provided", async () => {
+  it("forwards scoped bulk-forget provenance, actor, and canonical mutation lifecycle callbacks", async () => {
     const forgetMemory = vi.fn(() => ({
+      actionId: "forget-action-1",
+      matchedCount: 1,
+      alreadyForgottenCount: 0,
       forgottenCount: 1,
       itemIds: ["mem_1"],
+      items: [],
     }));
     const built = buildApp({
       forgetMemory,
     });
+    app = built.app;
+    app.decorateRequest("authActorId", "operator:route-test");
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/forget",
+      payload: {
+        namespace: "project.alpha",
+        workspaceId: "workspace-a",
+        includeGlobal: true,
+        actionId: "forget-action-1",
+        source: "route-test",
+        actorId: "untrusted-payload-actor",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(forgetMemory).toHaveBeenCalledTimes(1);
+    expect(forgetMemory).toHaveBeenCalledWith(
+      {
+        itemIds: undefined,
+        namespace: "project.alpha",
+        query: undefined,
+        workspaceId: "workspace-a",
+        includeGlobal: true,
+        actionId: "forget-action-1",
+        source: "route-test",
+        actorId: "operator:route-test",
+      },
+      {
+        onCommit: expect.any(Function),
+        afterCommit: expect.any(Function),
+      },
+    );
+    expect(response.json()).toEqual({
+      actionId: "forget-action-1",
+      matchedCount: 1,
+      alreadyForgottenCount: 0,
+      forgottenCount: 1,
+      itemIds: ["mem_1"],
+      items: [],
+    });
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an oversized explicit bulk-forget target set before calling the service", async () => {
+    const forgetMemory = vi.fn();
+    const built = buildApp({ forgetMemory });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/forget",
+      payload: {
+        itemIds: Array.from({ length: 2_001 }, (_, index) => `memory-${index}`),
+        workspaceId: "workspace-a",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(forgetMemory).not.toHaveBeenCalled();
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects includeGlobal without an explicit workspace before calling the service", async () => {
+    const forgetMemory = vi.fn();
+    const built = buildApp({ forgetMemory });
     app = built.app;
     await app.register(memoryRoutes);
 
@@ -92,22 +190,45 @@ describe("memory routes", () => {
       url: "/api/v1/memory/forget",
       payload: {
         namespace: "project.alpha",
+        includeGlobal: true,
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(forgetMemory).toHaveBeenCalledTimes(1);
-    expect(forgetMemory).toHaveBeenCalledWith({
-      itemIds: undefined,
-      namespace: "project.alpha",
-      query: undefined,
-      actorId: expect.stringMatching(/^ip:/),
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        fieldErrors: {
+          workspaceId: expect.arrayContaining([expect.stringMatching(/workspace/i)]),
+        },
+      },
     });
-    expect(response.json()).toEqual({
-      forgottenCount: 1,
-      itemIds: ["mem_1"],
-    });
+    expect(forgetMemory).not.toHaveBeenCalled();
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves operator authorization before bulk forget", async () => {
+    const forgetMemory = vi.fn();
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (status: number) => { send: (body: { error: string }) => unknown } }) =>
+        reply.code(401).send({ error: "Operator authentication required." }),
+    );
+    const built = buildApp({ forgetMemory }, requireOperatorAuth);
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/forget",
+      payload: {
+        itemIds: ["memory-1"],
+        workspaceId: "workspace-a",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "Operator authentication required." });
+    expect(requireOperatorAuth).toHaveBeenCalledTimes(1);
+    expect(forgetMemory).not.toHaveBeenCalled();
   });
 
   it("routes atomic memory item batch mutations through the memory service", async () => {

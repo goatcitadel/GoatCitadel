@@ -1,3 +1,4 @@
+import { validateMemoryForgetRequest } from "@goatcitadel/contracts";
 import type {
   DocsIngestInput,
   EmbeddingIndexInput,
@@ -16,6 +17,8 @@ import type {
   MemoryFeedbackRecord,
   MemoryFeedbackStatus,
   MemoryFeedbackTargetKind,
+  MemoryForgetRequest,
+  MemoryForgetResponse,
   MemoryItemRecord,
   MemoryLearningRecord,
   MemoryLifecyclePatch,
@@ -48,6 +51,11 @@ import type {
 } from "@goatcitadel/contracts";
 
 import { request } from "./client-core.js";
+
+type LegacyMemoryForgetClientRequest = MemoryForgetRequest & {
+  /** @deprecated Gateway HTTP routes derive actor authority from authenticated request context. */
+  actorId?: string;
+};
 
 export async function knowledgeMemoryWrite(
   input: MemoryWriteInput,
@@ -364,13 +372,9 @@ export async function rejectMemoryMaintenanceRecommendation(
   );
 }
 
-export async function forgetMemory(input: {
-  itemIds?: string[];
-  namespace?: string;
-  query?: string;
-  actorId?: string;
-}): Promise<{ forgottenCount: number; itemIds: string[] }> {
-  return request<{ forgottenCount: number; itemIds: string[] }>("/api/v1/memory/forget", {
+export async function forgetMemory(input: LegacyMemoryForgetClientRequest): Promise<MemoryForgetResponse> {
+  validateMemoryForgetRequest(input);
+  return request<MemoryForgetResponse>("/api/v1/memory/forget", {
     method: "POST",
     body: JSON.stringify(input),
   });

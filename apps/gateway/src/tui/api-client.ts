@@ -9,6 +9,8 @@ import type {
   LlmRuntimeConfig,
   ApprovalReplayEvent,
   MemoryContextPack,
+  MemoryForgetRequest,
+  MemoryForgetResponse,
   McpServerPolicy,
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
@@ -34,6 +36,7 @@ import type {
   ToolGrantRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { validateMemoryForgetRequest } from "@goatcitadel/contracts";
 
 type TuiThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
 type TuiSpeedMode = "standard" | "fast";
@@ -857,11 +860,8 @@ export class TuiApiClient {
     });
   }
 
-  public async forgetMemory(input: {
-    itemIds?: string[];
-    namespace?: string;
-    query?: string;
-  }): Promise<Record<string, unknown>> {
+  public async forgetMemory(input: MemoryForgetRequest): Promise<MemoryForgetResponse> {
+    validateMemoryForgetRequest(input);
     return this.request(
       "/api/v1/memory/forget",
       {

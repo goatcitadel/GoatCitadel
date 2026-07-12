@@ -322,7 +322,15 @@ describe("MemoryLifecycleService", () => {
         if (sql.includes("UPDATE memory_items")) {
           return {
             get: vi.fn(),
-            all: vi.fn(() => []),
+            all: vi.fn((params: Record<string, unknown>) => {
+              if (!sql.includes("RETURNING")) {
+                return [];
+              }
+              row.status = "forgotten";
+              row.forgotten_at = String(params.forgottenAt);
+              row.updated_at = String(params.updatedAt ?? row.updated_at);
+              return [{ ...row }];
+            }),
             run: vi.fn((params: Record<string, unknown>) => {
               if (params.title !== undefined) {
                 row.title = String(params.title);
@@ -365,6 +373,7 @@ describe("MemoryLifecycleService", () => {
         }
         throw new Error(`Unexpected SQL in test harness: ${sql}`);
       }),
+      runImmediateTransaction: <T>(callback: () => T): T => callback(),
     };
     const service = new MemoryLifecycleService({
       context: {} as never,

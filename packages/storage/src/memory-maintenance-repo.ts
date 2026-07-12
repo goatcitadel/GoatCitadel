@@ -142,7 +142,10 @@ export interface WorkspaceToolArtifactRecord {
   createdAt: string;
 }
 
-export function buildMemoryWorkspaceScopeSql(dialect: DatabaseClient["dialect"]): string {
+export function buildMemoryWorkspaceScopeSql(
+  dialect: DatabaseClient["dialect"],
+  options: { includeGlobal?: boolean } = {},
+): string {
   if (dialect !== "sqlite" && dialect !== "postgres") {
     throw new TypeError("Memory workspace scope SQL requires an explicit database dialect.");
   }
@@ -161,11 +164,18 @@ export function buildMemoryWorkspaceScopeSql(dialect: DatabaseClient["dialect"])
         END`;
   // Canonical workspace IDs are normalized on write. Keep exact equality so
   // idx_memory_items_workspace remains usable; padded/blank canonical rows fail closed.
+  // Read paths preserve the historical behavior of treating rows without a
+  // valid legacy workspace as global. Destructive paths can opt out so a
+  // workspace-scoped mutation never silently widens to global memory.
+  const legacyScopeSql =
+    options.includeGlobal === false
+      ? `(${legacyWorkspaceExpr}) = @workspaceId`
+      : `COALESCE((${legacyWorkspaceExpr}), @workspaceId) = @workspaceId`;
   return `(
     workspace_id = @workspaceId
     OR (
       workspace_id IS NULL
-      AND COALESCE((${legacyWorkspaceExpr}), @workspaceId) = @workspaceId
+      AND ${legacyScopeSql}
     )
   )`;
 }
