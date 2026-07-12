@@ -1511,9 +1511,11 @@ describe("mcp runtime", () => {
   });
 
   it("returns a structured failure instead of hanging when the MCP stdio command cannot be spawned", async () => {
+    const missingCommand = path.join(os.tmpdir(), "goatcitadel-mcp-missing-executable", `${process.pid}-${Date.now()}`);
+    expect(fs.existsSync(missingCommand)).toBe(false);
     const server: McpServerRecord = {
       ...createTestServer(""),
-      command: "definitely-not-a-real-binary-goatcitadel-test",
+      command: missingCommand,
       args: [],
     };
 
@@ -1523,11 +1525,8 @@ describe("mcp runtime", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("MCP stdio request failed");
-    // Structured, attributable failure: either the spawn ENOENT error event fires
-    // (the expected channel for a plain, extension-less command name) or -- on a
-    // host/path that routes the launch through a shell -- the child exits
-    // immediately and surfaces as a non-zero "exited before responding" close.
-    // Either channel is acceptable; a silent hang is not.
+    // A known-absent absolute path avoids PATH-specific EACCES collisions while
+    // proving the spawn error resolves structurally instead of hanging.
     expect(result.error).toMatch(/enoent|exited before responding/i);
     // Resolved well inside the timeout budget -- proves this failed structurally
     // rather than waiting out the timeout.
