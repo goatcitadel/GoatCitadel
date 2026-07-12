@@ -18,6 +18,7 @@ import {
 } from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
 import { invokeGifSearchAction } from "./gif-search-action.js";
+import { buildLocalBridgeActionTargets, isLocalBridgeExternalSideEffectAction } from "./local-bridge-action-policy.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import {
   buildIntegrationWardAction,
@@ -175,10 +176,12 @@ async function invokeLocalBridgeAction(
     );
   }
   const authHeader = resolveBearerAuth(host, connection.config);
-  const candidates = [
-    joinUrl(bridgeUrl, "/v1/integrations/actions"),
-    joinUrl(bridgeUrl, "/api/v1/integrations/actions"),
-  ];
+  const candidates = buildLocalBridgeActionTargets(
+    bridgeUrl,
+    host.readConnectionConfigValue(connection.config, "actionRoute"),
+  );
+  const selectedSideEffectTarget = candidates[0];
+  const isSideEffectAction = isExternalSideEffectAction(connection, action);
   const bridgePayload = {
     integrationKey: connection.key,
     catalogId: connection.catalogId,
@@ -186,6 +189,7 @@ async function invokeLocalBridgeAction(
     actionId: action.actionId,
     input: request.input ?? {},
   };
+  const bridgeTargets = isSideEffectAction ? [selectedSideEffectTarget] : candidates;
   const executeBridge = () =>
     sendLocalBridgeAction(
       host,
@@ -193,18 +197,36 @@ async function invokeLocalBridgeAction(
       action.actionId,
       checkedAt,
       bridgeUrl,
-      candidates,
+      bridgeTargets,
       authHeader,
       bridgePayload,
     );
 
-  if (action.capability === "write") {
+  if (isSideEffectAction) {
+    const runImmediateTransaction = host.storage.runImmediateTransaction;
+    if (!host.mutationStore || !host.sideEffectRunStore || !runImmediateTransaction) {
+      return blocked(
+        connection,
+        action.actionId,
+        checkedAt,
+        `${action.label} was not sent because durable external-side-effect authority is unavailable.`,
+        "external_side_effect_durability_unavailable",
+        {
+          provider: "local_bridge",
+          catalogId: connection.catalogId,
+          actionId: action.actionId,
+        },
+      );
+    }
     const replayRun = await runWardGatedExternalSideEffect(
       host,
       ward,
       {
         mutationStore: host.mutationStore,
         sideEffectRunStore: host.sideEffectRunStore,
+        runClaimTransaction: (work) => host.storage.runImmediateTransaction!(work),
+        requireMutationClaimOwnership: true,
+        requireDurableBoundaryRecord: true,
         boundary: "integration_local_bridge_action",
         catalogId: connection.catalogId,
         connectionId: connection.connectionId,
@@ -212,6 +234,7 @@ async function invokeLocalBridgeAction(
         checkedAt,
         workspaceId: connection.workspaceId,
         idempotencyKey: request.idempotencyKey,
+        externalDestinationFingerprint: fingerprintExternalSideEffectDestination(selectedSideEffectTarget),
         payload: {
           provider: "local_bridge",
           catalogId: connection.catalogId,
@@ -233,7 +256,7 @@ async function invokeLocalBridgeAction(
           return result;
         },
       },
-      { externalDestination: bridgeUrl },
+      { externalDestination: selectedSideEffectTarget },
     );
     if (replayRun.status === "blocked") {
       return blocked(
@@ -799,7 +822,7 @@ function recordExternalWritebackEnvelope(
   request: IntegrationActionInvokeInput,
   checkedAt: string,
 ): IntegrationActionInvokeResult {
-  if (action.capability !== "write") {
+  if (!isExternalSideEffectAction(connection, action)) {
     return result;
   }
   const durableWriteback = recordAuditOnlyExternalSideEffectIntent({
@@ -831,6 +854,13 @@ function recordExternalWritebackEnvelope(
     durableWriteback,
     reversibility: durableWriteback.reversibility,
   };
+}
+
+function isExternalSideEffectAction(connection: IntegrationConnection, action: IntegrationOperatorAction): boolean {
+  if (isLocalBridgeCatalogId(connection.catalogId)) {
+    return isLocalBridgeExternalSideEffectAction(action);
+  }
+  return action.capability === "write";
 }
 
 function readExternalReplayOutcome(
@@ -956,12 +986,6 @@ function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, u
     host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
     host.resolveConnectionSecret(config, "token", "tokenEnv");
   return token ? `Bearer ${token}` : undefined;
-}
-
-function joinUrl(baseUrl: string, suffix: string): string {
-  const normalizedBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-  return `${normalizedBase}${normalizedSuffix}`;
 }
 
 async function parseResponse(

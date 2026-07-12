@@ -1193,6 +1193,61 @@ describe("external-side-effect-runner-service", () => {
     );
   });
 
+  it("keeps a real rolled-back boundary marker failure safely retryable before provider invocation", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-boundary-rollback-"));
+    realStorageTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const sideEffectRunStore = new Proxy(storage.externalSideEffectRuns, {
+      get(target, property, receiver) {
+        if (property === "markExternalCallStarted") {
+          return () => {
+            throw new Error("started mirror unavailable");
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as ExternalSideEffectRunStore;
+    const provider = vi.fn(async () => ({ ok: true }));
+
+    try {
+      const result = await runIdempotentExternalSideEffect({
+        mutationStore: storage.mutationIdempotency,
+        sideEffectRunStore,
+        runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+        boundary: "durable_connector_delivery",
+        connectionId: "conn-boundary-rollback",
+        actionId: "send-boundary-rollback",
+        idempotencyKey: "boundary-rollback-key",
+        checkedAt: "2026-05-31T00:00:00.000Z",
+        payload: { message: "must not be sent" },
+        label: "Boundary rollback proof",
+        requireMutationClaimOwnership: true,
+        requireDurableBoundaryRecord: true,
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        claim: { resumeState: "manual_retry_after_recorded_failure" },
+      });
+      expect(provider).not.toHaveBeenCalled();
+      expect(storage.externalSideEffectRuns.listByConnection("conn-boundary-rollback")[0]).toMatchObject({
+        status: "failed_before_boundary",
+        resumeState: "manual_retry_after_recorded_failure",
+      });
+    } finally {
+      storage.close();
+    }
+  });
+
   it("does not reopen idempotency when a strict caller loses its durable boundary claim", async () => {
     const sideEffectRunStore = createSideEffectRunStore();
     sideEffectRunStore.markExternalCallStarted.mockImplementation(() => {

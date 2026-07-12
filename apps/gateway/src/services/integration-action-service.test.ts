@@ -29,11 +29,13 @@ function createHost(
   connection: IntegrationConnection,
   overrides: Partial<IntegrationActionHost> = {},
 ): IntegrationActionHost {
+  let claimSequence = 0;
   return {
     storage: {
       integrationConnections: {
         get: vi.fn(() => connection),
       },
+      runImmediateTransaction: vi.fn(<T>(work: () => T): T => work()),
     },
     fetchWithDiagnosticsTimeout: vi.fn(),
     readConnectionConfigValue: vi.fn((config: Record<string, unknown>, key: string) => {
@@ -59,13 +61,15 @@ function createHost(
           actorScope: input.actorScope ?? "",
           payloadHash: input.payloadHash,
           status: "pending" as const,
+          claimToken: `claim-${++claimSequence}`,
           createdAt: input.now ?? "2026-04-10T12:00:00.000Z",
           updatedAt: input.now ?? "2026-04-10T12:00:00.000Z",
         },
       })),
-      markCompleted: vi.fn(),
-      markFailed: vi.fn(),
+      markCompleted: vi.fn(() => true),
+      markFailed: vi.fn(() => true),
     },
+    sideEffectRunStore: createSideEffectRunStore(),
     ...overrides,
   };
 }
@@ -75,6 +79,7 @@ function createSideEffectRunStore(): ExternalSideEffectRunStore & {
   markExternalCallStarted: ReturnType<typeof vi.fn>;
   markCompleted: ReturnType<typeof vi.fn>;
   markFailure: ReturnType<typeof vi.fn>;
+  markFailureIfStatus: ReturnType<typeof vi.fn>;
 } {
   return {
     createOrGet: vi.fn((input, now) => ({
@@ -126,6 +131,26 @@ function createSideEffectRunStore(): ExternalSideEffectRunStore & {
       status: input.status,
       replayPolicy: "idempotent_external" as const,
       resumeState: "manual_retry_after_recorded_failure" as const,
+      errorText: input.errorText,
+      attemptCount: 1,
+      completedAt: now,
+      createdAt: now ?? "2026-04-10T12:00:00.000Z",
+      updatedAt: now ?? "2026-04-10T12:00:00.000Z",
+    })),
+    markFailureIfStatus: vi.fn((runId, _expectedStatus, input, now) => ({
+      runId,
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external",
+      actorScope: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "operator-key",
+      payloadHash: "hash",
+      status: input.status,
+      replayPolicy: "idempotent_external" as const,
+      resumeState:
+        input.status === "unknown_external_outcome"
+          ? ("manual_review_unknown_external_outcome" as const)
+          : ("manual_retry_after_recorded_failure" as const),
       errorText: input.errorText,
       attemptCount: 1,
       completedAt: now,
@@ -320,6 +345,381 @@ describe("integration-action-service", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      failureLabel: "returns a server error after dispatch",
+      expectedMessage: "bridge response failed after dispatch",
+      firstAttempt: async () =>
+        new Response(JSON.stringify({ message: "bridge response failed after dispatch" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+    },
+    {
+      failureLabel: "loses the response after dispatch",
+      expectedMessage: "bridge response lost after dispatch",
+      firstAttempt: async () => {
+        throw new Error("bridge response lost after dispatch");
+      },
+    },
+  ])(
+    "does not replay an ambiguous local bridge write when it $failureLabel",
+    async ({ firstAttempt, expectedMessage }) => {
+      const connection = createConnection({
+        config: {
+          bridgeUrl: "http://127.0.0.1:4040",
+        },
+      });
+      const fetchMock = vi
+        .fn()
+        .mockImplementationOnce(firstAttempt)
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "duplicate write accepted" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      const sideEffectRunStore = createSideEffectRunStore();
+      const host = createHost(connection, {
+        fetchWithDiagnosticsTimeout: fetchMock,
+        sideEffectRunStore,
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+        idempotencyKey: "local-bridge-ambiguous-key",
+        input: { title: "Governed note", content: "Must be dispatched at most once." },
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        message: expectedMessage,
+        output: {
+          provider: "local_bridge",
+          catalogId: "productivity.apple-notes",
+          actionId: "write",
+          replayPolicy: "idempotent_external",
+          replayOutcome: "claimed",
+          resumable: false,
+          resumeState: "manual_review_unknown_external_outcome",
+        },
+        durableWriteback: {
+          replayPolicy: "idempotent_external",
+          resumable: false,
+          resumeState: "manual_review_unknown_external_outcome",
+        },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+      expect(host.mutationStore?.markFailed).toHaveBeenCalledTimes(1);
+      expect(sideEffectRunStore.markCompleted).not.toHaveBeenCalled();
+      expect(sideEffectRunStore.markFailureIfStatus).toHaveBeenCalledWith(
+        expect.any(String),
+        "external_call_started",
+        expect.objectContaining({ status: "unknown_external_outcome" }),
+        expect.any(String),
+      );
+    },
+  );
+
+  it.each([404, 405])("does not replay a local bridge write after an untrusted %i response", async (status) => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("route unavailable", { status }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "legacy write accepted", output: { id: "note-legacy" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const sideEffectRunStore = createSideEffectRunStore();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      sideEffectRunStore,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: `local-bridge-route-${status}`,
+      input: { title: "Legacy-compatible note" },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      output: {
+        provider: "local_bridge",
+        replayPolicy: "idempotent_external",
+        resumeState: "manual_review_unknown_external_outcome",
+      },
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(["http://127.0.0.1:4040/v1/integrations/actions"]);
+    expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it("pins side-effecting local bridge actions to an explicitly configured legacy route", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+        actionRoute: "api_v1",
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: "legacy write accepted", output: { id: "note-legacy" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "local-bridge-explicit-legacy-route",
+      input: { title: "Legacy-compatible note" },
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      message: "legacy write accepted",
+      output: {
+        provider: "local_bridge",
+        id: "note-legacy",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4040/api/v1/integrations/actions",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("preserves the storage receiver when recording strict local bridge boundaries", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    let transactionCalls = 0;
+    const storage: IntegrationActionHost["storage"] = {
+      integrationConnections: {
+        get: () => connection,
+      },
+      runImmediateTransaction<T>(work: () => T): T {
+        transactionCalls += 1;
+        if (this !== storage) {
+          throw new Error("storage transaction receiver was lost");
+        }
+        return work();
+      },
+    };
+    const host = createHost(connection, {
+      storage,
+      fetchWithDiagnosticsTimeout: vi.fn(
+        async () => new Response(JSON.stringify({ message: "bridge write accepted" }), { status: 200 }),
+      ),
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "local-bridge-storage-receiver",
+      input: { title: "Receiver-sensitive write" },
+    });
+
+    expect(result).toMatchObject({ status: "executed", message: "bridge write accepted" });
+    expect(transactionCalls).toBe(3);
+  });
+
+  it.each([
+    {
+      label: "control",
+      catalogId: "automation.peekaboo-screen",
+      actionId: "control",
+      input: { command: "ping" },
+      firstAttempt: async () => new Response("control response failed after dispatch", { status: 503 }),
+    },
+    {
+      label: "capture",
+      catalogId: "automation.camera-photo-video",
+      actionId: "capture",
+      input: {},
+      firstAttempt: async () => {
+        throw new Error("capture response lost after dispatch");
+      },
+    },
+  ])("governs ambiguous local bridge $label actions as external side effects", async (testCase) => {
+    const connection = createConnection({
+      catalogId: testCase.catalogId,
+      key: testCase.catalogId.split(".").at(-1) ?? testCase.catalogId,
+      kind: "automation",
+      label: `Local bridge ${testCase.label}`,
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(testCase.firstAttempt)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "duplicate side effect accepted" }), { status: 200 }),
+      );
+    const sideEffectRunStore = createSideEffectRunStore();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      sideEffectRunStore,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, testCase.actionId, {
+      idempotencyKey: `local-bridge-${testCase.label}-ambiguous`,
+      input: testCase.input,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      output: {
+        provider: "local_bridge",
+        replayPolicy: "idempotent_external",
+        resumeState: "manual_review_unknown_external_outcome",
+      },
+      durableWriteback: {
+        replayPolicy: "idempotent_external",
+        resumeState: "manual_review_unknown_external_outcome",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before a local bridge side effect when durable boundary authority is unavailable", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(),
+      sideEffectRunStore: undefined,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "local-bridge-no-durable-boundary",
+      input: { title: "Must not be sent" },
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      blockedReason: "external_side_effect_durability_unavailable",
+    });
+    expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
+  it("does not call the local bridge when durable boundary recording fails", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const sideEffectRunStore = createSideEffectRunStore();
+    sideEffectRunStore.markExternalCallStarted.mockImplementation(() => {
+      throw new Error("durable boundary ledger unavailable");
+    });
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(),
+      sideEffectRunStore,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      idempotencyKey: "local-bridge-boundary-record-failure",
+      input: { title: "Must not be sent" },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      message: "durable boundary ledger unavailable",
+      output: {
+        replayPolicy: "idempotent_external",
+        resumeState: "manual_retry_after_recorded_failure",
+      },
+    });
+    expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      failureLabel: "returns a server error",
+      firstAttempt: async () => new Response("temporary bridge failure", { status: 503 }),
+    },
+    {
+      failureLabel: "throws a transport error",
+      firstAttempt: async () => {
+        throw new Error("temporary bridge transport failure");
+      },
+    },
+  ])("preserves broad local bridge read fallback when the first endpoint $failureLabel", async ({ firstAttempt }) => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(firstAttempt)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "legacy read succeeded", output: { items: ["note-1"] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "read");
+
+    expect(result).toMatchObject({
+      status: "executed",
+      message: "legacy read succeeded",
+      output: { items: ["note-1"] },
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "http://127.0.0.1:4040/v1/integrations/actions",
+      "http://127.0.0.1:4040/api/v1/integrations/actions",
+    ]);
+  });
+
+  it("keeps the local bridge tray-status action read-only with broad compatibility fallback", async () => {
+    const connection = createConnection({
+      catalogId: "platform.macos-menubar-voice",
+      key: "macos-menubar-voice",
+      kind: "platform",
+      label: "macOS companion",
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("temporary route failure", { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "tray status loaded", output: { state: "ready" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const host = createHost(connection, { fetchWithDiagnosticsTimeout: fetchMock });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "tray");
+
+    expect(result).toMatchObject({ status: "executed", message: "tray status loaded" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(host.mutationStore?.claim).not.toHaveBeenCalled();
+    expect(result.durableWriteback).toBeUndefined();
   });
 
   it("executes Trello read and write actions through the core-native Trello runtime", async () => {

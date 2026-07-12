@@ -634,10 +634,12 @@ export async function runIdempotentExternalSideEffect<TValue>(
           throw new Error(`${input.label} requires a durable external-boundary record before execution.`);
         }
         try {
-          input.runClaimTransaction!(() => {
-            ownedClaim = rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim);
-            markExternalSideEffectRunStarted(input.sideEffectRunStore, ownedClaim, input.checkedAt);
+          const rotatedClaim = input.runClaimTransaction!(() => {
+            const nextClaim = rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim);
+            markExternalSideEffectRunStarted(input.sideEffectRunStore, nextClaim, input.checkedAt);
+            return nextClaim;
           });
+          ownedClaim = rotatedClaim;
         } catch (error) {
           boundaryClaimLost = isExternalSideEffectBoundaryClaimLostError(error);
           throw error;

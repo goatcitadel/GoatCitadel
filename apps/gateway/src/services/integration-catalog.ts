@@ -22,6 +22,11 @@ function localBridgeSchema(
         placeholder: "http://127.0.0.1:8765",
         required: true,
       }),
+      select("actionRoute", "Action API Route", ["v1", "api_v1"], "v1", {
+        advanced: true,
+        description:
+          "Pins side-effecting actions to one bridge route. Choose api_v1 only for a legacy bridge; GoatCitadel never probes an alternate route after sending a side effect.",
+      }),
       text("authTokenEnv", "Bridge Token ENV Var", {
         placeholder: "LOCAL_AGENT_AUTH_TOKEN",
         secretRef: true,
@@ -763,6 +768,11 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       text("bridgeUrl", "Bridge URL", {
         placeholder: "http://127.0.0.1:8765",
         advanced: true,
+      }),
+      select("actionRoute", "Action API Route", ["v1", "api_v1"], "v1", {
+        advanced: true,
+        description:
+          "Pins side-effecting actions to one bridge route. Choose api_v1 only for a legacy bridge; GoatCitadel never probes an alternate route after sending a side effect.",
       }),
       bool("enabled", "Enabled", true),
     ],
