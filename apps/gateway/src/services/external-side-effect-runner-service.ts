@@ -262,6 +262,13 @@ export interface ExternalSideEffectClaimResult {
   sideEffectRunId?: string;
 }
 
+class PersistedExternalSideEffectClaimConflict extends Error {
+  public constructor(public readonly claim: ExternalSideEffectClaimResult) {
+    super("Persisted external side-effect identity conflicts with the mutation claim.");
+    this.name = "PersistedExternalSideEffectClaimConflict";
+  }
+}
+
 export interface ExternalSideEffectExecutionContext extends ExternalSideEffectClaimResult {
   readonly externalCallStarted: boolean;
   readonly externalCallNotRequired: boolean;
@@ -444,13 +451,38 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
       routePath,
       ...(claim.outcome === "claimed" && claim.record?.claimToken ? { claimToken: claim.record.claimToken } : {}),
     };
-    return currentReplayRun
-      ? { ...claimed, sideEffectRunId: currentReplayRun.runId }
-      : recordExternalSideEffectRun(input, claimed);
+    if (currentReplayRun) {
+      return { ...claimed, sideEffectRunId: currentReplayRun.runId };
+    }
+    const recorded = recordExternalSideEffectRun(input, claimed);
+    if (claim.outcome === "claimed" && recorded.replayOutcome !== "claimed") {
+      // A durable preflight row can already own this idempotency identity even
+      // when the mutation ledger has no row yet. Roll the new mutation
+      // generation back with the owning transaction so the original preflight
+      // payload can still be committed after this mismatched attempt.
+      if (input.runClaimTransaction) {
+        throw new PersistedExternalSideEffectClaimConflict(recorded);
+      }
+      if (
+        claimed.replayAttempt !== "new" ||
+        !discardIdempotentExternalSideEffectPending(input.mutationStore, claimed)
+      ) {
+        markIdempotentExternalSideEffectFailed(input.mutationStore, claimed, input.checkedAt);
+      }
+    }
+    return recorded;
   };
-  return input.sideEffectRunStore && input.runClaimTransaction
-    ? input.runClaimTransaction(claimAndRecord)
-    : claimAndRecord();
+  if (!input.sideEffectRunStore || !input.runClaimTransaction) {
+    return claimAndRecord();
+  }
+  try {
+    return input.runClaimTransaction(claimAndRecord);
+  } catch (error) {
+    if (error instanceof PersistedExternalSideEffectClaimConflict) {
+      return error.claim;
+    }
+    throw error;
+  }
 }
 
 export async function runReplaySafeExternalSideEffectWorker<TValue>(
@@ -919,13 +951,15 @@ function buildCurrentReplayRunBlock(
     return undefined;
   }
   const replayOutcome: IntegrationExternalWritebackReplayOutcome =
-    run.status === "completed" || run.status === "blocked_duplicate"
-      ? "duplicate"
-      : run.status === "idempotency_unavailable"
-        ? "idempotency_unavailable"
-        : run.status === "external_call_started" || run.status === "unknown_external_outcome"
-          ? "in_progress"
-          : "payload_mismatch";
+    run.payloadHash !== identity.payloadHash
+      ? "payload_mismatch"
+      : run.status === "completed" || run.status === "blocked_duplicate"
+        ? "duplicate"
+        : run.status === "idempotency_unavailable"
+          ? "idempotency_unavailable"
+          : run.status === "external_call_started" || run.status === "unknown_external_outcome"
+            ? "in_progress"
+            : "payload_mismatch";
   return {
     replayPolicy: "idempotent_external",
     replayOutcome,
@@ -1000,6 +1034,15 @@ function recordExternalSideEffectRun(
     },
     input.checkedAt,
   );
+  const persistedBlock = buildCurrentReplayRunBlock(run, {
+    idempotencyKey: claim.idempotencyKey,
+    payloadHash: claim.payloadHash,
+    actorScope: claim.actorScope,
+    routePath: claim.routePath,
+  });
+  if (persistedBlock) {
+    return persistedBlock;
+  }
   return {
     ...claim,
     sideEffectRunId: run.runId,
@@ -1234,6 +1277,25 @@ export function markIdempotentExternalSideEffectFailed(
       `External side-effect mutation ${claim.idempotencyKey} lost ownership before failure settlement.`,
     );
   }
+}
+
+function discardIdempotentExternalSideEffectPending(
+  mutationStore: MutationIdempotencyStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+): boolean {
+  if (!claim.claimToken) {
+    return false;
+  }
+  return (
+    mutationStore?.discardPending?.({
+      method: "POST",
+      routePath: claim.routePath,
+      idempotencyKey: claim.idempotencyKey,
+      actorScope: claim.actorScope,
+      payloadHash: claim.payloadHash,
+      claimToken: claim.claimToken,
+    }) === true
+  );
 }
 
 function formatExternalSideEffectReplayBlockMessage(

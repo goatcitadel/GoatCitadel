@@ -1248,6 +1248,292 @@ describe("external-side-effect-runner-service", () => {
     }
   });
 
+  it("blocks a payload-mismatched Ward preflight without stranding mutation ownership", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-preflight-mismatch-"));
+    realStorageTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const provider = vi.fn(async () => ({ ok: true }));
+    const base = {
+      mutationStore: storage.mutationIdempotency,
+      sideEffectRunStore: storage.externalSideEffectRuns,
+      runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+      boundary: "integration_local_bridge_action",
+      catalogId: "productivity.apple-notes",
+      connectionId: "conn-preflight-mismatch",
+      actionId: "write",
+      idempotencyKey: "preflight-mismatch-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      label: "Apple Notes local bridge action",
+      requireMutationClaimOwnership: true,
+      requireDurableBoundaryRecord: true,
+    } as const;
+
+    try {
+      const refusal = await runIdempotentExternalSideEffect({
+        ...base,
+        payload: { title: "Payload A" },
+        wardEffect: "require_dry_run",
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+      expect(refusal).toMatchObject({
+        status: "blocked",
+        blockedReason: "external_side_effect_dry_run_required",
+      });
+      const preflight = storage.externalSideEffectRuns.listByConnection(base.connectionId, {
+        workspaceId: base.workspaceId,
+      })[0]!;
+      expect(preflight).toMatchObject({ status: "idempotency_unavailable", replayAttempt: "blocked" });
+
+      const governed = await runIdempotentExternalSideEffect({
+        ...base,
+        checkedAt: "2026-05-31T00:01:00.000Z",
+        payload: { title: "Payload B" },
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+
+      expect(governed).toMatchObject({
+        status: "blocked",
+        blockedReason: "external_side_effect_payload_mismatch",
+        claim: { replayOutcome: "payload_mismatch", resumeState: "payload_mismatch" },
+      });
+      expect(provider).not.toHaveBeenCalled();
+      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
+        status: "idempotency_unavailable",
+        payloadHash: preflight.payloadHash,
+      });
+      const mutationIdentity = {
+        method: "POST",
+        routePath: governed.claim.routePath,
+        idempotencyKey: base.idempotencyKey,
+        actorScope: base.connectionId,
+      };
+      expect(storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
+
+      const approvedOriginal = await runIdempotentExternalSideEffect({
+        ...base,
+        checkedAt: "2026-05-31T00:02:00.000Z",
+        payload: { title: "Payload A" },
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+      expect(approvedOriginal.status).toBe("executed");
+      expect(provider).toHaveBeenCalledTimes(1);
+      expect(storage.mutationIdempotency.get(mutationIdentity)).toMatchObject({ status: "completed" });
+      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
+        status: "completed",
+        replayOutcome: "claimed",
+        resumeState: "completed",
+      });
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("discards a non-transactional collision without poisoning the original preflight payload", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-legacy-preflight-mismatch-"));
+    realStorageTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const provider = vi.fn(async () => ({ ok: true }));
+    const base = {
+      mutationStore: storage.mutationIdempotency,
+      sideEffectRunStore: storage.externalSideEffectRuns,
+      boundary: "integration_operator_action",
+      catalogId: "automation.gmail",
+      connectionId: "conn-legacy-preflight-mismatch",
+      actionId: "write",
+      idempotencyKey: "legacy-preflight-mismatch-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      label: "Gmail send",
+      requireMutationClaimOwnership: true,
+    } as const;
+
+    try {
+      await runIdempotentExternalSideEffect({
+        ...base,
+        payload: { subject: "Payload A" },
+        wardEffect: "require_dry_run",
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+
+      const mismatched = await runIdempotentExternalSideEffect({
+        ...base,
+        checkedAt: "2026-05-31T00:01:00.000Z",
+        payload: { subject: "Payload B" },
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+      expect(mismatched).toMatchObject({
+        status: "blocked",
+        blockedReason: "external_side_effect_payload_mismatch",
+      });
+      const mutationIdentity = {
+        method: "POST",
+        routePath: mismatched.claim.routePath,
+        idempotencyKey: base.idempotencyKey,
+        actorScope: base.connectionId,
+      };
+      expect(storage.mutationIdempotency.get(mutationIdentity)).toBeUndefined();
+
+      const original = await runIdempotentExternalSideEffect({
+        ...base,
+        checkedAt: "2026-05-31T00:02:00.000Z",
+        payload: { subject: "Payload A" },
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+      expect(original.status).toBe("executed");
+      expect(provider).toHaveBeenCalledTimes(1);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("reconciles a same-payload completed durable row before crossing the boundary", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-completed-reconcile-"));
+    realStorageTempRoots.push(root);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const provider = vi.fn(async () => ({ ok: true }));
+    const base = {
+      mutationStore: storage.mutationIdempotency,
+      sideEffectRunStore: storage.externalSideEffectRuns,
+      runClaimTransaction: <T>(work: () => T): T => storage.runImmediateTransaction(work),
+      boundary: "integration_local_bridge_action",
+      catalogId: "productivity.apple-notes",
+      connectionId: "conn-completed-reconcile",
+      actionId: "write",
+      idempotencyKey: "completed-reconcile-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      payload: { title: "Already sent" },
+      label: "Apple Notes local bridge action",
+      requireMutationClaimOwnership: true,
+      requireDurableBoundaryRecord: true,
+    } as const;
+
+    try {
+      await runIdempotentExternalSideEffect({
+        ...base,
+        wardEffect: "require_dry_run",
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+      const preflight = storage.externalSideEffectRuns.listByConnection(base.connectionId, {
+        workspaceId: base.workspaceId,
+      })[0]!;
+      storage.externalSideEffectRuns.createOrGet(
+        {
+          workspaceId: base.workspaceId,
+          boundary: base.boundary,
+          routePath: preflight.routePath,
+          catalogId: base.catalogId,
+          connectionId: base.connectionId,
+          actionId: base.actionId,
+          actorScope: preflight.actorScope,
+          idempotencyKey: base.idempotencyKey,
+          payloadHash: preflight.payloadHash,
+          status: "claimed_not_sent",
+          replayOutcome: "claimed",
+          replayAttempt: "new",
+        },
+        "2026-05-31T00:00:01.000Z",
+      );
+      storage.externalSideEffectRuns.markExternalCallStarted(preflight.runId, undefined, "2026-05-31T00:00:02.000Z");
+      storage.externalSideEffectRuns.markCompleted(
+        preflight.runId,
+        { replayOutcome: "claimed" },
+        "2026-05-31T00:00:03.000Z",
+      );
+      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({ status: "completed" });
+      expect(
+        storage.externalSideEffectRuns.createOrGet(
+          {
+            workspaceId: base.workspaceId,
+            boundary: base.boundary,
+            routePath: preflight.routePath,
+            catalogId: base.catalogId,
+            connectionId: base.connectionId,
+            actionId: base.actionId,
+            actorScope: preflight.actorScope,
+            idempotencyKey: base.idempotencyKey,
+            payloadHash: preflight.payloadHash,
+            status: "claimed_not_sent",
+            replayOutcome: "claimed",
+            replayAttempt: "new",
+          },
+          "2026-05-31T00:00:04.000Z",
+        ),
+      ).toMatchObject({ status: "completed" });
+
+      const reconciledClaim = claimIdempotentExternalSideEffect({
+        ...base,
+        checkedAt: "2026-05-31T00:00:30.000Z",
+      });
+      expect(reconciledClaim).toMatchObject({ replayOutcome: "duplicate", resumeState: "completed" });
+
+      const replay = await runIdempotentExternalSideEffect({
+        ...base,
+        checkedAt: "2026-05-31T00:01:00.000Z",
+        execute: async (claim) => {
+          claim.markExternalCallStarted();
+          return provider();
+        },
+      });
+
+      expect(replay).toMatchObject({
+        status: "blocked",
+        blockedReason: "external_side_effect_duplicate",
+        claim: { replayOutcome: "duplicate", resumeState: "completed" },
+      });
+      expect(provider).not.toHaveBeenCalled();
+      expect(storage.externalSideEffectRuns.get(preflight.runId)).toMatchObject({
+        status: "completed",
+        replayOutcome: "claimed",
+        resumeState: "completed",
+      });
+      expect(
+        storage.mutationIdempotency.get({
+          method: "POST",
+          routePath: replay.claim.routePath,
+          idempotencyKey: base.idempotencyKey,
+          actorScope: base.connectionId,
+        }),
+      ).toBeUndefined();
+    } finally {
+      storage.close();
+    }
+  });
+
   it("does not reopen idempotency when a strict caller loses its durable boundary claim", async () => {
     const sideEffectRunStore = createSideEffectRunStore();
     sideEffectRunStore.markExternalCallStarted.mockImplementation(() => {
@@ -1351,25 +1637,21 @@ describe("external-side-effect-runner-service", () => {
         updatedAt: "2026-05-31T00:10:00.000Z",
       });
 
-      let releaseRetry!: () => void;
-      const retryGate = new Promise<void>((resolve) => {
-        releaseRetry = resolve;
+      const retryExecute = vi.fn(async (claim: ExternalSideEffectExecutionContext) => {
+        claim.markExternalCallStarted();
+        return { id: "must-not-send" };
       });
-      let retryEntered!: () => void;
-      const retryEnteredGate = new Promise<void>((resolve) => {
-        retryEntered = resolve;
-      });
-      const retry = runIdempotentExternalSideEffect({
+      const retry = await runIdempotentExternalSideEffect({
         ...base,
         checkedAt: "2026-05-31T00:10:00.000Z",
-        execute: async (claim) => {
-          retryEntered();
-          await retryGate;
-          claim.markExternalCallStarted();
-          return { id: "must-not-send" };
-        },
+        execute: retryExecute,
       });
-      await retryEnteredGate;
+      expect(retry).toMatchObject({
+        status: "blocked",
+        blockedReason: "external_side_effect_in_progress",
+        claim: { replayOutcome: "in_progress", resumeState: "in_progress" },
+      });
+      expect(retryExecute).not.toHaveBeenCalled();
 
       releaseOriginal();
       await expect(original).resolves.toMatchObject({
@@ -1378,12 +1660,6 @@ describe("external-side-effect-runner-service", () => {
         error: { code: "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST" },
       });
       expect(storage.externalSideEffectRuns.get(run.runId).status).toBe("unknown_external_outcome");
-
-      releaseRetry();
-      await expect(retry).resolves.toMatchObject({
-        status: "failed",
-        claim: { resumeState: "manual_review_unknown_external_outcome" },
-      });
       expect(storage.externalSideEffectRuns.get(run.runId)).toMatchObject({
         status: "unknown_external_outcome",
         resumeState: "manual_review_unknown_external_outcome",

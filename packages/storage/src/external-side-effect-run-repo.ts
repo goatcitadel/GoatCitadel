@@ -49,6 +49,7 @@ export class ExternalSideEffectRunRepository {
   private readonly insertStmt;
   private readonly getStmt;
   private readonly findByIdempotencyStmt;
+  private readonly promotePreflightClaimStmt;
   private readonly listByWorkspaceStmt;
   private readonly listByConnectionStmt;
   private readonly markExternalCallStartedStmt;
@@ -99,6 +100,24 @@ export class ExternalSideEffectRunRepository {
         AND idempotency_key = @idempotencyKey
         AND actor_scope = @actorScope
       LIMIT 1
+    `);
+    this.promotePreflightClaimStmt = db.prepare(`
+      UPDATE external_side_effect_runs
+      SET status = 'claimed_not_sent',
+          replay_outcome = 'claimed',
+          replay_attempt = @replayAttempt,
+          resume_state = 'not_resumable',
+          request_payload_json = @requestPayloadJson,
+          response_payload_json = NULL,
+          external_reference_id = NULL,
+          error_text = NULL,
+          attempt_count = 0,
+          external_call_started_at = NULL,
+          completed_at = NULL,
+          updated_at = ${databaseNowText}
+      WHERE run_id = @runId
+        AND status = 'idempotency_unavailable'
+        AND payload_hash = @payloadHash
     `);
     this.listByWorkspaceStmt = db.prepare(`
       SELECT *
@@ -207,6 +226,21 @@ export class ExternalSideEffectRunRepository {
     const actorScope = input.actorScope?.trim() ?? "";
     const existing = this.findByIdempotency(input.routePath, input.idempotencyKey, actorScope);
     if (existing) {
+      if (
+        existing.status === "idempotency_unavailable" &&
+        input.status === "claimed_not_sent" &&
+        input.replayOutcome === "claimed"
+      ) {
+        const promoted = this.promotePreflightClaimStmt.run({
+          runId: existing.runId,
+          payloadHash: input.payloadHash,
+          replayAttempt: input.replayAttempt ?? "new",
+          requestPayloadJson: serializeJson(input.requestPayload),
+        });
+        if (promoted.changes === 1) {
+          return this.get(existing.runId);
+        }
+      }
       return existing;
     }
     const runId = `extfx_${randomUUID().replaceAll("-", "").slice(0, 24)}`;

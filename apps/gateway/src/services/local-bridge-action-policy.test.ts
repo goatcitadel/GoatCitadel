@@ -12,11 +12,11 @@ function action(capability: string): IntegrationOperatorAction {
 }
 
 describe("local-bridge-action-policy", () => {
-  it.each(["read", "tray"])("keeps %s explicitly read-only", (capability) => {
+  it.each(["read", "tray", " READ ", "Tray"])("keeps %s explicitly read-only", (capability) => {
     expect(isLocalBridgeExternalSideEffectAction(action(capability))).toBe(false);
   });
 
-  it.each(["write", "control", "capture", "camera", "canvas", "voice", "future_capability"])(
+  it.each(["write", " Write ", "control", "capture", "camera", "canvas", "voice", "future_capability"])(
     "defaults %s to governed external-side-effect behavior",
     (capability) => {
       expect(isLocalBridgeExternalSideEffectAction(action(capability))).toBe(true);

@@ -22,11 +22,7 @@ function localBridgeSchema(
         placeholder: "http://127.0.0.1:8765",
         required: true,
       }),
-      select("actionRoute", "Action API Route", ["v1", "api_v1"], "v1", {
-        advanced: true,
-        description:
-          "Pins side-effecting actions to one bridge route. Choose api_v1 only for a legacy bridge; GoatCitadel never probes an alternate route after sending a side effect.",
-      }),
+      localBridgeActionRouteField(),
       text("authTokenEnv", "Bridge Token ENV Var", {
         placeholder: "LOCAL_AGENT_AUTH_TOKEN",
         secretRef: true,
@@ -36,6 +32,14 @@ function localBridgeSchema(
       bool("enabled", "Enabled", true),
     ],
   };
+}
+
+function localBridgeActionRouteField(): IntegrationFieldSchema {
+  return select("actionRoute", "Action API Route", ["v1", "api_v1"], "v1", {
+    advanced: true,
+    description:
+      "Pins side-effecting actions to one bridge route. Choose api_v1 only for a legacy bridge; GoatCitadel never probes an alternate route after sending a side effect.",
+  });
 }
 
 function inboundAccessFields(): IntegrationFieldSchema[] {
@@ -769,11 +773,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "http://127.0.0.1:8765",
         advanced: true,
       }),
-      select("actionRoute", "Action API Route", ["v1", "api_v1"], "v1", {
-        advanced: true,
-        description:
-          "Pins side-effecting actions to one bridge route. Choose api_v1 only for a legacy bridge; GoatCitadel never probes an alternate route after sending a side effect.",
-      }),
+      localBridgeActionRouteField(),
       bool("enabled", "Enabled", true),
     ],
   },

@@ -75,6 +75,59 @@ describe("ExternalSideEffectRunRepository", () => {
     assert.equal(repo.listByWorkspace("workspace-1")[0]?.runId, created.runId);
   });
 
+  it("promotes a preflight idempotency-unavailable row when governed execution becomes claimed", () => {
+    const repo = createRepo();
+    const input = {
+      workspaceId: "workspace-ward",
+      boundary: "integration_local_bridge_action",
+      routePath: "external_side_effect:integration_local_bridge_action:productivity.apple-notes:conn-ward:write",
+      catalogId: "productivity.apple-notes",
+      connectionId: "conn-ward",
+      actionId: "write",
+      actorScope: "conn-ward",
+      idempotencyKey: "ward-approved-key",
+      payloadHash: "payload-hash",
+      requestPayload: { provider: "local_bridge", actionId: "write" },
+    };
+    const refusal = repo.createOrGet(
+      {
+        ...input,
+        status: "idempotency_unavailable",
+        replayOutcome: "idempotency_unavailable",
+        replayAttempt: "blocked",
+      },
+      "2026-05-31T10:00:00.000Z",
+    );
+
+    const mismatchedClaim = repo.createOrGet({
+      ...input,
+      payloadHash: "different-payload-hash",
+      status: "claimed_not_sent",
+      replayOutcome: "claimed",
+      replayAttempt: "new",
+    });
+    assert.equal(mismatchedClaim.runId, refusal.runId);
+    assert.equal(mismatchedClaim.status, "idempotency_unavailable");
+    assert.equal(mismatchedClaim.payloadHash, "payload-hash");
+
+    const claimed = repo.createOrGet(
+      {
+        ...input,
+        status: "claimed_not_sent",
+        replayOutcome: "claimed",
+        replayAttempt: "new",
+      },
+      "2026-05-31T10:01:00.000Z",
+    );
+
+    assert.equal(claimed.runId, refusal.runId);
+    assert.equal(claimed.status, "claimed_not_sent");
+    assert.equal(claimed.replayOutcome, "claimed");
+    assert.equal(claimed.replayAttempt, "new");
+    assert.equal(claimed.resumeState, "not_resumable");
+    assert.equal(repo.markExternalCallStarted(claimed.runId).status, "external_call_started");
+  });
+
   it("tracks external-start, completion, evidence, and unknown-outcome failure states", () => {
     const repo = createRepo();
     const run = repo.createOrGet(

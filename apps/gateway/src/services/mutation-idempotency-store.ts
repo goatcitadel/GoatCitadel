@@ -6,4 +6,5 @@ export interface MutationIdempotencyStore {
   ): ReturnType<Storage["mutationIdempotency"]["claim"]>;
   markCompleted(input: Parameters<Storage["mutationIdempotency"]["markCompleted"]>[0]): boolean | void;
   markFailed(input: Parameters<Storage["mutationIdempotency"]["markFailed"]>[0]): boolean | void;
+  discardPending?(input: Parameters<Storage["mutationIdempotency"]["discardPending"]>[0]): boolean | void;
 }

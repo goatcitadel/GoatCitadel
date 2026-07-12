@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalCreateInput,
@@ -8,6 +11,7 @@ import type {
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 import { approveDryRun, createInMemoryDryRunCommitStore } from "./dry-run-commit-service.js";
+import { Storage } from "@goatcitadel/storage";
 
 function createConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -1847,7 +1851,11 @@ describe("integration-action-service", () => {
         });
       }
 
-      function dryRunHost(connection: IntegrationConnection, storeOverride?: DryRunCommitStore) {
+      function dryRunHost(
+        connection: IntegrationConnection,
+        storeOverride?: DryRunCommitStore,
+        wardPattern = "integration.automation.gmail.write",
+      ) {
         const store = storeOverride ?? createInMemoryDryRunCommitStore();
         const upserts: Array<Record<string, unknown>> = [];
         const approvalEvents: Array<Record<string, unknown>> = [];
@@ -1865,16 +1873,12 @@ describe("integration-action-service", () => {
             explanationStatus: "not_requested",
           };
         });
-        const base = wardHost(
-          connection,
-          [{ actionPattern: "integration.automation.gmail.write", effect: "require_dry_run" }],
-          {
-            fetchWithDiagnosticsTimeout: vi.fn(
-              async () => new Response(JSON.stringify({ id: "msg-1" }), { status: 200 }),
-            ),
-            createApproval,
-          },
-        );
+        const base = wardHost(connection, [{ actionPattern: wardPattern, effect: "require_dry_run" }], {
+          fetchWithDiagnosticsTimeout: vi.fn(
+            async () => new Response(JSON.stringify({ id: "msg-1" }), { status: 200 }),
+          ),
+          createApproval,
+        });
         const host: IntegrationActionHost = {
           ...base,
           storage: {
@@ -1979,6 +1983,64 @@ describe("integration-action-service", () => {
         expect(committed.status).toBe("executed");
         expect(host.fetchWithDiagnosticsTimeout).toHaveBeenCalledTimes(1);
         expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
+      });
+
+      it("commits a strict local-bridge dry-run after its preflight refusal ledger row", async () => {
+        const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-local-bridge-dry-run-"));
+        const storage = new Storage({
+          dbPath: ":memory:",
+          transcriptsDir: path.join(root, "transcripts"),
+          auditDir: path.join(root, "audit"),
+        });
+        const connection = createConnection({
+          workspaceId: "ws-guarded",
+          config: { bridgeUrl: "http://127.0.0.1:4040" },
+        });
+        const localInput = { title: "Approved bridge note", content: "Send once after approval." };
+        const { host, store } = dryRunHost(connection, undefined, "integration.productivity.apple-notes.write");
+        host.mutationStore = storage.mutationIdempotency;
+        host.sideEffectRunStore = storage.externalSideEffectRuns;
+        host.storage.runImmediateTransaction = <T>(work: () => T): T => storage.runImmediateTransaction(work);
+
+        try {
+          const refusal = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+            input: localInput,
+          });
+          const dryRunId = (refusal.output as Record<string, unknown>).dryRunId as string;
+          expect(refusal).toMatchObject({
+            status: "blocked",
+            blockedReason: "external_side_effect_dry_run_required",
+          });
+          expect(
+            storage.externalSideEffectRuns.listByConnection(connection.connectionId, {
+              workspaceId: connection.workspaceId,
+            })[0],
+          ).toMatchObject({ status: "idempotency_unavailable", replayAttempt: "blocked" });
+
+          approveDryRun(store, dryRunId, {
+            approvedBy: "operator",
+            approvedAt: "2026-07-07T00:01:00.000Z",
+          });
+          const committed = await invokeIntegrationConnectionAction(
+            host,
+            connection.connectionId,
+            "write",
+            { input: localInput },
+            { dryRunCommit: { dryRunId, approvedBy: "operator" } },
+          );
+
+          expect(committed.status).toBe("executed");
+          expect(host.fetchWithDiagnosticsTimeout).toHaveBeenCalledTimes(1);
+          expect(store.get(dryRunId)).toMatchObject({ state: "committed" });
+          expect(
+            storage.externalSideEffectRuns.listByConnection(connection.connectionId, {
+              workspaceId: connection.workspaceId,
+            })[0],
+          ).toMatchObject({ status: "completed", replayOutcome: "claimed", resumeState: "completed" });
+        } finally {
+          storage.close();
+          rmSync(root, { recursive: true, force: true });
+        }
       });
 
       it("refuses a commit whose rebuilt action diverges from the approved preview (hash mismatch)", async () => {
