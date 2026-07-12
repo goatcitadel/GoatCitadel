@@ -165,10 +165,7 @@ export function buildMemoryWorkspaceScopeSql(dialect: DatabaseClient["dialect"])
     workspace_id = @workspaceId
     OR (
       workspace_id IS NULL
-      AND (
-        (${legacyWorkspaceExpr}) IS NULL
-        OR (${legacyWorkspaceExpr}) = @workspaceId
-      )
+      AND COALESCE((${legacyWorkspaceExpr}), @workspaceId) = @workspaceId
     )
   )`;
 }

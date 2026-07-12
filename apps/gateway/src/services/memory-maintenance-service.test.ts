@@ -19,6 +19,7 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
+import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
 import type { ServiceContext } from "./service-context.js";
 
 type EligibleSession = {
@@ -217,17 +218,9 @@ class FakeMemoryMaintenanceRepo {
   public listActiveMemoryItems(limit = 200, workspaceId?: string): MemoryItemRecord[] {
     this.activeMemoryItemQueries.push({ limit, workspaceId });
     return this.activeMemoryItems
-      .filter((item) => {
-        if (!workspaceId) {
-          return true;
-        }
-        const canonicalWorkspaceId = item.workspaceId?.trim();
-        if (canonicalWorkspaceId) {
-          return canonicalWorkspaceId === workspaceId;
-        }
-        const legacyWorkspaceId = typeof item.metadata.workspaceId === "string" ? item.metadata.workspaceId.trim() : "";
-        return !legacyWorkspaceId || legacyWorkspaceId === workspaceId;
-      })
+      .filter((item) =>
+        workspaceId ? matchesMemoryWorkspaceScope(item, workspaceId, (value) => value?.trim() || "default") : true,
+      )
       .slice(0, limit);
   }
 
@@ -862,6 +855,15 @@ describe("MemoryMaintenanceService durable execution", () => {
           metadata: {},
           updatedAt: "2026-04-01T07:00:00.000Z",
         }),
+        makeMemoryItem({
+          itemId: "mem-padded-canonical-a",
+          title: "PADDED-CANONICAL-A",
+          content: "Malformed canonical ownership must fail closed.",
+          namespace: "shared.notes",
+          workspaceId: " workspace-a ",
+          metadata: { workspaceId: "workspace-a" },
+          updatedAt: "2026-04-01T06:30:00.000Z",
+        }),
       );
       harness.service.patchPolicy("workspace-a", {
         enabled: true,
@@ -873,6 +875,10 @@ describe("MemoryMaintenanceService durable execution", () => {
         providerId: "ollama",
         model: "qwen3",
       });
+
+      expect(
+        harness.memoryMaintenance.listActiveMemoryItems(200, "workspace-a").map((item) => item.itemId),
+      ).not.toContain("mem-padded-canonical-a");
 
       const queuedRun = harness.service.runNow({ workspaceId: "workspace-a", triggerSource: "manual" });
       const result = await harness.service.executeDurableRun(harness.callbacks.getDurableRun(queuedRun.durableRunId!));
@@ -893,6 +899,7 @@ describe("MemoryMaintenanceService durable execution", () => {
       expect(prompt).toContain("TARGET-A");
       expect(prompt).toContain("GLOBAL-MEMORY");
       expect(prompt).not.toContain("FOREIGN-B");
+      expect(prompt).not.toContain("PADDED-CANONICAL-A");
     } finally {
       vi.useRealTimers();
     }

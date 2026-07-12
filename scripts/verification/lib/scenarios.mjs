@@ -2999,6 +2999,15 @@ async function assertHighRiskRouteFamiliesAreOperatorGated(gatewayUrl, manifestI
   }
 }
 
+export function requireCanonicalMemorySeed(body, expectedWorkspaceId, label) {
+  const itemId = typeof body?.itemId === "string" ? body.itemId.trim() : "";
+  const workspaceId = typeof body?.workspaceId === "string" ? body.workspaceId : "";
+  if (!itemId || workspaceId !== expectedWorkspaceId) {
+    throw new Error(`${label} did not return canonical ownership`);
+  }
+  return itemId;
+}
+
 export async function runUiParityLane(context, _options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: false,
@@ -3038,6 +3047,11 @@ export async function runUiParityLane(context, _options = {}) {
       },
     });
     assertOk(foreignMemory, "seed ui-parity foreign memory item");
+    const foreignMemoryItemId = requireCanonicalMemorySeed(
+      foreignMemory.body,
+      foreignWorkspaceId,
+      "ui-parity foreign memory seed",
+    );
     const approvals = await requestJson(stack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20");
     assertOk(approvals, "read ui-parity approvals");
     const memoryItems = await requestJson(
@@ -3053,7 +3067,11 @@ export async function runUiParityLane(context, _options = {}) {
     ) {
       throw new Error("ui-parity selected-workspace memory read omitted its canonical item");
     }
-    if (memoryItems.body?.items?.some((item) => item.itemId === foreignMemory.body?.itemId)) {
+    if (
+      memoryItems.body?.items?.some(
+        (item) => item.itemId === foreignMemoryItemId || item.title === foreignMemoryNeedle,
+      )
+    ) {
       throw new Error("ui-parity selected-workspace memory read exposed the foreign item");
     }
     const events = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
@@ -3275,6 +3293,11 @@ export async function runMemoryTruthLane(context, _options = {}) {
           },
         });
         assertOk(foreignItem, "seed memory-truth foreign item");
+        const foreignItemId = requireCanonicalMemorySeed(
+          foreignItem.body,
+          foreignWorkspaceId,
+          "memory-truth foreign memory seed",
+        );
 
         const memoryTitle = `Memory truth item ${randomUUID().slice(0, 8)}`;
         const created = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
@@ -3307,7 +3330,11 @@ export async function runMemoryTruthLane(context, _options = {}) {
         if (item.workspaceId !== memoryWorkspaceId) {
           throw new Error(`memory-truth listed ${item.itemId} without canonical workspace ownership`);
         }
-        if (listedAll.body?.items?.some((entry) => entry.itemId === foreignItem.body?.itemId)) {
+        if (
+          listedAll.body?.items?.some(
+            (entry) => entry.itemId === foreignItemId || entry.title === foreignTitle,
+          )
+        ) {
           throw new Error(`memory-truth exposed foreign workspace item ${foreignTitle}`);
         }
 

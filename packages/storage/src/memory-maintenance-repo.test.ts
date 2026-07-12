@@ -766,4 +766,9 @@ describe("MemoryMaintenanceRepository workspace scoping", () => {
       details.join("\n"),
     );
   });
+
+  it("evaluates the dialect-specific legacy workspace expression once per predicate", () => {
+    assert.equal(buildMemoryWorkspaceScopeSql("sqlite").match(/json_valid/g)?.length, 1);
+    assert.equal(buildMemoryWorkspaceScopeSql("postgres").match(/jsonb_typeof/g)?.length, 1);
+  });
 });
