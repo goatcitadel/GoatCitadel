@@ -122,6 +122,56 @@ describe("MutationIdempotencyRepository", () => {
     assert.equal(mismatch.record.payloadHash, "hash-a");
   });
 
+  it("discards only the owned pending generation", () => {
+    const repo = createRepo();
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:integration_operator_action",
+      idempotencyKey: "idem-discard-pending",
+      actorScope: "operator:test",
+      payloadHash: "hash-discard",
+      now: "2026-04-19T00:00:00.000Z",
+    };
+    const claimed = repo.claim(identity);
+    assert.equal(claimed.outcome, "claimed");
+    assert.ok(claimed.record.claimToken);
+
+    assert.equal(
+      repo.discardPending({
+        ...identity,
+        claimToken: "wrong-generation",
+      }),
+      false,
+    );
+    assert.equal(repo.get(identity)?.status, "pending");
+    assert.equal(
+      repo.discardPending({
+        ...identity,
+        claimToken: claimed.record.claimToken,
+      }),
+      true,
+    );
+    assert.equal(repo.get(identity), undefined);
+
+    const replacement = repo.claim({ ...identity, now: "2026-04-19T00:00:01.000Z" });
+    assert.equal(replacement.outcome, "claimed");
+    assert.equal(
+      repo.markCompleted({
+        ...identity,
+        claimToken: replacement.record.claimToken,
+      }),
+      true,
+    );
+    assert.equal(
+      repo.discardPending({
+        ...identity,
+        claimToken: replacement.record.claimToken!,
+      }),
+      false,
+    );
+    assert.equal(repo.get(identity)?.status, "completed");
+  });
+
   it("rejects an active claim but reclaims a crash-stale claim with a new generation token", () => {
     const repo = createRepo();
     const input = {

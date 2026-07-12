@@ -59,6 +59,29 @@ describe("integration-catalog", () => {
     });
   });
 
+  it("exposes an explicit local-bridge action route instead of probing after side effects", () => {
+    for (const catalogId of [
+      "productivity.apple-notes",
+      "productivity.apple-reminders",
+      "productivity.things3",
+      "productivity.bear",
+      "automation.peekaboo-screen",
+      "automation.camera-photo-video",
+      "platform.macos-menubar-voice",
+      "platform.ios-canvas-camera-voice",
+    ]) {
+      const actionRoute = getIntegrationFormSchema(catalogId)?.fields.find((field) => field.key === "actionRoute");
+
+      expect(actionRoute).toMatchObject({
+        key: "actionRoute",
+        type: "select",
+        defaultValue: "v1",
+        advanced: true,
+        options: [expect.objectContaining({ value: "v1" }), expect.objectContaining({ value: "api_v1" })],
+      });
+    }
+  });
+
   it("requires a WhatsApp phone number id in the guided setup form", () => {
     const whatsappForm = getIntegrationFormSchema("channel.whatsapp");
     const phoneNumberIdField = whatsappForm?.fields.find((field) => field.key === "phoneNumberId");

@@ -1618,6 +1618,30 @@ test(
         }),
         true,
       );
+      const discardIdentity = {
+        method: "POST",
+        routePath: "external_side_effect:integration_operator_action",
+        idempotencyKey: `discard-pending-${suffix}`,
+        actorScope: "operator:postgres-proof",
+        payloadHash: "discard-payload-hash",
+      };
+      const discardClaim = mutationIdempotency.claim(discardIdentity);
+      assert.equal(discardClaim.outcome, "claimed");
+      assert.equal(
+        mutationIdempotency.discardPending({
+          ...discardIdentity,
+          claimToken: "wrong-generation",
+        }),
+        false,
+      );
+      assert.equal(
+        mutationIdempotency.discardPending({
+          ...discardIdentity,
+          claimToken: discardClaim.record.claimToken!,
+        }),
+        true,
+      );
+      assert.equal(mutationIdempotency.get(discardIdentity), undefined);
 
       const approvals = new ApprovalRepository(syncClient);
       const approvalDatabaseNow = Date.now();
@@ -3398,6 +3422,36 @@ test(
       });
       assert.equal(reconciled.status, "unknown_external_outcome");
       assert.equal(reconciled.resumeState, "manual_review_unknown_external_outcome");
+
+      const wardRoute = `external_side_effect:integration_local_bridge_action:productivity.apple-notes:conn-${suffix}:write`;
+      const wardInput = {
+        workspaceId: "workspace-clock",
+        boundary: "integration_local_bridge_action",
+        routePath: wardRoute,
+        catalogId: "productivity.apple-notes",
+        connectionId: `conn-${suffix}`,
+        actionId: "write",
+        actorScope: `conn-${suffix}`,
+        idempotencyKey: `ward-approved:${suffix}`,
+        payloadHash: `ward-payload-${suffix}`,
+      };
+      const wardRefusal = repo.createOrGet({
+        ...wardInput,
+        status: "idempotency_unavailable",
+        replayOutcome: "idempotency_unavailable",
+        replayAttempt: "blocked",
+      });
+      const wardClaimed = repo.createOrGet({
+        ...wardInput,
+        status: "claimed_not_sent",
+        replayOutcome: "claimed",
+        replayAttempt: "new",
+      });
+      assert.equal(wardClaimed.runId, wardRefusal.runId);
+      assert.equal(wardClaimed.status, "claimed_not_sent");
+      assert.equal(wardClaimed.replayOutcome, "claimed");
+      assert.equal(wardClaimed.replayAttempt, "new");
+      assert.equal(repo.markExternalCallStarted(wardClaimed.runId).status, "external_call_started");
     } finally {
       syncClient?.close();
       await scopedPool.end();

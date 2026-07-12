@@ -45,6 +45,7 @@ export class MutationIdempotencyRepository {
   private readonly insertStmt;
   private readonly updateStatusStmt;
   private readonly updateOwnedStatusStmt;
+  private readonly discardOwnedPendingStmt;
   private readonly reviveFailedStmt;
   private readonly takeoverStaleStmt;
 
@@ -114,6 +115,16 @@ export class MutationIdempotencyRepository {
         AND route_path = @routePath
         AND idempotency_key = @idempotencyKey
         AND actor_scope = @actorScope
+        AND status = 'pending'
+        AND claim_token = @claimToken
+    `);
+    this.discardOwnedPendingStmt = db.prepare(`
+      DELETE FROM mutation_idempotency
+      WHERE method = @method
+        AND route_path = @routePath
+        AND idempotency_key = @idempotencyKey
+        AND actor_scope = @actorScope
+        AND payload_hash = @payloadHash
         AND status = 'pending'
         AND claim_token = @claimToken
     `);
@@ -291,6 +302,37 @@ export class MutationIdempotencyRepository {
     claimToken?: string;
   }): boolean {
     return this.updateStatus(input, "failed");
+  }
+
+  /**
+   * Removes only the caller's still-pending generation when a separate durable
+   * authority proves the mutation must not proceed. Completed, failed, or
+   * replacement generations are never removed.
+   */
+  public discardPending(input: {
+    method: string;
+    routePath: string;
+    idempotencyKey: string;
+    actorScope?: string;
+    payloadHash: string;
+    claimToken: string;
+  }): boolean {
+    const identity = {
+      method: input.method,
+      routePath: input.routePath,
+      idempotencyKey: input.idempotencyKey,
+      actorScope: input.actorScope?.trim() ?? "",
+    };
+    const claimToken = input.claimToken.trim();
+    if (!claimToken) {
+      return false;
+    }
+    const discarded = this.discardOwnedPendingStmt.run({
+      ...identity,
+      payloadHash: input.payloadHash,
+      claimToken,
+    });
+    return discarded.changes > 0 || this.get(identity) === undefined;
   }
 
   private updateStatus(
