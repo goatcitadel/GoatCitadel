@@ -2,6 +2,7 @@ import {
   applyChatModePresetToPatch,
   inferProviderForModelId,
   providerAllowsForeignModelIds,
+  providerRecognizesModelId,
   type RoutingDecisionSnapshot,
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
@@ -142,7 +143,10 @@ function resolveEffectiveModel(input: {
     return { model };
   }
 
-  if (!providerAllowsForeignModelIds(input.provider.providerId)) {
+  if (
+    !providerAllowsForeignModelIds(input.provider.providerId) &&
+    !providerRecognizesModelId(input.provider.providerId, normalizedRequested)
+  ) {
     const ownerProviderId = inferProviderForModelId(normalizedRequested);
     if (ownerProviderId && ownerProviderId !== input.provider.providerId) {
       const normalizedFallback = fallbackModel

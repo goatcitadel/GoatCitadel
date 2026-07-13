@@ -248,6 +248,36 @@ describe("chat-route-resolution", () => {
     );
   });
 
+  it("keeps a supported shared bare GPT model on the explicitly selected OpenAI Codex provider", () => {
+    const route = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "openai-codex",
+          activeModel: "gpt-5.5",
+          providers: [
+            {
+              providerId: "openai-codex",
+              label: "OpenAI Codex (ChatGPT OAuth)",
+              defaultModel: "gpt-5.5",
+              hasApiKey: true,
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ],
+        },
+      }) as never,
+      "session-1",
+      { action: "send", providerId: "openai-codex", model: "gpt-5.4" },
+    );
+
+    expect(route).toEqual(
+      expect.objectContaining({
+        effectiveProviderId: "openai-codex",
+        effectiveModel: "gpt-5.4",
+        blockedReason: undefined,
+      }),
+    );
+  });
+
   it("normalizes google model ids and reports fallback boundary direction", () => {
     const google = resolveChatRouteDescriptor(
       createHost({

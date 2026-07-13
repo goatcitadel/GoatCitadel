@@ -302,6 +302,41 @@ describe("LlmService", () => {
     ).toThrowError(/belongs to anthropic/i);
   });
 
+  it("accepts supported shared GPT models and rejects API-only models for the OpenAI Codex OAuth provider", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai-codex",
+      activeModel: "gpt-5.5",
+      providers: [
+        {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          apiStyle: "openai-codex-responses",
+          defaultModel: "gpt-5.5",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+
+    expect(() =>
+      service.updateRuntimeConfig({
+        activeProviderId: "openai-codex",
+        activeModel: "gpt-5.4",
+      }),
+    ).not.toThrow();
+    expect(service.getRuntimeConfig()).toMatchObject({
+      activeProviderId: "openai-codex",
+      activeModel: "gpt-5.4",
+    });
+    expect(() =>
+      service.updateRuntimeConfig({
+        activeProviderId: "openai-codex",
+        activeModel: "gpt-5.6",
+      }),
+    ).toThrowError(/belongs to openai/i);
+  });
+
   it("rejects chat requests that pair a model with the wrong provider", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -2599,6 +2634,9 @@ describe("LlmService", () => {
       expect(result.items.map((item) => item.id)).toEqual([
         "gpt-5.4-mini",
         "gpt-4.1-mini",
+        "gpt-5.6",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.4",
         "gpt-5-mini",
         "gpt-4o-mini",
@@ -2759,6 +2797,9 @@ describe("LlmService", () => {
       const models = await service.listModels("openai");
       expect(models.map((model) => model.id)).toEqual([
         "gpt-5.4-mini",
+        "gpt-5.6",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.4",
         "gpt-5-mini",
         "gpt-4.1-mini",

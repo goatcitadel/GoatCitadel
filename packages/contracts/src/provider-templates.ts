@@ -34,16 +34,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://chatgpt.com/backend-api/codex",
     defaultModel: "gpt-5.5",
     apiStyle: "openai-codex-responses",
-    knownModels: [
-      "gpt-5.6",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.5-pro",
-      "gpt-5.4",
-      "gpt-5.4-pro",
-      "gpt-5.4-mini",
-    ],
+    knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"],
   },
   {
     providerId: "anthropic",
@@ -254,6 +245,22 @@ export function findBuiltinProviderProfile(providerId: string): ProviderProfile 
 
 export function providerAllowsForeignModelIds(providerId: string): boolean {
   return FOREIGN_MODEL_PROVIDER_IDS.has(providerId.trim().toLowerCase());
+}
+
+export function providerRecognizesModelId(providerId: string, modelId: string): boolean {
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  const normalizedModelId = modelId.trim();
+  if (!normalizedProviderId || !normalizedModelId) {
+    return false;
+  }
+
+  const providerPrefix = normalizedModelId.split("/", 1)[0]?.trim().toLowerCase();
+  if (normalizedModelId.includes("/") && providerPrefix && MODEL_PREFIX_PROVIDER_IDS[providerPrefix]) {
+    return MODEL_PREFIX_PROVIDER_IDS[providerPrefix] === normalizedProviderId;
+  }
+
+  const template = findProviderTemplate(normalizedProviderId);
+  return template?.defaultModel === normalizedModelId || template?.knownModels?.includes(normalizedModelId) === true;
 }
 
 export function inferProviderForModelId(modelId: string): string | undefined {

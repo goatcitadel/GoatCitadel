@@ -1794,6 +1794,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       getRuntimeConfig: vi.fn(() => ({
         providers: [
           { providerId: "openai", defaultModel: "gpt-5.4-mini" },
+          { providerId: "openai-codex", defaultModel: "gpt-5.5" },
           { providerId: "openrouter", defaultModel: "openrouter/auto" },
         ],
       })),
@@ -1833,6 +1834,15 @@ describe("GatewayService low-hanging facade delegation", () => {
     ).toEqual({
       providerId: "missing-provider",
       model: "claude-sonnet-4-6",
+    });
+    expect(
+      GatewayService.prototype.ensureChatSessionModelDefaults.call(gateway, "session-1", {
+        providerId: "openai-codex",
+        model: "gpt-5.4",
+      }),
+    ).toEqual({
+      providerId: "openai-codex",
+      model: "gpt-5.4",
     });
     expect(
       GatewayService.prototype.ensureChatSessionModelDefaults.call(gateway, "session-1", {

@@ -40,6 +40,7 @@ import {
   NotFoundError,
   PolicyViolationError,
   providerAllowsForeignModelIds,
+  providerRecognizesModelId,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
@@ -2752,7 +2753,10 @@ export class GatewayService {
       return prefs;
     }
 
-    if (providerAllowsForeignModelIds(provider.providerId)) {
+    if (
+      providerAllowsForeignModelIds(provider.providerId) ||
+      providerRecognizesModelId(provider.providerId, prefs.model)
+    ) {
       return prefs;
     }
 

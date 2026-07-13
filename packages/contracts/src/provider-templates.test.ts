@@ -6,6 +6,7 @@ import {
   inferProviderForModelId,
   providerTemplates,
   providerAllowsForeignModelIds,
+  providerRecognizesModelId,
 } from "./provider-templates.js";
 
 describe("provider templates", () => {
@@ -42,9 +43,9 @@ describe("provider templates", () => {
       apiStyle: "openai-codex-responses",
     });
     const codexModels = findProviderTemplate("openai-codex")?.knownModels ?? [];
-    expect(codexModels).toContain("gpt-5.6");
-    expect(codexModels).toContain("gpt-5.6-terra");
-    expect(codexModels).toContain("gpt-5.6-luna");
+    expect(codexModels).not.toContain("gpt-5.6");
+    expect(codexModels).not.toContain("gpt-5.6-terra");
+    expect(codexModels).not.toContain("gpt-5.6-luna");
     expect(codexModels).toContain("gpt-5.5");
   });
 
@@ -124,6 +125,14 @@ describe("provider templates", () => {
     expect(inferProviderForModelId("claude-code/claude-sonnet-4")).toBe("claude-code");
     expect(inferProviderForModelId("zai/glm-5v-turbo")).toBe("glm");
     expect(inferProviderForModelId("custom-private-model")).toBeUndefined();
+  });
+
+  it("recognizes shared bare model ids for each provider that explicitly supports them", () => {
+    expect(providerRecognizesModelId("openai", "gpt-5.6")).toBe(true);
+    expect(providerRecognizesModelId("openai-codex", "gpt-5.6")).toBe(false);
+    expect(providerRecognizesModelId("openai-codex", "gpt-5.4")).toBe(true);
+    expect(providerRecognizesModelId("openai-codex", "openai/gpt-5.6")).toBe(false);
+    expect(providerRecognizesModelId("openai-codex", "openai-codex/gpt-5.4")).toBe(true);
   });
 
   it("marks pass-through providers as capable of foreign model ids", () => {

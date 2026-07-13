@@ -37,6 +37,7 @@ import {
   findProviderTemplate,
   inferProviderForModelId,
   providerAllowsForeignModelIds,
+  providerRecognizesModelId,
   SECRET_REDACTION_MARKER,
 } from "@goatcitadel/contracts";
 import { clampSummaryReserveTokens, type ClampSummaryReserveResult } from "./chat-compaction.js";
@@ -2130,6 +2131,9 @@ function resolveConfiguredModelForProvider(
 
 function inferForeignProviderForModel(providerId: string, model: string): string | undefined {
   if (providerAllowsForeignModelIds(providerId)) {
+    return undefined;
+  }
+  if (providerRecognizesModelId(providerId, model)) {
     return undefined;
   }
   const ownerProviderId = inferProviderForModelId(model);
