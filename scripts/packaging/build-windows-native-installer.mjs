@@ -187,6 +187,8 @@ Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest
 WizardStyle=modern
+CloseApplications=force
+RestartApplications=no
 UninstallDisplayIcon={app}\\{#MyDesktopExe}
 
 [Languages]
@@ -221,6 +223,13 @@ Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\shell\\open\\command"; Valu
 Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
 
 [Code]
+procedure RegisterExtraCloseApplicationsResources;
+begin
+  // The desktop host closes to the tray, so explicitly register its installed executable with
+  // Restart Manager before replacing app\\. The normal post-install action owns relaunch.
+  RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\{#MyDesktopExe}'));
+end;
+
 procedure RunOrFail(FileName: String; Parameters: String; WorkingDir: String; StatusText: String);
 var
   ResultCode: Integer;
@@ -275,14 +284,81 @@ begin
     False);
 end;
 
-procedure RemoveGoatCitadelPayload();
+procedure StopExistingGoatCitadelRuntime();
+var
+  LauncherPath: String;
 begin
   if not GoatCitadelInstallMarkerExists() then
   begin
     Exit;
   end;
-  DelTree(ExpandConstant('{app}\\app'), True, True, True);
-  DelTree(ExpandConstant('{app}\\bin'), True, True, True);
+  LauncherPath := ExpandConstant('{app}\\bin\\goatcitadel.cmd');
+  if not FileExists(LauncherPath) then
+  begin
+    Exit;
+  end;
+  RunBestEffort(
+    'powershell.exe',
+    ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ''{app}\\bin\\goatcitadel.cmd'' stop --json"'),
+    ExpandConstant('{app}'),
+    'Stopping the existing GoatCitadel runtime...'
+  );
+end;
+
+procedure StopExistingGoatCitadelPayloadProcesses();
+var
+  PayloadRoot: String;
+  Parameters: String;
+begin
+  if not GoatCitadelInstallMarkerExists() then
+  begin
+    Exit;
+  end;
+  PayloadRoot := AddBackslash(ExpandConstant('{app}\\app'));
+  if not DirExists(PayloadRoot) then
+  begin
+    Exit;
+  end;
+  // Restart Manager gets the first chance to close the host. Then stop only processes whose
+  // executable lives in this marker-owned app\\ payload, including an orphaned launch --wait
+  // supervisor that would otherwise keep the bundled node.exe locked.
+  Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& { param($payloadRoot) $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($payloadRoot, [System.StringComparison]::OrdinalIgnoreCase) }); if ($processes.Count -gt 0) { $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; $processes | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue } } }" ' + AddQuotes(PayloadRoot);
+  RunBestEffort(
+    'powershell.exe',
+    Parameters,
+    ExpandConstant('{app}'),
+    'Closing existing GoatCitadel payload processes...'
+  );
+  // Self-contained .NET/WinUI DLL handles can outlive process enumeration very briefly.
+  Sleep(1500);
+end;
+
+procedure RemoveGoatCitadelPayload();
+var
+  AppPayloadPath: String;
+  BinPayloadPath: String;
+begin
+  if not GoatCitadelInstallMarkerExists() then
+  begin
+    Exit;
+  end;
+  AppPayloadPath := ExpandConstant('{app}\\app');
+  BinPayloadPath := ExpandConstant('{app}\\bin');
+  DelTree(AppPayloadPath, True, True, True);
+  DelTree(BinPayloadPath, True, True, True);
+  if DirExists(AppPayloadPath) or DirExists(BinPayloadPath) then
+  begin
+    RunOrFail(
+      'powershell.exe',
+      ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "try {{ [System.IO.Directory]::Delete(''\\\\?\\{app}\\app'', $true) }} catch {{}}; try {{ [System.IO.Directory]::Delete(''\\\\?\\{app}\\bin'', $true) }} catch {{}}; Remove-Item -LiteralPath ''\\\\?\\{app}\\app'' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath ''\\\\?\\{app}\\bin'' -Recurse -Force -ErrorAction SilentlyContinue; exit 0"'),
+      '',
+      'Removing the previous GoatCitadel payload...'
+    );
+  end;
+  if DirExists(AppPayloadPath) or DirExists(BinPayloadPath) then
+  begin
+    RaiseException('The previous GoatCitadel payload is still in use. Close GoatCitadel and retry the update.');
+  end;
 end;
 
 procedure ExpandGoatCitadelBundle();
@@ -327,7 +403,10 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    // Clear a prior GoatCitadel payload (marker-guarded) before extracting the new bundle.
+    // Stop the packaged runtime, then clear its prior payload (marker-guarded) before extracting
+    // the new bundle. Mutable runtime-root state remains outside app\\ and bin\\.
+    StopExistingGoatCitadelRuntime();
+    StopExistingGoatCitadelPayloadProcesses();
     RemoveGoatCitadelPayload();
   end;
   if CurStep = ssPostInstall then
@@ -350,7 +429,10 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
-    // Only delete the payload trees if this directory carries our install marker.
+    // Stop the packaged runtime before removing its payload. Only delete the payload trees if
+    // this directory carries our install marker.
+    StopExistingGoatCitadelRuntime();
+    StopExistingGoatCitadelPayloadProcesses();
     RemoveGoatCitadelPayload();
   end;
   if CurUninstallStep = usPostUninstall then

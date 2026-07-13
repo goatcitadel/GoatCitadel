@@ -15,6 +15,9 @@ describe("provider templates", () => {
     // Assert the anchors that matter (default + routing-critical members), not the exact
     // catalog — pinning the full array churns the test on every model addition.
     const openaiModels = findProviderTemplate("openai")?.knownModels ?? [];
+    expect(openaiModels).toContain("gpt-5.6");
+    expect(openaiModels).toContain("gpt-5.6-terra");
+    expect(openaiModels).toContain("gpt-5.6-luna");
     expect(openaiModels).toContain("gpt-5.4");
     expect(openaiModels).toContain("gpt-5.4-mini");
     expect(openaiModels).toContain("chat-latest");
@@ -38,7 +41,11 @@ describe("provider templates", () => {
       defaultModel: "gpt-5.5",
       apiStyle: "openai-codex-responses",
     });
-    expect(findProviderTemplate("openai-codex")?.knownModels).toContain("gpt-5.5");
+    const codexModels = findProviderTemplate("openai-codex")?.knownModels ?? [];
+    expect(codexModels).toContain("gpt-5.6");
+    expect(codexModels).toContain("gpt-5.6-terra");
+    expect(codexModels).toContain("gpt-5.6-luna");
+    expect(codexModels).toContain("gpt-5.5");
   });
 
   it("exposes built-in provider profiles without changing template behavior", () => {
@@ -110,6 +117,8 @@ describe("provider templates", () => {
     expect(inferProviderForModelId("models/gemini-2.5-flash")).toBe("google");
     expect(inferProviderForModelId("gemini-3-pro-image-preview")).toBe("google");
     expect(inferProviderForModelId("openai/gpt-5.4-mini")).toBe("openai");
+    expect(inferProviderForModelId("openai/gpt-5.6")).toBe("openai");
+    expect(inferProviderForModelId("openai-codex/gpt-5.6")).toBe("openai-codex");
     expect(inferProviderForModelId("openai-codex/gpt-5.5")).toBe("openai-codex");
     expect(inferProviderForModelId("anthropic/claude-sonnet-4")).toBe("anthropic");
     expect(inferProviderForModelId("claude-code/claude-sonnet-4")).toBe("claude-code");

@@ -42,3 +42,49 @@ test("unconditional app/bin filesandordirs deletes are removed", () => {
   assert.match(iss, /Type: dirifempty; Name: "\{app\}\\app"/);
   assert.match(iss, /Type: dirifempty; Name: "\{app\}"/);
 });
+
+test("installer updates stop the packaged runtime before replacing the payload", () => {
+  const iss = renderSample();
+
+  assert.match(iss, /procedure StopExistingGoatCitadelRuntime\(\);/);
+  assert.match(iss, /goatcitadel\.cmd'' stop --json/);
+  assert.match(
+    iss,
+    /if CurStep = ssInstall then[\s\S]*?StopExistingGoatCitadelRuntime\(\);[\s\S]*?StopExistingGoatCitadelPayloadProcesses\(\);[\s\S]*?RemoveGoatCitadelPayload\(\);/,
+  );
+});
+
+test("installer updates close the running desktop host without double-restarting it", () => {
+  const iss = renderSample();
+
+  assert.match(iss, /CloseApplications=force/);
+  assert.match(iss, /RestartApplications=no/);
+  assert.match(iss, /procedure RegisterExtraCloseApplicationsResources;/);
+  assert.ok(
+    iss.includes("RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\{#MyDesktopExe}'));"),
+  );
+  assert.match(iss, /Flags: nowait postinstall skipifsilent/);
+  assert.match(iss, /procedure StopExistingGoatCitadelPayloadProcesses\(\);/);
+  assert.match(iss, /param\(\$payloadRoot\)/);
+  assert.match(iss, /ExecutablePath\.StartsWith\(\$payloadRoot, \[System\.StringComparison\]::OrdinalIgnoreCase\)/);
+  assert.match(iss, /Stop-Process -Id \$_\.ProcessId -Force/);
+  assert.match(iss, /Sleep\(1500\);/);
+});
+
+test("installer updates fail closed when the previous payload remains locked", () => {
+  const iss = renderSample();
+
+  assert.match(iss, /if DirExists\(AppPayloadPath\) or DirExists\(BinPayloadPath\) then/);
+  assert.match(iss, /Removing the previous GoatCitadel payload/);
+  assert.match(iss, /Remove-Item[\s\S]*?exit 0/);
+  assert.match(iss, /The previous GoatCitadel payload is still in use\. Close GoatCitadel and retry the update\./);
+});
+
+test("uninstall stops the packaged runtime before removing its payload", () => {
+  const iss = renderSample();
+
+  assert.match(
+    iss,
+    /if CurUninstallStep = usUninstall then[\s\S]*?StopExistingGoatCitadelRuntime\(\);[\s\S]*?StopExistingGoatCitadelPayloadProcesses\(\);[\s\S]*?RemoveGoatCitadelPayload\(\);/,
+  );
+});

@@ -101,6 +101,13 @@ async function main() {
   }
 
   if (command === "install" || command === "update") {
+    if (command === "update" && isPackagedInstall()) {
+      console.error("This GoatCitadel installation is managed by the packaged installer.");
+      console.error("Download or rebuild the newer Windows installer and run it to update in place.");
+      console.error("The installer replaces the app payload while preserving runtime-root data and configuration.");
+      process.exitCode = 1;
+      return;
+    }
     installOrUpdate();
     return;
   }
@@ -1999,7 +2006,7 @@ Usage:
 
 Commands:
   install    Install GoatCitadel from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
-  update     Update existing install from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
+  update     Update a source-bootstrap install from GitHub; packaged Windows installs use the newer installer
   uninstall  Remove a local GoatCitadel install [--install-dir <path>] [--force]
   launch     Start the local stack if needed, wait for health, and open Mission Control [--no-open] [--json] [--wait]
   status     Report local runtime status [--json]

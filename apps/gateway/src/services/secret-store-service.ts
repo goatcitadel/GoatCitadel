@@ -287,7 +287,11 @@ function assertSecretAccount(account: string): void {
 
 function hasCommand(command: string): boolean {
   const whichCommand = process.platform === "win32" ? "where" : "which";
-  const result = spawnSync(whichCommand, [command], { stdio: "ignore" });
+  const result = spawnSync(whichCommand, [command], {
+    stdio: "ignore",
+    // Packaged desktop helpers must never allocate or activate a console window.
+    windowsHide: true,
+  });
   return result.status === 0;
 }
 
@@ -306,6 +310,8 @@ export function runCommand(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    // PasswordVault and other keychain helpers run behind a windowed desktop host.
+    windowsHide: true,
     // SECURITY: do NOT spread `process.env` into these OS keychain-helper child
     // processes. The parent env carries provider API keys, GOATCITADEL_AUTH_TOKEN,
     // mesh join tokens, etc.; spreading it would expose every secret to the helper

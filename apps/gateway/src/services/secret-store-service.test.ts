@@ -61,7 +61,10 @@ describe("SecretStoreService", () => {
     const service = new SecretStoreService();
 
     expect(() => service.setSecret("provider:openai", "sk-test")).toThrow(SecretStoreUnavailableError);
-    expect(spawnSyncMock).toHaveBeenCalledWith("which", ["secret-tool"], { stdio: "ignore" });
+    expect(spawnSyncMock).toHaveBeenCalledWith("which", ["secret-tool"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
   });
 
   it("stores, reads, and deletes Linux secrets through secret-tool", () => {
@@ -135,7 +138,10 @@ describe("SecretStoreService", () => {
     expect(service.getSecret("provider:moonshot")).toBeUndefined();
     service.deleteSecret("provider:moonshot");
 
-    expect(spawnSyncMock).toHaveBeenNthCalledWith(1, "where", ["powershell"], { stdio: "ignore" });
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(1, "where", ["powershell"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
     expect(spawnSyncMock).toHaveBeenNthCalledWith(
       2,
       "powershell",
@@ -148,6 +154,9 @@ describe("SecretStoreService", () => {
         }),
       }),
     );
+    for (const call of spawnSyncMock.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ windowsHide: true }));
+    }
   });
 
   it("surfaces command stderr when the keychain command exits unexpectedly", () => {
@@ -202,6 +211,7 @@ describe("runCommand env allowlist", () => {
       // The parent process.env (which carries provider API keys, auth/mesh tokens,
       // etc.) must NOT be spread into the keychain-helper child process.
       expect(env).not.toHaveProperty("UNRELATED_FAKE_SECRET");
+      expect(spawnSyncMock.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ windowsHide: true }));
       // The explicit per-call override (service/account/value) must still pass through.
       expect(env?.GOATCITADEL_SECRET_VALUE).toBe("x");
       // A genuinely-needed locator var must survive the allowlist when present on the host.

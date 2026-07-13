@@ -41,7 +41,7 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("parses against LlmModelMetadataManifest and every entry is well-formed", () => {
     expect(parsedManifest.version).toBe(1);
     expect(typeof parsedManifest.entries).toBe("object");
-    expect(Object.keys(parsedManifest.entries)).toHaveLength(28);
+    expect(Object.keys(parsedManifest.entries)).toHaveLength(34);
     for (const [key, entry] of Object.entries(parsedManifest.entries)) {
       expect(key.toLowerCase()).not.toMatch(/(?:^|\/)(?:xai|grok)(?:\/|$)/);
       expect(entry.contextWindow, `${key} contextWindow`).toBeGreaterThan(0);
@@ -54,6 +54,10 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
 
   it("includes the critical entries called out in the plan", () => {
     expect(parsedManifest.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
+    expect(parsedManifest.entries["openai-codex/gpt-5.6"]).toEqual({
+      contextWindow: 1050000,
+      outputTokenLimit: 128000,
+    });
     expect(parsedManifest.entries["openrouter/deepseek/deepseek-v4-pro"]).toEqual({
       contextWindow: 128000,
       outputTokenLimit: 32000,

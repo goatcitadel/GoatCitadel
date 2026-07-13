@@ -37,6 +37,28 @@ if (process.platform !== "win32") {
 
 assertDotnet10Sdk();
 
+const secretStoreRegression = spawnSync(
+  process.env.ComSpec || "cmd.exe",
+  [
+    "/d",
+    "/s",
+    "/c",
+    "pnpm.cmd",
+    "--filter",
+    "@goatcitadel/gateway",
+    "exec",
+    "vitest",
+    "run",
+    "src/services/secret-store-service.test.ts",
+  ],
+  {
+    cwd: repoRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  },
+);
+assertSuccessfulSpawn(secretStoreRegression, "Packaged secret-store helper regression test");
+
 const dotnetTest = spawnSync(
   "dotnet",
   [

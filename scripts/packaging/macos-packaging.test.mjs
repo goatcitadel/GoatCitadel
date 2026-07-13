@@ -143,8 +143,10 @@ test("Windows native installer replaces payload via a marker-guarded delete only
   assert.doesNotMatch(installerBuilder, /\[InstallDelete\]/);
   assert.match(installerBuilder, /procedure RemoveGoatCitadelPayload\(\);/);
   assert.match(installerBuilder, /if not GoatCitadelInstallMarkerExists\(\) then/);
-  assert.match(installerBuilder, /DelTree\(ExpandConstant\('\{app\}\\\\app'\)/);
-  assert.match(installerBuilder, /DelTree\(ExpandConstant\('\{app\}\\\\bin'\)/);
+  assert.match(installerBuilder, /AppPayloadPath := ExpandConstant\('\{app\}\\\\app'\)/);
+  assert.match(installerBuilder, /BinPayloadPath := ExpandConstant\('\{app\}\\\\bin'\)/);
+  assert.match(installerBuilder, /DelTree\(AppPayloadPath/);
+  assert.match(installerBuilder, /DelTree\(BinPayloadPath/);
   // The destructive long-path uninstall delete must be gated on the marker.
   assert.match(installerBuilder, /Remove-Item -LiteralPath[\s\S]*?Check: GoatCitadelInstallMarkerExists/);
   assert.match(installerBuilder, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage/);
