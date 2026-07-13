@@ -100,8 +100,10 @@ export default tseslint.config(
       globals: {
         HTMLElement: "readonly",
         NodeFilter: "readonly",
+        NodeList: "readonly",
         PerformanceObserver: "readonly",
         document: "readonly",
+        getComputedStyle: "readonly",
         location: "readonly",
         navigator: "readonly",
         window: "readonly",
