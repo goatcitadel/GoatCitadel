@@ -191,11 +191,11 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
                 });
               }}
             >
-              <Plus className="h-4 w-4" />
+              <Plus size={16} />
               New profile
             </button>
             <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Refresh
             </button>
           </div>
@@ -295,7 +295,7 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
                 <LibraryButtonRow>
                   {createMode || selectedAgent?.editable ? (
                     <button type="button" className="mc-next-settings-filter" onClick={() => void handleSave()}>
-                      <Save className="h-4 w-4" />
+                      <Save size={16} />
                       {createMode ? "Create agent" : "Save changes"}
                     </button>
                   ) : null}
@@ -305,7 +305,7 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
                       className="mc-next-settings-filter"
                       onClick={() => void handleArchiveToggle()}
                     >
-                      <Undo2 className="h-4 w-4" />
+                      <Undo2 size={16} />
                       {selectedAgent.lifecycleStatus === "archived" ? "Restore" : "Archive"}
                     </button>
                   ) : null}

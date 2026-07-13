@@ -107,11 +107,13 @@ export function ThreadedContextDrawer({
   props,
   permissionSummary,
   permissionOverrideActive,
+  onCopyTrustReport,
 }: {
   surface: ChatMode;
   props: MissionThreadedContextDockProps;
   permissionSummary?: string;
   permissionOverrideActive?: boolean;
+  onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DrawerTab>("context");
   const projectOptions = useMemo(() => props.projectOptions ?? [], [props.projectOptions]);
@@ -238,6 +240,17 @@ export function ThreadedContextDrawer({
             </details>
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
             {props.routePreflight?.blockedReason ? <p>{props.routePreflight.blockedReason}</p> : null}
+            {onCopyTrustReport && props.selectedSessionId ? (
+              <div className="mc-next-context-actions">
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  onClick={() => onCopyTrustReport(props.selectedSessionId, props.selectedTurn?.turnId)}
+                >
+                  Copy trust report
+                </button>
+              </div>
+            ) : null}
           </section>
 
           {props.trust ? (

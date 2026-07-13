@@ -1,9 +1,8 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Code2, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
 import type {
-  FilesystemReadAccessMode,
   LocalOperatorOverrideRecord,
   LocalOperatorOverrideScope,
   PermissionSurface,
@@ -32,7 +31,6 @@ import {
   SettingsButtonRow,
   SettingsEmptyState,
   SettingsField,
-  SettingsFieldGrid,
   SettingsGrid,
   SettingsLoadWarnings,
   SettingsNotice,
@@ -56,38 +54,30 @@ import {
   type PermissionProfileEditorDraft,
   resetLocalOperatorOverrideScopeRefForScope,
   resolveLocalOperatorOverrideScopeRef,
-  togglePermissionProfileSurface,
-  TOOL_APPROVAL_MODE_OPTIONS,
 } from "../../SettingsNativePage";
+import {
+  describeReadAccessMode,
+  EFFECTIVE_PERMISSION_CONTEXTS,
+  formatPermissionContextLabel,
+  formatPermissionContextList,
+  hasLegacyOnlyPermissionContexts,
+  isLegacyPermissionContext,
+  isPrimaryPermissionContext,
+  LEGACY_PERMISSION_CONTEXTS,
+  PERMISSION_CONTEXT_PRESENTATION,
+  PermissionProfileDraftFields,
+  PRIMARY_PERMISSION_CONTEXTS,
+} from "./PermissionProfileDraftFields";
 
-const PERMISSION_SURFACE_OPTIONS = [
-  "chat",
-  "cowork",
-  "code",
-  "tools",
-  "mcp",
-] as const satisfies readonly PermissionSurface[];
-const PERMISSION_PROFILE_DEFAULT_SURFACE_OPTIONS = [
-  "chat",
-  "cowork",
-  "code",
-  "tools",
-  "mcp",
-  "all",
-] as const satisfies readonly PermissionSurface[];
 const LOCAL_OPERATOR_OVERRIDE_SCOPE_OPTIONS = [
   "workspace",
   "session",
   "run",
   "operator",
 ] as const satisfies readonly LocalOperatorOverrideScope[];
-const READ_ACCESS_MODE_OPTIONS = ["", "roots_only", "approval_required", "full_disk"] as const satisfies readonly (
-  | FilesystemReadAccessMode
-  | ""
-)[];
 
 interface EffectivePermissionSurfaceState {
-  surface: (typeof PERMISSION_SURFACE_OPTIONS)[number];
+  surface: (typeof EFFECTIVE_PERMISSION_CONTEXTS)[number];
   profileId?: string;
   profileLabel?: string;
   approvalMode?: string;
@@ -98,7 +88,7 @@ interface EffectivePermissionSurfaceState {
 export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const effectiveLoadsPromise = Promise.all(
-      PERMISSION_SURFACE_OPTIONS.map(async (surface) => ({
+      EFFECTIVE_PERMISSION_CONTEXTS.map(async (surface) => ({
         surface,
         load: await nativeLoad(
           `Effective ${surface} permission profile`,
@@ -127,6 +117,8 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
   const [revokePending, setRevokePending] = useState(false);
+  const [pendingArchiveProfile, setPendingArchiveProfile] = useState<{ profileId: string; label: string } | null>(null);
+  const [archiveProfilePending, setArchiveProfilePending] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("safe");
   const [profileDraft, setProfileDraft] = useState<PermissionProfileEditorDraft>(createEmptyPermissionProfileDraft);
   const [profileEditDraft, setProfileEditDraft] = useState<PermissionProfileEditorDraft>(
@@ -166,6 +158,8 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const selectedProfileBypassesPrompts = selectedProfile?.approvalMode === "bypass";
   const activationBlockedByRemoteHardened = Boolean(promptSkippingProfileRestriction && selectedProfileBypassesPrompts);
   const activeAutonomyGrants = (data?.autonomyGrants ?? []).filter((grant) => grant.status === "active");
+  const primaryEffectiveContexts = (data?.effective ?? []).filter((item) => isPrimaryPermissionContext(item.surface));
+  const legacyEffectiveContexts = (data?.effective ?? []).filter((item) => isLegacyPermissionContext(item.surface));
 
   useEffect(() => {
     setOverrideDraft((current) =>
@@ -264,20 +258,20 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   };
 
   const handleArchiveSelectedProfile = async () => {
-    if (!selectedProfile || selectedProfile.builtin) {
-      setNotice({ tone: "warning", message: "Select a custom permission profile to archive." });
+    if (!pendingArchiveProfile) {
       return;
     }
-    if (!window.confirm(`Archive permission profile ${selectedProfile.label}?`)) {
-      return;
-    }
+    setArchiveProfilePending(true);
     try {
-      await archivePermissionProfile(selectedProfile.profileId);
+      await archivePermissionProfile(pendingArchiveProfile.profileId);
       setSelectedProfileId("safe");
       setNotice({ tone: "success", message: "Permission profile archived." });
+      setPendingArchiveProfile(null);
       await reload();
     } catch (archiveError) {
       setNotice({ tone: "error", message: getErrorMessage(archiveError) });
+    } finally {
+      setArchiveProfilePending(false);
     }
   };
 
@@ -431,10 +425,10 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                           : "No profile deny patterns",
                       },
                       {
-                        label: "Default surfaces",
+                        label: "Default policy contexts",
                         description: selectedProfile.defaultForSurfaces?.length
-                          ? selectedProfile.defaultForSurfaces.join(", ")
-                          : "No automatic surface default",
+                          ? formatPermissionContextList(selectedProfile.defaultForSurfaces)
+                          : "No automatic policy-context default",
                       },
                     ]}
                     emptyLabel="No profile policy details."
@@ -442,26 +436,33 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   {activationBlockedByRemoteHardened ? (
                     <p className="mc-next-settings-field-note">{promptSkippingProfileRestriction}</p>
                   ) : null}
+                  {hasLegacyOnlyPermissionContexts(selectedProfile.defaultForSurfaces) ? (
+                    <p className="mc-next-settings-field-note" role="status">
+                      Compatibility warning: this profile defaults only to legacy policy keys and does not govern
+                      current Chat. Add Chat or All policy contexts if intended; GoatCitadel has not broadened it
+                      automatically.
+                    </p>
+                  ) : null}
                   <SettingsButtonRow>
                     <NativeButton
                       variant="default"
                       disabled={activationBlockedByRemoteHardened}
-                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
+                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "chat")}
                     >
                       <ShieldCheck size={16} />
-                      Use for all surfaces
+                      Use for Chat
                     </NativeButton>
                     <NativeButton
                       variant="secondary"
                       disabled={activationBlockedByRemoteHardened}
-                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "code")}
+                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
                     >
-                      <Code2 size={16} />
-                      Use for Code
+                      <ShieldCheck size={16} />
+                      Use across all policy contexts
                     </NativeButton>
                   </SettingsButtonRow>
                   <SettingsButtonRow>
-                    {PERMISSION_SURFACE_OPTIONS.filter((surface) => surface !== "code").map((surface) => (
+                    {PRIMARY_PERMISSION_CONTEXTS.filter((surface) => surface !== "chat").map((surface) => (
                       <NativeButton
                         key={surface}
                         variant="secondary"
@@ -469,10 +470,30 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                         onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
                       >
                         <ShieldCheck size={16} />
-                        Use for {surface.toUpperCase()}
+                        Use for {formatPermissionContextLabel(surface)}
                       </NativeButton>
                     ))}
                   </SettingsButtonRow>
+                  <details className="mc-next-disclosure">
+                    <summary>Legacy compatibility contexts</summary>
+                    <p className="mc-next-settings-field-note">
+                      Cowork and Code are retained policy keys for stored activations and older API clients. They are
+                      not separate Mission Control surfaces and do not govern current Chat.
+                    </p>
+                    <SettingsButtonRow>
+                      {LEGACY_PERMISSION_CONTEXTS.map((surface) => (
+                        <NativeButton
+                          key={surface}
+                          variant="secondary"
+                          disabled={activationBlockedByRemoteHardened}
+                          onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
+                        >
+                          {surface === "code" ? <Code2 size={16} /> : <ShieldCheck size={16} />}
+                          Use for {formatPermissionContextLabel(surface)}
+                        </NativeButton>
+                      ))}
+                    </SettingsButtonRow>
+                  </details>
                 </>
               ) : (
                 <SettingsEmptyState label="Select a profile." />
@@ -495,7 +516,17 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                     <Save size={16} />
                     Save profile
                   </NativeButton>
-                  <NativeButton variant="destructive" onClick={() => void handleArchiveSelectedProfile()}>
+                  <NativeButton
+                    variant="destructive"
+                    onClick={() =>
+                      selectedProfile && !selectedProfile.builtin
+                        ? setPendingArchiveProfile({
+                            profileId: selectedProfile.profileId,
+                            label: selectedProfile.label,
+                          })
+                        : setNotice({ tone: "warning", message: "Select a custom permission profile to archive." })
+                    }
+                  >
                     <Trash2 size={16} />
                     Archive profile
                   </NativeButton>
@@ -524,22 +555,46 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
-            title="Active defaults"
-            subtitle="Effective profile and temporary local override state by surface."
+            title="Effective policy contexts"
+            subtitle="Chat includes conversation, agentic work, and Chat-launched Code Mode. Direct tools and MCP remain separate policy contexts."
           >
             <SettingsActionList
-              items={(data.effective ?? []).map((item) => ({
-                label: item.surface.toUpperCase(),
+              items={primaryEffectiveContexts.map((item) => ({
+                id: item.surface,
+                label: formatPermissionContextLabel(item.surface),
                 description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
                   item.approvalMode ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}` : ""
                 }${
                   item.localOperatorOverrideId
                     ? `, override ${item.localOperatorOverrideId} until ${formatDateTime(item.localOperatorOverride?.expiresAt)}`
                     : ""
-                }`,
+                } · ${PERMISSION_CONTEXT_PRESENTATION[item.surface].description}`,
               }))}
-              emptyLabel="No effective profile state returned."
+              emptyLabel="No effective primary policy context returned."
             />
+            <details className="mc-next-disclosure">
+              <summary>Legacy compatibility contexts</summary>
+              <p className="mc-next-settings-field-note">
+                These retained Cowork and Code policy keys keep stored activations and older API clients inspectable.
+                They are not separate Mission Control surfaces and do not govern current Chat.
+              </p>
+              <SettingsActionList
+                items={legacyEffectiveContexts.map((item) => ({
+                  id: item.surface,
+                  label: formatPermissionContextLabel(item.surface),
+                  description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
+                    item.approvalMode
+                      ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}`
+                      : ""
+                  }${
+                    item.localOperatorOverrideId
+                      ? `, override ${item.localOperatorOverrideId} until ${formatDateTime(item.localOperatorOverride?.expiresAt)}`
+                      : ""
+                  } · ${PERMISSION_CONTEXT_PRESENTATION[item.surface].description}`,
+                }))}
+                emptyLabel="No legacy compatibility context returned."
+              />
+            </details>
           </NativeCard>
           <NativeCard
             density="compact"
@@ -664,8 +719,12 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
             <SettingsActionList
               items={(data.autonomyGrants ?? []).map((grant) => ({
                 label: grant.grantId,
-                description: `${grant.workspaceId} · ${grant.surfaces.join(", ")} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
-                meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}`,
+                description: `${grant.workspaceId} · ${formatPermissionContextList(grant.surfaces)} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
+                meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}${
+                  hasLegacyOnlyPermissionContexts(grant.surfaces)
+                    ? " · Compatibility warning: this legacy-only grant does not govern current Chat; reissue it for Chat or All policy contexts if intended."
+                    : ""
+                }`,
                 onClick: grant.status === "active" ? () => setPendingRevokeGrantId(grant.grantId) : undefined,
                 actionLabel: grant.status === "active" ? "Revoke" : undefined,
               }))}
@@ -674,6 +733,16 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={pendingArchiveProfile !== null}
+        danger
+        pending={archiveProfilePending}
+        title="Archive permission profile?"
+        message={`Archive ${pendingArchiveProfile?.label ?? "this permission profile"}? It will no longer be available for activation.`}
+        confirmLabel="Archive profile"
+        onCancel={() => setPendingArchiveProfile(null)}
+        onConfirm={() => void handleArchiveSelectedProfile()}
+      />
       <ConfirmModal
         open={pendingRevokeGrantId !== null}
         danger
@@ -699,143 +768,6 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
       />
     </SettingsSectionShell>
   );
-}
-
-function PermissionProfileDraftFields({
-  draft,
-  bypassUnavailableReason,
-  setDraft,
-}: {
-  draft: PermissionProfileEditorDraft;
-  bypassUnavailableReason?: string;
-  setDraft: Dispatch<SetStateAction<PermissionProfileEditorDraft>>;
-}) {
-  const bypassUnavailable = Boolean(bypassUnavailableReason);
-  return (
-    <SettingsFieldGrid>
-      <SettingsField label="Name">
-        <input
-          className="mc-next-settings-input"
-          value={draft.label}
-          onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))}
-          placeholder="Review mode, research mode, release captain"
-        />
-      </SettingsField>
-      <SettingsField label="Approval behavior">
-        <select
-          className="mc-next-settings-input"
-          value={draft.approvalMode}
-          onChange={(event) => {
-            const nextMode = normalizeToolApprovalMode(event.target.value);
-            if (bypassUnavailable && nextMode === "bypass") {
-              return;
-            }
-            setDraft((current) => ({
-              ...current,
-              approvalMode: nextMode,
-            }));
-          }}
-        >
-          {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-            <option key={mode} value={mode} disabled={bypassUnavailable && mode === "bypass"}>
-              {bypassUnavailable && mode === "bypass"
-                ? `${describeToolApprovalMode(mode)} (unavailable)`
-                : describeToolApprovalMode(mode)}
-            </option>
-          ))}
-        </select>
-        {bypassUnavailableReason ? <p className="mc-next-settings-field-note">{bypassUnavailableReason}</p> : null}
-      </SettingsField>
-      <SettingsField label="Description" span={2}>
-        <textarea
-          className="mc-next-settings-input"
-          value={draft.description}
-          onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-          rows={3}
-          placeholder="Why this profile exists and when to use it"
-        />
-      </SettingsField>
-      <SettingsField label="Read access">
-        <select
-          className="mc-next-settings-input"
-          value={draft.readAccessMode}
-          onChange={(event) =>
-            setDraft((current) => ({
-              ...current,
-              readAccessMode: event.target.value as FilesystemReadAccessMode | "",
-            }))
-          }
-        >
-          {READ_ACCESS_MODE_OPTIONS.map((mode) => (
-            <option key={mode || "default"} value={mode}>
-              {describeReadAccessMode(mode)}
-            </option>
-          ))}
-        </select>
-      </SettingsField>
-      <SettingsField label="Default surfaces">
-        {PERMISSION_PROFILE_DEFAULT_SURFACE_OPTIONS.map((surface) => (
-          <label key={surface} className="mc-next-settings-toggle">
-            <input
-              type="checkbox"
-              checked={draft.defaultForSurfaces.includes(surface)}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  defaultForSurfaces: togglePermissionProfileSurface(
-                    current.defaultForSurfaces,
-                    surface,
-                    event.target.checked,
-                  ),
-                }))
-              }
-            />
-            <span>{surface.toUpperCase()}</span>
-          </label>
-        ))}
-      </SettingsField>
-      <SettingsField label="Tool patterns" span={2}>
-        <textarea
-          className="mc-next-settings-input"
-          value={draft.toolPatterns}
-          onChange={(event) => setDraft((current) => ({ ...current, toolPatterns: event.target.value }))}
-          rows={5}
-          placeholder={"session.status\nmemory.read"}
-        />
-      </SettingsField>
-      <SettingsField label="Allow patterns">
-        <textarea
-          className="mc-next-settings-input"
-          value={draft.allow}
-          onChange={(event) => setDraft((current) => ({ ...current, allow: event.target.value }))}
-          rows={4}
-          placeholder="Optional allow patterns"
-        />
-      </SettingsField>
-      <SettingsField label="Deny patterns">
-        <textarea
-          className="mc-next-settings-input"
-          value={draft.deny}
-          onChange={(event) => setDraft((current) => ({ ...current, deny: event.target.value }))}
-          rows={4}
-          placeholder="Optional deny patterns"
-        />
-      </SettingsField>
-    </SettingsFieldGrid>
-  );
-}
-
-function describeReadAccessMode(mode: FilesystemReadAccessMode | "") {
-  switch (mode) {
-    case "roots_only":
-      return "Workspace roots only";
-    case "approval_required":
-      return "Ask before broader reads";
-    case "full_disk":
-      return "Full local disk reads";
-    default:
-      return "Global default";
-  }
 }
 
 function readEffectivePermissionSurfaceState(

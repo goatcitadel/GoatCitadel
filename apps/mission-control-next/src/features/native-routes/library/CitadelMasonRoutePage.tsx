@@ -178,7 +178,7 @@ export function CitadelMasonRoutePage({
                 disabled={!canDraft || review.loading}
                 onClick={() => void draftAndReview()}
               >
-                <Sparkles className="h-4 w-4" />
+                <Sparkles size={16} />
                 {review.loading ? "Drafting…" : "Draft & review Blueprint"}
               </NativeButton>
             ) : undefined
@@ -189,7 +189,7 @@ export function CitadelMasonRoutePage({
             <div className="mc-next-mason-start">
               <p>Start a session and tell the Mason what this Citadel is for.</p>
               <NativeButton variant="default" disabled={sessionState.busy} onClick={() => void startSession()}>
-                <Hammer className="h-4 w-4" />
+                <Hammer size={16} />
                 {sessionState.busy ? "Starting…" : "Start setup"}
               </NativeButton>
             </div>
@@ -216,7 +216,7 @@ export function CitadelMasonRoutePage({
                 disabled={sessionState.busy || message.trim().length === 0}
                 onClick={() => void submitMessage()}
               >
-                <Send className="h-4 w-4" />
+                <Send size={16} />
                 {sessionState.busy ? "Interpreting…" : "Send to the Mason"}
               </NativeButton>
             </>
@@ -246,7 +246,7 @@ export function CitadelMasonRoutePage({
       </NativeGrid>
 
       <p className="mc-next-mason-footnote">
-        <RefreshCw className="h-3 w-3" aria-hidden="true" />
+        <RefreshCw size={12} aria-hidden="true" />
         The Mason runs on your configured model. With no model set, structured answers still draft a Blueprint.
       </p>
     </NativePageFrame>

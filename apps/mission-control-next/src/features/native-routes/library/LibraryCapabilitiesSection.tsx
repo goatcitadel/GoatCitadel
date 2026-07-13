@@ -112,7 +112,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
           />
           <LibraryButtonRow>
             <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Refresh catalog
             </button>
           </LibraryButtonRow>

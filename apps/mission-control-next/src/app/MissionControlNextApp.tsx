@@ -56,6 +56,7 @@ import {
   getRouteLabel,
   getRouteReleaseScope,
   isExperimentalRoute,
+  isHiddenRoute,
   normalizeAppRoute,
   type AppRoute,
   RAIL_GROUPS,
@@ -139,6 +140,7 @@ export function MissionControlNextApp() {
   const { gatewayAccess, gatewayBusy, autoRetryPending, retryGatewayAccess } = useGatewayAccess();
   const gatewayReady = gatewayAccess.status === "ready";
   const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector();
+  const shellInspectorAvailable = route.area !== "chat";
   const { notifications, pushNotification, dismissNotification, deliverRealtimeNotification, lastEnabledSoundModeRef } =
     useShellNotifications({ notificationPreferences });
   const { streamState, streamTruthMode } = useEventStream({
@@ -203,16 +205,18 @@ export function MissionControlNextApp() {
         run: () => navigate(buildPrimaryAreaRoute(area)),
       };
     });
-    const settingsItems = RAIL_ITEMS.settings.map((railItem) => {
-      const section = railItem.section;
-      const descriptionWords = railItem.description.toLowerCase().split(/\s+/).slice(0, 6).join(" ");
-      return {
-        id: `settings-${section}`,
-        label: `Settings → ${railItem.label}`,
-        keywords: ["settings", ...(section ? [section] : []), railItem.label.toLowerCase(), descriptionWords],
-        run: () => navigate({ area: "settings", section, theme: route.theme }),
-      };
-    });
+    const settingsItems = RAIL_ITEMS.settings
+      .filter((railItem) => !isHiddenRoute(railItem))
+      .map((railItem) => {
+        const section = railItem.section;
+        const descriptionWords = railItem.description.toLowerCase().split(/\s+/).slice(0, 6).join(" ");
+        return {
+          id: `settings-${section}`,
+          label: `Settings → ${railItem.label}`,
+          keywords: ["settings", ...(section ? [section] : []), railItem.label.toLowerCase(), descriptionWords],
+          run: () => navigate({ area: "settings", section, theme: route.theme }),
+        };
+      });
     // F-M11: the experimental library/ops surfaces are filtered out of the rails
     // (NAV-02) and were unreachable from the palette. Settings experimental
     // sections already appear via `settingsItems`, but curator/improvement/kanban
@@ -235,7 +239,7 @@ export function MissionControlNextApp() {
       setShortcutsOpen(false);
       return true;
     }
-    if (inspectorOpen) {
+    if (shellInspectorAvailable && inspectorOpen) {
       setInspectorOpen(false);
       return true;
     }
@@ -244,7 +248,7 @@ export function MissionControlNextApp() {
       return true;
     }
     return false;
-  }, [inspectorOpen, navOpen, setInspectorOpen, shortcutsOpen]);
+  }, [inspectorOpen, navOpen, setInspectorOpen, shellInspectorAvailable, shortcutsOpen]);
 
   const routeShortcuts = useMemo(
     () =>
@@ -274,7 +278,7 @@ export function MissionControlNextApp() {
         route.area,
         // NAV-02: keep experimental surfaces out of the primary rails. They stay
         // reachable via direct URL, the command palette, and their stage badge.
-        currentRailItems.filter((item) => !isExperimentalRoute(item)),
+        currentRailItems.filter((item) => !isExperimentalRoute(item) && !isHiddenRoute(item)),
       ),
     [route.area, currentRailItems],
   );
@@ -300,21 +304,24 @@ export function MissionControlNextApp() {
   const isWorkArea = route.area === "chat";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
-  const hasVisibleInspector = detailPanelPinned || inspectorOpen;
+  // Chat owns its own Working Context surface. Suppress the generic route
+  // inspector there so two different "Context" controls cannot compete for the
+  // same right-side workspace; retain the inspector on every non-Chat route.
+  const hasVisibleInspector = shellInspectorAvailable && (detailPanelPinned || inspectorOpen);
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
   const activeCitadelName = citadelOptions.find((item) => item.citadelId === activeCitadelId)?.name ?? activeCitadelId;
 
-  const copyTrustReportForRoute = useCallback(
-    async (targetRoute: AppRoute) => {
-      if (!targetRoute.sessionId) {
+  const copyTrustReport = useCallback(
+    async (sessionId?: string | null, turnId?: string | null) => {
+      if (!sessionId) {
         pushNotification("warning", "Open a Work session before exporting a trust report.", "trust-report");
         return;
       }
       try {
         const bundle = await fetchRuntimeLifecycleExport({
-          sessionId: targetRoute.sessionId,
-          turnId: targetRoute.turnId,
+          sessionId,
+          turnId: turnId ?? undefined,
           includeTimeline: true,
           includeTranscript: true,
           format: "trust_report",
@@ -353,7 +360,7 @@ export function MissionControlNextApp() {
         <NativeButton
           variant="secondary"
           onClick={() => {
-            void copyTrustReportForRoute(route);
+            void copyTrustReport(route.sessionId, route.turnId);
           }}
         >
           <ShieldCheck size={14} />
@@ -415,7 +422,7 @@ export function MissionControlNextApp() {
     currentReleaseStatusLabel,
     currentRouteDescription,
     currentRouteLabel,
-    copyTrustReportForRoute,
+    copyTrustReport,
     realtimeStatusCopy.inspector,
     route,
     status.dashboard,
@@ -576,6 +583,17 @@ export function MissionControlNextApp() {
   }, [route]);
 
   useEffect(() => {
+    if (route.area !== "chat") {
+      return;
+    }
+    // Chat owns Working Context. Clear both shell-inspector state channels on
+    // entry so Escape cannot consume an invisible layer and stale route detail
+    // cannot reappear when the operator later leaves Chat.
+    setInspectorOpen(false);
+    setDetailEntry(null);
+  }, [route.area, setDetailEntry, setInspectorOpen]);
+
+  useEffect(() => {
     const handlePopState = () => {
       // Match `navigate`: keep the current surface mounted while a lazy route
       // chunk loads instead of flashing the Suspense fallback on browser back.
@@ -645,16 +663,25 @@ export function MissionControlNextApp() {
     gatewayStatus: threadedGatewayStatus,
     pendingApprovals,
     navigate,
+    onCopyTrustReport: copyTrustReport,
     setActiveCitadelId,
     setActiveWorkspaceId,
   });
 
   return (
     <ShellDetailPanelProvider
-      isOpen={detailPanelPinned || inspectorOpen}
-      onOpenPanel={() => setInspectorOpen(true)}
+      isOpen={hasVisibleInspector}
+      onOpenPanel={() => {
+        if (shellInspectorAvailable) {
+          setInspectorOpen(true);
+        }
+      }}
       onClosePanel={() => setInspectorOpen(false)}
-      onActiveEntryChange={setDetailEntry}
+      onActiveEntryChange={(entry) => {
+        if (shellInspectorAvailable) {
+          setDetailEntry(entry);
+        }
+      }}
     >
       <div
         className={[
@@ -690,6 +717,7 @@ export function MissionControlNextApp() {
             handleToggleNotificationSound={handleToggleNotificationSound}
             handleToggleTheme={handleToggleTheme}
             inspectorOpen={inspectorOpen}
+            inspectorAvailable={shellInspectorAvailable}
             isCompactTopbar={isCompactTopbar}
             mode={mode}
             navigate={navigate}
@@ -709,19 +737,28 @@ export function MissionControlNextApp() {
 
           <div className={`mc-next-body${usesFullStageLayout ? " is-work-area" : ""}`}>
             <ShellRail
+              activeCitadelId={activeCitadelId}
+              activeCitadelName={activeCitadelName}
+              activeWorkspaceId={activeWorkspaceId}
+              activeWorkspaceName={activeWorkspaceName}
               buildPrimaryAreaRoute={buildPrimaryAreaRoute}
+              citadelOptions={citadelOptions}
               currentAreaMeta={currentAreaMeta}
               groupedRailItems={groupedRailItems}
+              handleSelectCitadel={handleSelectCitadel}
+              handleSelectWorkspace={handleSelectWorkspace}
               isMobileNav={isMobileNav}
               navOpen={navOpen}
               navigate={navigate}
               onClose={() => setNavOpen(false)}
+              onOpenPalette={() => setPaletteOpen(true)}
               pendingApprovals={pendingApprovals}
               preloadRouteChunk={preloadRouteChunk}
               railSignalLines={railSignalLines}
               railSignalTitle={railSignalTitle}
               route={route}
               taskBacklogCount={taskBacklogCount}
+              workspaceOptions={workspaceOptions}
             />
 
             <ShellRouteStage
@@ -794,6 +831,7 @@ export function renderRouteContent(input: {
   gatewayStatus: ThreadedGatewayStatusSummary;
   pendingApprovals: number;
   navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
+  onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
   setActiveCitadelId?: (citadelId: string) => void;
   setActiveWorkspaceId: (workspaceId: string) => void;
 }): ReactNode {
@@ -817,6 +855,7 @@ export function renderRouteContent(input: {
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
+        onCopyTrustReport={input.onCopyTrustReport}
         onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenPersonalitiesSettings={openPersonalitiesSettings}
         onOpenLibraryArtifacts={openLibraryArtifacts}

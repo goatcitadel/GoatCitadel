@@ -19,7 +19,7 @@ export function ReleaseScopeBadge({ status }: { status?: ReleaseSurfaceStatus })
   const label = status === "experimental" ? "Experimental" : "Needs release polish";
   return (
     <span className="mc-next-experimental-badge" data-release-status={status} role="note" aria-label={label}>
-      <FlaskConical className="h-3 w-3" aria-hidden="true" />
+      <FlaskConical size={12} aria-hidden="true" />
       {label}
     </span>
   );
@@ -48,7 +48,7 @@ export function NativePageFrame({
   releaseStatus,
   className,
 }: {
-  icon?: React.ComponentType<{ className?: string }>;
+  icon?: React.ComponentType<{ className?: string; size?: number | string }>;
   kicker: string;
   title: string;
   description: string;
@@ -117,7 +117,7 @@ export function NativePageFrame({
       <header className="mc-next-directory-header" data-native-kicker={kicker} data-area={area}>
         {Icon ? (
           <div className="mc-next-directory-icon">
-            <Icon className="h-5 w-5" />
+            <Icon size={20} />
           </div>
         ) : null}
         <div className="mc-next-directory-copy">
@@ -174,7 +174,7 @@ export function NativePageFrame({
           primaryAction={
             onRetry ? (
               <NativeButton variant="outline" onClick={onRetry}>
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw size={16} />
                 Retry
               </NativeButton>
             ) : undefined
@@ -403,7 +403,7 @@ export function QuickJumpCard({
             }}
           >
             <span>{item.label}</span>
-            <ArrowRight className="h-4 w-4" />
+            <ArrowRight size={16} />
           </NativeButton>
         ))}
       </div>

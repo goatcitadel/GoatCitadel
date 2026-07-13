@@ -1,5 +1,6 @@
 export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   const {
+    appendTraceArtifact,
     assertBrowserConsoleHealthy,
     assertLegacyRedirectResolution,
     attachBrowserLogging,
@@ -14,6 +15,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
     runScenario,
     seedMissionControlNextFixture,
     setBrowserCorrelation,
+    startBrowserTrace,
     startVerificationStack,
     stopVerificationStack,
     waitForMissionControlShell,
@@ -59,33 +61,56 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
           },
           async ({ correlationId }) => {
             const browserLogCursor = browserLog.mark();
-            await page.goto(buildVerificationUiUrl(stack.uiUrl, route.href), { waitUntil: "domcontentloaded" });
-            await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
-            await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
-            await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
-            const browserSanity = assertBrowserConsoleHealthy(
-              browserLog,
-              browserLogCursor,
-              verificationTarget.packageName,
-            );
-            await page.waitForTimeout(250);
-            const artifacts = await captureBrowserArtifacts(context, {
-              slug: `surface-regression-${route.slug}`,
-              page,
-              browserLog,
-              gatewayUrl: stack.gatewayUrl,
-              correlationId,
-              logCursor: browserLogCursor,
-            });
-            return {
-              status: "passed",
-              metrics: {
-                route: route.href,
-                consoleErrors: browserSanity.consoleErrors.length,
-                pageErrors: browserSanity.pageErrors.length,
-              },
-              artifacts,
-            };
+            const artifactSlug = `surface-regression-${route.slug}`;
+            const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
+            let artifacts;
+            try {
+              await page.goto(buildVerificationUiUrl(stack.uiUrl, route.href), { waitUntil: "domcontentloaded" });
+              await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+              await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+              await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
+              const browserSanity = assertBrowserConsoleHealthy(
+                browserLog,
+                browserLogCursor,
+                verificationTarget.packageName,
+              );
+              await page.waitForTimeout(250);
+              artifacts = await captureBrowserArtifacts(context, {
+                slug: artifactSlug,
+                page,
+                browserLog,
+                gatewayUrl: stack.gatewayUrl,
+                correlationId,
+                logCursor: browserLogCursor,
+              });
+              return {
+                status: "passed",
+                metrics: {
+                  route: route.href,
+                  consoleErrors: browserSanity.consoleErrors.length,
+                  pageErrors: browserSanity.pageErrors.length,
+                },
+                artifacts,
+              };
+            } catch (error) {
+              artifacts ??= await captureBrowserArtifacts(context, {
+                slug: `${artifactSlug}-failure`,
+                page,
+                browserLog,
+                gatewayUrl: stack.gatewayUrl,
+                correlationId,
+                logCursor: browserLogCursor,
+              });
+              const traceArtifact = await trace.retain().catch(() => null);
+              return {
+                status: "failed",
+                error: formatBrowserFailure(error),
+                metrics: { route: route.href },
+                artifacts: appendTraceArtifact(artifacts, traceArtifact),
+              };
+            } finally {
+              await trace.discard().catch(() => undefined);
+            }
           },
         );
       }
@@ -106,40 +131,63 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
           },
           async ({ correlationId }) => {
             const browserLogCursor = browserLog.mark();
-            await page.goto(buildVerificationUiUrl(stack.uiUrl, redirect.href), { waitUntil: "domcontentloaded" });
-            await waitForMissionControlShell(page, { packageName: verificationTarget.packageName });
-            await assertLegacyRedirectResolution(page, redirect.expectedPath, redirect.expectedSearchParams);
-            await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
-            await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
-            await performVerificationInteraction(
-              page,
-              redirect.interaction ?? route.interaction,
-              verificationTarget.packageName,
-            );
-            const browserSanity = assertBrowserConsoleHealthy(
-              browserLog,
-              browserLogCursor,
-              verificationTarget.packageName,
-            );
-            const artifacts = await captureBrowserArtifacts(context, {
-              slug: `surface-regression-redirect-${redirect.slug}`,
-              page,
-              browserLog,
-              gatewayUrl: stack.gatewayUrl,
-              correlationId,
-              logCursor: browserLogCursor,
-            });
-            return {
-              status: "passed",
-              metrics: {
-                href: redirect.href,
-                expectedPath: redirect.expectedPath,
-                targetHref,
-                consoleErrors: browserSanity.consoleErrors.length,
-                pageErrors: browserSanity.pageErrors.length,
-              },
-              artifacts,
-            };
+            const artifactSlug = `surface-regression-redirect-${redirect.slug}`;
+            const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
+            let artifacts;
+            try {
+              await page.goto(buildVerificationUiUrl(stack.uiUrl, redirect.href), { waitUntil: "domcontentloaded" });
+              await waitForMissionControlShell(page, { packageName: verificationTarget.packageName });
+              await assertLegacyRedirectResolution(page, redirect.expectedPath, redirect.expectedSearchParams);
+              await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+              await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+              await performVerificationInteraction(
+                page,
+                redirect.interaction ?? route.interaction,
+                verificationTarget.packageName,
+              );
+              const browserSanity = assertBrowserConsoleHealthy(
+                browserLog,
+                browserLogCursor,
+                verificationTarget.packageName,
+              );
+              artifacts = await captureBrowserArtifacts(context, {
+                slug: artifactSlug,
+                page,
+                browserLog,
+                gatewayUrl: stack.gatewayUrl,
+                correlationId,
+                logCursor: browserLogCursor,
+              });
+              return {
+                status: "passed",
+                metrics: {
+                  href: redirect.href,
+                  expectedPath: redirect.expectedPath,
+                  targetHref,
+                  consoleErrors: browserSanity.consoleErrors.length,
+                  pageErrors: browserSanity.pageErrors.length,
+                },
+                artifacts,
+              };
+            } catch (error) {
+              artifacts ??= await captureBrowserArtifacts(context, {
+                slug: `${artifactSlug}-failure`,
+                page,
+                browserLog,
+                gatewayUrl: stack.gatewayUrl,
+                correlationId,
+                logCursor: browserLogCursor,
+              });
+              const traceArtifact = await trace.retain().catch(() => null);
+              return {
+                status: "failed",
+                error: formatBrowserFailure(error),
+                metrics: { href: redirect.href, expectedPath: redirect.expectedPath, targetHref },
+                artifacts: appendTraceArtifact(artifacts, traceArtifact),
+              };
+            } finally {
+              await trace.discard().catch(() => undefined);
+            }
           },
         );
       }
@@ -163,4 +211,8 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
     await stopVerificationStack(stack);
   }
 
+}
+
+function formatBrowserFailure(error) {
+  return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }

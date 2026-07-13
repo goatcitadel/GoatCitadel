@@ -8,85 +8,20 @@ import { pipeline } from "node:stream/promises";
 import { chromium } from "playwright";
 import { Storage } from "@goatcitadel/storage";
 import { resolveUiTarget } from "../../../scripts/lib/ui-target.mjs";
-import { NEXT_RELEASE_SURFACE_MANIFEST } from "../../../scripts/verification/lib/release-surface-manifest.mjs";
+import { resolvePublicScreenshotTargets } from "./mission-control-screenshot-targets.mjs";
+import { publishStagedGallery } from "./screenshot-gallery-publisher.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 const tmpDir = path.join(repoRoot, ".tmp", "public-share-screenshots");
 const runtimeRoot = path.join(tmpDir, "runtime");
 const uiTarget = resolveUiTarget(repoRoot, process.env);
 const outputDir = path.join(repoRoot, "docs", "screenshots", uiTarget.screenshotDirName);
+const stagedOutputDir = path.join(tmpDir, "gallery-staging");
 const gatewayPort = 18787;
 const uiPort = 15173;
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const uiUrl = `http://127.0.0.1:${uiPort}`;
 const DEFAULT_SCREENSHOT_SETTLE_MS = 1800;
-
-const publicScreenshotTargets = [
-  {
-    slug: "chat",
-    file: "chat.png",
-    title: "Chat",
-    description: "Fast conversation with runtime context, citations, attachments, and tool visibility close at hand.",
-  },
-  {
-    slug: "cowork",
-    file: "cowork.png",
-    title: "Cowork",
-    description: "Supervised agentic work with approvals, checkpoints, delegation lineage, and synthesis status.",
-  },
-  {
-    slug: "code",
-    file: "code.png",
-    title: "Code",
-    description: "Focused implementation, review, debugging, and governed Code Mode execution.",
-  },
-  {
-    slug: "projects",
-    file: "projects.png",
-    title: "Projects",
-    description: "Workspace and project containers that group Chat, Cowork, and Code threads.",
-    readyText: "Release readiness",
-  },
-  {
-    slug: "library-citadel-overview",
-    file: "library-citadel-overview.png",
-    title: "Citadel / Overview",
-    description: "Citadel charter, wards, council, blueprint, and vault posture for the active operating space.",
-  },
-  {
-    slug: "library-capabilities",
-    file: "library-capabilities.png",
-    title: "Library / Capabilities",
-    description: "Inspectable capability, skill, tool, provider, MCP, and channel evidence.",
-  },
-  {
-    slug: "ops-runtime",
-    file: "ops-runtime.png",
-    title: "Ops / Runtime",
-    description: "Operational health, runtime posture, diagnostics, and source-status truth.",
-  },
-  {
-    slug: "settings-providers",
-    file: "settings-providers.png",
-    title: "Settings / Providers",
-    description: "Provider and model setup with key-on-file truth and safe local defaults.",
-  },
-];
-
-const screenshotTargets = publicScreenshotTargets.map((target) => {
-  const route = NEXT_RELEASE_SURFACE_MANIFEST.find((candidate) => candidate.slug === target.slug);
-  if (!route) {
-    throw new Error(`Missing Mission Control Next route manifest entry for screenshot target ${target.slug}.`);
-  }
-  return {
-    ...target,
-    href: route.href,
-    readySelector: route.readySelector,
-    readyText: target.readyText ?? route.readyText,
-    settleMs: route.settleMs ?? DEFAULT_SCREENSHOT_SETTLE_MS,
-    scrollY: route.scrollY,
-  };
-});
 
 async function main() {
   await prepareRuntimeRoot();
@@ -125,8 +60,13 @@ async function main() {
     await waitForHttp(`${gatewayUrl}/health`, "Gateway health");
     await waitForHttp(uiUrl, "Mission Control UI");
     const seed = await seedDemoData();
-    await captureScreenshots(seed.workspaceId);
-    await writeGalleryIndex();
+    const screenshotTargets = resolvePublicScreenshotTargets(seed).map((target) => ({
+      ...target,
+      settleMs: target.settleMs ?? DEFAULT_SCREENSHOT_SETTLE_MS,
+    }));
+    await captureScreenshots(seed.workspaceId, screenshotTargets);
+    await writeGalleryIndex(screenshotTargets);
+    await publishGallery(screenshotTargets);
   } finally {
     await stopProcess(ui);
     await stopProcess(gateway);
@@ -135,9 +75,8 @@ async function main() {
 
 async function prepareRuntimeRoot() {
   await fs.rm(tmpDir, { recursive: true, force: true });
-  await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(tmpDir, { recursive: true });
-  await fs.mkdir(outputDir, { recursive: true });
+  await fs.mkdir(stagedOutputDir, { recursive: true });
   await fs.mkdir(path.join(runtimeRoot, "data"), { recursive: true });
   await fs.cp(path.join(repoRoot, "config"), path.join(runtimeRoot, "config"), { recursive: true });
   await materializeCopiedConfigExamples();
@@ -446,6 +385,7 @@ async function seedDemoData() {
     content: "Manual testing starts only after install docs, installers, and validation gates are green.",
     tags: ["release", "policy"],
     source: "release-demo",
+    metadata: { workspaceId: workspace.workspaceId, fixture: "public-screenshot" },
     sessionId: session.sessionId,
   });
 
@@ -456,6 +396,7 @@ async function seedDemoData() {
       "Discord is the first external channel for 1.0 launch validation, with Slack second after sandbox validation.",
     tags: ["channels", "discord"],
     source: "release-demo",
+    metadata: { workspaceId: workspace.workspaceId, fixture: "public-screenshot" },
     sessionId: session.sessionId,
   });
 
@@ -549,35 +490,57 @@ async function seedChatMessages(sessionId, mode) {
       actorId: "goatherder",
     };
     const baseTime = Date.now() - 10 * 60 * 1000;
+    const userMessageId = randomUUID();
+    const assistantMessageId = randomUUID();
+    const turnId = randomUUID();
+    const userTimestamp = new Date(baseTime).toISOString();
+    const assistantTimestamp = new Date(baseTime + 45_000).toISOString();
     storage.chatMessages.upsertMany([
       {
-        messageId: randomUUID(),
+        messageId: userMessageId,
         sessionId,
         role: "user",
         actorType: "user",
         actorId: "operator",
         content: copy.user,
-        timestamp: new Date(baseTime).toISOString(),
+        timestamp: userTimestamp,
       },
       {
-        messageId: randomUUID(),
+        messageId: assistantMessageId,
         sessionId,
         role: "assistant",
         actorType: "agent",
         actorId: copy.actorId,
         content: copy.assistant,
-        timestamp: new Date(baseTime + 45_000).toISOString(),
+        timestamp: assistantTimestamp,
         tokenInput: 412,
         tokenOutput: 188,
         costUsd: 0.0042,
       },
     ]);
+    storage.chatTurnTraces.create({
+      turnId,
+      sessionId,
+      userMessageId,
+      assistantMessageId,
+      status: "completed",
+      // Cowork/Code are retained session compatibility values; current turns
+      // are rendered and governed through the canonical Chat surface.
+      mode: "chat",
+      model: "public-screenshot-seed",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      startedAt: userTimestamp,
+      finishedAt: assistantTimestamp,
+    });
+    storage.chatSessionBranchState.setActiveLeaf(sessionId, turnId);
   } finally {
     storage.close();
   }
 }
 
-async function captureScreenshots(activeWorkspaceId) {
+async function captureScreenshots(activeWorkspaceId, screenshotTargets) {
   const browser = await chromium.launch({
     headless: true,
   });
@@ -631,11 +594,11 @@ async function captureScreenshots(activeWorkspaceId) {
       });
       if (target.screenshotSelector) {
         await page.locator(target.screenshotSelector).screenshot({
-          path: path.join(outputDir, target.file),
+          path: path.join(stagedOutputDir, target.file),
         });
       } else {
         await page.screenshot({
-          path: path.join(outputDir, target.file),
+          path: path.join(stagedOutputDir, target.file),
         });
       }
     }
@@ -645,7 +608,7 @@ async function captureScreenshots(activeWorkspaceId) {
   }
 }
 
-async function writeGalleryIndex() {
+async function writeGalleryIndex(screenshotTargets) {
   const cards = screenshotTargets
     .map((target) =>
       [
@@ -733,7 +696,16 @@ ${cards}
   </body>
 </html>
 `;
-  await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
+  await fs.writeFile(path.join(stagedOutputDir, "index.html"), html, "utf8");
+}
+
+async function publishGallery(screenshotTargets) {
+  await publishStagedGallery({
+    stagedOutputDir,
+    outputDir,
+    backupDir: path.join(tmpDir, "gallery-published-backup"),
+    expectedFiles: ["index.html", ...screenshotTargets.map((target) => target.file)],
+  });
 }
 
 function escapeHtml(value) {

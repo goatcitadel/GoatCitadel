@@ -8,6 +8,7 @@ import {
   hasDirtySections,
   useAnySectionDirty,
   useBeforeUnloadGuard,
+  useDraftTransitionGuard,
   useFormDirty,
   useNavigateGuard,
 } from "./use-form-dirty";
@@ -374,5 +375,88 @@ describe("useNavigateGuard", () => {
       latest!.navigate({ area: "settings", section: "providers" }, { replace: true });
     });
     expect(rawNavigate).toHaveBeenCalledWith({ area: "settings", section: "providers" }, { replace: true });
+  });
+});
+
+describe("useDraftTransitionGuard", () => {
+  function DraftTransitionDriver({
+    dirty,
+    applyTransition,
+    resetDraft,
+    onState,
+  }: {
+    dirty: boolean;
+    applyTransition: (value: string) => void;
+    resetDraft: () => void;
+    onState: (state: ReturnType<typeof useDraftTransitionGuard<string>>) => void;
+  }) {
+    const guard = useDraftTransitionGuard(dirty, applyTransition, resetDraft);
+    onState(guard);
+    return null;
+  }
+
+  it("keeps clean transitions silent", async () => {
+    const applyTransition = vi.fn();
+    const resetDraft = vi.fn();
+    let latest: ReturnType<typeof useDraftTransitionGuard<string>> | null = null;
+    await act(async () => {
+      create(
+        createElement(DraftTransitionDriver, {
+          dirty: false,
+          applyTransition,
+          resetDraft,
+          onState: (state) => {
+            latest = state;
+          },
+        }),
+      );
+    });
+
+    await act(async () => {
+      latest!.requestTransition("next");
+    });
+
+    expect(applyTransition).toHaveBeenCalledWith("next");
+    expect(resetDraft).not.toHaveBeenCalled();
+    expect(latest!.pendingTransition).toBeNull();
+  });
+
+  it("defers dirty transitions, preserves edits on cancel, and resets before confirm", async () => {
+    const callOrder: string[] = [];
+    const applyTransition = vi.fn((value: string) => callOrder.push(`apply:${value}`));
+    const resetDraft = vi.fn(() => callOrder.push("reset"));
+    let latest: ReturnType<typeof useDraftTransitionGuard<string>> | null = null;
+    await act(async () => {
+      create(
+        createElement(DraftTransitionDriver, {
+          dirty: true,
+          applyTransition,
+          resetDraft,
+          onState: (state) => {
+            latest = state;
+          },
+        }),
+      );
+    });
+
+    await act(async () => {
+      latest!.requestTransition("cancelled");
+    });
+    expect(latest!.pendingTransition).toBe("cancelled");
+    await act(async () => {
+      latest!.cancelDiscard();
+    });
+    expect(applyTransition).not.toHaveBeenCalled();
+    expect(resetDraft).not.toHaveBeenCalled();
+    expect(latest!.pendingTransition).toBeNull();
+
+    await act(async () => {
+      latest!.requestTransition("confirmed");
+    });
+    await act(async () => {
+      latest!.confirmDiscard();
+    });
+    expect(callOrder).toEqual(["reset", "apply:confirmed"]);
+    expect(latest!.pendingTransition).toBeNull();
   });
 });

@@ -13,7 +13,8 @@
     "typography:check": "node ../../scripts/check-mission-control-next-typography.mjs",
     "contrast:check": "node ../../scripts/check-mission-control-next-contrast.mjs",
     "buttons:check": "node ../../scripts/check-mission-control-next-buttons.mjs",
-    "perf:check": "node ../../scripts/check-mission-control-next-legacy-usage.mjs && node ../../scripts/check-mission-control-next-token-drift.mjs && node ../../scripts/check-mission-control-next-typography.mjs && node ../../scripts/check-mission-control-next-buttons.mjs && node ../../scripts/check-mission-control-next-contrast.mjs && node ../../scripts/check-mission-control-next-budgets.mjs",
+    "icons:check": "node ../../scripts/check-mission-control-next-icon-sizing.mjs",
+    "perf:check": "node ../../scripts/check-mission-control-next-legacy-usage.mjs && node ../../scripts/check-mission-control-next-token-drift.mjs && node ../../scripts/check-mission-control-next-typography.mjs && node ../../scripts/check-mission-control-next-buttons.mjs && node ../../scripts/check-mission-control-next-icon-sizing.mjs && node ../../scripts/check-mission-control-next-contrast.mjs && node ../../scripts/check-mission-control-next-budgets.mjs",
     "preview": "vite preview",
     "typecheck": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json",
     "test": "vitest run",
@@ -23,7 +24,6 @@
   "dependencies": {
     "@assistant-ui/react": "0.12.25",
     "@assistant-ui/react-markdown": "0.12.9",
-    "@awesome.me/webawesome": "3.5.0",
     "@fontsource-variable/geist": "5.2.8",
     "@goatcitadel/contracts": "workspace:*",
     "@goatcitadel/mission-control-shared": "workspace:*",

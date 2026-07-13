@@ -194,9 +194,6 @@ export default defineConfig(({ mode }) => {
             if (normalized.includes("/node_modules/@radix-ui/")) {
               return "vendor-radix";
             }
-            if (normalized.includes("/node_modules/@awesome.me/webawesome/")) {
-              return "vendor-webawesome";
-            }
             if (normalized.includes("/node_modules/@react-three/")) {
               return "vendor-r3f";
             }

@@ -295,6 +295,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
             ) : null}
           </NativeCard>
           <NativeCard
+            className="mc-next-approvals-detail-card"
             title={selectedApproval ? selectedApproval.kind || selectedApproval.approvalId : "Approval detail"}
             subtitle={
               selectedApproval
@@ -636,7 +637,7 @@ function ApprovalInspectorCard(props: {
           tone="info"
           message={
             <span className="mc-next-approvals-followup">
-              <Clock className="h-4 w-4" aria-hidden="true" />
+              <Clock size={16} aria-hidden="true" />
               <span>
                 <strong>{formatApprovalFollowUp(approval.followUp.status)}</strong>{" "}
                 {approval.followUp.reason ??
@@ -693,7 +694,7 @@ function ApprovalInspectorCard(props: {
           </div>
           <div className="mc-next-approvals-inline-actions">
             <NativeButton variant="outline" className="subtle" disabled={durableBusy} onClick={onLoadDurableStatus}>
-              <Waypoints className="h-4 w-4" />
+              <Waypoints size={16} />
               {durableBusy ? "Loading..." : "Load durable status"}
             </NativeButton>
             <NativeButton
@@ -702,7 +703,7 @@ function ApprovalInspectorCard(props: {
               disabled={durableBusy || durable?.status !== "paused"}
               onClick={onResumeCheckpoint}
             >
-              <Play className="h-4 w-4" />
+              <Play size={16} />
               Resume paused run
             </NativeButton>
           </div>
@@ -737,7 +738,7 @@ function ApprovalInspectorCard(props: {
                 className="subtle"
                 onClick={() => onLoadTracePreview(traceMetadata.correlationId)}
               >
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw size={16} />
                 {tracePreview ? "Refresh trace detail" : "Load trace detail"}
               </NativeButton>
             ) : null}
@@ -827,7 +828,7 @@ function ApprovalInspectorCard(props: {
       {replay ? (
         <details className="mc-next-approvals-details">
           <summary>
-            <History className="h-4 w-4" />
+            <History size={16} />
             Replay trail and pending action
           </summary>
           <div className="mc-next-directory-card mc-next-directory-card-compact">

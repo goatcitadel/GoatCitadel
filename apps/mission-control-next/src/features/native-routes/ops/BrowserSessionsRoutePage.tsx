@@ -191,7 +191,7 @@ export function BrowserSessionsRoutePage({ route, activeWorkspaceId, activeWorks
       ]}
       actions={
         <NativeButton variant="secondary" onClick={() => void reload()}>
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw size={16} />
           Refresh
         </NativeButton>
       }

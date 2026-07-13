@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 
 const mocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(async () => ({
@@ -1109,6 +1110,19 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return match;
 }
 
+function findCheckboxByLabel(root: ReactTestInstance, label: string, matchIndex = 0): ReactTestInstance {
+  const labelledControls = root.findAll((node) => node.type === "label" && collectText(node).trim() === label);
+  const labelledControl = labelledControls[matchIndex];
+  if (!labelledControl) {
+    throw new Error(`Unable to find checkbox label: ${label}`);
+  }
+  const checkbox = labelledControl.findAll((node) => node.type === "input" && node.props.type === "checkbox")[0];
+  if (!checkbox) {
+    throw new Error(`Unable to find checkbox for label: ${label}`);
+  }
+  return checkbox;
+}
+
 function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): ReactTestInstance {
   const match = root.findAll(
     (node) =>
@@ -1592,6 +1606,11 @@ beforeEach(async () => {
   };
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+  __resetFormDirtyRegistryForTests();
+});
+
 describe("SettingsNativePage personalities", () => {
   it("renders the catalog and calls create, save, reset, remove, and default APIs", async () => {
     const previousWindow = globalThis.window;
@@ -1674,6 +1693,12 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         findButton(renderer!.root, "Reset built-in").props.onClick();
       });
+      let personalityRemoveModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Reset built-in personality?");
+      await act(async () => {
+        await personalityRemoveModal?.props.onConfirm();
+      });
       expect(mocks.deletePersonality).toHaveBeenCalledWith("operator");
 
       await act(async () => {
@@ -1682,7 +1707,12 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         findButton(renderer!.root, "Remove custom").props.onClick();
       });
-      expect(confirmSpy).toHaveBeenCalledWith("Remove Direct Custom?");
+      personalityRemoveModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Remove custom personality?");
+      await act(async () => {
+        await personalityRemoveModal?.props.onConfirm();
+      });
       expect(mocks.deletePersonality).toHaveBeenCalledWith("direct-custom");
 
       await act(async () => {
@@ -1809,13 +1839,23 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         findButton(renderer!.root, "Remove custom").props.onClick();
       });
-      expect(confirmSpy).toHaveBeenCalledWith("Remove Direct Custom?");
+      let personalityRemoveModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Remove custom personality?");
+      await act(async () => {
+        personalityRemoveModal?.props.onCancel();
+      });
       expect(mocks.deletePersonality).not.toHaveBeenCalled();
 
-      confirmSpy.mockReturnValue(true);
       mocks.deletePersonality.mockRejectedValueOnce(new Error("remove failed"));
       await act(async () => {
         findButton(renderer!.root, "Remove custom").props.onClick();
+      });
+      personalityRemoveModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Remove custom personality?");
+      await act(async () => {
+        await personalityRemoveModal?.props.onConfirm();
       });
       expect(collectText(renderer!.root)).toContain("remove failed");
     } finally {
@@ -1825,7 +1865,7 @@ describe("SettingsNativePage personalities", () => {
 });
 
 describe("SettingsNativePage permissions", () => {
-  it("keeps all-surfaces activation as one dedicated action", async () => {
+  it("groups primary and legacy policy contexts while preserving exact activation payloads", async () => {
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = renderPage("permissions");
@@ -1835,18 +1875,117 @@ describe("SettingsNativePage permissions", () => {
     const activationLabels = renderer!.root
       .findAll((node) => node.type === "button" && collectText(node).includes("Use for"))
       .map((node) => collectText(node).trim().toLowerCase());
-    expect(activationLabels).toContain("use for all surfaces");
-    expect(activationLabels).toContain("use for code");
-    expect(activationLabels.some((label) => label !== "use for all surfaces" && label !== "use for code")).toBe(true);
-    expect(activationLabels).not.toContain("use for all");
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Effective policy contexts");
+    expect(text).toContain("Chat includes conversation, agentic work, and Chat-launched Code Mode");
+    expect(text).toContain("Direct tools");
+    expect(text).toContain("MCP");
+    expect(text).toContain("Legacy compatibility contexts");
+    expect(text).toContain("not separate Mission Control surfaces");
+    expect(activationLabels.some((label) => label.includes("use for") && label.includes("chat"))).toBe(true);
+    expect(activationLabels.some((label) => label.includes("use for") && label.includes("direct tools"))).toBe(true);
+    expect(activationLabels.some((label) => label.includes("use for") && label.includes("mcp"))).toBe(true);
+    expect(
+      activationLabels.some((label) => label.includes("use for") && label.includes("legacy cowork compatibility")),
+    ).toBe(true);
+    expect(
+      activationLabels.some((label) => label.includes("use for") && label.includes("legacy code compatibility")),
+    ).toBe(true);
 
     await act(async () => {
-      findButton(renderer!.root, "Use for all surfaces").props.onClick();
+      findButton(renderer!.root, "Use for Chat").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "chat" }),
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Direct tools").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "tools" }),
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "MCP").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "mcp" }),
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Legacy Code compatibility").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "code" }),
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Use across all policy contexts").props.onClick();
     });
     await flushAsyncUpdates();
     expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "all" }),
     );
+  });
+
+  it("formats and warns about legacy-only profile and grant contexts without broadening them", async () => {
+    mocks.fetchPermissionProfiles.mockResolvedValueOnce({
+      items: [
+        {
+          profileId: "profile-legacy",
+          label: "Legacy-only profile",
+          description: "Imported policy profile",
+          scope: "workspace",
+          scopeRef: "default",
+          builtin: false,
+          approvalMode: "approve_risky",
+          toolPatterns: ["session.status"],
+          defaultForSurfaces: ["code"],
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+      ],
+    } as any);
+    mocks.fetchAutonomousActivationGrants.mockResolvedValueOnce({
+      items: [
+        {
+          grantId: "grant-legacy",
+          workspaceId: "default",
+          surfaces: ["cowork"],
+          maxRiskLevel: "caution",
+          activationKinds: ["tool"],
+          capabilityPatterns: ["*"],
+          toolPatterns: ["*"],
+          reason: "Imported grant",
+          status: "active",
+          usedActivations: 0,
+          grantor: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+          expiresAt: "2099-05-02T18:00:00.000Z",
+        },
+      ],
+    } as any);
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Legacy Code compatibility");
+    expect(text).toContain("Legacy Cowork compatibility");
+    expect(text).toContain("profile defaults only to legacy policy keys and does not govern current Chat");
+    expect(text).toContain("legacy-only grant does not govern current Chat");
+    expect(text).toContain("has not broadened it automatically");
+    expect(mocks.activatePermissionProfile).not.toHaveBeenCalled();
   });
 
   it("edits and archives custom permission profiles", async () => {
@@ -1908,11 +2047,8 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       createSelects.find((node) => node.props.value === "")!.props.onChange({ target: { value: "full_disk" } });
     });
-    const createSurfaceCheckboxes = renderer!.root.findAll(
-      (node) => node.type === "input" && node.props.type === "checkbox",
-    );
     await act(async () => {
-      createSurfaceCheckboxes[2]!.props.onChange({ target: { checked: true } });
+      findCheckboxByLabel(renderer!.root, "Legacy Code compatibility").props.onChange({ target: { checked: true } });
     });
     await act(async () => {
       findButton(renderer!.root, "Create profile").props.onClick();
@@ -1970,11 +2106,8 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       readAccessSelect!.props.onChange({ target: { value: "approval_required" } });
     });
-    const editSurfaceCheckboxes = renderer!.root.findAll(
-      (node) => node.type === "input" && node.props.type === "checkbox",
-    );
     await act(async () => {
-      editSurfaceCheckboxes[0]!.props.onChange({ target: { checked: true } });
+      findCheckboxByLabel(renderer!.root, "Chat").props.onChange({ target: { checked: true } });
     });
     await act(async () => {
       findButton(renderer!.root, "Save profile").props.onClick();
@@ -1994,30 +2127,28 @@ describe("SettingsNativePage permissions", () => {
       }),
     );
 
-    const previousWindow = globalThis.window;
-    const confirmSpy = vi.fn(() => false);
-    Object.assign(globalThis, {
-      window: {
-        confirm: confirmSpy,
-      },
+    await act(async () => {
+      findButton(renderer!.root, "Archive profile").props.onClick();
     });
-    try {
-      await act(async () => {
-        findButton(renderer!.root, "Archive profile").props.onClick();
-      });
-      await flushAsyncUpdates();
-      expect(confirmSpy).toHaveBeenCalledWith("Archive permission profile Review profile?");
-      expect(mocks.archivePermissionProfile).not.toHaveBeenCalled();
+    let archiveModal = renderer!.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Archive permission profile?");
+    await act(async () => {
+      archiveModal?.props.onCancel();
+    });
+    expect(mocks.archivePermissionProfile).not.toHaveBeenCalled();
 
-      confirmSpy.mockReturnValue(true);
-      await act(async () => {
-        findButton(renderer!.root, "Archive profile").props.onClick();
-      });
-      await flushAsyncUpdates();
-      expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review");
-    } finally {
-      Object.assign(globalThis, { window: previousWindow });
-    }
+    await act(async () => {
+      findButton(renderer!.root, "Archive profile").props.onClick();
+    });
+    archiveModal = renderer!.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Archive permission profile?");
+    await act(async () => {
+      await archiveModal?.props.onConfirm();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review");
   });
 
   it("keeps skip-routine custom profiles unavailable in Remote Hardened mode", async () => {
@@ -3093,8 +3224,12 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         findButton(renderer!.root, "Delete secret").props.onClick();
       });
-
-      expect(confirmSpy).toHaveBeenCalled();
+      const deleteSecretModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Delete provider secret?");
+      await act(async () => {
+        await deleteSecretModal?.props.onConfirm();
+      });
       expect(mocks.deleteProviderSecret).toHaveBeenCalledWith("openai");
       expect(collectText(renderer!.root)).toContain("Provider secret removed. No key remains on file.");
     } finally {
@@ -3831,12 +3966,22 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         findButton(renderer!.root, "Delete secret").props.onClick();
       });
-      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      let deleteSecretModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Delete provider secret?");
+      await act(async () => {
+        deleteSecretModal?.props.onCancel();
+      });
       expect(mocks.deleteProviderSecret).not.toHaveBeenCalled();
 
-      confirmSpy.mockReturnValue(true);
       await act(async () => {
         findButton(renderer!.root, "Delete secret").props.onClick();
+      });
+      deleteSecretModal = renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Delete provider secret?");
+      await act(async () => {
+        await deleteSecretModal?.props.onConfirm();
       });
       await flushAsyncUpdates();
       expect(collectText(renderer!.root)).toContain("secret delete failed");
@@ -4019,10 +4164,6 @@ describe("SettingsNativePage Trust & Policy", () => {
     expect(text).toContain("snapshot route missing");
     expect(text).toContain("Trust & Policy snapshot is unavailable");
   });
-});
-
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 describe("SettingsNativePage integrations", () => {

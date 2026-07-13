@@ -563,11 +563,11 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                         variant="default"
                         onClick={() => navigate({ area: "settings", section: "trust-policy", theme: route.theme })}
                       >
-                        <Settings className="h-4 w-4" />
+                        <Settings size={16} />
                         Open settings
                       </NativeButton>
                       <NativeButton variant="default" onClick={() => navigate({ area: "chat", theme: route.theme })}>
-                        <MessageSquareText className="h-4 w-4" />
+                        <MessageSquareText size={16} />
                         Continue without durable memory
                       </NativeButton>
                     </div>
@@ -857,7 +857,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   });
               }}
             >
-              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+              <ShieldCheck size={16} aria-hidden="true" />
               Refresh evidence
             </NativeButton>
           </div>
@@ -910,7 +910,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               aria-label="Run memory quality scan"
               onClick={() => void memory.scanMemoryQuality()}
             >
-              <SearchCheck className="h-4 w-4" aria-hidden="true" />
+              <SearchCheck size={16} aria-hidden="true" />
               Scan quality
             </NativeButton>
             <NativeButton
@@ -918,7 +918,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               aria-label="Refresh memory quality issues"
               onClick={() => void memory.reload()}
             >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              <RefreshCw size={16} aria-hidden="true" />
               Refresh
             </NativeButton>
           </div>
@@ -1399,7 +1399,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   aria-label="Refresh memory maintenance state"
                   onClick={() => void memory.reload()}
                 >
-                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                  <RefreshCw size={16} aria-hidden="true" />
                   Refresh
                 </NativeButton>
               </div>
@@ -1549,7 +1549,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                             })
                           }
                         >
-                          <Waypoints className="h-4 w-4" />
+                          <Waypoints size={16} />
                           Open Run Detail
                         </NativeButton>
                       </div>

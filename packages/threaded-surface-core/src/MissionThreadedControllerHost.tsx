@@ -517,7 +517,10 @@ export function MissionThreadedControllerHost({
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
   const routeSearch = typeof window === "undefined" ? "" : window.location.search;
   const deferredSearch = useDeferredValue(search.trim());
-  const compactSurfaceLayout = useMediaQuery("(max-width: 1023px)");
+  // Keep controller ownership aligned with ThreadedSurfacePage and its CSS:
+  // below 1180px the inline rail becomes a drawer. Using the shell's narrower
+  // 1023px breakpoint here immediately closed that drawer at laptop widths.
+  const compactSurfaceLayout = useMediaQuery("(width < 1180px)");
 
   const {
     config: runtimeLlmConfig,

@@ -108,6 +108,36 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("copies the selected Chat trust report from Working Context", async () => {
+    const onCopyTrustReport = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            selectedSessionId: "session-1",
+            selectedTurn: {
+              turnId: "turn-1",
+              trace: traceFixture(),
+            },
+          })}
+          onCopyTrustReport={onCopyTrustReport}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Copy trust report").props.onClick();
+    });
+
+    expect(onCopyTrustReport).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(collectText(renderer!.root)).toContain("openai / gpt-5.4-mini");
+    expect(collectText(renderer!.root)).toContain("Memory");
+    expect(collectText(renderer!.root)).toContain("Runtime controls");
+  });
+
   it("summarizes the selected session project instead of the rail filter project", async () => {
     let renderer: ReactTestRenderer | null = null;
 

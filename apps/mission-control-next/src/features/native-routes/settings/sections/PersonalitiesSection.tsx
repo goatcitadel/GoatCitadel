@@ -10,6 +10,7 @@ import {
   setDefaultPersonality,
   updatePersonality,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   type Notice,
@@ -23,7 +24,7 @@ import {
   SettingsSectionShell,
   useAsyncLoad,
 } from "../SettingsShared";
-import { useFormDirty } from "../../library/use-form-dirty";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList, StatusChip } from "../../primitives";
 import {
@@ -47,6 +48,8 @@ const PERSONALITY_CATEGORY_OPTIONS: PersonalityPresetCategory[] = [
   "chaos",
 ];
 
+type PersonalityTransition = { kind: "select"; id: string } | { kind: "new" } | { kind: "refresh" };
+
 export function PersonalitiesSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => fetchPersonalities(), []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
@@ -54,6 +57,12 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   const [selectedPersonalityId, setSelectedPersonalityId] = useState("");
   const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
   const [draft, setDraft] = useState<PersonalityEditorDraft>(() => createEmptyPersonalityEditorDraft());
+  const [pendingRemove, setPendingRemove] = useState<{
+    id: string;
+    label: string;
+    builtin: boolean;
+  } | null>(null);
+  const [removePending, setRemovePending] = useState(false);
   const selectedPersonality =
     data?.items?.find((item) => item.id === selectedPersonalityId) ?? data?.items?.[0] ?? null;
   const defaultPersonalityId = data?.defaultPersonalityId ?? "default";
@@ -76,15 +85,31 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   const isDirty = !editorLocked && !arePersonalityDraftsEqual(draft, baselineDraft);
   useFormDirty("settings:personalities", isDirty, { label: "Personalities" });
 
-  const confirmDiscardPersonalityChanges = useCallback(() => {
-    if (!isDirty) {
-      return true;
-    }
-    return (
-      typeof window === "undefined" ||
-      window.confirm("Discard unsaved personality changes before switching editor context?")
-    );
-  }, [isDirty]);
+  const resetPersonalityDraft = useCallback(() => {
+    setDraft(baselineDraft);
+  }, [baselineDraft]);
+  const applyPersonalityTransition = useCallback(
+    (transition: PersonalityTransition) => {
+      if (transition.kind === "new") {
+        setEditorMode("new");
+        setDraft(createEmptyPersonalityEditorDraft());
+        setNotice(null);
+        return;
+      }
+      setEditorMode("selected");
+      if (transition.kind === "select") {
+        setSelectedPersonalityId(transition.id);
+      } else {
+        void reload();
+      }
+    },
+    [reload],
+  );
+  const personalityTransitionGuard = useDraftTransitionGuard(
+    isDirty,
+    applyPersonalityTransition,
+    resetPersonalityDraft,
+  );
 
   useEffect(() => {
     if (!data?.items?.length) {
@@ -104,20 +129,14 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   }, [editorMode, selectedPersonality]);
 
   const beginCustomPersonality = () => {
-    if (!confirmDiscardPersonalityChanges()) {
+    if (editorMode === "new") {
       return;
     }
-    setEditorMode("new");
-    setDraft(createEmptyPersonalityEditorDraft());
-    setNotice(null);
+    personalityTransitionGuard.requestTransition({ kind: "new" });
   };
 
   const refreshPersonalities = () => {
-    if (!confirmDiscardPersonalityChanges()) {
-      return;
-    }
-    setEditorMode("selected");
-    void reload();
+    personalityTransitionGuard.requestTransition({ kind: "refresh" });
   };
 
   const savePersonality = async () => {
@@ -172,25 +191,29 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
   };
 
   const removeOrResetPersonality = async () => {
-    if (!selectedPersonality || selectedPersonality.id === "default") {
+    if (!pendingRemove) {
       return;
     }
-    if (!selectedPersonality.builtin && !window.confirm(`Remove ${selectedPersonality.label}?`)) {
-      return;
-    }
+    setRemovePending(true);
     try {
-      await deletePersonality(selectedPersonality.id);
+      await deletePersonality(pendingRemove.id);
       setNotice({
         tone: "success",
-        message: selectedPersonality.builtin
-          ? `${selectedPersonality.label} reset to the shipped preset.`
-          : `${selectedPersonality.label} removed.`,
+        message: pendingRemove.builtin
+          ? `${pendingRemove.label} reset to the shipped preset.`
+          : `${pendingRemove.label} removed.`,
       });
-      await reload();
-      setSelectedPersonalityId(selectedPersonality.builtin ? selectedPersonality.id : "default");
+      const nextSelectedId = pendingRemove.builtin ? pendingRemove.id : "default";
+      const nextSelectedPersonality = data?.items?.find((item) => item.id === nextSelectedId) ?? null;
+      setDraft(createPersonalityEditorDraft(nextSelectedPersonality));
+      setSelectedPersonalityId(nextSelectedId);
       setEditorMode("selected");
+      setPendingRemove(null);
+      await reload();
     } catch (removeError) {
       setNotice({ tone: "error", message: getErrorMessage(removeError) });
+    } finally {
+      setRemovePending(false);
     }
   };
 
@@ -242,11 +265,10 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
               }))}
               selectedId={editorMode === "new" ? "" : selectedPersonalityId}
               onSelect={(id) => {
-                if (!confirmDiscardPersonalityChanges()) {
+                if (editorMode === "selected" && id === selectedPersonalityId) {
                   return;
                 }
-                setEditorMode("selected");
-                setSelectedPersonalityId(id);
+                personalityTransitionGuard.requestTransition({ kind: "select", id });
               }}
               emptyLabel="No personalities returned from the gateway."
               maxHeight="min(48vh, 28rem)"
@@ -377,7 +399,15 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
                   {editorMode === "selected" && selectedPersonality?.id !== "default" ? (
                     <NativeButton
                       variant={selectedPersonality?.builtin ? "secondary" : "destructive"}
-                      onClick={() => void removeOrResetPersonality()}
+                      onClick={() =>
+                        selectedPersonality
+                          ? setPendingRemove({
+                              id: selectedPersonality.id,
+                              label: selectedPersonality.label,
+                              builtin: selectedPersonality.builtin,
+                            })
+                          : undefined
+                      }
                       disabled={selectedPersonality?.builtin === true && !selectedPersonality.modified}
                     >
                       {selectedPersonality?.builtin ? <RotateCcw size={16} /> : <Trash2 size={16} />}
@@ -404,6 +434,30 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={personalityTransitionGuard.pendingTransition !== null}
+        danger
+        title="Discard personality changes?"
+        message="This personality has unsaved edits. Discard them and continue?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={personalityTransitionGuard.cancelDiscard}
+        onConfirm={personalityTransitionGuard.confirmDiscard}
+      />
+      <ConfirmModal
+        open={pendingRemove !== null}
+        danger={!pendingRemove?.builtin}
+        pending={removePending}
+        title={pendingRemove?.builtin ? "Reset built-in personality?" : "Remove custom personality?"}
+        message={
+          pendingRemove?.builtin
+            ? `Reset ${pendingRemove.label} to the shipped preset? Local edits will be removed.`
+            : `Remove ${pendingRemove?.label ?? "this personality"}? This cannot be undone.`
+        }
+        confirmLabel={pendingRemove?.builtin ? "Reset personality" : "Remove personality"}
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={() => void removeOrResetPersonality()}
+      />
     </SettingsSectionShell>
   );
 }

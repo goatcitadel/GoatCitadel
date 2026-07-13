@@ -172,11 +172,11 @@ export function CitadelBlueprintRoutePage({
           </label>
           <div className="mc-next-blueprint-actions">
             <NativeButton variant="default" disabled={importText.trim().length === 0} onClick={() => void validate()}>
-              <Check className="h-4 w-4" />
+              <Check size={16} />
               Validate
             </NativeButton>
             <NativeButton variant="outline" disabled={!canApply} onClick={() => void applyImport()}>
-              <Upload className="h-4 w-4" />
+              <Upload size={16} />
               {importState.busy ? "Importing…" : "Import"}
             </NativeButton>
           </div>
@@ -186,13 +186,13 @@ export function CitadelBlueprintRoutePage({
           {importState.validation ? (
             importState.validation.ok ? (
               <p className="mc-next-blueprint-ok">
-                <Check className="h-4 w-4" aria-hidden="true" />
+                <Check size={16} aria-hidden="true" />
                 Valid — safe to import.
               </p>
             ) : (
               <div className="mc-next-blueprint-errors">
                 <p>
-                  <X className="h-4 w-4" aria-hidden="true" />
+                  <X size={16} aria-hidden="true" />
                   Cannot import:
                 </p>
                 <NativeList

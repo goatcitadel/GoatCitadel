@@ -381,7 +381,7 @@ export function RuntimeSection(_props: SettingsSectionProps) {
                     onChange={(event) => setLlamaForm((current) => ({ ...current, alias: event.target.value }))}
                   />
                 </SettingsField>
-                <SettingsField label="Enabled">
+                <SettingsField label="Enabled" group>
                   <label className="mc-next-settings-toggle">
                     <input
                       type="checkbox"
@@ -391,7 +391,7 @@ export function RuntimeSection(_props: SettingsSectionProps) {
                     <span>Enable llama.cpp runtime</span>
                   </label>
                 </SettingsField>
-                <SettingsField label="Auto start">
+                <SettingsField label="Auto start" group>
                   <label className="mc-next-settings-toggle">
                     <input
                       type="checkbox"

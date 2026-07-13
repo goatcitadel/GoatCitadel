@@ -31,7 +31,7 @@ export function ErrorState({
   tone = "danger",
   size = "inline",
 }: ErrorStateProps) {
-  const resolvedIcon = icon === undefined ? <AlertTriangle className="h-4 w-4" /> : icon;
+  const resolvedIcon = icon === undefined ? <AlertTriangle size={16} /> : icon;
   const hasActions = Boolean(primaryAction) || Boolean(secondaryActions);
   return (
     <div className="mc-next-error-state" data-tone={tone} data-size={size} role="alert">

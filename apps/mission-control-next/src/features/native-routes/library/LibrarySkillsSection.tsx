@@ -179,7 +179,7 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
           />
           <LibraryButtonRow>
             <button type="button" className="mc-next-settings-filter" onClick={() => void handleReloadSkills()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Reload skills
             </button>
           </LibraryButtonRow>
@@ -701,15 +701,15 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
       </LibraryFieldGrid>
       <LibraryButtonRow>
         <button type="button" className="mc-next-settings-filter" disabled={busy} onClick={handleGenerateScenarios}>
-          <Sparkles className="h-4 w-4" />
+          <Sparkles size={16} />
           Generate scenarios
         </button>
         <button type="button" className="mc-next-settings-filter" disabled={busy} onClick={handleRunBaseline}>
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw size={16} />
           Run baseline
         </button>
         <button type="button" className="mc-next-settings-filter" disabled={busy} onClick={handleRunImprovement}>
-          <Save className="h-4 w-4" />
+          <Save size={16} />
           Run improvement
         </button>
         <button
@@ -718,7 +718,7 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
           disabled={busy || !activeRun?.accepted || Boolean(activeRun.proposalId)}
           onClick={() => void handleCreateProposal()}
         >
-          <Plus className="h-4 w-4" />
+          <Plus size={16} />
           Create proposal
         </button>
         <button
@@ -727,7 +727,7 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
           disabled={busy || !activeRun?.proposalId}
           onClick={() => void handleOpenProposal()}
         >
-          <FileText className="h-4 w-4" />
+          <FileText size={16} />
           Open proposal
         </button>
         <button
@@ -736,7 +736,7 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
           disabled={Boolean(proposalBusyKey) || !trustReviewCandidateId}
           onClick={() => void handleOpenTrustReview()}
         >
-          <Workflow className="h-4 w-4" />
+          <Workflow size={16} />
           Trust review
         </button>
       </LibraryButtonRow>

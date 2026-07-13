@@ -9,7 +9,7 @@
 
 .mc-next-approvals-decision-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
   padding: 0.85rem 0.95rem;
@@ -18,13 +18,33 @@
   background: color-mix(in oklab, var(--mc-surface-1) 96%, transparent);
 }
 
+.mc-next-approvals-detail-card {
+  container-name: approval-detail;
+  container-type: inline-size;
+}
+
+.mc-next-approvals-decision-shell > * {
+  min-width: 0;
+}
+
 .mc-next-approvals-decision-shell .mc-next-approvals-actions {
   align-self: stretch;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
   gap: 0.45rem;
   padding: 0.6rem 0.7rem;
   border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
   border-radius: var(--r-sm);
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
+}
+
+@container approval-detail (min-width: 46rem) {
+  .mc-next-approvals-decision-shell {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  }
+
+  .mc-next-approvals-decision-shell .mc-next-approvals-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .mc-next-approvals-decision-shell .mc-next-approvals-actions .gc-button {

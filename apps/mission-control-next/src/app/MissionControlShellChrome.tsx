@@ -1,4 +1,4 @@
-import { Suspense, type ReactNode } from "react";
+import { Suspense, useRef, type ReactNode } from "react";
 import {
   Activity,
   Bell,
@@ -26,6 +26,7 @@ import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/component
 import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
 import type { ShellDetailPanelEntry } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
 import { NativeButton } from "@next/features/native-routes/primitives";
+import { useModalDialogBehavior } from "@next/features/threaded-surface/useModalDialogBehavior";
 import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
 import {
   AREA_META,
@@ -73,6 +74,7 @@ export function ShellTopbar({
   handleToggleMode,
   handleToggleNotificationSound,
   handleToggleTheme,
+  inspectorAvailable,
   inspectorOpen,
   isCompactTopbar,
   mode,
@@ -102,6 +104,7 @@ export function ShellTopbar({
   handleToggleMode: () => void;
   handleToggleNotificationSound: () => void;
   handleToggleTheme: () => void;
+  inspectorAvailable: boolean;
   inspectorOpen: boolean;
   isCompactTopbar: boolean;
   mode: "simple" | "advanced";
@@ -167,7 +170,11 @@ export function ShellTopbar({
         </div>
         <label className="mc-next-select-field mc-next-citadel-field">
           <span>Citadel</span>
-          <select value={activeCitadelId} onChange={(event) => handleSelectCitadel(event.target.value)}>
+          <select
+            aria-label="Active Citadel"
+            value={activeCitadelId}
+            onChange={(event) => handleSelectCitadel(event.target.value)}
+          >
             {[...citadelOptions, { citadelId: activeCitadelId, name: activeCitadelName }]
               .filter(
                 (item, index, items) =>
@@ -236,7 +243,11 @@ export function ShellTopbar({
         ) : null}
         <label className="mc-next-select-field mc-next-workspace-field">
           <span>Workspace</span>
-          <select value={activeWorkspaceId} onChange={(event) => handleSelectWorkspace(event.target.value)}>
+          <select
+            aria-label="Active Workspace"
+            value={activeWorkspaceId}
+            onChange={(event) => handleSelectWorkspace(event.target.value)}
+          >
             {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
               .filter(
                 (item, index, items) =>
@@ -290,16 +301,18 @@ export function ShellTopbar({
             <span>{soundEnabled ? "On" : "Off"}</span>
           </button>
         ) : null}
-        <NativeButton
-          variant="secondary"
-          className="mc-next-wa-button"
-          onClick={onToggleInspector}
-          aria-label={inspectorOpen ? "Hide Context" : "Open Context"}
-          title={inspectorOpen ? "Hide Context" : "Open Context"}
-        >
-          {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-          {inspectorOpen ? "Hide Context" : "Open Context"}
-        </NativeButton>
+        {inspectorAvailable ? (
+          <NativeButton
+            variant="secondary"
+            className="mc-next-wa-button"
+            onClick={onToggleInspector}
+            aria-label={inspectorOpen ? "Hide Route details" : "Open Route details"}
+            title={inspectorOpen ? "Hide Route details" : "Open Route details"}
+          >
+            {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+            {inspectorOpen ? "Hide Route details" : "Open Route details"}
+          </NativeButton>
+        ) : null}
         {!isCompactTopbar ? (
           <button
             type="button"
@@ -318,135 +331,239 @@ export function ShellTopbar({
 }
 
 export function ShellRail({
+  activeCitadelId,
+  activeCitadelName,
+  activeWorkspaceId,
+  activeWorkspaceName,
   buildPrimaryAreaRoute,
+  citadelOptions,
   currentAreaMeta,
   groupedRailItems,
+  handleSelectCitadel,
+  handleSelectWorkspace,
   isMobileNav,
   navOpen,
   navigate,
   onClose,
+  onOpenPalette,
   pendingApprovals,
   preloadRouteChunk,
   railSignalLines,
   railSignalTitle,
   route,
   taskBacklogCount,
+  workspaceOptions,
 }: {
+  activeCitadelId: string;
+  activeCitadelName: string;
+  activeWorkspaceId: string;
+  activeWorkspaceName: string;
   buildPrimaryAreaRoute: (area: PrimaryArea) => AppRoute;
+  citadelOptions: Array<{ citadelId: string; name: string }>;
   currentAreaMeta: AreaMeta;
   groupedRailItems: RailSection[];
+  handleSelectCitadel: (citadelId: string) => void;
+  handleSelectWorkspace: (workspaceId: string) => void;
   isMobileNav: boolean;
   navOpen: boolean;
   navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
   onClose: () => void;
+  onOpenPalette: () => void;
   pendingApprovals: number;
   preloadRouteChunk: (route: AppRoute) => void;
   railSignalLines: string[];
   railSignalTitle: string;
   route: AppRoute;
   taskBacklogCount: number;
+  workspaceOptions: Array<{ workspaceId: string; name: string }>;
 }) {
+  const railRef = useRef<HTMLElement | null>(null);
+  const modalOpen = isMobileNav && navOpen;
+  useModalDialogBehavior({
+    open: modalOpen,
+    onClose,
+    containerRef: railRef,
+  });
+
   return (
-    <aside className={`mc-next-rail${navOpen ? " open" : ""}`}>
-      <div className="mc-next-rail-head">
-        <div>
-          <p>{currentAreaMeta.kicker}</p>
-          <h2>{currentAreaMeta.label}</h2>
+    <>
+      <button
+        type="button"
+        className={`mc-next-nav-scrim${modalOpen ? " open" : ""}`}
+        aria-hidden="true"
+        tabIndex={-1}
+        onClick={onClose}
+      />
+      <aside
+        ref={railRef}
+        className={`mc-next-rail${navOpen ? " open" : ""}`}
+        role={isMobileNav ? "dialog" : undefined}
+        aria-modal={isMobileNav ? true : undefined}
+        aria-label={isMobileNav ? "Navigation" : undefined}
+        aria-hidden={isMobileNav ? !navOpen : undefined}
+        inert={isMobileNav && !navOpen}
+      >
+        <div className="mc-next-rail-head">
+          <div>
+            <p>{currentAreaMeta.kicker}</p>
+            <h2>{currentAreaMeta.label}</h2>
+          </div>
+          <button type="button" className="mc-next-rail-close" onClick={onClose} aria-label="Close navigation">
+            <X size={16} />
+          </button>
         </div>
-        <button type="button" className="mc-next-rail-close" onClick={onClose} aria-label="Close navigation">
-          <X size={16} />
-        </button>
-      </div>
-      {isMobileNav ? (
-        <div className="mc-next-rail-areas">
-          {PRIMARY_NAV.map(({ area, icon: Icon }) => (
-            <button
-              key={area}
-              type="button"
-              className={`mc-next-rail-area-link${route.area === area ? " active" : ""}`}
-              aria-current={route.area === area ? "page" : undefined}
-              onClick={() => {
-                navigate(buildPrimaryAreaRoute(area));
-                onClose();
-              }}
-            >
-              <Icon size={16} />
-              <span>{AREA_META[area].label}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="mc-next-rail-menu">
-        {groupedRailItems.map((group) => {
-          const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;
-          return (
-            <section key={group.id} className="mc-next-rail-section" aria-labelledby={groupLabelId}>
-              {group.label ? (
-                <div className="mc-next-rail-separator" id={groupLabelId}>
-                  <span>{group.label}</span>
+        {isMobileNav ? (
+          <>
+            <div className="mc-next-rail-mobile-context" aria-label="Active scope and commands">
+              <label className="mc-next-rail-mobile-select">
+                <span>Citadel</span>
+                <select
+                  aria-label="Active Citadel"
+                  value={activeCitadelId}
+                  onChange={(event) => {
+                    handleSelectCitadel(event.target.value);
+                    onClose();
+                  }}
+                >
+                  {[...citadelOptions, { citadelId: activeCitadelId, name: activeCitadelName }]
+                    .filter(
+                      (item, index, items) =>
+                        items.findIndex((candidate) => candidate.citadelId === item.citadelId) === index,
+                    )
+                    .map((item) => (
+                      <option key={item.citadelId} value={item.citadelId}>
+                        {item.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="mc-next-rail-mobile-select">
+                <span>Workspace</span>
+                <select
+                  aria-label="Active Workspace"
+                  value={activeWorkspaceId}
+                  onChange={(event) => {
+                    handleSelectWorkspace(event.target.value);
+                    onClose();
+                  }}
+                >
+                  {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
+                    .filter(
+                      (item, index, items) =>
+                        items.findIndex((candidate) => candidate.workspaceId === item.workspaceId) === index,
+                    )
+                    .map((item) => (
+                      <option key={item.workspaceId} value={item.workspaceId}>
+                        {item.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="mc-next-rail-command-button"
+                aria-label="Open Command Palette"
+                onClick={() => {
+                  onOpenPalette();
+                  onClose();
+                }}
+              >
+                <Search size={16} />
+                <span>Command Palette</span>
+                <kbd>Ctrl K</kbd>
+              </button>
+            </div>
+            <div className="mc-next-rail-areas">
+              {PRIMARY_NAV.map(({ area, icon: Icon }) => (
+                <button
+                  key={area}
+                  type="button"
+                  className={`mc-next-rail-area-link${route.area === area ? " active" : ""}`}
+                  aria-current={route.area === area ? "page" : undefined}
+                  onClick={() => {
+                    navigate(buildPrimaryAreaRoute(area));
+                    onClose();
+                  }}
+                >
+                  <Icon size={16} />
+                  <span>{AREA_META[area].label}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+        <div className="mc-next-rail-menu">
+          {groupedRailItems.map((group) => {
+            const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;
+            return (
+              <section key={group.id} className="mc-next-rail-section" aria-labelledby={groupLabelId}>
+                {group.label ? (
+                  <div className="mc-next-rail-separator" id={groupLabelId}>
+                    <span>{group.label}</span>
+                  </div>
+                ) : null}
+                <div className="mc-next-rail-group">
+                  {group.items.map((item) => {
+                    const target = buildNavigationTarget(route, item);
+                    const releaseScope = getRouteReleaseScope(target);
+                    const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
+                    const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
+                    const backlogCount =
+                      item.section === "tasks"
+                        ? taskBacklogCount
+                        : item.section === "approvals"
+                          ? pendingApprovals
+                          : undefined;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
+                        aria-label={`${item.label}: ${item.description}`}
+                        onFocus={() => preloadRouteChunk(target)}
+                        onMouseEnter={() => preloadRouteChunk(target)}
+                        onClick={() => navigate(target)}
+                      >
+                        <div>
+                          <strong>
+                            {item.label}
+                            {releaseScope.status === "ship" ? null : (
+                              <span
+                                className="mc-next-rail-release-badge"
+                                data-release-status={releaseScope.status}
+                                title={releaseScopeOperatorSummary}
+                                aria-label={releaseScopeOperatorSummary}
+                              >
+                                {releaseStatusLabel}
+                              </span>
+                            )}
+                          </strong>
+                          <span title={item.description}>{item.description}</span>
+                        </div>
+                        {typeof backlogCount === "number" ? (
+                          <span className="mc-next-rail-count">{backlogCount}</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
-              ) : null}
-              <div className="mc-next-rail-group">
-                {group.items.map((item) => {
-                  const target = buildNavigationTarget(route, item);
-                  const releaseScope = getRouteReleaseScope(target);
-                  const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
-                  const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
-                  const backlogCount =
-                    item.section === "tasks"
-                      ? taskBacklogCount
-                      : item.section === "approvals"
-                        ? pendingApprovals
-                        : undefined;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
-                      aria-label={`${item.label}: ${item.description}`}
-                      onFocus={() => preloadRouteChunk(target)}
-                      onMouseEnter={() => preloadRouteChunk(target)}
-                      onClick={() => navigate(target)}
-                    >
-                      <div>
-                        <strong>
-                          {item.label}
-                          {releaseScope.status === "ship" ? null : (
-                            <span
-                              className="mc-next-rail-release-badge"
-                              data-release-status={releaseScope.status}
-                              title={releaseScopeOperatorSummary}
-                              aria-label={releaseScopeOperatorSummary}
-                            >
-                              {releaseStatusLabel}
-                            </span>
-                          )}
-                        </strong>
-                        <span title={item.description}>{item.description}</span>
-                      </div>
-                      {typeof backlogCount === "number" ? (
-                        <span className="mc-next-rail-count">{backlogCount}</span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-      <div className="mc-next-rail-signal-card">
-        <div className="mc-next-rail-signal-head">
-          <FolderKanban size={18} />
-          <span>{railSignalTitle}</span>
+              </section>
+            );
+          })}
         </div>
-        <ul>
-          {railSignalLines.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      </div>
-    </aside>
+        <div className="mc-next-rail-signal-card">
+          <div className="mc-next-rail-signal-head">
+            <FolderKanban size={18} />
+            <span>{railSignalTitle}</span>
+          </div>
+          <ul>
+            {railSignalLines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      </aside>
+    </>
   );
 }
 

@@ -130,7 +130,7 @@ export function CitadelCouncilRoutePage({
                 </select>
               </label>
               <button type="button" onClick={handleSeatAgent} disabled={!selectedAgentId}>
-                <Plus className="h-4 w-4" aria-hidden="true" />
+                <Plus size={16} aria-hidden="true" />
                 Seat
               </button>
               <button
@@ -138,7 +138,7 @@ export function CitadelCouncilRoutePage({
                 onClick={handleRemoveSeat}
                 disabled={!selectedAgentId || !seatedAgentIds.has(selectedAgentId)}
               >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                <Trash2 size={16} aria-hidden="true" />
                 Remove
               </button>
             </div>
@@ -157,7 +157,7 @@ export function CitadelCouncilRoutePage({
         </NativeCard>
       </NativeGrid>
       <p className="mc-next-citadel-footnote">
-        <Users className="h-3 w-3" aria-hidden="true" />
+        <Users size={12} aria-hidden="true" />
         Seating an agent references it; it never copies the agent. Per-seat grant ceilings are enforced by the policy
         engine.
       </p>

@@ -34,7 +34,9 @@ import {
   draftFromRequestConfig,
   LlmTransportFields,
   requestConfigFromDraft,
+  type LlmTransportDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   buildUniversalModelPickerOptions,
   useProviderModelCatalog,
@@ -59,6 +61,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import {
   buildChatGptOAuthProviderDraft,
   buildProviderEditorDraft,
@@ -90,18 +93,37 @@ const PROVIDER_API_STYLE_OPTIONS: ProviderEditorDraft["apiStyle"][] = [
   "bedrock-messages",
 ];
 
+type ProviderEditorTransition =
+  | { kind: "select"; providerId: string }
+  | { kind: "new" }
+  | { kind: "routing"; providerId: string; model?: string };
+
+function areProviderEditorDraftsEqual(a: ProviderEditorDraft, b: ProviderEditorDraft): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function areProviderTransportDraftsEqual(a: LlmTransportDraft, b: LlmTransportDraft): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const { config, providers, loading, error, reload, loadModelsForProvider, getCachedModelProbe } =
     useProviderModelCatalog("system");
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [routingProviderId, setRoutingProviderId] = useState("");
   const [routingModel, setRoutingModel] = useState("");
+  const [routingBaseline, setRoutingBaseline] = useState({ providerId: "", model: "" });
   const [secretValue, setSecretValue] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
   const [providerDraft, setProviderDraft] = useState<ProviderEditorDraft>(createEmptyProviderEditorDraft);
   const [providerTransportDraft, setProviderTransportDraft] = useState(createEmptyLlmTransportDraft);
+  const [providerBaselineDraft, setProviderBaselineDraft] =
+    useState<ProviderEditorDraft>(createEmptyProviderEditorDraft);
+  const [providerTransportBaselineDraft, setProviderTransportBaselineDraft] = useState(createEmptyLlmTransportDraft);
   const [providerSaveBusy, setProviderSaveBusy] = useState(false);
+  const [pendingDeleteSecret, setPendingDeleteSecret] = useState<{ providerId: string; label: string } | null>(null);
+  const [deleteSecretBusy, setDeleteSecretBusy] = useState(false);
   const [providerProbeBusyId, setProviderProbeBusyId] = useState<string | null>(null);
   const [modelPickerQuery, setModelPickerQuery] = useState("");
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
@@ -128,6 +150,13 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const codexOAuthProvider = providers.find((item) => item.providerId === "openai-codex") ?? null;
   const selectedProvider = providers.find((item) => item.providerId === selectedProviderId) ?? providers[0] ?? null;
   const selectedProviderConfig = selectedProvider ? providerConfigMap.get(selectedProvider.providerId) : undefined;
+  const providerEditorDirty =
+    !areProviderEditorDraftsEqual(providerDraft, providerBaselineDraft) ||
+    !areProviderTransportDraftsEqual(providerTransportDraft, providerTransportBaselineDraft);
+  const routingDirty = routingProviderId !== routingBaseline.providerId || routingModel !== routingBaseline.model;
+  const secretDraftDirty = secretValue.length > 0;
+  const editorSelectionDirty = providerEditorDirty || secretDraftDirty;
+  useFormDirty("settings:providers", editorSelectionDirty || routingDirty, { label: "Providers & Models" });
   const availableModels = selectedProvider?.models ?? [];
   const routingProvider = providers.find((item) => item.providerId === routingProviderId) ?? null;
   const routingUsesFallbackModels = routingProvider?.modelProbeState === "fallback";
@@ -282,6 +311,47 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     [config?.activeModel, config?.activeProviderId, modelPickerQuery, providers],
   );
 
+  const resetCurrentProviderDraft = useCallback(() => {
+    setProviderDraft(providerBaselineDraft);
+    setProviderTransportDraft(providerTransportBaselineDraft);
+    setSecretValue("");
+  }, [providerBaselineDraft, providerTransportBaselineDraft]);
+
+  const applyProviderTransition = useCallback(
+    (transition: ProviderEditorTransition) => {
+      if (transition.kind === "new") {
+        const emptyProviderDraft = createEmptyProviderEditorDraft();
+        const emptyTransportDraft = createEmptyLlmTransportDraft();
+        setEditorMode("new");
+        setProviderDraft(emptyProviderDraft);
+        setProviderBaselineDraft(emptyProviderDraft);
+        setProviderTransportDraft(emptyTransportDraft);
+        setProviderTransportBaselineDraft(emptyTransportDraft);
+        setSecretValue("");
+        setNotice({
+          tone: "info",
+          message: "Started a new provider draft. Save it through Settings when the fields are ready.",
+        });
+        return;
+      }
+      const nextProvider = providers.find((item) => item.providerId === transition.providerId);
+      if (transition.kind === "routing") {
+        setRoutingProviderId(transition.providerId);
+        setRoutingModel(transition.model ?? nextProvider?.defaultModel ?? nextProvider?.models?.[0] ?? "");
+      }
+      setEditorMode("selected");
+      setSelectedProviderId(transition.providerId);
+      setSecretValue("");
+    },
+    [providers],
+  );
+
+  const providerTransitionGuard = useDraftTransitionGuard(
+    editorSelectionDirty,
+    applyProviderTransition,
+    resetCurrentProviderDraft,
+  );
+
   useEffect(() => {
     if (!providers.length) {
       setSelectedProviderId("");
@@ -291,11 +361,16 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   }, [config?.activeProviderId, providers]);
 
   useEffect(() => {
-    if (!config) {
+    if (!config || routingDirty) {
       return;
     }
     setRoutingProviderId(config.activeProviderId);
     setRoutingModel(config.activeModel);
+    setRoutingBaseline({ providerId: config.activeProviderId, model: config.activeModel });
+    // Reconcile only when the server snapshot changes. A local baseline update
+    // after save must not immediately snap the controlled fields back to the
+    // previous config object while reload is still in flight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
   useEffect(() => {
@@ -357,17 +432,28 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   useEffect(() => {
     if (!selectedProvider) {
       if (editorMode !== "new") {
-        setProviderDraft(createEmptyProviderEditorDraft());
-        setProviderTransportDraft(createEmptyLlmTransportDraft());
+        const emptyProviderDraft = createEmptyProviderEditorDraft();
+        const emptyTransportDraft = createEmptyLlmTransportDraft();
+        setProviderDraft(emptyProviderDraft);
+        setProviderBaselineDraft(emptyProviderDraft);
+        setProviderTransportDraft(emptyTransportDraft);
+        setProviderTransportBaselineDraft(emptyTransportDraft);
       }
       return;
     }
     if (editorMode === "new") {
       return;
     }
-    setProviderDraft(buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider));
-    setProviderTransportDraft(draftFromRequestConfig(selectedProviderConfig?.request));
-  }, [editorMode, selectedProvider, selectedProviderConfig]);
+    if (providerEditorDirty) {
+      return;
+    }
+    const nextProviderDraft = buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider);
+    const nextTransportDraft = draftFromRequestConfig(selectedProviderConfig?.request);
+    setProviderDraft(nextProviderDraft);
+    setProviderBaselineDraft(nextProviderDraft);
+    setProviderTransportDraft(nextTransportDraft);
+    setProviderTransportBaselineDraft(nextTransportDraft);
+  }, [editorMode, providerEditorDirty, selectedProvider, selectedProviderConfig]);
 
   const handleSaveRouting = async () => {
     if (!routingProviderId.trim() || !routingModel.trim()) {
@@ -387,6 +473,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           ? "Provider routing updated with a suggested model that has not been account-verified."
           : "Provider routing updated.",
       });
+      setRoutingBaseline({ providerId: routingProviderId, model: routingModel });
       await reload();
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
@@ -427,22 +514,23 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   const handleDeleteSecret = async () => {
-    if (!selectedProviderId.trim()) {
+    if (!pendingDeleteSecret) {
       return;
     }
-    if (!window.confirm("Delete the saved secret for this provider?")) {
-      return;
-    }
+    setDeleteSecretBusy(true);
     try {
-      const next = await deleteProviderSecret(selectedProviderId);
+      const next = await deleteProviderSecret(pendingDeleteSecret.providerId);
       setSecretState({ loading: false, error: null, data: next });
       setNotice({
         tone: "success",
         message: `Provider secret removed. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
       });
+      setPendingDeleteSecret(null);
       await reload();
     } catch (deleteError) {
       setNotice({ tone: "error", message: getErrorMessage(deleteError) });
+    } finally {
+      setDeleteSecretBusy(false);
     }
   };
 
@@ -650,7 +738,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       await reload();
       setEditorMode("selected");
       setProviderDraft(draft);
-      setProviderTransportDraft(createEmptyLlmTransportDraft());
+      setProviderBaselineDraft(draft);
+      const emptyTransportDraft = createEmptyLlmTransportDraft();
+      setProviderTransportDraft(emptyTransportDraft);
+      setProviderTransportBaselineDraft(emptyTransportDraft);
       setSelectedProviderId(draft.providerId);
       setNotice({ tone: "success", message: "ChatGPT provider added. Start ChatGPT login below." });
       void loadModelsForProvider(draft.providerId, { force: true });
@@ -686,6 +777,8 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           },
         },
       });
+      setProviderBaselineDraft(providerDraft);
+      setProviderTransportBaselineDraft(providerTransportDraft);
       await reload();
       setEditorMode("selected");
       setSelectedProviderId(providerDraft.providerId.trim());
@@ -699,13 +792,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   const handleStartNewProviderDraft = () => {
-    setEditorMode("new");
-    setProviderDraft(createEmptyProviderEditorDraft());
-    setProviderTransportDraft(createEmptyLlmTransportDraft());
-    setNotice({
-      tone: "info",
-      message: "Started a new provider draft. Save it through Settings when the fields are ready.",
-    });
+    if (editorMode === "new") {
+      return;
+    }
+    providerTransitionGuard.requestTransition({ kind: "new" });
   };
 
   const handleOpenCodexOAuthVerification = () => {
@@ -796,8 +886,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             }))}
             selectedId={selectedProviderId}
             onSelect={(providerId) => {
-              setEditorMode("selected");
-              setSelectedProviderId(providerId);
+              if (editorMode === "selected" && providerId === selectedProviderId) {
+                return;
+              }
+              providerTransitionGuard.requestTransition({ kind: "select", providerId });
             }}
             emptyLabel="No providers returned from runtime settings."
             maxHeight="min(44vh, 25rem)"
@@ -817,11 +909,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   value={routingProviderId}
                   onChange={(event) => {
                     const nextProviderId = event.target.value;
-                    const provider = providers.find((item) => item.providerId === nextProviderId);
-                    setRoutingProviderId(nextProviderId);
-                    setRoutingModel(provider?.defaultModel ?? provider?.models?.[0] ?? "");
-                    setEditorMode("selected");
-                    setSelectedProviderId(nextProviderId);
+                    if (nextProviderId === routingProviderId) {
+                      return;
+                    }
+                    providerTransitionGuard.requestTransition({ kind: "routing", providerId: nextProviderId });
                   }}
                 >
                   {providers.map((item) => (
@@ -913,10 +1004,11 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   item.availability === "blocked"
                     ? undefined
                     : () => {
-                        setRoutingProviderId(item.providerId);
-                        setRoutingModel(item.model);
-                        setEditorMode("selected");
-                        setSelectedProviderId(item.providerId);
+                        providerTransitionGuard.requestTransition({
+                          kind: "routing",
+                          providerId: item.providerId,
+                          model: item.model,
+                        });
                       },
               }))}
               emptyLabel="No provider models match this search."
@@ -1281,7 +1373,17 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                         <RefreshCw size={16} />
                         {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
                       </NativeButton>
-                      <NativeButton variant="destructive" onClick={() => void handleDeleteSecret()}>
+                      <NativeButton
+                        variant="destructive"
+                        onClick={() =>
+                          selectedProviderId.trim()
+                            ? setPendingDeleteSecret({
+                                providerId: selectedProviderId,
+                                label: selectedProvider?.label ?? selectedProviderId,
+                              })
+                            : undefined
+                        }
+                      >
                         <Trash2 size={16} />
                         Delete secret
                       </NativeButton>
@@ -1425,9 +1527,13 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               <NativeButton
                 variant="secondary"
                 onClick={() => {
+                  const nextProviderDraft = buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider);
+                  const nextTransportDraft = draftFromRequestConfig(selectedProviderConfig?.request);
                   setEditorMode("selected");
-                  setProviderDraft(buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider));
-                  setProviderTransportDraft(draftFromRequestConfig(selectedProviderConfig?.request));
+                  setProviderDraft(nextProviderDraft);
+                  setProviderBaselineDraft(nextProviderDraft);
+                  setProviderTransportDraft(nextTransportDraft);
+                  setProviderTransportBaselineDraft(nextTransportDraft);
                 }}
                 disabled={!selectedProvider}
               >
@@ -1438,6 +1544,26 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
         </SettingsStack>
       </SettingsGrid>
+      <ConfirmModal
+        open={providerTransitionGuard.pendingTransition !== null}
+        danger
+        title="Discard provider changes?"
+        message="The selected provider has unsaved edits. Discard them and continue?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={providerTransitionGuard.cancelDiscard}
+        onConfirm={providerTransitionGuard.confirmDiscard}
+      />
+      <ConfirmModal
+        open={pendingDeleteSecret !== null}
+        danger
+        pending={deleteSecretBusy}
+        title="Delete provider secret?"
+        message={`Delete the saved secret for ${pendingDeleteSecret?.label ?? "this provider"}? This cannot be undone.`}
+        confirmLabel="Delete secret"
+        onCancel={() => setPendingDeleteSecret(null)}
+        onConfirm={() => void handleDeleteSecret()}
+      />
     </SettingsSectionShell>
   );
 }

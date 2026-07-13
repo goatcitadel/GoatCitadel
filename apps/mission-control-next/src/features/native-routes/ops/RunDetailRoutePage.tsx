@@ -174,15 +174,15 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
             onClick={() => void downloadEvidenceReceipt()}
             disabled={!runId || downloadingReceipt}
           >
-            <ShieldCheck className="h-4 w-4" />
+            <ShieldCheck size={16} />
             {downloadingReceipt ? "Preparing receipt..." : "Download evidence receipt"}
           </NativeButton>
           <NativeButton variant="secondary" onClick={() => void copyTraceExport()} disabled={!runId || exporting}>
-            <ClipboardCopy className="h-4 w-4" />
+            <ClipboardCopy size={16} />
             {exporting ? "Exporting..." : "Copy trace export"}
           </NativeButton>
           <NativeButton variant="secondary" onClick={() => void reload()}>
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw size={16} />
             Refresh
           </NativeButton>
         </>
@@ -381,7 +381,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
                 })
               }
             >
-              <GitBranch className="h-4 w-4" />
+              <GitBranch size={16} />
               Open source thread
             </NativeButton>
           ) : null}
@@ -390,7 +390,7 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
 
       <details className="mc-next-approvals-details">
         <summary>
-          <FileText className="h-4 w-4" />
+          <FileText size={16} />
           Expert raw trace
         </summary>
         <LibraryCodeBlock label="Trace JSON">{JSON.stringify(detail.raw, null, 2)}</LibraryCodeBlock>

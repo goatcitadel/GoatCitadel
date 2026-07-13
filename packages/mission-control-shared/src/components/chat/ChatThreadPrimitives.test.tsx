@@ -6,7 +6,6 @@ import {
   ChatThreadTurnCard,
   StreamingAssistantSkeleton,
   buildThreadWindow,
-  handleTurnSurfaceKeyDown,
   isInteractiveChatEventTarget,
   resolveEffectiveWindowStart,
 } from "./ChatThreadPrimitives";
@@ -114,18 +113,19 @@ describe("ChatThreadPrimitives", () => {
     });
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    // The activation affordance is a toggle-like control: clicking/keying it selects the
-    // turn. It carries role="button" with a human-readable accessible name derived from
-    // the user message (not the opaque turn UUID), and reflects selection via aria-pressed.
-    expect(turnSurface.props.role).toBe("button");
-    expect(turnSurface.props.tabIndex).toBe(0);
-    expect(turnSurface.props["aria-label"]).toBe("Open turn: Inspect the patch.");
-    expect(turnSurface.props["aria-pressed"]).toBe(true);
-    expect(turnSurface.props["aria-current"]).toBeUndefined();
+    // Pointer selection remains available on the non-interactive surface, while keyboard
+    // selection belongs to an actual button so controls inside the turn are never nested.
+    expect(turnSurface.props.role).toBeUndefined();
+    expect(turnSurface.props.tabIndex).toBeUndefined();
+    expect(turnSurface.props["aria-label"]).toBeUndefined();
+    const openTurnButton = renderer.root.findByProps({ "aria-label": "Open turn: Inspect the patch." });
+    expect(openTurnButton.type).toBe("button");
+    expect(openTurnButton.props.type).toBe("button");
+    expect(openTurnButton.props["aria-pressed"]).toBe(true);
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
       turnSurface.props.onClick({ target: { closest: () => ({ tagName: "A" }) }, currentTarget });
-      turnSurface.props.onKeyDown({ key: "Enter", target: currentTarget, currentTarget, preventDefault: vi.fn() });
+      openTurnButton.props.onClick();
     });
     expect(onSelectTurn).toHaveBeenCalledTimes(2);
     expect(onSelectTurn).toHaveBeenCalledWith("turn-1");
@@ -565,17 +565,7 @@ describe("ChatThreadPrimitives", () => {
     expect(renderer.root.findAll((node) => node.props.role === "status")).toHaveLength(0);
   });
 
-  it("exports surface event helpers", () => {
-    const onSelect = vi.fn();
-    const preventDefault = vi.fn();
-    handleTurnSurfaceKeyDown(
-      { key: " ", target: "surface", currentTarget: "surface", preventDefault } as any,
-      "turn-1",
-      onSelect,
-    );
-
-    expect(preventDefault).toHaveBeenCalled();
-    expect(onSelect).toHaveBeenCalledWith("turn-1");
+  it("identifies nested interactive targets", () => {
     expect(isInteractiveChatEventTarget({ closest: () => ({ tagName: "BUTTON" }) } as any, {} as any)).toBe(true);
   });
 

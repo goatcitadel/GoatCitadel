@@ -270,7 +270,7 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
             ]}
           >
             <SettingsFieldGrid>
-              <SettingsField label="In-app notifications">
+              <SettingsField label="In-app notifications" group>
                 <label className="mc-next-settings-check">
                   <input
                     type="checkbox"
@@ -297,7 +297,7 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
                   Sounds use short synthesized cues for done, waiting, and problem states.
                 </p>
               </SettingsField>
-              <SettingsField label="Desktop notifications">
+              <SettingsField label="Desktop notifications" group>
                 <label className="mc-next-settings-check">
                   <input
                     type="checkbox"
@@ -315,7 +315,7 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
                   Desktop notifications stay permission-aware in browser and native hosts.
                 </p>
               </SettingsField>
-              <SettingsField label="Attention scope">
+              <SettingsField label="Attention scope" group>
                 <label className="mc-next-settings-check">
                   <input
                     type="checkbox"

@@ -18,6 +18,8 @@ const appMocks = vi.hoisted(() => ({
   fetchRuntimeLifecycleExport: vi.fn(),
   fetchWorkspaces: vi.fn(),
   getGatewayApiBaseUrl: vi.fn(),
+  isCompactTopbar: false,
+  isMobileNav: false,
   preflightGatewayAccess: vi.fn(),
   publishEventStreamStatus: vi.fn(),
   publishChannelActivityFromRealtimeEvent: vi.fn(),
@@ -197,6 +199,10 @@ vi.mock("@goatcitadel/mission-control-shared/state/effects-mode", () => ({
   resolveEffectiveEffectsMode: (mode: string) => mode,
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
+  useMediaQuery: (query: string) => (query.includes("1023px") ? appMocks.isMobileNav : appMocks.isCompactTopbar),
+}));
+
 vi.mock("@goatcitadel/mission-control-shared/state/refresh-bus", () => ({
   emitRefresh: appMocks.emitRefresh,
 }));
@@ -339,6 +345,8 @@ describe("MissionControlNextApp", () => {
     vi.clearAllMocks();
     appMocks.activeCitadelId = "personal";
     appMocks.activeWorkspaceId = "workspace-1";
+    appMocks.isCompactTopbar = false;
+    appMocks.isMobileNav = false;
     appMocks.threadedRouteProps = null;
     appMocks.closeEventStream.mockReset();
     appMocks.connectEventStream.mockImplementation((onEvent, onStateChange, onStatusChange) => {
@@ -428,6 +436,9 @@ describe("MissionControlNextApp", () => {
     // Guardrail: the restored quick-glance status cluster (release scope /
     // degraded-realtime / approvals) must never be silently re-hidden.
     expect(css).not.toContain(".mc-next-topbar-status {\n  display: none;");
+    expect(css).not.toContain(
+      ".mc-next-topbar-right > button.mc-next-start-button,\n.mc-next-topbar-right > button.mc-next-mode-toggle {\n  display: none;",
+    );
   });
 
   it("renders access-gate states and lets retry recover from preflight failures", async () => {
@@ -468,7 +479,7 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
   });
 
-  it("renders the ready shell, handles navigation, realtime updates, and trust-report export", async () => {
+  it("renders the ready shell and handles navigation and realtime updates", async () => {
     const renderer = await renderApp();
 
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
@@ -477,6 +488,7 @@ describe("MissionControlNextApp", () => {
         ready: true,
         label: "Gateway ready",
       }),
+      onCopyTrustReport: expect.any(Function),
     });
     expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400, "personal");
     expect(appMocks.fetchDashboardState).toHaveBeenCalled();
@@ -484,6 +496,18 @@ describe("MissionControlNextApp", () => {
     expect(renderer.root.findByProps({ "aria-label": "Approvals: 2 pending" })).toBeDefined();
     expect(renderer.root.findByProps({ "aria-label": "Sessions: 2 visible" })).toBeDefined();
     expect(renderer.root.findByProps({ "aria-label": "Spend: $1.25" })).toBeDefined();
+
+    await act(async () => {
+      (appMocks.threadedRouteProps?.onCopyTrustReport as (sessionId: string, turnId: string) => void)(
+        "session-1",
+        "turn-1",
+      );
+    });
+    await flush();
+    expect(appMocks.fetchRuntimeLifecycleExport).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-1", turnId: "turn-1", format: "trust_report" }),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("# Trust\n\nReady.");
 
     await act(async () => {
       appMocks.streamCallbacks.onStateChange?.("open");
@@ -504,48 +528,13 @@ describe("MissionControlNextApp", () => {
     await act(async () => {
       findButton(renderer, "Guided").props.onClick();
       renderer.root.findByProps({ "aria-label": "Switch to light theme" }).props.onClick();
-      findButton(renderer, "Open Context").props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
     expect(appMocks.setTheme).toHaveBeenCalledWith("light");
     // F10: the Cmd/Ctrl+K trigger, its accessible name, and the dialog it opens
     // all read "Command Palette" (visible label matches accessible name).
     expect(findButton(renderer, "Command Palette").props["aria-label"]).toBe("Command Palette");
-    expect(JSON.stringify(renderer.toJSON())).toContain("Copy trust report");
-
-    await act(async () => {
-      findButton(renderer, "Copy trust report").props.onClick();
-    });
-    await flush();
-    expect(appMocks.fetchRuntimeLifecycleExport).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "session-1", turnId: "turn-1", format: "trust_report" }),
-    );
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("# Trust\n\nReady.");
-
-    await act(async () => {
-      findButton(renderer, "Detail provider close").props.onClick();
-    });
-    expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
-
-    await act(async () => {
-      findButton(renderer, "Detail provider open").props.onClick();
-    });
-    expect(JSON.stringify(renderer.toJSON())).toContain("Copy trust report");
-
-    await act(async () => {
-      findButton(renderer, "Pin").props.onClick();
-      findButton(renderer, "Close").props.onClick();
-    });
-    expect(appMocks.setDetailPanelPinned).toHaveBeenCalledWith(true);
-
-    await act(async () => {
-      findButton(renderer, "Open Context").props.onClick();
-      renderer.root
-        .findAllByType("button")
-        .find((node) => String(node.props.className).includes("mc-next-inspector-scrim"))
-        ?.props.onClick();
-    });
-    expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
+    expect(renderer.root.findAllByProps({ "aria-label": "Open Route details" })).toHaveLength(0);
 
     await act(async () => {
       renderer.root
@@ -647,6 +636,73 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
   });
 
+  it("keeps the route inspector off Chat while preserving non-Chat trust evidence", async () => {
+    const renderer = await renderApp("http://localhost:5173/settings/providers?sessionId=session-1&turnId=turn-1");
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Copy trust report");
+
+    await act(async () => {
+      findButton(renderer, "Copy trust report").props.onClick();
+    });
+    await flush();
+    expect(appMocks.fetchRuntimeLifecycleExport).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-1", turnId: "turn-1", format: "trust_report" }),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("# Trust\n\nReady.");
+
+    await act(async () => {
+      findButton(renderer, "Pin").props.onClick();
+      findButton(renderer, "Close").props.onClick();
+    });
+    expect(appMocks.setDetailPanelPinned).toHaveBeenCalledWith(true);
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
+      renderer.root
+        .findAllByType("button")
+        .find((node) => String(node.props.className).includes("mc-next-inspector-scrim"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
+  });
+
+  it("clears the shell inspector when entering Chat so it cannot resurrect on return", async () => {
+    const renderer = await renderApp("http://localhost:5173/settings/providers");
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Release readiness");
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Work"),
+        )
+        ?.props.onClick();
+    });
+    expect(window.location.pathname).toBe("/chat");
+    expect(renderer.root.findAllByProps({ "aria-label": "Open Route details" })).toHaveLength(0);
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Settings"),
+        )
+        ?.props.onClick();
+    });
+    expect(window.location.pathname).toBe("/settings/general");
+    expect(renderer.root.findAllByProps({ "aria-label": "Open Route details" }).length).toBeGreaterThan(0);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Release readiness");
+  });
+
   it("keeps grouped rail labels visible to assistive technology", async () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
     const railSeparators = renderer.root.findAllByProps({ className: "mc-next-rail-separator" });
@@ -661,6 +717,48 @@ describe("MissionControlNextApp", () => {
         "aria-labelledby": "mc-next-rail-group-settings-identity",
       }),
     ).toHaveLength(1);
+    expect(readNodeText(renderer.root)).not.toContain("Workspace capabilities");
+    expect(readNodeText(renderer.root)).not.toContain("Citadel capabilities");
+
+    await act(async () => {
+      findButton(renderer, "Command Palette").props.onClick();
+    });
+    const palette = JSON.stringify(renderer.toJSON());
+    expect(palette).not.toContain("Settings → Workspace capabilities");
+    expect(palette).not.toContain("Settings → Citadel capabilities");
+  });
+
+  it("keeps hidden settings reachable by direct URL", async () => {
+    const renderer = await renderApp("http://localhost:5173/settings/workspace-capabilities");
+
+    expect(JSON.stringify(renderer.toJSON())).toContain("Native settings/workspace-capabilities");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Direct URL only");
+  });
+
+  it("exposes Citadel, workspace, and command switching in the mobile drawer", async () => {
+    appMocks.isCompactTopbar = true;
+    appMocks.isMobileNav = true;
+    const renderer = await renderApp();
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Open navigation" }).props.onClick();
+    });
+
+    const mobileScope = renderer.root.findByProps({ className: "mc-next-rail-mobile-context" });
+    const citadelSelect = mobileScope.findByProps({ "aria-label": "Active Citadel" });
+    const workspaceSelect = mobileScope.findByProps({ "aria-label": "Active Workspace" });
+    await act(async () => {
+      citadelSelect.props.onChange({ target: { value: "company" } });
+      workspaceSelect.props.onChange({ target: { value: "workspace-2" } });
+    });
+    expect(appMocks.setActiveCitadelId).toHaveBeenCalledWith("company");
+    expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Open navigation" }).props.onClick();
+      renderer.root.findByProps({ "aria-label": "Open Command Palette" }).props.onClick();
+    });
+    expect(renderer.root.findAllByProps({ className: "modal-card command-palette" })).toHaveLength(1);
   });
 
   it("does not treat unknown daemon health as an intervention", async () => {
@@ -831,15 +929,18 @@ describe("MissionControlNextApp", () => {
     appMocks.activeWorkspaceId = "missing-workspace";
     const noSessionRenderer = await renderApp("http://localhost:5173/chat");
     expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
+    await act(async () => {
+      (appMocks.threadedRouteProps?.onCopyTrustReport as (sessionId?: string) => void)(undefined);
+    });
+    expect(JSON.stringify(noSessionRenderer.toJSON())).toContain(
+      "Open a Work session before exporting a trust report.",
+    );
     noSessionRenderer.unmount();
 
     appMocks.fetchRuntimeLifecycleExport.mockRejectedValueOnce(new Error("export offline"));
     const failingRenderer = await renderApp("http://localhost:5173/chat?sessionId=session-err");
     await act(async () => {
-      findButton(failingRenderer, "Open Context").props.onClick();
-    });
-    await act(async () => {
-      findButton(failingRenderer, "Copy trust report").props.onClick();
+      (appMocks.threadedRouteProps?.onCopyTrustReport as (sessionId?: string) => void)("session-err");
     });
     await flush();
 
@@ -855,7 +956,7 @@ describe("MissionControlNextApp", () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
 
     await act(async () => {
-      findButton(renderer, "Open Context").props.onClick();
+      renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
     });
 
     const rendered = JSON.stringify(renderer.toJSON());

@@ -817,6 +817,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           placeholder={getPlaceholder(props.mode)}
           rows={2}
           role="combobox"
+          aria-label="Message composer"
           aria-autocomplete="list"
           aria-expanded={commandSuggestionsOpen}
           aria-controls={commandSuggestionsOpen ? commandSuggestionsListboxId : undefined}

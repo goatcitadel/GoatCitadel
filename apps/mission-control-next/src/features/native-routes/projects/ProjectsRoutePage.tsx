@@ -527,11 +527,11 @@ export function ProjectsRoutePage({
               navigate({ area: "projects", projectId: selectedProject.projectId, theme: route.theme });
             }}
           >
-            <MessageSquarePlus className="h-4 w-4" />
+            <MessageSquarePlus size={16} />
             {recentLeadSession ? "Open latest thread" : "Open project"}
           </NativeButton>
           <NativeButton variant="outline" onClick={handleOpenCitadels}>
-            <Castle className="h-4 w-4" />
+            <Castle size={16} />
             Open Citadel
           </NativeButton>
         </div>
@@ -559,11 +559,11 @@ export function ProjectsRoutePage({
       </div>
       <div className="mc-next-settings-button-row">
         <NativeButton onClick={handleOpenCitadels}>
-          <Castle className="h-4 w-4" />
+          <Castle size={16} />
           Open Citadels
         </NativeButton>
         <NativeButton variant="outline" onClick={handleOpenMason}>
-          <FolderPlus className="h-4 w-4" />
+          <FolderPlus size={16} />
           Use Mason
         </NativeButton>
       </div>
@@ -615,7 +615,7 @@ export function ProjectsRoutePage({
           ]}
           actions={
             <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Refresh
             </button>
           }
@@ -649,6 +649,7 @@ export function ProjectsRoutePage({
                     <button
                       type="button"
                       className={`mc-next-settings-selectable mc-next-project-card-body${isSelected ? " active" : ""}`}
+                      aria-pressed={isSelected}
                       onClick={() => navigate({ area: "projects", projectId: project.projectId, theme: route.theme })}
                     >
                       <div className="mc-next-settings-selectable-head">
@@ -670,11 +671,7 @@ export function ProjectsRoutePage({
                         pressed={pinned}
                         onClick={() => handleTogglePin(project)}
                       >
-                        {pinned ? (
-                          <PinOff className="h-3.5 w-3.5" aria-hidden="true" />
-                        ) : (
-                          <Pin className="h-3.5 w-3.5" aria-hidden="true" />
-                        )}
+                        {pinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
                       </ProjectGlyphButton>
                       {isArchived ? (
                         <ProjectGlyphButton
@@ -683,7 +680,7 @@ export function ProjectsRoutePage({
                           busy={cardActionBusy === `restore:${project.projectId}`}
                           onClick={() => void handleRestoreProject(project)}
                         >
-                          <ArchiveRestore className="h-3.5 w-3.5" aria-hidden="true" />
+                          <ArchiveRestore size={14} aria-hidden="true" />
                         </ProjectGlyphButton>
                       ) : (
                         <ProjectGlyphButton
@@ -692,7 +689,7 @@ export function ProjectsRoutePage({
                           busy={cardActionBusy === `archive:${project.projectId}`}
                           onClick={() => void handleArchiveProject(project)}
                         >
-                          <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                          <Archive size={14} aria-hidden="true" />
                         </ProjectGlyphButton>
                       )}
                     </div>
@@ -717,12 +714,12 @@ export function ProjectsRoutePage({
                     </div>
                     <div className="mc-next-settings-button-row">
                       <NativeButton onClick={handleFocusCreateProject}>
-                        <FolderPlus className="h-4 w-4" />
+                        <FolderPlus size={16} />
                         Create project setup
                       </NativeButton>
                       {SURFACES.map((surface) => (
                         <NativeButton key={surface.mode} onClick={() => handleOpenSurface(surface.mode)}>
-                          <MessageSquarePlus className="h-4 w-4" />
+                          <MessageSquarePlus size={16} />
                           Start Chat
                         </NativeButton>
                       ))}
@@ -779,7 +776,7 @@ export function ProjectsRoutePage({
                 disabled={!selectedProject}
                 onClick={() => void handleNewSession(surface.mode)}
               >
-                <MessageSquarePlus className="h-4 w-4" />
+                <MessageSquarePlus size={16} />
                 {surface.action}
               </NativeButton>
             ))}
@@ -813,7 +810,7 @@ export function ProjectsRoutePage({
           <div className="mc-next-project-controls">
             <section className="mc-next-project-control-section">
               <div className="mc-next-project-control-heading">
-                <FolderPlus className="h-4 w-4" />
+                <FolderPlus size={16} />
                 <strong>Create project</strong>
               </div>
               <label className="mc-next-settings-field">
@@ -845,7 +842,7 @@ export function ProjectsRoutePage({
                 />
               </label>
               <NativeButton disabled={projectActionBusy === "create"} onClick={() => void handleCreateProject()}>
-                <FolderPlus className="h-4 w-4" />
+                <FolderPlus size={16} />
                 {projectActionBusy === "create" ? "Creating..." : "Create project"}
               </NativeButton>
             </section>
@@ -853,7 +850,7 @@ export function ProjectsRoutePage({
             {selectedProject ? (
               <section className="mc-next-project-control-section">
                 <div className="mc-next-project-control-heading">
-                  <Pencil className="h-4 w-4" />
+                  <Pencil size={16} />
                   <strong>Edit selected</strong>
                 </div>
                 <label className="mc-next-settings-field">
@@ -882,7 +879,7 @@ export function ProjectsRoutePage({
                 </label>
                 <div className="mc-next-settings-button-row">
                   <NativeButton disabled={projectActionBusy === "save"} onClick={() => void handleSaveProject()}>
-                    <Save className="h-4 w-4" />
+                    <Save size={16} />
                     {projectActionBusy === "save" ? "Saving..." : "Save project"}
                   </NativeButton>
                 </div>

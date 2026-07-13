@@ -88,13 +88,13 @@ export function CoworkExecutionGlance({
           aria-label="Chat operator attention"
         >
           <div>
-            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            <AlertTriangle size={16} aria-hidden="true" />
             <strong>{snapshot.attentionLabel}</strong>
           </div>
           <p>{snapshot.attentionDetail}</p>
           {onOpenBlocker ? (
             <NativeButton variant="secondary" onClick={onOpenBlocker}>
-              <AlertTriangle className="h-4 w-4" />
+              <AlertTriangle size={16} />
               Open blocker
             </NativeButton>
           ) : null}
@@ -102,15 +102,15 @@ export function CoworkExecutionGlance({
       ) : null}
       <LibraryButtonRow>
         <NativeButton variant="default" onClick={onContinue}>
-          <Workflow className="h-4 w-4" />
+          <Workflow size={16} />
           Continue Plan
         </NativeButton>
         <NativeButton variant="secondary" onClick={onOpenApprovals}>
-          <CheckCircle2 className="h-4 w-4" />
+          <CheckCircle2 size={16} />
           Review approvals
         </NativeButton>
         <NativeButton variant="secondary" onClick={onOpenBoard}>
-          <Workflow className="h-4 w-4" />
+          <Workflow size={16} />
           Agent board
         </NativeButton>
       </LibraryButtonRow>
@@ -166,7 +166,7 @@ function CoworkPhaseStateBadge({ phase }: { phase: CoworkExecutionPhaseSummary }
   const Icon = status.icon;
   return (
     <span className="mc-next-cowork-phase-state" data-state={phase.state}>
-      <Icon className="h-3 w-3" aria-hidden="true" />
+      <Icon size={12} aria-hidden="true" />
       {status.label}
     </span>
   );

@@ -9,6 +9,7 @@ import {
   RELEASE_SURFACE_VARIANTS,
   resolveVisualBaselineNamespace,
 } from "./verification/lib/release-surface-manifest.mjs";
+import { collectVisualBaselineCoverage } from "./verification/lib/visual-baseline-coverage.mjs";
 
 const root = process.cwd();
 const VALID_RELEASE_SURFACE_STATUSES = new Set(["ship", "hide", "experimental", "needs_release_polish"]);
@@ -616,24 +617,34 @@ for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
   }
 }
 
-for (const route of NEXT_VISUAL_REGRESSION_MANIFEST) {
-  for (const variant of RELEASE_SURFACE_VARIANTS) {
-    const namespace = resolveVisualBaselineNamespace("@goatcitadel/mission-control-next");
-    const baselinePath = path.join(
-      root,
-      "scripts",
-      "verification",
-      "baselines",
-      "visual",
-      namespace,
-      buildVisualBaselineFileName(route.slug, variant.slug),
-    );
-    try {
-      await access(baselinePath, constants.F_OK | constants.R_OK);
-    } catch {
-      errors.push(`Missing required visual baseline: ${path.relative(root, baselinePath).replaceAll("\\", "/")}`);
-    }
-  }
+const visualBaselineDirectory = path.join(
+  root,
+  "scripts",
+  "verification",
+  "baselines",
+  "visual",
+  resolveVisualBaselineNamespace("@goatcitadel/mission-control-next"),
+);
+const expectedVisualBaselineFiles = NEXT_VISUAL_REGRESSION_MANIFEST.flatMap((route) =>
+  RELEASE_SURFACE_VARIANTS.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),
+);
+const visualBaselineCoverage = await collectVisualBaselineCoverage(
+  visualBaselineDirectory,
+  expectedVisualBaselineFiles,
+);
+for (const fileName of visualBaselineCoverage.missingFiles) {
+  errors.push(
+    `Missing required visual baseline: ${path
+      .relative(root, path.join(visualBaselineDirectory, fileName))
+      .replaceAll("\\", "/")}`,
+  );
+}
+for (const fileName of visualBaselineCoverage.unexpectedFiles) {
+  errors.push(
+    `Unexpected visual baseline outside the canonical manifest: ${path
+      .relative(root, path.join(visualBaselineDirectory, fileName))
+      .replaceAll("\\", "/")}`,
+  );
 }
 
 // The root package carries the released product-line version (0.1.0 RC since

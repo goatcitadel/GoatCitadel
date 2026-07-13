@@ -3,7 +3,7 @@
 // decomposition. Keep this file focused on layout/utility surface; section-
 // specific helpers (providers, personalities, channels, MCP, tools, addons)
 // stay in `../SettingsNativePage.tsx` until their dedicated section files land.
-import { type ComponentType, type ReactNode } from "react";
+import { useId, type ComponentType, type ReactNode } from "react";
 import {
   Cable,
   CheckCircle2,
@@ -107,7 +107,7 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
       />
       <div className="mc-next-settings-actions">
         <NativeButton variant="secondary" onClick={() => void onRetry()}>
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw size={16} />
           Retry
         </NativeButton>
       </div>
@@ -123,7 +123,7 @@ export function SettingsPageFrame({
   children,
   releaseStatus,
 }: {
-  icon: ComponentType<{ className?: string }>;
+  icon: ComponentType<{ className?: string; size?: number | string }>;
   kicker: string;
   title: string;
   description: string;
@@ -177,7 +177,7 @@ export function SettingsSectionShell({
         primaryAction={
           onRetry ? (
             <NativeButton variant="outline" onClick={() => onRetry()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Retry
             </NativeButton>
           ) : undefined
@@ -352,9 +352,30 @@ export function SettingsFieldGrid({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
 
-export function SettingsField({ label, children, span = 1 }: { label: string; children: ReactNode; span?: 1 | 2 }) {
+export function SettingsField({
+  label,
+  children,
+  span = 1,
+  group = false,
+}: {
+  label: string;
+  children: ReactNode;
+  span?: 1 | 2;
+  /** Use for composite controls that already contain one or more labelled inputs. */
+  group?: boolean;
+}) {
+  const className = `mc-next-settings-field${span === 2 ? " span-2" : ""}`;
+  const labelId = useId();
+  if (group) {
+    return (
+      <div className={className} role="group" aria-labelledby={labelId}>
+        <span id={labelId}>{label}</span>
+        {children}
+      </div>
+    );
+  }
   return (
-    <label className={`mc-next-settings-field${span === 2 ? " span-2" : ""}`}>
+    <label className={className}>
       <span>{label}</span>
       {children}
     </label>

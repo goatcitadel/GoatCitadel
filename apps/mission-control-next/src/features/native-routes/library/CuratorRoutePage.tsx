@@ -100,11 +100,11 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
                 onClick={() => void load()}
                 disabled={loading || actionBusy}
               >
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw size={16} />
                 Refresh
               </NativeButton>
               <NativeButton variant="outline" className="subtle" onClick={handleRun} disabled={loading || actionBusy}>
-                <ShieldCheck className="h-4 w-4" />
+                <ShieldCheck size={16} />
                 Generate report
               </NativeButton>
             </div>
@@ -155,7 +155,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
                         disabled={actionBusy}
                         aria-label={`Archive ${item.name}`}
                       >
-                        <Archive className="h-4 w-4" />
+                        <Archive size={16} />
                         Archive
                       </NativeButton>
                     </div>
@@ -169,7 +169,7 @@ export function CuratorRoutePage({ route, navigate: _navigate, activeWorkspaceId
               title="No skills found."
               primaryAction={
                 <NativeButton variant="outline" className="subtle" onClick={handleRun} disabled={loading || actionBusy}>
-                  <ShieldCheck className="h-4 w-4" />
+                  <ShieldCheck size={16} />
                   Generate report
                 </NativeButton>
               }

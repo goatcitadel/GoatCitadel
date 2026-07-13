@@ -524,6 +524,7 @@
 }
 
 .mc-next-thread-turn-surface {
+  position: relative;
   cursor: pointer;
   border-radius: var(--r-sm);
   transition: background-color var(--motion-fast) var(--motion-ease);
@@ -533,16 +534,37 @@
   background: color-mix(in oklab, var(--mc-area-color) 3%, transparent);
 }
 
-/*
- * H-3 (ship punchlist) / CHAT-016: keyboard focus visibility on turn surface.
- * Mouse interaction is via click; keyboard users tab through turns and need a
- * visible focus indicator. Subtle outline-only (no background change) keeps the
- * surface visually quiet during mouse usage.
- */
-.mc-next-thread-turn-surface:focus-visible {
+.mc-next-thread-open-turn {
+  position: absolute;
+  z-index: 2;
+  top: 0.36rem;
+  right: 0.46rem;
+  min-height: 1.5rem;
+  padding: 0.12rem 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 28%, var(--mc-border-subtle));
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--mc-surface-2) 88%, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.mc-next-thread-open-turn:hover,
+.mc-next-thread-open-turn[aria-pressed="true"] {
+  border-color: color-mix(in oklab, var(--mc-area-color) 52%, var(--mc-border-subtle));
+  color: var(--foreground);
+}
+
+.mc-next-thread-open-turn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
-  border-radius: var(--r-sm);
+}
+
+.mc-next-thread-bubble.user .mc-next-thread-meta {
+  padding-inline-end: 5.2rem;
 }
 
 .mc-next-thread-bubble {
@@ -1370,6 +1392,7 @@
   align-items: center;
   gap: 0.45rem;
   width: 100%;
+  min-height: 1.5rem;
   padding: 0.12rem 0.2rem;
   border: 0;
   border-radius: var(--r-xs);

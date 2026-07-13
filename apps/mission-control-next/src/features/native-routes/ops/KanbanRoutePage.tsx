@@ -172,7 +172,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
           className="mc-next-kanban-action"
           onClick={() => props.navigate({ area: "ops", section: "kanban", theme: props.route.theme })}
         >
-          <Users className="h-3 w-3" /> Run Board
+          <Users size={12} /> Run Board
         </NativeButton>
       }
     >
@@ -207,7 +207,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
           disabled={bulkBusy}
           onClick={() => void load()}
         >
-          <RefreshCw className="h-3 w-3" /> Refresh
+          <RefreshCw size={12} /> Refresh
         </NativeButton>
       </div>
       {actionError ? (
@@ -339,7 +339,7 @@ export const KanbanCard = memo(function KanbanCard({
         <span>{card.updatedDisplay}</span>
       </div>
       <span className="mc-next-kanban-status-chip">
-        <StatusChip tone={KANBAN_STATUS_CHIP_TONE[card.statusTone]} icon={<Activity className="h-3 w-3" />}>
+        <StatusChip tone={KANBAN_STATUS_CHIP_TONE[card.statusTone]} icon={<Activity size={12} />}>
           {card.statusLabel}
         </StatusChip>
       </span>
@@ -356,11 +356,11 @@ export const KanbanCard = memo(function KanbanCard({
       ) : null}
       {card.diagnosticSummary.critical > 0 ? (
         <span data-testid={`diagnostic-chip-${card.taskId}`} className="distress critical">
-          <AlertTriangle className="h-3 w-3" /> {card.diagnosticSummary.critical} critical
+          <AlertTriangle size={12} /> {card.diagnosticSummary.critical} critical
         </span>
       ) : card.diagnosticSummary.warning > 0 ? (
         <span data-testid={`diagnostic-chip-${card.taskId}`} className="distress warn">
-          <Activity className="h-3 w-3" /> {card.diagnosticSummary.warning} warning
+          <Activity size={12} /> {card.diagnosticSummary.warning} warning
         </span>
       ) : null}
       <small className="run-id" title={`Run ${card.runId}`}>

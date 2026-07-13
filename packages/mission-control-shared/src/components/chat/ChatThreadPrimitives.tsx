@@ -1,12 +1,4 @@
-import {
-  memo,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-  type ReactNode,
-} from "react";
+import { memo, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   isChatTurnActiveStatus,
   type ChatMode,
@@ -239,20 +231,6 @@ export function isInteractiveChatEventTarget(target: EventTarget | null, current
     'a, button, input, select, textarea, summary, details, [role="button"], [role="link"], [contenteditable="true"]',
   );
   return Boolean(interactiveAncestor && interactiveAncestor !== currentTarget);
-}
-
-export function handleTurnSurfaceKeyDown(
-  event: ReactKeyboardEvent<HTMLDivElement>,
-  turnId: string,
-  onSelectTurn: (turnId: string) => void,
-) {
-  if (event.target !== event.currentTarget) {
-    return;
-  }
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    onSelectTurn(turnId);
-  }
 }
 
 export function isThreadScrollNearBottom(element: HTMLElement): boolean {
@@ -1018,17 +996,21 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     <article className={turnClassName}>
       <div
         className="mc-next-thread-turn-surface"
-        role="button"
-        tabIndex={0}
-        aria-pressed={selected}
-        aria-label={`Open turn: ${turnLabel}`}
         onClick={(event: ReactMouseEvent<HTMLDivElement>) => {
           if (!isInteractiveChatEventTarget(event.target, event.currentTarget)) {
             onSelectTurn(turn.turnId);
           }
         }}
-        onKeyDown={(event) => handleTurnSurfaceKeyDown(event, turn.turnId, onSelectTurn)}
       >
+        <button
+          type="button"
+          className="mc-next-thread-open-turn"
+          aria-label={`Open turn: ${turnLabel}`}
+          aria-pressed={selected}
+          onClick={() => onSelectTurn(turn.turnId)}
+        >
+          Open turn
+        </button>
         <div className="mc-next-thread-bubble user">
           <p className="mc-next-thread-meta">
             <strong>You</strong> · <ActorTimestamp timestamp={turn.userMessage.timestamp} />

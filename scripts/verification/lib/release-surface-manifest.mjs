@@ -40,13 +40,13 @@ export const RELEASE_SURFACE_VARIANTS = [
    */
   {
     slug: "desktop-narrow-dark",
-    viewport: { width: 1180, height: 900 },
+    viewport: { width: 1179, height: 900 },
     colorScheme: "dark",
     themeQuery: "",
   },
   {
     slug: "desktop-narrow-light",
-    viewport: { width: 1180, height: 900 },
+    viewport: { width: 1179, height: 900 },
     colorScheme: "light",
     themeQuery: "theme=light",
   },
@@ -120,7 +120,6 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     readySelector: ".mc-next-threaded-surface[data-mode=\"chat\"]",
     expectedArea: "chat",
     expectedSection: "root",
-    interaction: "open-inspector",
   },
   {
     slug: "projects",
@@ -516,37 +515,33 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
 export const NEXT_VISUAL_REGRESSION_MANIFEST = [...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST];
 
 export const NEXT_LEGACY_REDIRECT_MANIFEST = [
-  { slug: "legacy-tab-chat", href: "/?tab=chat&surface=chat", expectedPath: "/chat", interaction: "open-inspector" },
+  { slug: "legacy-tab-chat", href: "/?tab=chat&surface=chat", expectedPath: "/chat" },
   {
     slug: "legacy-tab-assembly",
     href: "/?tab=assembly",
     expectedPath: "/chat",
     targetHref: "/chat",
-    interaction: "open-inspector",
   },
   { slug: "legacy-tab-tasks", href: "/?tab=tasks", expectedPath: "/ops/kanban", interaction: "open-inspector" },
   { slug: "legacy-tab-board", href: "/?tab=herd-live", expectedPath: "/ops/kanban", interaction: "open-inspector" },
-  { slug: "legacy-surface-chat", href: "/?surface=chat", expectedPath: "/chat", interaction: "open-inspector" },
+  { slug: "legacy-surface-chat", href: "/?surface=chat", expectedPath: "/chat" },
   {
     slug: "legacy-surface-cowork",
     href: "/?surface=cowork",
     expectedPath: "/chat",
     targetHref: "/chat",
-    interaction: "open-inspector",
   },
   {
     slug: "legacy-surface-code",
     href: "/?surface=code",
     expectedPath: "/chat",
     targetHref: "/chat",
-    interaction: "open-inspector",
   },
   {
     slug: "legacy-space-code",
     href: "/?space=operate&page=surface&surface=code",
     expectedPath: "/chat",
     targetHref: "/chat",
-    interaction: "open-inspector",
   },
   {
     slug: "legacy-space-activity",

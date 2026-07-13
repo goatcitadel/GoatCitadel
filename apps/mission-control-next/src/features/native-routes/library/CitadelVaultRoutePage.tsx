@@ -181,12 +181,12 @@ export function CitadelVaultRoutePage({
                     <div className="mc-next-vault-item-actions">
                       {revealed[secret.secretId] === undefined ? (
                         <NativeButton variant="default" onClick={() => void reveal(secret.secretId)}>
-                          <Eye className="h-4 w-4" />
+                          <Eye size={16} />
                           Reveal
                         </NativeButton>
                       ) : (
                         <NativeButton variant="default" onClick={() => hide(secret.secretId)}>
-                          <EyeOff className="h-4 w-4" />
+                          <EyeOff size={16} />
                           Hide
                         </NativeButton>
                       )}
@@ -196,7 +196,7 @@ export function CitadelVaultRoutePage({
                         onClick={() => setPendingDelete({ id: secret.secretId, name: secret.secretName })}
                         aria-label={`Delete ${secret.secretName}`}
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 size={16} />
                       </NativeButton>
                     </div>
                   </div>
@@ -245,7 +245,7 @@ export function CitadelVaultRoutePage({
             disabled={draft.busy || draft.name.trim().length === 0 || draft.value.length === 0}
             onClick={() => void store()}
           >
-            <Lock className="h-4 w-4" />
+            <Lock size={16} />
             {draft.busy ? "Sealing…" : "Seal & store"}
           </NativeButton>
         </NativeCard>
@@ -265,7 +265,7 @@ export function CitadelVaultRoutePage({
       />
 
       <p className="mc-next-citadel-footnote">
-        <Lock className="h-3 w-3" aria-hidden="true" />
+        <Lock size={12} aria-hidden="true" />
         AES-256-GCM, sealed under a per-Citadel key in your OS keychain. Per-Chamber keys and rotation are the deferred
         follow-on.
       </p>

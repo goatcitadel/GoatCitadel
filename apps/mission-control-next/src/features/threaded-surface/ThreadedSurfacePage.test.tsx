@@ -526,6 +526,7 @@ describe("ThreadedSurfacePage", () => {
 
     expect(breakpointStart).toBeGreaterThanOrEqual(0);
     expect(block).toContain(".mc-next-threaded-surface.unified .mc-next-threaded-rail");
+    expect(block).toContain("width: min(100%, calc(100vw - 1.75rem))");
     expect(block).toContain("position: fixed");
     expect(block).toContain("visibility: hidden");
     expect(block).toContain("pointer-events: none");
@@ -727,6 +728,8 @@ describe("ThreadedSurfacePage", () => {
     await act(async () => {
       renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
     });
+
+    expect(findButtonByAriaLabel(renderer!.root, "Hide project form").type).toBe("button");
 
     await act(async () => {
       renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.onClick();

@@ -220,11 +220,13 @@ export function ThreadedSurfacePage({
   surface,
   input,
   permissionState,
+  onCopyTrustReport,
   onOpenUniversalRunDetail,
 }: {
   surface: ChatMode;
   input: MissionThreadedRenderSurfaceInput;
   permissionState?: ThreadedPermissionState;
+  onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const railDrawerLayout = useMediaQuery("(width < 1180px)");
@@ -489,6 +491,7 @@ export function ThreadedSurfacePage({
             type="button"
             className={`mc-next-threaded-secondary${input.sessionRail.showProjectCreate ? " active" : ""}`}
             onClick={input.sessionRail.onToggleProjectCreate}
+            aria-label={input.sessionRail.showProjectCreate ? "Hide project form" : "Create project"}
           >
             <FolderPlus size={15} />
             <span>{input.sessionRail.showProjectCreate ? "Hide project" : "Project"}</span>
@@ -759,6 +762,7 @@ export function ThreadedSurfacePage({
                 props={input.contextDockProps}
                 permissionSummary={formatThreadedPermissionSummary(permissionState)}
                 permissionOverrideActive={Boolean(permissionState?.localOperatorOverrideId)}
+                onCopyTrustReport={onCopyTrustReport}
               />
             )}
           </aside>

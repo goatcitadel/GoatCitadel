@@ -876,6 +876,7 @@ describe("ThreadedComposer", () => {
     await click(findButton(renderer.root, "Review run details"));
 
     const textarea = renderer.root.findByType("textarea");
+    expect(textarea.props["aria-label"]).toBe("Message composer");
     await act(async () => {
       textarea.props.onChange({ target: { value: "Next prompt" } });
       textarea.props.onKeyDown({ key: "Enter" });

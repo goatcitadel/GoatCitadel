@@ -1355,6 +1355,15 @@ export function isExperimentalRoute(route: { area: PrimaryArea; section?: AppRou
   return ROUTE_RELEASE_SCOPE_BY_KEY.get(getRouteReleaseKey(route))?.status === "experimental";
 }
 
+/**
+ * True when a route is intentionally direct-URL-only. Hidden routes remain
+ * routable for compatibility and verification, but must not leak into primary
+ * navigation or command-palette discovery.
+ */
+export function isHiddenRoute(route: { area: PrimaryArea; section?: AppRoute["section"] }): boolean {
+  return (ROUTE_RELEASE_SCOPE_BY_KEY.get(getRouteReleaseKey(route))?.status ?? "hide") === "hide";
+}
+
 export function describeReleaseSurfaceStatus(status: ReleaseSurfaceStatus): string {
   if (status === "ship") {
     return "Release-ready";

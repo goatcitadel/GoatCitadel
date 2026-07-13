@@ -57,16 +57,16 @@ export function NativeLane({ title, count, items, selectedTaskId, onSelect }: Na
 
 function TaskStatusIcon({ status }: { status: TaskRecord["status"] }) {
   if (status === "blocked") {
-    return <AlertTriangle className="h-4 w-4" aria-hidden="true" />;
+    return <AlertTriangle size={16} aria-hidden="true" />;
   }
   if (status === "review") {
-    return <Eye className="h-4 w-4" aria-hidden="true" />;
+    return <Eye size={16} aria-hidden="true" />;
   }
   if (status === "in_progress" || status === "testing") {
-    return <PlayCircle className="h-4 w-4" aria-hidden="true" />;
+    return <PlayCircle size={16} aria-hidden="true" />;
   }
   if (status === "done") {
-    return <CheckCircle2 className="h-4 w-4" aria-hidden="true" />;
+    return <CheckCircle2 size={16} aria-hidden="true" />;
   }
-  return <CircleDashed className="h-4 w-4" aria-hidden="true" />;
+  return <CircleDashed size={16} aria-hidden="true" />;
 }

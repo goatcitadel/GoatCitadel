@@ -21,6 +21,7 @@ export function ThreadedSurfaceRoute({
   onOpenCode,
   onOpenTasks,
   onOpenApprovals,
+  onCopyTrustReport,
   onOpenStartHere,
   onOpenPersonalitiesSettings,
   onOpenLibraryArtifacts,
@@ -41,6 +42,7 @@ export function ThreadedSurfaceRoute({
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
   onOpenApprovals?: (approvalId?: string) => void;
+  onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
@@ -77,6 +79,7 @@ export function ThreadedSurfaceRoute({
           surface={surface}
           workspaceId={workspaceId}
           input={input}
+          onCopyTrustReport={onCopyTrustReport}
           onOpenUniversalRunDetail={onOpenUniversalRunDetail}
         />
       )}
@@ -88,11 +91,13 @@ function ThreadedSurfacePermissionBridge({
   surface,
   workspaceId,
   input,
+  onCopyTrustReport,
   onOpenUniversalRunDetail,
 }: {
   surface: ChatMode;
   workspaceId: string;
   input: MissionThreadedRenderSurfaceInput;
+  onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
   onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const selectedSessionId =
@@ -135,6 +140,7 @@ function ThreadedSurfacePermissionBridge({
       surface={surface}
       input={input}
       permissionState={permissionState}
+      onCopyTrustReport={onCopyTrustReport}
       onOpenUniversalRunDetail={onOpenUniversalRunDetail}
     />
   );

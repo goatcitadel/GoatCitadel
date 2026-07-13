@@ -958,7 +958,7 @@ export function RuntimeRoutePage({
                   {runtime.daemonBusy === "stop" ? "Stopping..." : "Stop daemon"}
                 </NativeButton>
                 <NativeButton variant="outline" className="subtle" onClick={() => void runtime.reload()}>
-                  <RefreshCw className="h-4 w-4" />
+                  <RefreshCw size={16} />
                   Refresh
                 </NativeButton>
               </div>
@@ -1421,6 +1421,23 @@ export function RuntimeRoutePage({
       loading={runtime.loading}
       error={runtime.error}
       metrics={headMetrics}
+      actions={
+        runtime.lastFetchedAt ? (
+          <div className="mc-next-runtime-actions">
+            <StatusChip tone={runtime.isStale ? "warning" : "success"}>
+              {runtime.isStale ? "Data stale" : `Updated ${formatRuntimeFreshnessTime(runtime.lastFetchedAt)}`}
+            </StatusChip>
+            <NativeButton
+              variant="secondary"
+              aria-label="Refresh Ops runtime data"
+              onClick={() => void runtime.reload()}
+            >
+              <RefreshCw size={16} />
+              Refresh
+            </NativeButton>
+          </div>
+        ) : undefined
+      }
       lead={leadContent}
       releaseStatus={getRouteReleaseScope(route).status}
     >
@@ -1432,6 +1449,17 @@ export function RuntimeRoutePage({
       {content}
     </NativePageFrame>
   );
+}
+
+export function formatRuntimeFreshnessTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) {
+    return "unknown";
+  }
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 /**
@@ -1535,7 +1563,7 @@ function ReleaseProofDashboardPanel({
       ]}
       actions={
         <NativeButton variant="outline" className="subtle" disabled={loading} onClick={() => void onRefresh()}>
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw size={16} />
           Refresh proof
         </NativeButton>
       }
@@ -1708,7 +1736,7 @@ function ReviewReadinessPanel({
       ]}
       actions={
         <NativeButton variant="outline" className="subtle" disabled={loading} onClick={() => void onRefresh()}>
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw size={16} />
           Refresh
         </NativeButton>
       }
@@ -2457,7 +2485,7 @@ function OpsDegradedSourcesStrip({
       description={describeOpsDegradedSources(degraded)}
       primaryAction={
         <NativeButton variant="outline" onClick={onRetry} disabled={retrying}>
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw size={16} />
           {retrying ? "Retrying..." : "Retry"}
         </NativeButton>
       }

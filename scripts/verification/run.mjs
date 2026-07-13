@@ -12,6 +12,7 @@ import {
   runAgenticPluginsMarketplaceLane,
   runAgenticSelfImprovementTrustLane,
   runAgenticWorkbenchLoopLane,
+  runAccessibilitySmokeLane,
   runA2AFullLane,
   runAuthMatrixLane,
   runApiCompatibilityLane,
@@ -63,6 +64,7 @@ const VALID_LANES = new Set([
   "api-compat",
   "operator-proof",
   "durable-recovery",
+  "accessibility-smoke",
   "surface-regression",
   "visual-regression",
   "visual-rebaseline",
@@ -105,6 +107,7 @@ const REVIEW_LANES = new Set([
   "a2a-full",
   "operator-proof",
   "durable-recovery",
+  "accessibility-smoke",
   "surface-regression",
   "visual-regression",
   "visual-rebaseline",
@@ -200,6 +203,8 @@ async function main() {
       await runOperatorProofLane(context, { profile });
     } else if (lane === "durable-recovery") {
       await runDurableRecoveryLane(context, { profile });
+    } else if (lane === "accessibility-smoke") {
+      await runAccessibilitySmokeLane(context, { profile });
     } else if (lane === "surface-regression") {
       await runSurfaceRegressionLane(context, { profile });
     } else if (lane === "visual-regression") {
@@ -265,6 +270,7 @@ async function main() {
       await runA2AFullLane(context);
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });
+      await runAccessibilitySmokeLane(context, { profile });
       await runSurfaceRegressionLane(context, { profile });
       await runVisualRegressionLane(context, { profile, updateBaselines: false });
       await runBackupRoundtripLane(context, { profile });

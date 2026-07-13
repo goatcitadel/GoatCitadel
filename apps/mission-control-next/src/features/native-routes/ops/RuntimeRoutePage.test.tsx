@@ -58,6 +58,8 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
   data: undefined as unknown,
   daemonBusy: null as null | "start" | "restart" | "stop",
   notice: undefined as unknown,
+  lastFetchedAt: null as number | null,
+  isStale: false,
   reload: vi.fn(),
   runDaemonAction: vi.fn(),
 }));
@@ -82,6 +84,8 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
         ? { tone: "success", message: "Daemon restarted." }
         : runtimeSnapshotOverrides.notice,
     daemonBusy: runtimeSnapshotOverrides.daemonBusy,
+    lastFetchedAt: runtimeSnapshotOverrides.lastFetchedAt,
+    isStale: runtimeSnapshotOverrides.isStale,
     reload: runtimeSnapshotOverrides.reload,
     runDaemonAction: runtimeSnapshotOverrides.runDaemonAction,
     data:
@@ -414,6 +418,8 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.data = undefined;
     runtimeSnapshotOverrides.daemonBusy = null;
     runtimeSnapshotOverrides.notice = undefined;
+    runtimeSnapshotOverrides.lastFetchedAt = null;
+    runtimeSnapshotOverrides.isStale = false;
     runtimeApiMocks.createCronJob.mockReset();
     runtimeApiMocks.draftAutomationRecipe.mockReset();
     runtimeApiMocks.exportActivepiecesWorkflowTemplate.mockReset();
@@ -445,6 +451,24 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("LLM runtime efficiency");
     expect(markup).toContain("Local engine fit");
     expect(markup).toContain("Eval evidence");
+  });
+
+  it("surfaces stale runtime data with a refresh action", () => {
+    runtimeSnapshotOverrides.lastFetchedAt = Date.parse("2026-07-12T12:00:00.000Z");
+    runtimeSnapshotOverrides.isStale = true;
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={2}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Data stale");
+    expect(markup).toContain('aria-label="Refresh Ops runtime data"');
   });
 
   it("keeps ops head metrics defensive when a partial gateway response omits dashboard lists", () => {

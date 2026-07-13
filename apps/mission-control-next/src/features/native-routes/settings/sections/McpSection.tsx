@@ -24,6 +24,7 @@ import {
   startMcpOAuth,
   updateMcpServer,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   nativeLoad,
@@ -46,6 +47,7 @@ import {
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import {
   createEmptyMcpRemotePreview,
   createEmptyMcpServerModeManifest,
@@ -56,6 +58,32 @@ import {
   isRuntimeInvokableMcpServer,
   parseMcpElicitationDraft,
 } from "../../SettingsNativePage";
+
+function createEmptyMcpCreateForm() {
+  return {
+    label: "",
+    transport: "stdio",
+    command: "",
+    url: "",
+    authType: "none" as McpServerRecord["authType"],
+    oauth: undefined as McpServerRecord["oauth"] | undefined,
+    enabled: true,
+  };
+}
+
+function createMcpEditForm(server: McpServerRecord | null) {
+  return {
+    label: server?.label ?? "",
+    command: server?.command ?? "",
+    url: server?.url ?? "",
+    enabled: server?.enabled ?? true,
+    category: server?.category ?? "development",
+  };
+}
+
+function areMcpDraftsEqual(a: object, b: object): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 export function McpSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
@@ -77,24 +105,13 @@ export function McpSection(_props: SettingsSectionProps) {
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [pendingDeleteServer, setPendingDeleteServer] = useState<{ serverId: string; label: string } | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState("");
   const [elicitationDrafts, setElicitationDrafts] = useState<Record<string, string>>({});
-  const [createForm, setCreateForm] = useState({
-    label: "",
-    transport: "stdio",
-    command: "",
-    url: "",
-    authType: "none" as McpServerRecord["authType"],
-    oauth: undefined as McpServerRecord["oauth"] | undefined,
-    enabled: true,
-  });
-  const [editForm, setEditForm] = useState({
-    label: "",
-    command: "",
-    url: "",
-    enabled: true,
-    category: "development",
-  });
+  const [createForm, setCreateForm] = useState(createEmptyMcpCreateForm);
+  const [editForm, setEditForm] = useState(() => createMcpEditForm(null));
+  const [editFormBaseline, setEditFormBaseline] = useState(() => createMcpEditForm(null));
   const [tools, setTools] = useState<Array<{ toolName: string; description?: string }>>([]);
   const [healthReport, setHealthReport] = useState<ConnectorDiagnosticReport | null>(null);
   const selectedServer =
@@ -107,6 +124,20 @@ export function McpSection(_props: SettingsSectionProps) {
     : selectedServer
       ? isRuntimeInvokableMcpServer(selectedServer)
       : false;
+  const editFormDirty = !areMcpDraftsEqual(editForm, editFormBaseline);
+  const createFormDirty = !areMcpDraftsEqual(createForm, createEmptyMcpCreateForm());
+  const elicitationDraftDirty = Object.values(elicitationDrafts).some((draft) => draft.trim() !== "{}");
+  useFormDirty("settings:mcp", editFormDirty || createFormDirty || elicitationDraftDirty, { label: "MCP" });
+
+  const resetMcpEditDraft = useCallback(() => {
+    setEditForm(editFormBaseline);
+    setHealthReport(null);
+  }, [editFormBaseline]);
+  const applyServerSelection = useCallback((serverId: string) => {
+    setSelectedServerId(serverId);
+    setHealthReport(null);
+  }, []);
+  const serverSelectionGuard = useDraftTransitionGuard(editFormDirty, applyServerSelection, resetMcpEditDraft);
 
   useEffect(() => {
     if (!data?.servers?.length) {
@@ -133,23 +164,26 @@ export function McpSection(_props: SettingsSectionProps) {
   }, [data?.pendingElicitations]);
 
   useEffect(() => {
+    if (editFormDirty) {
+      return;
+    }
     if (!selectedServer) {
-      setEditForm({ label: "", command: "", url: "", enabled: true, category: "development" });
+      const emptyEditForm = createMcpEditForm(null);
+      setEditForm(emptyEditForm);
+      setEditFormBaseline(emptyEditForm);
       setTools([]);
       return;
     }
-    setEditForm({
-      label: selectedServer.label,
-      command: selectedServer.command ?? "",
-      url: selectedServer.url ?? "",
-      enabled: selectedServer.enabled,
-      category: selectedServer.category,
-    });
+    const nextEditForm = createMcpEditForm(selectedServer);
+    setEditForm(nextEditForm);
+    setEditFormBaseline(nextEditForm);
     void fetchMcpTools(selectedServer.serverId)
       .then((result) =>
         setTools(result.items.map((item) => ({ toolName: item.toolName, description: item.description }))),
       )
       .catch(() => setTools([]));
+    // Preserve local edits across background health/connect reloads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedServer]);
 
   const handleCreate = async () => {
@@ -168,15 +202,7 @@ export function McpSection(_props: SettingsSectionProps) {
         enabled: isRuntimeInvokableMcpServer(createForm) ? createForm.enabled : false,
       });
       setNotice({ tone: "success", message: `MCP server ${created.label} created.` });
-      setCreateForm({
-        label: "",
-        transport: "stdio",
-        command: "",
-        url: "",
-        authType: "none",
-        oauth: undefined,
-        enabled: true,
-      });
+      setCreateForm(createEmptyMcpCreateForm());
       await reload();
       setSelectedServerId(created.serverId);
     } catch (createError) {
@@ -196,6 +222,7 @@ export function McpSection(_props: SettingsSectionProps) {
         enabled: selectedServerRuntimeReady ? editForm.enabled : false,
         category: editForm.category as McpServerRecord["category"],
       });
+      setEditFormBaseline(editForm);
       setNotice({ tone: "success", message: "MCP server updated." });
       await reload();
     } catch (saveError) {
@@ -210,6 +237,23 @@ export function McpSection(_props: SettingsSectionProps) {
       await reload();
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
+    }
+  };
+
+  const handleDeleteServer = async () => {
+    if (!pendingDeleteServer) {
+      return;
+    }
+    setDeletePending(true);
+    try {
+      await deleteMcpServer(pendingDeleteServer.serverId);
+      setNotice({ tone: "success", message: `MCP server ${pendingDeleteServer.label} deleted.` });
+      setPendingDeleteServer(null);
+      await reload();
+    } catch (deleteError) {
+      setNotice({ tone: "error", message: getErrorMessage(deleteError) });
+    } finally {
+      setDeletePending(false);
     }
   };
 
@@ -267,8 +311,10 @@ export function McpSection(_props: SettingsSectionProps) {
                 }))}
                 selectedId={selectedServerId}
                 onSelect={(serverId) => {
-                  setSelectedServerId(serverId);
-                  setHealthReport(null);
+                  if (serverId === selectedServerId) {
+                    return;
+                  }
+                  serverSelectionGuard.requestTransition(serverId);
                 }}
                 emptyLabel="No MCP servers configured."
                 maxHeight="min(38vh, 22rem)"
@@ -308,7 +354,7 @@ export function McpSection(_props: SettingsSectionProps) {
                     />
                   </SettingsField>
                 )}
-                <SettingsField label="Enabled">
+                <SettingsField label="Enabled" group>
                   <label className="mc-next-settings-toggle">
                     <input
                       type="checkbox"
@@ -586,7 +632,12 @@ export function McpSection(_props: SettingsSectionProps) {
                     <select
                       className="mc-next-settings-input"
                       value={editForm.category}
-                      onChange={(event) => setEditForm((current) => ({ ...current, category: event.target.value }))}
+                      onChange={(event) =>
+                        setEditForm((current) => ({
+                          ...current,
+                          category: event.target.value as McpServerRecord["category"],
+                        }))
+                      }
                     >
                       <option value="development">development</option>
                       <option value="browser">browser</option>
@@ -615,7 +666,7 @@ export function McpSection(_props: SettingsSectionProps) {
                       />
                     </SettingsField>
                   )}
-                  <SettingsField label="Enabled">
+                  <SettingsField label="Enabled" group>
                     <label className="mc-next-settings-toggle">
                       <input
                         type="checkbox"
@@ -735,12 +786,7 @@ export function McpSection(_props: SettingsSectionProps) {
                   <NativeButton
                     variant="destructive"
                     onClick={() =>
-                      void runServerAction(async () => {
-                        if (!window.confirm(`Delete MCP server ${selectedServer.label}?`)) {
-                          return;
-                        }
-                        await deleteMcpServer(selectedServer.serverId);
-                      }, "MCP server deleted.")
+                      setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label })
                     }
                   >
                     <Trash2 size={16} />
@@ -762,6 +808,26 @@ export function McpSection(_props: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={serverSelectionGuard.pendingTransition !== null}
+        danger
+        title="Discard MCP server changes?"
+        message="The selected MCP server has unsaved edits. Discard them and open another server?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={serverSelectionGuard.cancelDiscard}
+        onConfirm={serverSelectionGuard.confirmDiscard}
+      />
+      <ConfirmModal
+        open={pendingDeleteServer !== null}
+        danger
+        pending={deletePending}
+        title="Delete MCP server?"
+        message={`Delete "${pendingDeleteServer?.label ?? "this MCP server"}"? Its saved configuration will be permanently removed.`}
+        confirmLabel="Delete"
+        onCancel={() => setPendingDeleteServer(null)}
+        onConfirm={() => void handleDeleteServer()}
+      />
     </SettingsSectionShell>
   );
 }

@@ -2,6 +2,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   const {
     VISUAL_DIFF_RATIO_THRESHOLD,
     VISUAL_ROUTE_READY_TIMEOUT_MS,
+    appendTraceArtifact,
     assertBrowserConsoleHealthy,
     assertNextVisualScenarioChrome,
     assertNoFooterStatusCollision,
@@ -23,6 +24,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     seedMissionControlNextFixture,
     setBrowserCorrelation,
     stabilizeVisualRegressionSnapshot,
+    startBrowserTrace,
     startVerificationStack,
     stopVerificationStack,
     waitForVerificationRouteReady,
@@ -91,80 +93,109 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
               },
               async ({ correlationId }) => {
                 const browserLogCursor = browserLog.mark();
-                await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)), {
-                  waitUntil: "domcontentloaded",
-                });
-                try {
-                  await waitForVerificationRouteReady(
-                    page,
-                    route,
-                    verificationTarget.packageName,
-                    VISUAL_ROUTE_READY_TIMEOUT_MS,
-                  );
-                  await assertNextVisualScenarioChrome(page, route);
-                } catch (readyError) {
-                  return await captureRouteReadyFailure(context, {
-                    page,
-                    browserLog,
-                    browserLogCursor,
-                    route,
-                    variant,
-                    scenarioLane,
-                    timeoutMs: VISUAL_ROUTE_READY_TIMEOUT_MS,
-                    readyError,
-                  });
-                }
-                const correlationSessionId =
-                  (route?.fixtureSessionKey && fixture?.sessions?.[route.fixtureSessionKey]) || fixture?.sessionId;
-                await setBrowserCorrelation(page, correlationId, correlationSessionId);
-                const browserSanity = assertBrowserConsoleHealthy(
-                  browserLog,
-                  browserLogCursor,
-                  verificationTarget.packageName,
-                );
-                await page.evaluate(async () => {
-                  if (document.fonts?.ready) {
-                    await document.fonts.ready;
-                  }
-                });
-                await page.waitForTimeout(1000);
-                await stabilizeVisualRegressionSnapshot(page);
-                await assertNoFooterStatusCollision(page, { route, variant });
                 const baselineSlug = `visual-regression-${route.slug}-${variant.slug}`;
                 const artifactSlug = `${scenarioLane}-${route.slug}-${variant.slug}`;
-                const artifacts = await captureBrowserArtifacts(context, {
-                  slug: artifactSlug,
-                  page,
-                  browserLog,
-                  gatewayUrl: stack.gatewayUrl,
-                  correlationId,
-                  logCursor: browserLogCursor,
-                });
-                const comparison = await compareVisualBaseline(context, baselineSlug, {
-                  artifactSlug,
-                  updateBaselines,
-                  packageName: verificationTarget.packageName,
-                });
-                const failed = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
-                return {
-                  status: failed ? "failed" : "passed",
-                  error: failed
-                    ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
-                    : undefined,
-                  metrics: {
-                    route: route.href,
-                    variant: variant.slug,
-                    diffRatio: comparison.diffRatio,
-                    changedPixels: comparison.changedPixels,
-                    consoleErrors: browserSanity.consoleErrors.length,
-                    pageErrors: browserSanity.pageErrors.length,
-                  },
-                  artifacts: {
+                const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
+                let artifacts;
+                try {
+                  await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)), {
+                    waitUntil: "domcontentloaded",
+                  });
+                  try {
+                    await waitForVerificationRouteReady(
+                      page,
+                      route,
+                      verificationTarget.packageName,
+                      VISUAL_ROUTE_READY_TIMEOUT_MS,
+                    );
+                    await assertNextVisualScenarioChrome(page, route);
+                  } catch (readyError) {
+                    const readyFailure = await captureRouteReadyFailure(context, {
+                      page,
+                      browserLog,
+                      browserLogCursor,
+                      route,
+                      variant,
+                      scenarioLane,
+                      timeoutMs: VISUAL_ROUTE_READY_TIMEOUT_MS,
+                      readyError,
+                    });
+                    const traceArtifact = await trace.retain().catch(() => null);
+                    return {
+                      ...readyFailure,
+                      artifacts: appendTraceArtifact(readyFailure.artifacts, traceArtifact),
+                    };
+                  }
+                  const correlationSessionId =
+                    (route?.fixtureSessionKey && fixture?.sessions?.[route.fixtureSessionKey]) || fixture?.sessionId;
+                  await setBrowserCorrelation(page, correlationId, correlationSessionId);
+                  const browserSanity = assertBrowserConsoleHealthy(
+                    browserLog,
+                    browserLogCursor,
+                    verificationTarget.packageName,
+                  );
+                  await page.evaluate(async () => {
+                    if (document.fonts?.ready) {
+                      await document.fonts.ready;
+                    }
+                  });
+                  await page.waitForTimeout(1000);
+                  await stabilizeVisualRegressionSnapshot(page);
+                  await assertNoFooterStatusCollision(page, { route, variant });
+                  artifacts = await captureBrowserArtifacts(context, {
+                    slug: artifactSlug,
+                    page,
+                    browserLog,
+                    gatewayUrl: stack.gatewayUrl,
+                    correlationId,
+                    logCursor: browserLogCursor,
+                  });
+                  const comparison = await compareVisualBaseline(context, baselineSlug, {
+                    artifactSlug,
+                    updateBaselines,
+                    packageName: verificationTarget.packageName,
+                  });
+                  const failed = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
+                  const comparisonArtifacts = {
                     ...artifacts,
                     screenshots: [...artifacts.screenshots, ...comparison.screenshots],
                     diagnostics: [...artifacts.diagnostics, ...comparison.diagnostics],
-                  },
-                };
+                  };
+                  const traceArtifact = failed ? await trace.retain().catch(() => null) : null;
+                  return {
+                    status: failed ? "failed" : "passed",
+                    error: failed
+                      ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
+                      : undefined,
+                    metrics: {
+                      route: route.href,
+                      variant: variant.slug,
+                      diffRatio: comparison.diffRatio,
+                      changedPixels: comparison.changedPixels,
+                      consoleErrors: browserSanity.consoleErrors.length,
+                      pageErrors: browserSanity.pageErrors.length,
+                    },
+                    artifacts: appendTraceArtifact(comparisonArtifacts, traceArtifact),
+                  };
+                } catch (error) {
+                  artifacts ??= await captureBrowserArtifacts(context, {
+                    slug: `${artifactSlug}-failure`,
+                    page,
+                    browserLog,
+                    gatewayUrl: stack.gatewayUrl,
+                    correlationId,
+                    logCursor: browserLogCursor,
+                  });
+                  const traceArtifact = await trace.retain().catch(() => null);
+                  return {
+                    status: "failed",
+                    error: formatBrowserFailure(error),
+                    metrics: { route: route.href, variant: variant.slug },
+                    artifacts: appendTraceArtifact(artifacts, traceArtifact),
+                  };
+                } finally {
+                  await trace.discard().catch(() => undefined);
+                }
               },
             );
             if (verificationTarget.isNext && scenarioRecord?.artifacts?.screenshots?.length) {
@@ -190,4 +221,8 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     await stopVerificationStack(stack);
   }
 
+}
+
+function formatBrowserFailure(error) {
+  return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }

@@ -729,36 +729,27 @@ describe("ThreadedTimeline", () => {
     ).toEqual(["Actions"]);
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    // Corrected a11y contract: the turn surface is a toggle-like control (role="button")
-    // with a human-readable accessible name derived from the user message, reflecting
-    // selection via aria-pressed rather than aria-current.
-    expect(turnSurface.props.role).toBe("button");
-    expect(turnSurface.props.tabIndex).toBe(0);
-    expect(turnSurface.props["aria-current"]).toBeUndefined();
-    expect(turnSurface.props["aria-label"]?.startsWith("Open turn:")).toBe(true);
+    // The pointer surface is intentionally non-interactive in the accessibility tree;
+    // an explicit button owns keyboard activation and selection state.
+    expect(turnSurface.props.role).toBeUndefined();
+    expect(turnSurface.props.tabIndex).toBeUndefined();
+    expect(turnSurface.props["aria-label"]).toBeUndefined();
+    const openTurnButton = renderer.root.find(
+      (node) => node.type === "button" && String(node.props["aria-label"] ?? "").startsWith("Open turn:"),
+    );
+    expect(openTurnButton.props.type).toBe("button");
+    expect(openTurnButton.props["aria-pressed"]).toBe(false);
     const currentTarget = {};
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
       turnSurface.props.onClick({ target: { closest: () => currentTarget }, currentTarget });
-      turnSurface.props.onKeyDown({
-        key: "Enter",
-        target: currentTarget,
-        currentTarget,
-        preventDefault: vi.fn(),
-      });
-      turnSurface.props.onKeyDown({
-        key: " ",
-        target: currentTarget,
-        currentTarget,
-        preventDefault: vi.fn(),
-      });
+      openTurnButton.props.onClick();
       turnSurface.props.onClick({ target: { closest: () => ({ tagName: "BUTTON" }) }, currentTarget });
     });
-    expect(props.onSelectTurn).toHaveBeenCalledTimes(4);
+    expect(props.onSelectTurn).toHaveBeenCalledTimes(3);
     expect(props.onSelectTurn).toHaveBeenNthCalledWith(1, "turn-1");
     expect(props.onSelectTurn).toHaveBeenNthCalledWith(2, "turn-1");
     expect(props.onSelectTurn).toHaveBeenNthCalledWith(3, "turn-1");
-    expect(props.onSelectTurn).toHaveBeenNthCalledWith(4, "turn-1");
 
     const contextTurn = renderer.root.findByProps({ "aria-label": "Add turn turn-1 as context" });
     TestRenderer.act(() => {

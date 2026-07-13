@@ -292,11 +292,11 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       actions={
         <>
           <NativeButton variant="secondary" onClick={() => void copyEvalProofExport()} disabled={exporting}>
-            <ClipboardCopy className="h-4 w-4" />
+            <ClipboardCopy size={16} />
             {exporting ? "Exporting..." : "Copy eval proof export"}
           </NativeButton>
           <NativeButton variant="secondary" onClick={() => void reload()}>
-            <BarChart3 className="h-4 w-4" />
+            <BarChart3 size={16} />
             Refresh
           </NativeButton>
         </>
@@ -414,7 +414,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                   onClick={() => void copyPromptPackExportPath()}
                   disabled={!selectedExport}
                 >
-                  <ClipboardCopy className="h-4 w-4" />
+                  <ClipboardCopy size={16} />
                   Copy prompt-pack export path
                 </NativeButton>
                 <NativeButton variant="secondary" onClick={() => openPromptPackWorkbench(selectedPack?.packId)}>
@@ -739,7 +739,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           />
           <div className="mc-next-approvals-inline-actions">
             <NativeButton variant="secondary" onClick={() => void copyOtelQualityExport()} disabled={otelExporting}>
-              <ClipboardCopy className="h-4 w-4" />
+              <ClipboardCopy size={16} />
               {otelExporting ? "Exporting..." : "Copy OTel evidence"}
             </NativeButton>
           </div>

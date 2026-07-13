@@ -520,21 +520,21 @@ export function CoworkNativePage({
               variant="default"
               onClick={() => navigate({ area: "cowork", section: "tasks", theme: route.theme })}
             >
-              <Workflow className="h-4 w-4" />
+              <Workflow size={16} />
               Review tasks
             </NativeButton>
             <NativeButton
               variant="secondary"
               onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
             >
-              <CheckCircle2 className="h-4 w-4" />
+              <CheckCircle2 size={16} />
               Approval queue
             </NativeButton>
             <NativeButton
               variant="secondary"
               onClick={() => navigate({ area: "ops", section: "kanban", theme: route.theme })}
             >
-              <LayoutDashboard className="h-4 w-4" />
+              <LayoutDashboard size={16} />
               Run kanban
             </NativeButton>
           </LibraryButtonRow>
@@ -570,7 +570,7 @@ export function CoworkNativePage({
                     variant="default"
                     onClick={() => navigate({ area: "cowork", section: "tasks", theme: route.theme })}
                   >
-                    <Workflow className="h-4 w-4" />
+                    <Workflow size={16} />
                     Open task detail
                   </NativeButton>
                   {selectedTask.status === "blocked" ? (
@@ -578,7 +578,7 @@ export function CoworkNativePage({
                       variant="secondary"
                       onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
                     >
-                      <CheckCircle2 className="h-4 w-4" />
+                      <CheckCircle2 size={16} />
                       Review approvals
                     </NativeButton>
                   ) : null}
@@ -687,11 +687,11 @@ export function CoworkNativePage({
             </LibraryFieldGrid>
             <LibraryButtonRow>
               <NativeButton variant="default" onClick={() => void handleCreateTask()}>
-                <Plus className="h-4 w-4" />
+                <Plus size={16} />
                 Create task
               </NativeButton>
               <NativeButton variant="secondary" onClick={() => void refreshCowork()}>
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw size={16} />
                 Refresh
               </NativeButton>
             </LibraryButtonRow>
@@ -809,17 +809,17 @@ export function CoworkNativePage({
                       onClick={() => void handleSaveTask()}
                       disabled={Boolean(selectedTask.deletedAt)}
                     >
-                      <Save className="h-4 w-4" />
+                      <Save size={16} />
                       Save task
                     </NativeButton>
                     {selectedTask.deletedAt ? (
                       <NativeButton variant="secondary" onClick={() => void handleRestoreTask()}>
-                        <Undo2 className="h-4 w-4" />
+                        <Undo2 size={16} />
                         Restore
                       </NativeButton>
                     ) : (
                       <NativeButton variant="destructive" onClick={() => void handleDeleteTask()}>
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 size={16} />
                         Move to trash
                       </NativeButton>
                     )}
@@ -877,7 +877,7 @@ export function CoworkNativePage({
                       onClick={() => void handleAddDeliverable()}
                       disabled={Boolean(selectedTask.deletedAt)}
                     >
-                      <Plus className="h-4 w-4" />
+                      <Plus size={16} />
                       Add deliverable
                     </NativeButton>
                   </LibraryButtonRow>
@@ -929,22 +929,18 @@ export function CoworkNativePage({
         aria-label="Chat next action"
       >
         <div>
-          {leadIsBlocker ? (
-            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <Workflow className="h-4 w-4" aria-hidden="true" />
-          )}
+          {leadIsBlocker ? <AlertTriangle size={16} aria-hidden="true" /> : <Workflow size={16} aria-hidden="true" />}
           <strong>{leadIsBlocker ? "Blocked" : `Next: ${coworkContinuation.nextActionLabel}`}</strong>
         </div>
         <p>{coworkContinuation.nextActionDetail}</p>
         {leadIsBlocker ? (
           <NativeButton variant="secondary" onClick={handleOpenBlocker}>
-            <AlertTriangle className="h-4 w-4" />
+            <AlertTriangle size={16} />
             Open blocker
           </NativeButton>
         ) : (
           <NativeButton variant="default" onClick={() => navigate({ area: "cowork", theme: route.theme })}>
-            <Workflow className="h-4 w-4" />
+            <Workflow size={16} />
             Continue Plan
           </NativeButton>
         )}

@@ -70,6 +70,7 @@ export function NativeSelectableList({
         .join(" ")}
       data-native-scroll={maxHeight ? "true" : undefined}
       style={maxHeight ? { maxHeight } : undefined}
+      role={ariaLabel ? "group" : undefined}
       aria-label={ariaLabel}
     >
       {children ??
@@ -78,6 +79,7 @@ export function NativeSelectableList({
             key={item.id}
             type="button"
             className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
+            aria-pressed={selectedId === undefined ? undefined : selectedId === item.id}
             onClick={() => onSelect?.(item.id)}
           >
             <div className="mc-next-settings-selectable-head">

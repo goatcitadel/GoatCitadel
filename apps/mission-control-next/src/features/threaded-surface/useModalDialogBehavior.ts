@@ -35,7 +35,7 @@ export function useModalDialogBehavior({ open, onClose, containerRef }: ModalDia
   });
 
   useEffect(() => {
-    if (!open || typeof document === "undefined") {
+    if (!open || typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return undefined;
     }
     const previouslyFocused = asFocusable(document.activeElement);

@@ -162,7 +162,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
           />
           <LibraryButtonRow>
             <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Refresh
             </button>
             <button
@@ -170,7 +170,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
               className="mc-next-settings-filter"
               onClick={() => navigate({ area: "ops", section: "quality", theme: route.theme })}
             >
-              <Waypoints className="h-4 w-4" />
+              <Waypoints size={16} />
               Ops quality
             </button>
           </LibraryButtonRow>
@@ -320,7 +320,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                     disabled={saving || !selectedTestId}
                     onClick={() => void saveJudgment()}
                   >
-                    <Scale className="h-4 w-4" />
+                    <Scale size={16} />
                     Save judgment
                   </NativeButton>
                 </LibraryButtonRow>

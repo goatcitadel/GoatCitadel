@@ -8,7 +8,7 @@ const assetsRoot = path.join(distRoot, "assets");
 const monacoRoot = path.join(distRoot, "vendor", "monaco", "vs");
 
 const budgets = {
-  initialCssBytes: 180 * 1024,
+  initialCssBytes: 100 * 1024,
   initialJsBytes: 450 * 1024,
   lazyJsBytes: 900 * 1024,
 };
@@ -79,6 +79,9 @@ const initialCssSize = stylesheetAssets.reduce((sum, assetName) => {
   }
   return sum + fs.statSync(assetPath).size;
 }, 0);
+if (stylesheetAssets.some((assetName) => assetName.includes("webawesome"))) {
+  fail("Mission Control Next must not eagerly load the unused WebAwesome stylesheet.");
+}
 if (initialCssSize > budgets.initialCssBytes) {
   fail(`Initial shell CSS is ${initialCssSize} bytes; budget is ${budgets.initialCssBytes} bytes.`);
 }

@@ -77,7 +77,7 @@ export function NewSessionButton({
       onClick={onSelect}
     >
       <span className="mc-next-new-session-button-swatch" aria-hidden="true" />
-      <MessageSquarePlus className="h-4 w-4" />
+      <MessageSquarePlus size={16} />
       {label}
     </button>
   );

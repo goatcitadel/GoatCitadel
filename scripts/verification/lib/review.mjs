@@ -55,6 +55,9 @@ function buildReviewItem(item) {
 
 function classifyFailureFamily(item) {
   const haystack = `${item.title} ${item.error ?? ""} ${item.notes.join(" ")} ${item.subsystem}`.toLowerCase();
+  if (/accessibility|axe-core|\baxe\b|wcag|focus-visible/.test(haystack)) {
+    return "accessibility";
+  }
   if (/401|403|auth|authentication failed|api key|missing secret/.test(haystack)) {
     return "provider_auth";
   }
@@ -98,6 +101,9 @@ function classifySeverity(item, family) {
   if (["install_failure", "client_render", "sse"].includes(family)) {
     return "critical";
   }
+  if (family === "accessibility") {
+    return "high";
+  }
   if (["provider_auth", "voice_runtime_failure", "addon_readiness", "orchestration_route_mismatch"].includes(family)) {
     return "high";
   }
@@ -111,6 +117,9 @@ function deriveLikelySurfaces(item, family) {
   const surfaces = new Set([item.subsystem]);
   if (family === "client_render") {
     // W5 Phase 1: legacy `apps/mission-control` retired; next is the only client renderer.
+    surfaces.add("apps/mission-control-next");
+  }
+  if (family === "accessibility") {
     surfaces.add("apps/mission-control-next");
   }
   if (family === "sse") {
@@ -165,6 +174,11 @@ function buildChecklist(item, family) {
   }
   if (family === "visual_perf_regression") {
     checklist.push("Review performance artifacts for long tasks, effects mode, and scroll jank.");
+  }
+  if (family === "accessibility") {
+    checklist.push(
+      "Review the axe rule targets, keyboard focus sample, and captured route state before changing UI semantics.",
+    );
   }
   return checklist;
 }
@@ -236,6 +250,8 @@ function deriveRecommendedReruns(items) {
       reruns.add("pnpm verify:deep:ecosystem");
     } else if (item.family === "visual_perf_regression") {
       reruns.add("pnpm verify:deep:core");
+    } else if (item.family === "accessibility") {
+      reruns.add("pnpm verify:accessibility:smoke");
     }
   }
   if (reruns.size === 0) {

@@ -15,6 +15,7 @@ import {
   updateCitadel,
   updateWorkspace,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   type Notice,
@@ -32,6 +33,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
+import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import { formatDateTime } from "../../SettingsNativePage";
 
 const CITADEL_KIND_OPTIONS: Array<CitadelRecord["kind"]> = [
@@ -46,6 +48,39 @@ const CITADEL_KIND_OPTIONS: Array<CitadelRecord["kind"]> = [
   "custom",
 ];
 
+type DirectoryView = "active" | "archived" | "all";
+type DirectoryTransition = { kind: "select"; id: string } | { kind: "filter"; view: DirectoryView };
+type PendingArchive = { kind: "citadel" | "workspace"; id: string; label: string };
+
+function createEmptyCitadelDraft() {
+  return { name: "", description: "", slug: "", kind: "custom" };
+}
+
+function createCitadelEditDraft(citadel: CitadelRecord | null) {
+  return {
+    name: citadel?.name ?? "",
+    description: citadel?.description ?? "",
+    slug: citadel?.slug ?? "",
+    kind: citadel?.kind ?? "custom",
+  };
+}
+
+function createEmptyWorkspaceDraft() {
+  return { name: "", description: "", slug: "" };
+}
+
+function createWorkspaceEditDraft(workspace: { name: string; description?: string; slug: string } | null) {
+  return {
+    name: workspace?.name ?? "",
+    description: workspace?.description ?? "",
+    slug: workspace?.slug ?? "",
+  };
+}
+
+function areDirectoryDraftsEqual(a: object, b: object): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function WorkspacesSection({
   activeCitadelId,
   activeCitadelName,
@@ -53,8 +88,8 @@ export function WorkspacesSection({
   setActiveCitadelId,
   setActiveWorkspaceId,
 }: SettingsSectionProps) {
-  const [view, setView] = useState<"active" | "archived" | "all">("all");
-  const [citadelView, setCitadelView] = useState<"active" | "archived" | "all">("all");
+  const [view, setView] = useState<DirectoryView>("all");
+  const [citadelView, setCitadelView] = useState<DirectoryView>("all");
   const load = useCallback(
     async () => (activeCitadelId ? fetchWorkspaces("all", 500, activeCitadelId) : fetchWorkspaces("all", 500)),
     [activeCitadelId],
@@ -70,28 +105,14 @@ export function WorkspacesSection({
   const [selectedCitadelId, setSelectedCitadelId] = useState(activeCitadelId ?? "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [citadelCreateForm, setCitadelCreateForm] = useState({
-    name: "",
-    description: "",
-    slug: "",
-    kind: "custom",
-  });
-  const [citadelEditForm, setCitadelEditForm] = useState({
-    name: "",
-    description: "",
-    slug: "",
-    kind: "custom",
-  });
-  const [createForm, setCreateForm] = useState({
-    name: "",
-    description: "",
-    slug: "",
-  });
-  const [editForm, setEditForm] = useState({
-    name: "",
-    description: "",
-    slug: "",
-  });
+  const [citadelCreateForm, setCitadelCreateForm] = useState(createEmptyCitadelDraft);
+  const [citadelEditForm, setCitadelEditForm] = useState(() => createCitadelEditDraft(null));
+  const [citadelEditBaseline, setCitadelEditBaseline] = useState(() => createCitadelEditDraft(null));
+  const [createForm, setCreateForm] = useState(createEmptyWorkspaceDraft);
+  const [editForm, setEditForm] = useState(() => createWorkspaceEditDraft(null));
+  const [workspaceEditBaseline, setWorkspaceEditBaseline] = useState(() => createWorkspaceEditDraft(null));
+  const [pendingArchive, setPendingArchive] = useState<PendingArchive | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
 
   const filtered = useMemo(() => {
     const items = data?.items ?? [];
@@ -109,6 +130,47 @@ export function WorkspacesSection({
   }, [citadelView, citadelsData?.items]);
   const selectedCitadel = (citadelsData?.items ?? []).find((item) => item.citadelId === selectedCitadelId) ?? null;
   const selectedWorkspace = (data?.items ?? []).find((item) => item.workspaceId === selectedWorkspaceId) ?? null;
+  const citadelEditDirty = !areDirectoryDraftsEqual(citadelEditForm, citadelEditBaseline);
+  const workspaceEditDirty = !areDirectoryDraftsEqual(editForm, workspaceEditBaseline);
+  const citadelCreateDirty = !areDirectoryDraftsEqual(citadelCreateForm, createEmptyCitadelDraft());
+  const workspaceCreateDirty = !areDirectoryDraftsEqual(createForm, createEmptyWorkspaceDraft());
+  useFormDirty(
+    "settings:workspaces",
+    citadelEditDirty || workspaceEditDirty || citadelCreateDirty || workspaceCreateDirty,
+    { label: "Workspaces" },
+  );
+
+  const resetCitadelEditDraft = useCallback(() => {
+    setCitadelEditForm(citadelEditBaseline);
+  }, [citadelEditBaseline]);
+  const applyCitadelTransition = useCallback((transition: DirectoryTransition) => {
+    if (transition.kind === "filter") {
+      setCitadelView(transition.view);
+      return;
+    }
+    setSelectedCitadelId(transition.id);
+  }, []);
+  const citadelTransitionGuard = useDraftTransitionGuard(
+    citadelEditDirty,
+    applyCitadelTransition,
+    resetCitadelEditDraft,
+  );
+
+  const resetWorkspaceEditDraft = useCallback(() => {
+    setEditForm(workspaceEditBaseline);
+  }, [workspaceEditBaseline]);
+  const applyWorkspaceTransition = useCallback((transition: DirectoryTransition) => {
+    if (transition.kind === "filter") {
+      setView(transition.view);
+      return;
+    }
+    setSelectedWorkspaceId(transition.id);
+  }, []);
+  const workspaceTransitionGuard = useDraftTransitionGuard(
+    workspaceEditDirty,
+    applyWorkspaceTransition,
+    resetWorkspaceEditDraft,
+  );
 
   useEffect(() => {
     setSelectedCitadelId((current) => activeCitadelId || current);
@@ -127,16 +189,20 @@ export function WorkspacesSection({
   }, [filteredCitadels]);
 
   useEffect(() => {
-    if (!selectedCitadel) {
-      setCitadelEditForm({ name: "", description: "", slug: "", kind: "custom" });
+    if (citadelEditDirty) {
       return;
     }
-    setCitadelEditForm({
-      name: selectedCitadel.name,
-      description: selectedCitadel.description ?? "",
-      slug: selectedCitadel.slug,
-      kind: selectedCitadel.kind,
-    });
+    if (!selectedCitadel) {
+      const emptyEditDraft = createCitadelEditDraft(null);
+      setCitadelEditForm(emptyEditDraft);
+      setCitadelEditBaseline(emptyEditDraft);
+      return;
+    }
+    const nextEditDraft = createCitadelEditDraft(selectedCitadel);
+    setCitadelEditForm(nextEditDraft);
+    setCitadelEditBaseline(nextEditDraft);
+    // Preserve local edits while background directory data refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCitadel]);
 
   useEffect(() => {
@@ -150,15 +216,20 @@ export function WorkspacesSection({
   }, [filtered]);
 
   useEffect(() => {
-    if (!selectedWorkspace) {
-      setEditForm({ name: "", description: "", slug: "" });
+    if (workspaceEditDirty) {
       return;
     }
-    setEditForm({
-      name: selectedWorkspace.name,
-      description: selectedWorkspace.description ?? "",
-      slug: selectedWorkspace.slug,
-    });
+    if (!selectedWorkspace) {
+      const emptyEditDraft = createWorkspaceEditDraft(null);
+      setEditForm(emptyEditDraft);
+      setWorkspaceEditBaseline(emptyEditDraft);
+      return;
+    }
+    const nextEditDraft = createWorkspaceEditDraft(selectedWorkspace);
+    setEditForm(nextEditDraft);
+    setWorkspaceEditBaseline(nextEditDraft);
+    // Preserve local edits while background directory data refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWorkspace]);
 
   const handleCreateCitadel = async () => {
@@ -174,7 +245,7 @@ export function WorkspacesSection({
         kind: citadelCreateForm.kind as CitadelRecord["kind"],
       });
       setNotice({ tone: "success", message: `Citadel ${created.name} created.` });
-      setCitadelCreateForm({ name: "", description: "", slug: "", kind: "custom" });
+      setCitadelCreateForm(createEmptyCitadelDraft());
       await reloadCitadels();
       setSelectedCitadelId(created.citadelId);
       setActiveCitadelId?.(created.citadelId);
@@ -194,26 +265,11 @@ export function WorkspacesSection({
         slug: citadelEditForm.slug.trim() || undefined,
         kind: citadelEditForm.kind as CitadelRecord["kind"],
       });
+      setCitadelEditBaseline(citadelEditForm);
       setNotice({ tone: "success", message: `Citadel ${updated.name} updated.` });
       await reloadCitadels();
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    }
-  };
-
-  const handleArchiveCitadel = async () => {
-    if (!selectedCitadel) {
-      return;
-    }
-    if (!window.confirm(`Archive Citadel ${selectedCitadel.name}?`)) {
-      return;
-    }
-    try {
-      await archiveCitadel(selectedCitadel.citadelId);
-      setNotice({ tone: "success", message: `Citadel ${selectedCitadel.name} archived.` });
-      await reloadCitadels();
-    } catch (archiveError) {
-      setNotice({ tone: "error", message: getErrorMessage(archiveError) });
     }
   };
 
@@ -243,7 +299,7 @@ export function WorkspacesSection({
         slug: createForm.slug.trim() || undefined,
       });
       setNotice({ tone: "success", message: `Workspace ${created.name} created.` });
-      setCreateForm({ name: "", description: "", slug: "" });
+      setCreateForm(createEmptyWorkspaceDraft());
       await reload();
       setSelectedWorkspaceId(created.workspaceId);
       setActiveWorkspaceId(created.workspaceId);
@@ -262,6 +318,7 @@ export function WorkspacesSection({
         description: editForm.description.trim() || undefined,
         slug: editForm.slug.trim() || undefined,
       });
+      setWorkspaceEditBaseline(editForm);
       setNotice({ tone: "success", message: `Workspace ${updated.name} updated.` });
       await reload();
     } catch (saveError) {
@@ -269,19 +326,26 @@ export function WorkspacesSection({
     }
   };
 
-  const handleArchive = async () => {
-    if (!selectedWorkspace) {
+  const handleConfirmArchive = async () => {
+    if (!pendingArchive) {
       return;
     }
-    if (!window.confirm(`Archive workspace ${selectedWorkspace.name}?`)) {
-      return;
-    }
+    setArchiveBusy(true);
     try {
-      await archiveWorkspace(selectedWorkspace.workspaceId);
-      setNotice({ tone: "success", message: `Workspace ${selectedWorkspace.name} archived.` });
-      await reload();
+      if (pendingArchive.kind === "citadel") {
+        await archiveCitadel(pendingArchive.id);
+        setNotice({ tone: "success", message: `Citadel ${pendingArchive.label} archived.` });
+        await reloadCitadels();
+      } else {
+        await archiveWorkspace(pendingArchive.id);
+        setNotice({ tone: "success", message: `Workspace ${pendingArchive.label} archived.` });
+        await reload();
+      }
+      setPendingArchive(null);
     } catch (archiveError) {
       setNotice({ tone: "error", message: getErrorMessage(archiveError) });
+    } finally {
+      setArchiveBusy(false);
     }
   };
 
@@ -334,7 +398,16 @@ export function WorkspacesSection({
                 { id: "archived", label: "Archived" },
               ]}
               value={citadelView}
-              onChange={(next) => setCitadelView(next as "active" | "archived" | "all")}
+              onChange={(next) => {
+                const nextView = next as DirectoryView;
+                const hidesSelection =
+                  selectedCitadel !== null && nextView !== "all" && selectedCitadel.lifecycleStatus !== nextView;
+                if (hidesSelection) {
+                  citadelTransitionGuard.requestTransition({ kind: "filter", view: nextView });
+                } else {
+                  setCitadelView(nextView);
+                }
+              }}
             />
             <NativeSelectableList
               items={filteredCitadels.map((item) => ({
@@ -344,7 +417,11 @@ export function WorkspacesSection({
                 body: item.description || item.slug,
               }))}
               selectedId={selectedCitadelId}
-              onSelect={setSelectedCitadelId}
+              onSelect={(citadelId) => {
+                if (citadelId !== selectedCitadelId) {
+                  citadelTransitionGuard.requestTransition({ kind: "select", id: citadelId });
+                }
+              }}
               emptyLabel="No Citadels in this view."
               maxHeight="14rem"
             />
@@ -360,7 +437,12 @@ export function WorkspacesSection({
                 <select
                   className="mc-next-settings-input"
                   value={citadelCreateForm.kind}
-                  onChange={(event) => setCitadelCreateForm((current) => ({ ...current, kind: event.target.value }))}
+                  onChange={(event) =>
+                    setCitadelCreateForm((current) => ({
+                      ...current,
+                      kind: event.target.value as CitadelRecord["kind"],
+                    }))
+                  }
                 >
                   {CITADEL_KIND_OPTIONS.map((kind) => (
                     <option key={kind} value={kind}>
@@ -400,7 +482,12 @@ export function WorkspacesSection({
                     <select
                       className="mc-next-settings-input"
                       value={citadelEditForm.kind}
-                      onChange={(event) => setCitadelEditForm((current) => ({ ...current, kind: event.target.value }))}
+                      onChange={(event) =>
+                        setCitadelEditForm((current) => ({
+                          ...current,
+                          kind: event.target.value as CitadelRecord["kind"],
+                        }))
+                      }
                     >
                       {CITADEL_KIND_OPTIONS.map((kind) => (
                         <option key={kind} value={kind}>
@@ -441,7 +528,16 @@ export function WorkspacesSection({
                       Restore
                     </NativeButton>
                   ) : (
-                    <NativeButton variant="destructive" onClick={() => void handleArchiveCitadel()}>
+                    <NativeButton
+                      variant="destructive"
+                      onClick={() =>
+                        setPendingArchive({
+                          kind: "citadel",
+                          id: selectedCitadel.citadelId,
+                          label: selectedCitadel.name,
+                        })
+                      }
+                    >
                       <Trash2 size={16} />
                       Archive
                     </NativeButton>
@@ -516,7 +612,16 @@ export function WorkspacesSection({
                 { id: "archived", label: "Archived" },
               ]}
               value={view}
-              onChange={(next) => setView(next as "active" | "archived" | "all")}
+              onChange={(next) => {
+                const nextView = next as DirectoryView;
+                const hidesSelection =
+                  selectedWorkspace !== null && nextView !== "all" && selectedWorkspace.lifecycleStatus !== nextView;
+                if (hidesSelection) {
+                  workspaceTransitionGuard.requestTransition({ kind: "filter", view: nextView });
+                } else {
+                  setView(nextView);
+                }
+              }}
             />
             <NativeSelectableList
               items={filtered.map((item) => ({
@@ -526,7 +631,11 @@ export function WorkspacesSection({
                 body: item.description || item.slug,
               }))}
               selectedId={selectedWorkspaceId}
-              onSelect={setSelectedWorkspaceId}
+              onSelect={(workspaceId) => {
+                if (workspaceId !== selectedWorkspaceId) {
+                  workspaceTransitionGuard.requestTransition({ kind: "select", id: workspaceId });
+                }
+              }}
               emptyLabel="No workspaces in this view."
               maxHeight="min(42vh, 23rem)"
             />
@@ -592,7 +701,16 @@ export function WorkspacesSection({
                     Restore
                   </NativeButton>
                 ) : (
-                  <NativeButton variant="destructive" onClick={() => void handleArchive()}>
+                  <NativeButton
+                    variant="destructive"
+                    onClick={() =>
+                      setPendingArchive({
+                        kind: "workspace",
+                        id: selectedWorkspace.workspaceId,
+                        label: selectedWorkspace.name,
+                      })
+                    }
+                  >
                     <Trash2 size={16} />
                     Archive
                   </NativeButton>
@@ -604,6 +722,36 @@ export function WorkspacesSection({
           )}
         </NativeCard>
       </SettingsGrid>
+      <ConfirmModal
+        open={citadelTransitionGuard.pendingTransition !== null}
+        danger
+        title="Discard Citadel changes?"
+        message="The selected Citadel has unsaved edits. Discard them and continue?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={citadelTransitionGuard.cancelDiscard}
+        onConfirm={citadelTransitionGuard.confirmDiscard}
+      />
+      <ConfirmModal
+        open={workspaceTransitionGuard.pendingTransition !== null}
+        danger
+        title="Discard workspace changes?"
+        message="The selected workspace has unsaved edits. Discard them and continue?"
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        onCancel={workspaceTransitionGuard.cancelDiscard}
+        onConfirm={workspaceTransitionGuard.confirmDiscard}
+      />
+      <ConfirmModal
+        open={pendingArchive !== null}
+        danger
+        pending={archiveBusy}
+        title={`Archive ${pendingArchive?.kind === "citadel" ? "Citadel" : "workspace"}?`}
+        message={`Archive ${pendingArchive?.label ?? "this item"}? It remains available from the archived view.`}
+        confirmLabel="Archive"
+        onCancel={() => setPendingArchive(null)}
+        onConfirm={() => void handleConfirmArchive()}
+      />
     </SettingsSectionShell>
   );
 }

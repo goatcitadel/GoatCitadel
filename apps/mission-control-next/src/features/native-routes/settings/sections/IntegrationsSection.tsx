@@ -37,6 +37,7 @@ import {
   updateIntegrationConnection,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfigFormBuilder } from "@goatcitadel/mission-control-shared/components/ConfigFormBuilder";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   nativeLoad,
@@ -127,6 +128,11 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   const [detailSchema, setDetailSchema] = useState<IntegrationFormSchema | undefined>();
   const [showDetailJson, setShowDetailJson] = useState(false);
   const [diagnostics, setDiagnostics] = useState<ConnectorDiagnosticReport | null>(null);
+  const [pendingDeleteConnection, setPendingDeleteConnection] = useState<{
+    connectionId: string;
+    label: string;
+  } | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
   const [operatorActionInputs, setOperatorActionInputs] = useState<Record<string, Record<string, unknown>>>({});
   const [operatorActionIdempotencyKeys, setOperatorActionIdempotencyKeys] = useState<Record<string, string>>({});
   const [replayAuditBusy, setReplayAuditBusy] = useState(false);
@@ -279,19 +285,20 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   };
 
   const handleDelete = async () => {
-    if (!selectedConnection) {
+    if (!pendingDeleteConnection) {
       return;
     }
-    if (!window.confirm(`Delete connection ${selectedConnection.label}?`)) {
-      return;
-    }
+    setDeletePending(true);
     try {
-      await deleteIntegrationConnection(selectedConnection.connectionId);
+      await deleteIntegrationConnection(pendingDeleteConnection.connectionId);
       setNotice({ tone: "success", message: "Connection deleted." });
       setDiagnostics(null);
+      setPendingDeleteConnection(null);
       await reload();
     } catch (deleteError) {
       setNotice({ tone: "error", message: getErrorMessage(deleteError) });
+    } finally {
+      setDeletePending(false);
     }
   };
 
@@ -675,7 +682,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                       <option value="error">Error</option>
                     </select>
                   </SettingsField>
-                  <SettingsField label="Enabled">
+                  <SettingsField label="Enabled" group>
                     <label className="mc-next-settings-toggle">
                       <input
                         type="checkbox"
@@ -726,7 +733,15 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     <SlidersHorizontal size={16} />
                     {showDetailJson ? "Use guided fields" : "Advanced JSON"}
                   </NativeButton>
-                  <NativeButton variant="destructive" onClick={() => void handleDelete()}>
+                  <NativeButton
+                    variant="destructive"
+                    onClick={() =>
+                      setPendingDeleteConnection({
+                        connectionId: selectedConnection.connectionId,
+                        label: selectedConnection.label,
+                      })
+                    }
+                  >
                     <Trash2 size={16} />
                     Delete
                   </NativeButton>
@@ -814,6 +829,16 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={pendingDeleteConnection !== null}
+        danger
+        pending={deletePending}
+        title="Delete integration connection?"
+        message={`Delete ${pendingDeleteConnection?.label ?? "this connection"}? Saved configuration will be permanently removed.`}
+        confirmLabel="Delete connection"
+        onCancel={() => setPendingDeleteConnection(null)}
+        onConfirm={() => void handleDelete()}
+      />
     </SettingsSectionShell>
   );
 }

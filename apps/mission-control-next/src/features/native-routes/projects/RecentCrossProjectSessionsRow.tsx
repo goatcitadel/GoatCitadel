@@ -64,12 +64,14 @@ export function RecentCrossProjectSessionsRow({
 function RecentCrossProjectCard({ item, onOpen }: { item: RecentCrossProjectSession; onOpen: () => void }) {
   const title = item.title?.trim() || item.sessionKey;
   return (
-    <button type="button" className="mc-next-project-recent-card" role="listitem" onClick={onOpen}>
-      <span className={`mc-next-mode-chip mode-${item.mode}`}>{labelForMode(item.mode)}</span>
-      <strong>{title}</strong>
-      <span className="mc-next-project-recent-meta">
-        {item.projectLabel} · {formatDateTime(item.lastActivityAt)}
-      </span>
-    </button>
+    <div className="mc-next-project-recent-card-item" role="listitem">
+      <button type="button" className="mc-next-project-recent-card" onClick={onOpen}>
+        <span className={`mc-next-mode-chip mode-${item.mode}`}>{labelForMode(item.mode)}</span>
+        <strong>{title}</strong>
+        <span className="mc-next-project-recent-meta">
+          {item.projectLabel} · {formatDateTime(item.lastActivityAt)}
+        </span>
+      </button>
+    </div>
   );
 }

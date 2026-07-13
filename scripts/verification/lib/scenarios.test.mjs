@@ -8,11 +8,217 @@ import {
   FAST_LANE_COMMANDS,
   buildOrchestrationPerformanceScenarioResult,
   deriveProviderStatus,
+  exerciseMissionControlNextMobileRail,
+  openMissionControlNextThreadedContext,
+  performVerificationInteraction,
   requireCanonicalMemorySeed,
   runFastLane,
 } from "./scenarios.mjs";
 import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
+
+test("Mission Control Next shell interaction targets Route details instead of Chat context", async () => {
+  let inspectorVisible = false;
+  let requestedName;
+  const routeDetailsButton = {
+    async waitFor() {},
+    async textContent() {
+      return inspectorVisible ? "Hide Route details" : "Open Route details";
+    },
+    async click() {
+      inspectorVisible = true;
+    },
+    async evaluate() {
+      inspectorVisible = true;
+    },
+  };
+  const page = {
+    getByRole(role, options) {
+      assert.equal(role, "button");
+      requestedName = options.name;
+      return { first: () => routeDetailsButton };
+    },
+    locator(selector) {
+      assert.equal(selector, ".mc-next-shell-inspector");
+      return { isVisible: async () => inspectorVisible };
+    },
+    async waitForTimeout() {},
+    async waitForSelector() {
+      assert.fail("visible inspector should be observed without fallback waiting");
+    },
+  };
+
+  await performVerificationInteraction(page, "open-inspector", "@goatcitadel/mission-control-next");
+
+  assert.equal(inspectorVisible, true);
+  assert.equal(requestedName.test("Open Route details"), true);
+  assert.equal(requestedName.test("Hide Route details"), true);
+  assert.equal(requestedName.test("Open Context"), false);
+});
+
+test("mobile Chat proof rejects shell inspector ownership and opens threaded Working Context", async () => {
+  let contextVisible = false;
+  let requestedRouteDetailsName;
+  const contextButton = {
+    async waitFor() {},
+    async boundingBox() {
+      return { x: 12, y: 20, width: 120, height: 36 };
+    },
+    async click() {
+      contextVisible = true;
+    },
+  };
+  const contextPanel = {
+    async isVisible() {
+      return contextVisible;
+    },
+    async waitFor() {
+      assert.equal(contextVisible, true);
+    },
+  };
+  const workingContext = {
+    async waitFor() {
+      assert.equal(contextVisible, true);
+    },
+  };
+  const page = {
+    getByRole(role, options) {
+      assert.equal(role, "button");
+      requestedRouteDetailsName = options.name;
+      return { count: async () => 0 };
+    },
+    locator(selector) {
+      if (selector === ".mc-next-shell-inspector") {
+        return { count: async () => 0 };
+      }
+      if (selector === ".mc-next-threaded-mobile-bar .mc-next-threaded-menu-button") {
+        return {
+          filter({ hasText }) {
+            assert.equal(hasText.test("Context"), true);
+            return { first: () => contextButton };
+          },
+        };
+      }
+      if (selector === '.mc-next-threaded-context-panel[aria-label="Thread context drawer"]') {
+        return { first: () => contextPanel };
+      }
+      if (selector === ".mc-next-threaded-context-panel .mc-next-context-drawer") {
+        return {
+          filter({ hasText }) {
+            assert.equal(hasText.test("Working Context"), true);
+            return { first: () => workingContext };
+          },
+        };
+      }
+      assert.fail(`unexpected locator: ${selector}`);
+    },
+    viewportSize() {
+      return { width: 390, height: 844 };
+    },
+    async waitForTimeout() {},
+  };
+
+  await openMissionControlNextThreadedContext(page);
+
+  assert.equal(contextVisible, true);
+  assert.equal(requestedRouteDetailsName.test("Open Route details"), true);
+});
+
+test("mobile Chat proof fails closed when the generic Route details control is present", async () => {
+  const page = {
+    getByRole() {
+      return { count: async () => 1 };
+    },
+    locator(selector) {
+      assert.equal(selector, ".mc-next-shell-inspector");
+      return { count: async () => 0 };
+    },
+  };
+
+  await assert.rejects(
+    () => openMissionControlNextThreadedContext(page),
+    /generic Route details inspector instead of threaded Working Context/,
+  );
+});
+
+test("mobile shell proof exercises accessible scope controls and the drawer Command Palette", async () => {
+  let railVisible = true;
+  let paletteVisible = false;
+  const activated = [];
+  const visibleLocator = (label, onClick) => ({
+    async waitFor({ state }) {
+      if (state === "visible") {
+        assert.equal(label === "rail" ? railVisible : label === "palette" ? paletteVisible : true, true);
+      } else if (state === "hidden") {
+        assert.equal(label === "palette" ? paletteVisible : false, false);
+      }
+    },
+    async boundingBox() {
+      return { x: 12, y: 20, width: 160, height: 36 };
+    },
+    async click() {
+      activated.push(label);
+      await onClick?.();
+    },
+  });
+  const rail = visibleLocator("rail");
+  const closeNavigation = visibleLocator("Close navigation");
+  const controls = new Map([
+    ["Active Citadel", visibleLocator("Active Citadel")],
+    ["Active Workspace", visibleLocator("Active Workspace")],
+    [
+      "Open Command Palette",
+      visibleLocator("Open Command Palette", () => {
+        railVisible = false;
+        paletteVisible = true;
+      }),
+    ],
+    [
+      "Open navigation",
+      visibleLocator("Open navigation", () => {
+        railVisible = true;
+      }),
+    ],
+    ["Close navigation", closeNavigation],
+  ]);
+  const page = {
+    locator(selector) {
+      assert.equal(selector, ".mc-next-rail.open");
+      return { first: () => rail };
+    },
+    getByRole(role, { name }) {
+      if (role === "dialog") {
+        assert.equal(name.test("Command Palette"), true);
+        return { first: () => visibleLocator("palette") };
+      }
+      if (role === "combobox" || role === "button") {
+        assert.ok(controls.has(name), `unexpected accessible control: ${String(name)}`);
+        return { first: () => controls.get(name) };
+      }
+      assert.fail(`unexpected role: ${role}`);
+    },
+    viewportSize() {
+      return { width: 390, height: 844 };
+    },
+    async waitForTimeout() {},
+    async waitForFunction() {
+      assert.equal(railVisible, false);
+    },
+    keyboard: {
+      async press(key) {
+        assert.equal(key, "Escape");
+        paletteVisible = false;
+      },
+    },
+  };
+
+  const result = await exerciseMissionControlNextMobileRail(page);
+
+  assert.equal(result.railCloseButton, closeNavigation);
+  assert.deepEqual(activated, ["Open Command Palette", "Open navigation"]);
+  assert.equal(railVisible, true);
+  assert.equal(paletteVisible, false);
+});
 
 test("canonical memory seed validation fails closed on incomplete or foreign ownership", () => {
   assert.equal(

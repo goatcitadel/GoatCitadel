@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { chromium } from "playwright";
 import sharp from "sharp";
@@ -43,8 +44,15 @@ import {
   waitForHttp,
 } from "./runtime.mjs";
 import { DEFAULT_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
-import { attachBrowserLogging, captureBrowserArtifacts, setBrowserCorrelation } from "./scenarios/browser-helpers.mjs";
+import {
+  appendTraceArtifact,
+  attachBrowserLogging,
+  captureBrowserArtifacts,
+  setBrowserCorrelation,
+  startBrowserTrace,
+} from "./scenarios/browser-helpers.mjs";
 import { seedMissionControlNextFixture as seedMissionControlNextFixtureImpl } from "./scenarios/fixture-seeding.mjs";
+import { collectVisualBaselineCoverage } from "./visual-baseline-coverage.mjs";
 import {
   API_COMPAT_ALLOWLIST_PATH,
   API_COMPAT_BASELINE_PATH,
@@ -56,6 +64,11 @@ import {
 } from "./scenarios/api-compatibility-helpers.mjs";
 import { runDurableRecoveryLane as runDurableRecoveryLaneImpl } from "./scenarios/durable-recovery-lane.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
+import {
+  auditPageAccessibility,
+  probeKeyboardFocus,
+  runAccessibilitySmokeLane as runAccessibilitySmokeLaneImpl,
+} from "./scenarios/accessibility-smoke-lane.mjs";
 import { runApiCompatibilityLane as runApiCompatibilityLaneImpl } from "./scenarios/api-compatibility-lane.mjs";
 import { runVisualRegressionLane as runVisualRegressionLaneImpl } from "./scenarios/visual-regression-lane.mjs";
 import { runRuntimeTruthLane as runRuntimeTruthLaneImpl } from "./scenarios/runtime-truth-lane.mjs";
@@ -86,6 +99,7 @@ const TAB_ROUTES = [
 ];
 
 const NEXT_UI_PACKAGE = "@goatcitadel/mission-control-next";
+const AXE_SOURCE_PATH = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 const VISUAL_BASELINE_ROOT_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
 const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.04;
@@ -115,7 +129,10 @@ function verificationLaneDeps() {
     assertNoFooterStatusCollision,
     assertOk,
     assertVisualBaselineCoverage,
+    appendTraceArtifact,
     attachBrowserLogging,
+    auditPageAccessibility,
+    axeSourcePath: AXE_SOURCE_PATH,
     buildAuthMatrixExpectations,
     buildVerificationUiUrl,
     captureBrowserArtifacts,
@@ -140,6 +157,7 @@ function verificationLaneDeps() {
     path,
     performVerificationInteraction,
     pinVisualRegressionProvider,
+    probeKeyboardFocus,
     pnpmCommand,
     randomUUID,
     probeAuthMatrixRoute,
@@ -163,6 +181,7 @@ function verificationLaneDeps() {
     stabilizeVisualRegressionSnapshot,
     stabilizeMissionControlNextFileFixtureMtime,
     startVerificationStack,
+    startBrowserTrace,
     stopProcess,
     stopVerificationStack,
     waitForDurableRunStatus,
@@ -2125,6 +2144,10 @@ export async function runSurfaceRegressionLane(context, options = {}) {
   return await runSurfaceRegressionLaneImpl(context, options, verificationLaneDeps());
 }
 
+export async function runAccessibilitySmokeLane(context, options = {}) {
+  return await runAccessibilitySmokeLaneImpl(context, options, verificationLaneDeps());
+}
+
 export async function runCatalogParityLane(context, options = {}) {
   return await runCatalogParityLaneImpl(context, options, verificationLaneDeps());
 }
@@ -3841,16 +3864,13 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
   }
 }
 
-async function performVerificationInteraction(page, interaction, packageName = DEFAULT_UI_PACKAGE) {
+export async function performVerificationInteraction(page, interaction, packageName = DEFAULT_UI_PACKAGE) {
   if (!interaction) {
     return;
   }
   if (interaction === "open-inspector" && packageName === NEXT_UI_PACKAGE) {
-    const contextButton = page
-      .locator(".mc-next-topbar-right .mc-next-wa-button")
-      .filter({ hasText: /Open Context|Hide Context/i })
-      .first();
-    await contextButton.waitFor({ timeout: 15000 });
+    const routeDetailsButton = page.getByRole("button", { name: /^(Open|Hide) Route details$/i }).first();
+    await routeDetailsButton.waitFor({ timeout: 15000 });
     const inspector = page.locator(".mc-next-shell-inspector");
     const deadline = Date.now() + 15000;
     let attemptedClick = false;
@@ -3860,12 +3880,12 @@ async function performVerificationInteraction(page, interaction, packageName = D
         return;
       }
 
-      const label = (await contextButton.textContent())?.trim() ?? "";
-      if (!/hide context/i.test(label) || !attemptedClick) {
+      const label = (await routeDetailsButton.textContent())?.trim() ?? "";
+      if (!/hide route details/i.test(label) || !attemptedClick) {
         try {
-          await contextButton.click({ timeout: 5000 });
+          await routeDetailsButton.click({ timeout: 5000 });
         } catch {
-          await contextButton.evaluate((element) => {
+          await routeDetailsButton.evaluate((element) => {
             element.click();
           });
         }
@@ -4953,51 +4973,75 @@ async function runMissionControlNextMobileShellProof(context, input) {
       },
       async ({ correlationId }) => {
         const browserLogCursor = browserLog.mark();
-        await page.goto(buildVerificationUiUrl(input.uiUrl, "/chat"), { waitUntil: "domcontentloaded" });
-        await waitForVerificationRouteReady(
-          page,
-          {
-            expectedArea: "chat",
-            expectedSection: "root",
-            readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
-          },
-          input.packageName,
-        );
-        await setBrowserCorrelation(page, correlationId, input.sessionId);
-        await assertNoHorizontalOverflow(page, "mobile chat shell");
-        const menuButton = page.locator(".mc-next-nav-toggle").first();
-        await assertLocatorFullyVisible(page, menuButton, "mobile menu toggle");
-        await menuButton.click();
-        await page.waitForSelector(".mc-next-rail.open", { timeout: 15000 });
-        const railCloseButton = page.locator(".mc-next-rail-close").first();
-        await assertLocatorFullyVisible(page, railCloseButton, "mobile rail close button");
-        await railCloseButton.click();
-        await page.waitForFunction(() => !document.querySelector(".mc-next-rail.open"), { timeout: 15000 });
-        const contextButton = page
-          .locator(".mc-next-topbar-right .mc-next-wa-button")
-          .filter({ hasText: /Open Context|Hide Context/i })
-          .first();
-        await assertLocatorFullyVisible(page, contextButton, "mobile open context button");
-        await contextButton.click();
-        await page.waitForSelector(".mc-next-shell-inspector", { state: "visible", timeout: 15000 });
-        await assertNoHorizontalOverflow(page, "mobile chat shell with inspector");
-        const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
-        const artifacts = await captureBrowserArtifacts(context, {
-          slug: "surface-regression-mobile-chat-shell",
-          page,
-          browserLog,
-          gatewayUrl: input.gatewayUrl,
-          correlationId,
-          logCursor: browserLogCursor,
-        });
-        return {
-          status: "passed",
-          metrics: {
-            consoleErrors: browserSanity.consoleErrors.length,
-            pageErrors: browserSanity.pageErrors.length,
-          },
-          artifacts,
-        };
+        const artifactSlug = "surface-regression-mobile-chat-shell";
+        const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
+        let artifacts;
+        try {
+          await page.goto(buildVerificationUiUrl(input.uiUrl, "/chat"), { waitUntil: "domcontentloaded" });
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "chat",
+              expectedSection: "root",
+              readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
+            },
+            input.packageName,
+          );
+          await setBrowserCorrelation(page, correlationId, input.sessionId);
+          await assertNoHorizontalOverflow(page, "mobile chat shell");
+          const menuButton = page.locator(".mc-next-nav-toggle").first();
+          await assertLocatorFullyVisible(page, menuButton, "mobile menu toggle");
+          await menuButton.click();
+          await page.waitForSelector(".mc-next-rail.open", { timeout: 15000 });
+          const { railCloseButton } = await exerciseMissionControlNextMobileRail(page);
+          const drawerScreenshotPath = path.join(
+            context.artifactRoot,
+            "screenshots",
+            `${artifactSlug}-navigation-drawer.png`,
+          );
+          await fs.mkdir(path.dirname(drawerScreenshotPath), { recursive: true });
+          await page.screenshot({ path: drawerScreenshotPath, fullPage: false });
+          await railCloseButton.click();
+          await page.waitForFunction(() => !document.querySelector(".mc-next-rail.open"), { timeout: 15000 });
+          await openMissionControlNextThreadedContext(page);
+          await assertNoHorizontalOverflow(page, "mobile chat shell with threaded context");
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
+          artifacts = await captureBrowserArtifacts(context, {
+            slug: artifactSlug,
+            page,
+            browserLog,
+            gatewayUrl: input.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          artifacts.screenshots = [relativeToRun(context, drawerScreenshotPath), ...(artifacts.screenshots ?? [])];
+          return {
+            status: "passed",
+            metrics: {
+              consoleErrors: browserSanity.consoleErrors.length,
+              pageErrors: browserSanity.pageErrors.length,
+            },
+            artifacts,
+          };
+        } catch (error) {
+          artifacts ??= await captureBrowserArtifacts(context, {
+            slug: `${artifactSlug}-failure`,
+            page,
+            browserLog,
+            gatewayUrl: input.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          const traceArtifact = await trace.retain().catch(() => null);
+          return {
+            status: "failed",
+            error: formatBrowserScenarioFailure(error),
+            metrics: {},
+            artifacts: appendTraceArtifact(artifacts, traceArtifact),
+          };
+        } finally {
+          await trace.discard().catch(() => undefined);
+        }
       },
     );
 
@@ -5011,40 +5055,120 @@ async function runMissionControlNextMobileShellProof(context, input) {
       },
       async ({ correlationId }) => {
         const browserLogCursor = browserLog.mark();
-        await page.goto(buildVerificationUiUrl(input.uiUrl, "/ops/kanban"), { waitUntil: "domcontentloaded" });
-        await waitForVerificationRouteReady(
-          page,
-          { expectedArea: "ops", expectedSection: "kanban", readySelector: ".mc-next-kanban-board" },
-          input.packageName,
-        );
-        await setBrowserCorrelation(page, correlationId, input.sessionId);
-        await assertNoHorizontalOverflow(page, "mobile ops kanban");
-        const primaryTaskAction = page.locator(".mc-next-kanban-board button, .mc-next-kanban-column").first();
-        await assertLocatorFullyVisible(page, primaryTaskAction, "task board primary action");
-        await performVerificationInteraction(page, "open-inspector", input.packageName);
-        await assertNoHorizontalOverflow(page, "mobile ops kanban with inspector");
-        const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
-        const artifacts = await captureBrowserArtifacts(context, {
-          slug: "surface-regression-mobile-ops-kanban",
-          page,
-          browserLog,
-          gatewayUrl: input.gatewayUrl,
-          correlationId,
-          logCursor: browserLogCursor,
-        });
-        return {
-          status: "passed",
-          metrics: {
-            consoleErrors: browserSanity.consoleErrors.length,
-            pageErrors: browserSanity.pageErrors.length,
-          },
-          artifacts,
-        };
+        const artifactSlug = "surface-regression-mobile-ops-kanban";
+        const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
+        let artifacts;
+        try {
+          await page.goto(buildVerificationUiUrl(input.uiUrl, "/ops/kanban"), { waitUntil: "domcontentloaded" });
+          await waitForVerificationRouteReady(
+            page,
+            { expectedArea: "ops", expectedSection: "kanban", readySelector: ".mc-next-kanban-board" },
+            input.packageName,
+          );
+          await setBrowserCorrelation(page, correlationId, input.sessionId);
+          await assertNoHorizontalOverflow(page, "mobile ops kanban");
+          const primaryTaskAction = page.locator(".mc-next-kanban-board button, .mc-next-kanban-column").first();
+          await assertLocatorFullyVisible(page, primaryTaskAction, "task board primary action");
+          await performVerificationInteraction(page, "open-inspector", input.packageName);
+          await assertNoHorizontalOverflow(page, "mobile ops kanban with inspector");
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
+          artifacts = await captureBrowserArtifacts(context, {
+            slug: artifactSlug,
+            page,
+            browserLog,
+            gatewayUrl: input.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          return {
+            status: "passed",
+            metrics: {
+              consoleErrors: browserSanity.consoleErrors.length,
+              pageErrors: browserSanity.pageErrors.length,
+            },
+            artifacts,
+          };
+        } catch (error) {
+          artifacts ??= await captureBrowserArtifacts(context, {
+            slug: `${artifactSlug}-failure`,
+            page,
+            browserLog,
+            gatewayUrl: input.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          const traceArtifact = await trace.retain().catch(() => null);
+          return {
+            status: "failed",
+            error: formatBrowserScenarioFailure(error),
+            metrics: {},
+            artifacts: appendTraceArtifact(artifacts, traceArtifact),
+          };
+        } finally {
+          await trace.discard().catch(() => undefined);
+        }
       },
     );
   } finally {
     await browserContext.close();
   }
+}
+
+function formatBrowserScenarioFailure(error) {
+  return error instanceof Error ? (error.stack ?? error.message) : String(error);
+}
+
+export async function openMissionControlNextThreadedContext(page) {
+  const routeDetailsControl = page.getByRole("button", { name: /^(Open|Hide) Route details$/i });
+  const shellInspector = page.locator(".mc-next-shell-inspector");
+  if ((await routeDetailsControl.count()) > 0 || (await shellInspector.count()) > 0) {
+    throw new Error("mobile Chat exposed the generic Route details inspector instead of threaded Working Context");
+  }
+
+  const contextButton = page
+    .locator(".mc-next-threaded-mobile-bar .mc-next-threaded-menu-button")
+    .filter({ hasText: /^(Context|Hide context)$/i })
+    .first();
+  await assertLocatorFullyVisible(page, contextButton, "mobile threaded context button");
+  const contextPanel = page.locator('.mc-next-threaded-context-panel[aria-label="Thread context drawer"]').first();
+  if (!(await contextPanel.isVisible().catch(() => false))) {
+    await contextButton.click();
+  }
+  await contextPanel.waitFor({ state: "visible", timeout: 15000 });
+  await page
+    .locator(".mc-next-threaded-context-panel .mc-next-context-drawer")
+    .filter({ hasText: /Working Context/i })
+    .first()
+    .waitFor({ state: "visible", timeout: 15000 });
+}
+
+export async function exerciseMissionControlNextMobileRail(page) {
+  const rail = page.locator(".mc-next-rail.open").first();
+  await rail.waitFor({ state: "visible", timeout: 15000 });
+  await assertLocatorFullyVisible(page, rail, "mobile navigation drawer");
+
+  const activeCitadel = page.getByRole("combobox", { name: "Active Citadel" }).first();
+  const activeWorkspace = page.getByRole("combobox", { name: "Active Workspace" }).first();
+  const commandPaletteButton = page.getByRole("button", { name: "Open Command Palette" }).first();
+  await assertLocatorFullyVisible(page, activeCitadel, "mobile Active Citadel control");
+  await assertLocatorFullyVisible(page, activeWorkspace, "mobile Active Workspace control");
+  await assertLocatorFullyVisible(page, commandPaletteButton, "mobile Command Palette control");
+
+  await commandPaletteButton.click();
+  await page.waitForFunction(() => !document.querySelector(".mc-next-rail.open"), { timeout: 15000 });
+  const paletteDialog = page.getByRole("dialog", { name: /Command Palette/i }).first();
+  await assertLocatorFullyVisible(page, paletteDialog, "mobile Command Palette dialog");
+  await page.keyboard.press("Escape");
+  await paletteDialog.waitFor({ state: "hidden", timeout: 15000 });
+
+  const menuButton = page.getByRole("button", { name: "Open navigation" }).first();
+  await assertLocatorFullyVisible(page, menuButton, "mobile menu toggle after palette close");
+  await menuButton.click();
+  await rail.waitFor({ state: "visible", timeout: 15000 });
+  await assertLocatorFullyVisible(page, rail, "mobile navigation drawer after palette close");
+  const railCloseButton = page.getByRole("button", { name: "Close navigation" }).first();
+  await assertLocatorFullyVisible(page, railCloseButton, "mobile rail close button");
+  return { railCloseButton };
 }
 
 async function assertNoHorizontalOverflow(page, label) {
@@ -5106,7 +5230,7 @@ async function writeMissionControlNextManualProofChecklist(context, entries) {
     "- Check for horizontal overflow or clipped controls.",
     "- Confirm sticky regions stay stable on desktop and mobile.",
     "- Confirm drawer usability at 390x844.",
-    "- Confirm the context inspector opens cleanly on wide and narrow layouts.",
+    "- Confirm Route details opens on non-Chat routes and Chat opens its threaded Working Context cleanly.",
     "- Confirm dark/light contrast remains readable without neon overload.",
     "",
     "## Captured screenshots",
@@ -5256,24 +5380,17 @@ async function assertVisualBaselineCoverage(context, options = {}) {
   const expectedFiles = routes.flatMap((route) =>
     variants.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),
   );
-  const missing = [];
-  for (const fileName of expectedFiles) {
-    try {
-      await fs.access(path.join(baselineDir, fileName));
-    } catch {
-      missing.push(fileName);
-    }
-  }
-  if (missing.length === 0) {
+  const coverage = await collectVisualBaselineCoverage(baselineDir, expectedFiles);
+  if (coverage.missingFiles.length === 0 && coverage.unexpectedFiles.length === 0) {
     return;
   }
   const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", "visual-baseline-coverage.json");
-  await writeJson(diagnosticsPath, {
-    baselineDirectory: baselineDir,
-    expectedFiles,
-    missingFiles: missing,
-  });
-  throw new Error(`visual baseline coverage is incomplete: ${missing.join(", ")}`);
+  await writeJson(diagnosticsPath, coverage);
+  const problems = [
+    coverage.missingFiles.length > 0 ? `missing: ${coverage.missingFiles.join(", ")}` : null,
+    coverage.unexpectedFiles.length > 0 ? `unexpected: ${coverage.unexpectedFiles.join(", ")}` : null,
+  ].filter(Boolean);
+  throw new Error(`visual baseline coverage does not match the canonical manifest (${problems.join("; ")})`);
 }
 
 async function measureLongTaskProfile(page, action) {

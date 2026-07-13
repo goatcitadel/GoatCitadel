@@ -172,12 +172,12 @@ export function CitadelOverviewRoutePage({
       {!state.staged ? (
         <div className="mc-next-citadel-defaults">
           <EmptyState
-            icon={<Castle className="h-5 w-5" />}
+            icon={<Castle size={20} />}
             title={`${activeCitadelName} needs a Charter`}
             description="A Citadel becomes operational once it has a Charter. Start with one of the default operating spaces, or use the Mason for a custom Blueprint."
             primaryAction={
               <NativeButton variant="outline" onClick={() => navigate({ area: "library", section: "citadel" })}>
-                <Hammer className="h-4 w-4" />
+                <Hammer size={16} />
                 Open the Mason
               </NativeButton>
             }
@@ -207,7 +207,7 @@ export function CitadelOverviewRoutePage({
                       onClick={() => void handleCreateFromTemplate(template)}
                       disabled={templateState.busyTemplateId !== null}
                     >
-                      <Sparkles className="h-4 w-4" />
+                      <Sparkles size={16} />
                       {templateState.busyTemplateId === template.id ? "Creating..." : "Use template"}
                     </NativeButton>
                   </article>
@@ -311,7 +311,7 @@ export function CitadelOverviewRoutePage({
               variant="outline"
               onClick={() => navigate({ area: "library", section: "citadel", theme: route.theme })}
             >
-              <Hammer className="h-4 w-4" />
+              <Hammer size={16} />
               Open the Mason
             </NativeButton>
           </NativeCard>
@@ -320,9 +320,9 @@ export function CitadelOverviewRoutePage({
 
       {state.staged ? (
         <p className="mc-next-citadel-footnote">
-          <Shield className="h-3 w-3" aria-hidden="true" />
-          Wards and Gates are evaluated deny-wins. <Lock className="h-3 w-3" aria-hidden="true" /> Sealed Chambers never
-          widen access.
+          <Shield size={12} aria-hidden="true" />
+          Wards and Gates are evaluated deny-wins. <Lock size={12} aria-hidden="true" /> Sealed Chambers never widen
+          access.
         </p>
       ) : null}
     </NativePageFrame>

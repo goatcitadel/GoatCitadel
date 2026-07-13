@@ -400,7 +400,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                       onChange={(event) => setDraftLabel(event.target.value)}
                     />
                   </SettingsField>
-                  <SettingsField label="Enabled">
+                  <SettingsField label="Enabled" group>
                     <label className="mc-next-settings-toggle">
                       <input
                         type="checkbox"

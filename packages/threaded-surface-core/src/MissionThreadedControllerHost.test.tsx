@@ -60,6 +60,7 @@ const useChatDockWorkbenchControllerMock = vi.fn();
 const useChatComposerInteractionsMock = vi.fn();
 const useChatMultimodalControlsMock = vi.fn();
 const useRouteGeneratedArtifactRevealMock = vi.fn();
+const useMediaQueryMock = vi.fn();
 
 let mockSurfaceMode: ChatMode = "chat";
 let mockCompact = false;
@@ -221,7 +222,10 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useEventStreamStatus", () => 
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
-  useMediaQuery: () => mockCompact,
+  useMediaQuery: (query: string) => {
+    useMediaQueryMock(query);
+    return mockCompact;
+  },
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
@@ -822,6 +826,12 @@ describe("MissionThreadedControllerHost", () => {
 
   afterEach(async () => {
     await cleanupRenderedHosts();
+  });
+
+  it("keeps compact session ownership aligned with the 1180px surface breakpoint", async () => {
+    await renderHost();
+
+    expect(useMediaQueryMock).toHaveBeenCalledWith("(width < 1180px)");
   });
 
   it("covers package-local host helpers", () => {

@@ -456,9 +456,12 @@ describe("ChatThreadView", () => {
     expect(renderedText(renderer)).toContain("Connect Gmail");
     expect(renderedText(renderer)).not.toContain("Enable memory");
 
-    const turnSurface = renderer.root.find((node) => node.props["aria-label"]?.startsWith("Open turn:") === true);
-    expect(turnSurface.props["aria-current"]).toBeUndefined();
-    expect(turnSurface.props.role).toBe("button");
+    const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
+    const openTurnButton = renderer.root.find(
+      (node) => node.type === "button" && node.props["aria-label"]?.startsWith("Open turn:") === true,
+    );
+    expect(openTurnButton.props["aria-current"]).toBeUndefined();
+    expect(openTurnButton.props["aria-pressed"]).toBe(false);
     const currentTarget = {};
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
@@ -467,26 +470,10 @@ describe("ChatThreadView", () => {
     expect(onSelectTurn).toHaveBeenCalledWith("turn-1");
     expect(onSelectTurn).toHaveBeenCalledTimes(1);
 
-    const preventDefault = vi.fn();
     TestRenderer.act(() => {
-      turnSurface.props.onKeyDown({
-        key: "Enter",
-        currentTarget: "surface",
-        target: "surface",
-        preventDefault,
-      });
+      openTurnButton.props.onClick();
     });
-    expect(preventDefault).toHaveBeenCalled();
     expect(onSelectTurn).toHaveBeenCalledWith("turn-1");
-
-    TestRenderer.act(() => {
-      turnSurface.props.onKeyDown({
-        key: " ",
-        currentTarget: "surface",
-        target: "child",
-        preventDefault: vi.fn(),
-      });
-    });
     expect(onSelectTurn).toHaveBeenCalledTimes(2);
 
     const previous = renderer.root.find(

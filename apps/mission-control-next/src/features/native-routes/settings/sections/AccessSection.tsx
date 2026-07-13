@@ -172,7 +172,7 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                     <option value="basic">Basic</option>
                   </select>
                 </SettingsField>
-                <SettingsField label="Loopback bypass">
+                <SettingsField label="Loopback bypass" group>
                   <label className="mc-next-settings-toggle">
                     <input
                       type="checkbox"

@@ -5,6 +5,11 @@
   gap: 0.6rem;
 }
 
+.mc-next-project-recent-card-item {
+  display: flex;
+  min-width: 0;
+}
+
 .mc-next-project-recent-card {
   display: flex;
   flex-direction: column;
@@ -22,6 +27,7 @@
     transform 120ms ease;
   font: inherit;
   color: inherit;
+  width: 100%;
 }
 
 .mc-next-project-recent-card:hover,

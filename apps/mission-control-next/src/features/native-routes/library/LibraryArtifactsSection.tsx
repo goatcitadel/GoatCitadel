@@ -136,7 +136,7 @@ export function LibraryArtifactsSection({
           />
           <LibraryButtonRow>
             <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw size={16} />
               Refresh
             </button>
           </LibraryButtonRow>
@@ -265,7 +265,7 @@ export function LibraryArtifactsSection({
                       })
                     }
                   >
-                    <Workflow className="h-4 w-4" />
+                    <Workflow size={16} />
                     Open source thread
                   </NativeButton>
                   <NativeButton
@@ -280,7 +280,7 @@ export function LibraryArtifactsSection({
                       })
                     }
                   >
-                    <FileText className="h-4 w-4" />
+                    <FileText size={16} />
                     Reopen artifact
                   </NativeButton>
                   {selectedArtifactRunId ? (
@@ -300,7 +300,7 @@ export function LibraryArtifactsSection({
                         })
                       }
                     >
-                      <Waypoints className="h-4 w-4" />
+                      <Waypoints size={16} />
                       Open run detail
                     </NativeButton>
                   ) : null}

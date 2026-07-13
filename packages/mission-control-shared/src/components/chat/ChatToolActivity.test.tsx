@@ -339,6 +339,9 @@ describe("ChatLiveActivityRail", () => {
     expect(text).toContain("Working…");
 
     const row = renderer.root.findByProps({ className: "mc-next-live-activity-row" });
+    expect(row.type).toBe("button");
+    expect(row.props.type).toBe("button");
+    expect(row.props["aria-label"]).toBe("Open execution detail for memory.search");
     TestRenderer.act(() => {
       row.props.onClick();
     });

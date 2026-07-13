@@ -67,7 +67,7 @@ export function ProjectHomeBasePanel({
                 aria-label={`Start ${intent.label} for ${projectName}`}
                 onClick={() => onStartIntake(intent)}
               >
-                <Icon className="h-4 w-4" aria-hidden="true" />
+                <Icon size={16} aria-hidden="true" />
                 <span>{labelForMode(intent.mode)}</span>
                 <strong>{intent.label}</strong>
                 <p>{intent.detail}</p>
@@ -99,7 +99,7 @@ export function ProjectHomeBasePanel({
       <div className="mc-next-project-continue-row">
         {SURFACES.map((surface) => (
           <NativeButton key={surface.mode} onClick={() => onContinue(surface.mode)}>
-            <MessageSquarePlus className="h-4 w-4" />
+            <MessageSquarePlus size={16} />
             {home.latestByMode[surface.mode] ? `Continue ${surface.label}` : `Start ${surface.label}`}
           </NativeButton>
         ))}
@@ -136,7 +136,7 @@ export function ProjectHomeBasePanel({
       <div className="mc-next-project-readiness-list">
         {home.readiness.map((item) => (
           <div key={item.id} className={`mc-next-project-readiness-item is-${item.status}`}>
-            {item.status === "ready" ? <CheckCircle2 className="h-4 w-4" /> : <CircleAlert className="h-4 w-4" />}
+            {item.status === "ready" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}
             <div>
               <strong>{item.label}</strong>
               <p>{item.detail}</p>

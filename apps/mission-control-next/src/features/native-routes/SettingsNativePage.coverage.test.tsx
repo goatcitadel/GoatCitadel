@@ -1,7 +1,8 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsNativePage } from "./SettingsNativePage";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { __resetFormDirtyRegistryForTests, hasDirtySections } from "./library/use-form-dirty";
 
 const settingsMocks = vi.hoisted(() => {
   const fn = (value: unknown = {}) => vi.fn(async () => value);
@@ -1130,6 +1131,10 @@ beforeEach(() => {
   setupResponses();
 });
 
+afterEach(() => {
+  __resetFormDirtyRegistryForTests();
+});
+
 describe("SettingsNativePage broad native sections", () => {
   it("covers settings fallback stats and route action tails without silently falling through", async () => {
     settingsMocks.fetchSettings.mockRejectedValueOnce(new Error("settings offline"));
@@ -1304,6 +1309,22 @@ describe("SettingsNativePage broad native sections", () => {
     await click(exactButtons(workspacesPage.root, "Make active")[1]!);
     expect(workspaceSetter).toHaveBeenCalledWith("default");
     await click(exactButtons(workspacesPage.root, "Archive")[1]!);
+    let archiveModal = workspacesPage.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Archive workspace?");
+    expect(archiveModal?.props.open).toBe(true);
+    await act(async () => {
+      archiveModal?.props.onCancel();
+    });
+    expect(settingsMocks.archiveWorkspace).not.toHaveBeenCalled();
+    await click(exactButtons(workspacesPage.root, "Archive")[1]!);
+    archiveModal = workspacesPage.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Archive workspace?");
+    await act(async () => {
+      await archiveModal?.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.archiveWorkspace).toHaveBeenCalledWith("default");
     await click(buttons(workspacesPage.root, "Archived")[1]!);
     await click(findExactButton(workspacesPage.root, "Restore"));
@@ -1410,6 +1431,20 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(addons.root, "Launch"));
     await click(findButton(addons.root, "Stop"));
     await click(findButton(addons.root, "Uninstall"));
+    let uninstallModal = addons.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Uninstall add-on?");
+    expect(uninstallModal?.props.open).toBe(true);
+    await act(async () => {
+      uninstallModal?.props.onCancel();
+    });
+    expect(settingsMocks.uninstallAddon).not.toHaveBeenCalled();
+    await click(findButton(addons.root, "Uninstall"));
+    uninstallModal = addons.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Uninstall add-on?");
+    await act(async () => {
+      await uninstallModal?.props.onConfirm();
+    });
+    await flush();
     await click(findButton(addons.root, "Stage pack"));
     await click(findButton(addons.root, "Export manifest"));
     await click(findButton(addons.root, "Record review"));
@@ -1541,6 +1576,22 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findExactButton(integrations.root, "Run"));
     expect(settingsMocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-1", "sync-issues", {});
     await click(findButton(integrations.root, "Delete"));
+    let deleteConnectionModal = integrations.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Delete integration connection?");
+    expect(deleteConnectionModal?.props.open).toBe(true);
+    await act(async () => {
+      deleteConnectionModal?.props.onCancel();
+    });
+    expect(settingsMocks.deleteIntegrationConnection).not.toHaveBeenCalled();
+    await click(findButton(integrations.root, "Delete"));
+    deleteConnectionModal = integrations.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Delete integration connection?");
+    await act(async () => {
+      await deleteConnectionModal?.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.deleteIntegrationConnection).toHaveBeenCalledWith("conn-1");
 
     settingsMocks.fetchMcpServers.mockRejectedValueOnce(new Error("mcp offline"));
@@ -1857,11 +1908,195 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(mcp.root)).toContain("Inspect pending approvals");
     expect(collectText(mcp.root)).toContain("Ready.");
 
-    (window.confirm as unknown as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
     await click(findButton(mcp.root, "Delete"));
+    let mcpDeleteModal = mcp.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Delete MCP server?");
+    expect(mcpDeleteModal?.props.open).toBe(true);
+    await act(async () => {
+      mcpDeleteModal?.props.onCancel();
+    });
     expect(settingsMocks.deleteMcpServer).not.toHaveBeenCalled();
+    expect(collectText(mcp.root)).not.toContain("MCP server Approval Inbox deleted.");
     await click(findButton(mcp.root, "Delete"));
+    mcpDeleteModal = mcp.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Delete MCP server?");
+    await act(async () => {
+      await mcpDeleteModal?.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.deleteMcpServer).toHaveBeenCalledWith("srv-1");
+    expect(collectText(mcp.root)).toContain("MCP server Approval Inbox deleted.");
+  });
+
+  it("guards dirty provider selection, preserves edits on cancel, and stays silent after save", async () => {
+    settingsMocks.providerModelCatalog.providers = [
+      ...settingsMocks.providerModelCatalog.providers,
+      {
+        providerId: "anthropic",
+        label: "Anthropic",
+        baseUrl: "https://api.anthropic.com",
+        defaultModel: "claude-sonnet-5",
+        apiStyle: "anthropic-messages",
+        models: ["claude-sonnet-5"],
+        hasApiKey: true,
+        apiKeySource: "env",
+        modelProbeState: "ready",
+      },
+    ];
+    const providers = await mount("providers");
+    const providerLabel = providers.root.findByProps({ placeholder: "OpenAI-compatible" });
+    await change(providerLabel, "OpenAI dirty");
+    expect(hasDirtySections()).toBe(true);
+
+    await click(findButton(providers.root, "Anthropic"));
+    let discardModal = providers.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard provider changes?");
+    expect(discardModal?.props.open).toBe(true);
+    await act(async () => {
+      discardModal?.props.onCancel();
+    });
+    expect(providers.root.findByProps({ placeholder: "OpenAI-compatible" }).props.value).toBe("OpenAI dirty");
+
+    await click(findButton(providers.root, "Anthropic"));
+    discardModal = providers.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard provider changes?");
+    await act(async () => {
+      discardModal?.props.onConfirm();
+    });
+    await flush();
+    expect(providers.root.findByProps({ placeholder: "OpenAI-compatible" }).props.value).toBe("Anthropic");
+
+    await change(providers.root.findByProps({ placeholder: "OpenAI-compatible" }), "Anthropic saved");
+    await click(findButton(providers.root, "Save provider"));
+    await click(findButton(providers.root, "OpenAI"));
+    discardModal = providers.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard provider changes?");
+    expect(discardModal?.props.open).toBe(false);
+  });
+
+  it("guards dirty MCP server selection and resets only after confirmed discard", async () => {
+    settingsMocks.fetchMcpServers.mockResolvedValue({
+      items: [
+        {
+          serverId: "srv-1",
+          label: "Approval Inbox",
+          transport: "http",
+          url: "goatcitadel://approval-inbox",
+          authType: "none",
+          enabled: true,
+          status: "connected",
+          category: "system",
+          trustTier: "trusted",
+          costTier: "free",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "basic",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+          },
+          createdAt: "2026-04-24T12:00:00.000Z",
+          updatedAt: "2026-04-24T12:00:00.000Z",
+        },
+        {
+          serverId: "srv-stdio",
+          label: "Local Research",
+          transport: "stdio",
+          command: "node research.js",
+          authType: "none",
+          enabled: true,
+          status: "disconnected",
+          category: "research",
+          trustTier: "trusted",
+          costTier: "free",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "basic",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+          },
+          createdAt: "2026-04-24T12:00:00.000Z",
+          updatedAt: "2026-04-24T12:00:00.000Z",
+        },
+      ],
+    });
+    const mcp = await mount("mcp");
+    const labelInput = mcp.root.findByProps({ value: "Approval Inbox" });
+    await change(labelInput, "Approval Inbox draft");
+    expect(hasDirtySections()).toBe(true);
+
+    await click(findButton(mcp.root, "Local Research"));
+    let discardModal = mcp.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard MCP server changes?");
+    expect(discardModal?.props.open).toBe(true);
+    await act(async () => {
+      discardModal?.props.onCancel();
+    });
+    expect(mcp.root.findByProps({ value: "Approval Inbox draft" })).toBeTruthy();
+
+    await click(findButton(mcp.root, "Local Research"));
+    discardModal = mcp.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard MCP server changes?");
+    await act(async () => {
+      discardModal?.props.onConfirm();
+    });
+    await flush();
+    expect(mcp.root.findByProps({ value: "Local Research" })).toBeTruthy();
+  });
+
+  it("guards both Citadel and workspace editor selection without discarding on cancel", async () => {
+    const workspacesPage = await mount("workspaces");
+    await change(workspacesPage.root.findByProps({ value: "Personal" }), "Personal draft");
+    expect(hasDirtySections()).toBe(true);
+
+    await click(findButton(workspacesPage.root, "Company"));
+    let discardCitadel = workspacesPage.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard Citadel changes?");
+    expect(discardCitadel?.props.open).toBe(true);
+    await act(async () => {
+      discardCitadel?.props.onCancel();
+    });
+    expect(workspacesPage.root.findByProps({ value: "Personal draft" })).toBeTruthy();
+
+    await click(findButton(workspacesPage.root, "Company"));
+    discardCitadel = workspacesPage.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard Citadel changes?");
+    await act(async () => {
+      discardCitadel?.props.onConfirm();
+    });
+    await flush();
+    expect(workspacesPage.root.findByProps({ value: "Company" })).toBeTruthy();
+
+    await change(workspacesPage.root.findByProps({ value: "Default" }), "Default draft");
+    const archivedWorkspaceButton = workspacesPage.root
+      .findAllByType("button")
+      .find((button) => collectText(button).includes("Archived workspace"));
+    expect(archivedWorkspaceButton).toBeTruthy();
+    await click(archivedWorkspaceButton!);
+    const discardWorkspace = workspacesPage.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard workspace changes?");
+    expect(discardWorkspace?.props.open).toBe(true);
+    await act(async () => {
+      discardWorkspace?.props.onCancel();
+    });
+    expect(workspacesPage.root.findByProps({ value: "Default draft" })).toBeTruthy();
+
+    await click(archivedWorkspaceButton!);
+    const confirmedWorkspaceDiscard = workspacesPage.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Discard workspace changes?");
+    await act(async () => {
+      confirmedWorkspaceDiscard?.props.onConfirm();
+    });
+    await flush();
+    expect(workspacesPage.root.findByProps({ value: "Archive" })).toBeTruthy();
   });
 
   it("covers channel draft selection warnings and Slack OAuth polling branches", async () => {
@@ -2071,10 +2306,23 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(providers.root, "Save secret"));
     expect(settingsMocks.saveProviderSecret).toHaveBeenCalledWith("openai", "sk-live");
 
-    (window.confirm as unknown as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
     await click(findButton(providers.root, "Delete secret"));
+    let secretModal = providers.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Delete provider secret?");
+    expect(secretModal?.props.open).toBe(true);
+    await act(async () => {
+      secretModal?.props.onCancel();
+    });
     expect(settingsMocks.deleteProviderSecret).not.toHaveBeenCalled();
     await click(findButton(providers.root, "Delete secret"));
+    secretModal = providers.root
+      .findAllByType(ConfirmModal)
+      .find((modal) => modal.props.title === "Delete provider secret?");
+    await act(async () => {
+      await secretModal?.props.onConfirm();
+    });
+    await flush();
     expect(settingsMocks.deleteProviderSecret).toHaveBeenCalledWith("openai");
 
     await click(findButton(providers.root, "Refresh models"));

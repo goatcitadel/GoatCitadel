@@ -176,7 +176,7 @@ export function CitadelWardsRoutePage({
               disabled={draft.busy || draft.name.trim().length === 0 || draft.actionPattern.trim().length === 0}
               onClick={() => void addWard()}
             >
-              <ShieldAlert className="h-4 w-4" />
+              <ShieldAlert size={16} />
               {draft.busy ? "Adding…" : "Add Ward"}
             </NativeButton>
           </NativeCard>
@@ -197,7 +197,7 @@ export function CitadelWardsRoutePage({
               />
             </label>
             <NativeButton variant="default" disabled={probe.trim().length === 0} onClick={() => void evaluate()}>
-              <Sparkles className="h-4 w-4" />
+              <Sparkles size={16} />
               Evaluate
             </NativeButton>
             {probeResult ? (

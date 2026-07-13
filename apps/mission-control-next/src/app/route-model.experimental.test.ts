@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isExperimentalRoute } from "./route-model";
+import { isExperimentalRoute, isHiddenRoute } from "./route-model";
 
 describe("isExperimentalRoute (NAV-02 rail gating)", () => {
   it("flags every experimental surface that is gated out of the primary rails", () => {
@@ -41,5 +41,29 @@ describe("isExperimentalRoute (NAV-02 rail gating)", () => {
     for (const section of citadelSections) {
       expect(isExperimentalRoute({ area: "library", section })).toBe(false);
     }
+  });
+});
+
+describe("isHiddenRoute (release-only navigation gating)", () => {
+  it("flags direct-URL-only capability settings without treating them as experimental", () => {
+    const hidden = [
+      { area: "settings", section: "workspace-capabilities" },
+      { area: "settings", section: "citadel-capabilities" },
+    ] as const;
+
+    for (const route of hidden) {
+      expect(isHiddenRoute(route)).toBe(true);
+      expect(isExperimentalRoute(route)).toBe(false);
+    }
+  });
+
+  it("does not hide release-bearing or experimental routes", () => {
+    expect(isHiddenRoute({ area: "settings", section: "providers" })).toBe(false);
+    expect(isHiddenRoute({ area: "settings", section: "addons" })).toBe(false);
+    expect(isHiddenRoute({ area: "chat" })).toBe(false);
+  });
+
+  it("fails closed when a route is missing release metadata", () => {
+    expect(isHiddenRoute({ area: "settings", section: "not-a-real-section" as never })).toBe(true);
   });
 });

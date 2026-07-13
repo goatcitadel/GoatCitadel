@@ -150,6 +150,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
     gap: 0.45rem;
+    width: min(100%, calc(100vw - 1.75rem));
   }
 
   .mc-next-threaded-surface.unified {

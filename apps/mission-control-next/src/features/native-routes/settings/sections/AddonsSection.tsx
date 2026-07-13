@@ -30,6 +30,7 @@ import {
   uninstallAddon,
   updateAddon,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
   type LoadState,
@@ -189,6 +190,8 @@ export function AddonsSection(_props: SettingsSectionProps) {
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedAddonId, setSelectedAddonId] = useState("");
+  const [pendingUninstall, setPendingUninstall] = useState<{ addonId: string; label: string } | null>(null);
+  const [uninstallPending, setUninstallPending] = useState(false);
   const [selectedPackId, setSelectedPackId] = useState("");
   const [status, setStatus] = useState<LoadState<Awaited<ReturnType<typeof fetchAddonStatus>>>>({
     loading: false,
@@ -325,6 +328,23 @@ export function AddonsSection(_props: SettingsSectionProps) {
       }
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
+    }
+  };
+
+  const handleUninstall = async () => {
+    if (!pendingUninstall) {
+      return;
+    }
+    setUninstallPending(true);
+    try {
+      await uninstallAddon(pendingUninstall.addonId);
+      setNotice({ tone: "success", message: `${pendingUninstall.label} uninstalled.` });
+      setPendingUninstall(null);
+      await reload();
+    } catch (actionError) {
+      setNotice({ tone: "error", message: getErrorMessage(actionError) });
+    } finally {
+      setUninstallPending(false);
     }
   };
 
@@ -572,15 +592,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                   </NativeButton>
                   <NativeButton
                     variant="destructive"
-                    onClick={() => {
-                      if (!window.confirm(`Uninstall ${selectedAddon.label}?`)) {
-                        return;
-                      }
-                      void runAddonAction(
-                        () => uninstallAddon(selectedAddon.addonId),
-                        `${selectedAddon.label} uninstalled.`,
-                      );
-                    }}
+                    onClick={() => setPendingUninstall({ addonId: selectedAddon.addonId, label: selectedAddon.label })}
                   >
                     <Trash2 size={16} />
                     Uninstall
@@ -833,6 +845,16 @@ export function AddonsSection(_props: SettingsSectionProps) {
           </NativeCard>
         </SettingsGrid>
       ) : null}
+      <ConfirmModal
+        open={pendingUninstall !== null}
+        danger
+        pending={uninstallPending}
+        title="Uninstall add-on?"
+        message={`Uninstall ${pendingUninstall?.label ?? "this add-on"}? Runtime slots and its installed record will be removed.`}
+        confirmLabel="Uninstall"
+        onCancel={() => setPendingUninstall(null)}
+        onConfirm={() => void handleUninstall()}
+      />
     </SettingsSectionShell>
   );
 }

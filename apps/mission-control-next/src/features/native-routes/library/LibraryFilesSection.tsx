@@ -269,7 +269,7 @@ export function LibraryFilesSection({
             />
             <LibraryButtonRow>
               <button type="button" className="mc-next-settings-filter" onClick={() => void handleCreateFromTemplate()}>
-                <FileText className="h-4 w-4" />
+                <FileText size={16} />
                 Create file
               </button>
             </LibraryButtonRow>

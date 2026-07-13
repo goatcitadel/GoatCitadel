@@ -267,6 +267,59 @@ export interface NavigateGuardController<Route> {
   cancelDiscard: () => void;
 }
 
+export interface DraftTransitionGuardController<Transition> {
+  /**
+   * Apply an in-page selection/filter transition immediately when the current
+   * draft is clean, or defer it until the operator confirms discard.
+   */
+  requestTransition: (transition: Transition) => void;
+  /** The transition currently waiting behind the discard confirmation. */
+  pendingTransition: Transition | null;
+  /** Reset the current draft, then apply the deferred transition. */
+  confirmDiscard: () => void;
+  /** Keep the current draft and abandon the deferred transition. */
+  cancelDiscard: () => void;
+}
+
+/**
+ * Protect selection changes inside a settings editor. Route guards alone are
+ * insufficient for master/detail screens because choosing another row resets
+ * the editor without unmounting the route.
+ */
+export function useDraftTransitionGuard<Transition>(
+  isDirty: boolean,
+  applyTransition: (transition: Transition) => void,
+  resetDraft: () => void,
+): DraftTransitionGuardController<Transition> {
+  const [pendingTransition, setPendingTransition] = useState<Transition | null>(null);
+
+  const requestTransition = useCallback(
+    (transition: Transition) => {
+      if (!isDirty) {
+        applyTransition(transition);
+        return;
+      }
+      setPendingTransition(transition);
+    },
+    [applyTransition, isDirty],
+  );
+
+  const confirmDiscard = useCallback(() => {
+    if (pendingTransition === null) {
+      return;
+    }
+    resetDraft();
+    applyTransition(pendingTransition);
+    setPendingTransition(null);
+  }, [applyTransition, pendingTransition, resetDraft]);
+
+  const cancelDiscard = useCallback(() => {
+    setPendingTransition(null);
+  }, []);
+
+  return { requestTransition, pendingTransition, confirmDiscard, cancelDiscard };
+}
+
 /**
  * Wrap a `navigate(route)` callback so that, when any section is dirty, the
  * caller is given a chance to gate the navigation behind a confirm. The
@@ -330,6 +383,6 @@ export function useNavigateGuard<Route>(
 export function __resetFormDirtyRegistryForTests(): void {
   dirtyRegistry.clear();
   labelRegistry.clear();
+  subscribers.clear();
   rebuildSnapshot();
-  notifySubscribers();
 }
