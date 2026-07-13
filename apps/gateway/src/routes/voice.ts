@@ -131,7 +131,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.voice.stopRealtimeVoiceSession(params.data.id));
+      return reply.send(await fastify.services.voice.stopRealtimeVoiceSession(params.data.id));
     } catch (error) {
       const statusCode = error instanceof OpenAIRealtimeVoiceError ? error.statusCode : 400;
       return reply.code(statusCode).send({ error: (error as Error).message });
