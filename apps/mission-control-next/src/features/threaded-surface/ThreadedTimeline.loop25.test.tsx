@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
-import type { ComponentProps } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 
-type TimelineProps = ComponentProps<typeof ThreadedTimeline>["props"];
-
-function buildProps(overrides: Record<string, unknown> = {}): TimelineProps {
+function buildProps(overrides: Record<string, unknown> = {}): any {
   const turn = {
     turnId: "turn-1",
+    branchKind: "append",
     userMessage: {
       messageId: "user-1",
       sessionId: "session-1",
@@ -103,7 +102,7 @@ function buildProps(overrides: Record<string, unknown> = {}): TimelineProps {
     streamStatus: "idle",
     queuedCount: 0,
     streamError: null,
-    eventStreamStatus: "connected",
+    eventStreamStatus: { state: "open", reconnectAttempts: 0 },
     pendingApproval: null,
     pendingUserInput: null,
     workspaceId: "default",
@@ -123,11 +122,11 @@ function buildProps(overrides: Record<string, unknown> = {}): TimelineProps {
     onDenyPending: vi.fn(),
     onSubmitUserInput: vi.fn(),
     ...overrides,
-  } as unknown as TimelineProps;
+  };
 }
 
-function renderTimeline(props: TimelineProps): string {
-  return renderToStaticMarkup(<ThreadedTimeline props={props} />);
+function renderTimeline(props: any): string {
+  return renderToStaticMarkup(createElement(ThreadedTimeline, { props }));
 }
 
 describe("ThreadedTimeline loop 25 branch tails", () => {
@@ -156,14 +155,20 @@ describe("ThreadedTimeline loop 25 branch tails", () => {
   it("covers alternate delegation status tones without changing status copy", () => {
     const coworkProps = buildProps();
     coworkProps.mode = "cowork";
-    coworkProps.delegationRun!.status = "partial";
-    coworkProps.delegationRun!.steps[0]!.status = "completed";
+    if (!coworkProps.delegationRun || !coworkProps.delegationRun.steps[0]) {
+      throw new Error("expected delegation fixture");
+    }
+    coworkProps.delegationRun.status = "partial";
+    coworkProps.delegationRun.steps[0].status = "completed";
     const coworkMarkup = renderTimeline(coworkProps);
     expect(coworkMarkup).toContain("partial");
     expect(coworkMarkup).toContain("Agentic activity");
 
     const completedProps = buildProps();
-    completedProps.delegationRun!.status = "completed";
+    if (!completedProps.delegationRun) {
+      throw new Error("expected delegation fixture");
+    }
+    completedProps.delegationRun.status = "completed";
     const completedMarkup = renderTimeline(completedProps);
     expect(completedMarkup).toContain("completed");
   });

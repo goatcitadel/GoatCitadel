@@ -154,7 +154,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.voice.stopTalkSession(params.data.id));
+      return reply.send(await fastify.services.voice.stopTalkSession(params.data.id));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -195,7 +195,11 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.code(201).send(fastify.services.voice.startGoogleMeetSession(parsed.data));
+    try {
+      return reply.code(201).send(await fastify.services.voice.startGoogleMeetSession(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.post("/api/v1/voice/google-meet/sessions/:sessionId/transcript", async (request, reply) => {
@@ -208,7 +212,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.voice.appendGoogleMeetTranscriptChunk(params.data.sessionId, body.data));
+      return reply.send(await fastify.services.voice.appendGoogleMeetTranscriptChunk(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -224,7 +228,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.voice.createGoogleMeetConsultHandoff(params.data.sessionId, body.data));
+      return reply.send(await fastify.services.voice.createGoogleMeetConsultHandoff(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -236,7 +240,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.voice.stopGoogleMeetSession(params.data.sessionId));
+      return reply.send(await fastify.services.voice.stopGoogleMeetSession(params.data.sessionId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
