@@ -4485,11 +4485,22 @@ function applySchemaMigrationForTest(version: number, db: DatabaseSync): void {
   migration.up(db);
 }
 
+function getSchemaMigrationNameForTest(version: number): string {
+  const migration = SCHEMA_MIGRATIONS.find((candidate) => candidate.version === version);
+  if (!migration) {
+    throw new Error(`Unknown SQLite schema migration version: ${version}`);
+  }
+  // Return only immutable identity data. Migration callbacks remain private so
+  // tests cannot mutate or execute the production registry by reference.
+  return migration.name;
+}
+
 export const __sqliteInternals = {
   migrate,
   addColumnIfMissing,
   createSqliteSchemaBlueprintFromDatabase,
   applySchemaMigrationForTest,
+  getSchemaMigrationNameForTest,
   migrateTaskSubagentSessionColumns,
   runPromptPackBenchmarkDedupPass,
   repairPromptPackBenchmarkDedupWinners,

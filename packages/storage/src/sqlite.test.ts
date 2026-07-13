@@ -446,7 +446,7 @@ test("SQLite prompt pack content hash migration upgrades already-migrated databa
       VALUES (?, ?, ?)
     `);
     for (let version = 1; version <= 135; version += 1) {
-      markApplied.run(version, `legacy-${version}`, "2026-07-08T00:00:00.000Z");
+      markApplied.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version), "2026-07-08T00:00:00.000Z");
     }
     seed.close();
 
@@ -489,8 +489,8 @@ test("SQLite migration runner rolls back the active migration when migration SQL
       throw new Error("migration failed");
     },
     prepare(sql: string) {
-      if (sql.includes("SELECT version FROM schema_migrations")) {
-        return { all: () => [] };
+      if (sql.includes("SELECT version, name") && sql.includes("FROM schema_migrations")) {
+        return { all: () => [], get: () => undefined };
       }
       if (sql.includes("INSERT INTO schema_migrations")) {
         return {

@@ -265,7 +265,12 @@ test("manages worker transaction lifecycle with commit rollback close and missin
   assert.equal(runtime.transactions.has("tx-1"), false);
   assert.deepEqual(
     firstClient.calls.map((call) => call.sql),
-    ["BEGIN", "SELECT * FROM task WHERE id = $1", "COMMIT"],
+    [
+      "BEGIN",
+      "SELECT current_setting('server_encoding') AS server_encoding",
+      "SELECT * FROM task WHERE id = $1",
+      "COMMIT",
+    ],
   );
 
   assert.equal(
@@ -298,6 +303,187 @@ test("manages worker transaction lifecycle with commit rollback close and missin
     }),
     /Missing active Postgres transaction missing/,
   );
+});
+
+test("pins queries and independently committed transactions to one worker session", async () => {
+  const pinnedClient = createFakeTransactionClient([{ source: "pinned" }], 1);
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onConnect: async () => pinnedClient,
+      }),
+    },
+  );
+
+  assert.equal(await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "session-1" }), true);
+  assert.deepEqual(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "SELECT pinned",
+      params: [],
+      mode: "one",
+      sessionId: "session-1",
+    }),
+    { source: "pinned" },
+  );
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "tx_begin",
+      txId: "session-tx-1",
+      mode: "immediate",
+      sessionId: "session-1",
+    }),
+    true,
+  );
+  await handlePostgresSyncWorkerRequest(runtime, {
+    kind: "exec",
+    sql: "UPDATE pinned",
+    txId: "session-tx-1",
+    sessionId: "session-1",
+  });
+  assert.equal(await handlePostgresSyncWorkerRequest(runtime, { kind: "tx_commit", txId: "session-tx-1" }), true);
+  assert.equal(pinnedClient.released, false);
+  assert.equal(runtime.sessions.get("session-1"), pinnedClient);
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "session_end",
+      sessionId: "session-1",
+      destroy: true,
+    }),
+    true,
+  );
+  assert.equal(pinnedClient.released, true);
+  assert.deepEqual(pinnedClient.releaseArguments, [true]);
+  assert.deepEqual(
+    pinnedClient.calls.map((call) => call.sql),
+    [
+      "SELECT current_setting('server_encoding') AS server_encoding",
+      "SELECT pinned",
+      "BEGIN",
+      "UPDATE pinned",
+      "COMMIT",
+    ],
+  );
+});
+
+test("keeps a pinned session reserved while BEGIN is still in flight", async () => {
+  const pinnedClient = createFakeTransactionClient();
+  const originalQuery = pinnedClient.query.bind(pinnedClient);
+  let resolveBeginStarted!: () => void;
+  let releaseBegin!: () => void;
+  const beginStarted = new Promise<void>((resolve) => {
+    resolveBeginStarted = resolve;
+  });
+  const beginGate = new Promise<void>((resolve) => {
+    releaseBegin = resolve;
+  });
+  pinnedClient.query = async <T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ) => {
+    if (sql === "BEGIN") {
+      pinnedClient.calls.push({ sql, params });
+      resolveBeginStarted();
+      await beginGate;
+      return { rowCount: 0, rows: [] as T[] };
+    }
+    return originalQuery<T>(sql, params);
+  };
+
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onConnect: async () => pinnedClient,
+      }),
+    },
+  );
+
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "session-race" }),
+    true,
+  );
+  const begin = handlePostgresSyncWorkerRequest(runtime, {
+    kind: "tx_begin",
+    txId: "tx-race",
+    mode: "immediate",
+    sessionId: "session-race",
+  });
+  await beginStarted;
+  const endOutcome = await handlePostgresSyncWorkerRequest(runtime, {
+    kind: "session_end",
+    sessionId: "session-race",
+    destroy: false,
+  }).then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (error: unknown) => ({ status: "rejected" as const, error }),
+  );
+  releaseBegin();
+  await begin;
+
+  assert.equal(endOutcome.status, "rejected");
+  if (endOutcome.status === "rejected") {
+    assert.match(String(endOutcome.error), /still owns an active transaction/);
+  }
+  assert.equal(pinnedClient.released, false);
+  assert.equal(runtime.sessions.get("session-race"), pinnedClient);
+  assert.equal(runtime.transactions.get("tx-race"), pinnedClient);
+  assert.equal(runtime.transactionSessionIds.get("tx-race"), "session-race");
+
+  assert.equal(await handlePostgresSyncWorkerRequest(runtime, { kind: "tx_rollback", txId: "tx-race" }), true);
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "session_end",
+      sessionId: "session-race",
+      destroy: false,
+    }),
+    true,
+  );
+  assert.deepEqual(pinnedClient.releaseArguments, [false]);
+});
+
+test("clears a pinned-session reservation when BEGIN fails", async () => {
+  const pinnedClient = createFakeTransactionClient();
+  pinnedClient.query = async () => {
+    throw new Error("BEGIN failed");
+  };
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onConnect: async () => pinnedClient,
+      }),
+    },
+  );
+
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "session-failed-begin" }),
+    true,
+  );
+  await assert.rejects(
+    handlePostgresSyncWorkerRequest(runtime, {
+      kind: "tx_begin",
+      txId: "tx-failed-begin",
+      mode: "immediate",
+      sessionId: "session-failed-begin",
+    }),
+    /BEGIN failed/,
+  );
+  assert.equal(runtime.transactions.has("tx-failed-begin"), false);
+  assert.equal(runtime.transactionSessionIds.has("tx-failed-begin"), false);
+  assert.equal(runtime.sessions.get("session-failed-begin"), pinnedClient);
+  assert.equal(pinnedClient.released, false);
+
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "session_end",
+      sessionId: "session-failed-begin",
+      destroy: true,
+    }),
+    true,
+  );
+  assert.deepEqual(pinnedClient.releaseArguments, [true]);
 });
 
 test("rejects duplicate Postgres worker transaction ids without replacing the active client", async () => {
@@ -434,6 +620,212 @@ test("registers a message handler that delegates to the response helper", async 
   assert.deepEqual(messages, [{ ok: true, result: { changes: 1, lastInsertRowid: undefined } }]);
 });
 
+test("queues registered session cleanup behind an in-flight pinned BEGIN", async () => {
+  const pinnedClient = createFakeTransactionClient();
+  const originalQuery = pinnedClient.query.bind(pinnedClient);
+  const beginStarted = createDeferred();
+  const beginGate = createDeferred();
+  pinnedClient.query = async <T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ) => {
+    if (sql === "BEGIN") {
+      pinnedClient.calls.push({ sql, params });
+      beginStarted.resolve();
+      await beginGate.promise;
+      return { rowCount: 0, rows: [] as T[] };
+    }
+    return originalQuery<T>(sql, params);
+  };
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    { pool: createFakePool({ onConnect: async () => pinnedClient }) },
+  );
+  await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "queued-session" });
+  const listener = captureRegisteredWorkerListener(runtime);
+
+  const begin = dispatchRegisteredWorkerRequest(listener, {
+    kind: "tx_begin",
+    txId: "queued-tx",
+    mode: "immediate",
+    sessionId: "queued-session",
+  });
+  await beginStarted.promise;
+  const end = dispatchRegisteredWorkerRequest(listener, {
+    kind: "session_end",
+    sessionId: "queued-session",
+    destroy: false,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const endWaitedForBegin = end.state[0] === 0;
+  beginGate.resolve();
+  await waitForState(begin.state);
+  await waitForState(end.state);
+
+  assert.equal(endWaitedForBegin, true);
+  assert.deepEqual(begin.messages, [{ ok: true, result: true }]);
+  assert.equal(end.messages[0]?.ok, false);
+  if (end.messages[0]?.ok === false) {
+    assert.match(end.messages[0].error.message, /still owns an active transaction/);
+  }
+  assert.equal(pinnedClient.released, false);
+  assert.equal(runtime.sessions.get("queued-session"), pinnedClient);
+  assert.equal(runtime.transactions.get("queued-tx"), pinnedClient);
+
+  await handlePostgresSyncWorkerRequest(runtime, { kind: "tx_rollback", txId: "queued-tx" });
+  await handlePostgresSyncWorkerRequest(runtime, {
+    kind: "session_end",
+    sessionId: "queued-session",
+    destroy: false,
+  });
+});
+
+test("queues rollback and session cleanup behind an in-flight pinned COMMIT", async () => {
+  const pinnedClient = createFakeTransactionClient();
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    { pool: createFakePool({ onConnect: async () => pinnedClient }) },
+  );
+  await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "commit-session" });
+  await handlePostgresSyncWorkerRequest(runtime, {
+    kind: "tx_begin",
+    txId: "commit-tx",
+    mode: "immediate",
+    sessionId: "commit-session",
+  });
+
+  const originalQuery = pinnedClient.query.bind(pinnedClient);
+  const commitStarted = createDeferred();
+  const commitGate = createDeferred();
+  pinnedClient.query = async <T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ) => {
+    if (sql === "COMMIT") {
+      pinnedClient.calls.push({ sql, params });
+      commitStarted.resolve();
+      await commitGate.promise;
+      return { rowCount: 0, rows: [] as T[] };
+    }
+    return originalQuery<T>(sql, params);
+  };
+  const listener = captureRegisteredWorkerListener(runtime);
+  const commit = dispatchRegisteredWorkerRequest(listener, { kind: "tx_commit", txId: "commit-tx" });
+  await commitStarted.promise;
+  const rollback = dispatchRegisteredWorkerRequest(listener, { kind: "tx_rollback", txId: "commit-tx" });
+  const end = dispatchRegisteredWorkerRequest(listener, {
+    kind: "session_end",
+    sessionId: "commit-session",
+    destroy: true,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const cleanupWaitedForCommit = rollback.state[0] === 0 && end.state[0] === 0 && !pinnedClient.released;
+  commitGate.resolve();
+  await waitForState(commit.state);
+  await waitForState(rollback.state);
+  await waitForState(end.state);
+
+  assert.equal(cleanupWaitedForCommit, true);
+  assert.deepEqual(commit.messages, [{ ok: true, result: true }]);
+  assert.equal(rollback.messages[0]?.ok, false);
+  if (rollback.messages[0]?.ok === false) {
+    assert.match(rollback.messages[0].error.message, /Missing active Postgres transaction commit-tx/);
+  }
+  assert.deepEqual(end.messages, [{ ok: true, result: true }]);
+  assert.deepEqual(
+    pinnedClient.calls.map((call) => call.sql),
+    ["BEGIN", "COMMIT"],
+  );
+  assert.deepEqual(pinnedClient.releaseArguments, [true]);
+  assert.equal(runtime.sessions.size, 0);
+  assert.equal(runtime.transactions.size, 0);
+  assert.equal(runtime.transactionSessionIds.size, 0);
+});
+
+test("queues worker close behind an in-flight pinned BEGIN", async () => {
+  const pinnedClient = createFakeTransactionClient();
+  const originalQuery = pinnedClient.query.bind(pinnedClient);
+  const beginStarted = createDeferred();
+  const beginGate = createDeferred();
+  pinnedClient.query = async <T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ) => {
+    if (sql === "BEGIN") {
+      pinnedClient.calls.push({ sql, params });
+      beginStarted.resolve();
+      await beginGate.promise;
+      return { rowCount: 0, rows: [] as T[] };
+    }
+    return originalQuery<T>(sql, params);
+  };
+  let poolEndCount = 0;
+  const pool = createFakePool({ onConnect: async () => pinnedClient });
+  pool.end = async () => {
+    poolEndCount += 1;
+  };
+  const runtime = createPostgresSyncWorkerRuntime({ database: "goatcitadel" }, { pool });
+  await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "close-session" });
+  const listener = captureRegisteredWorkerListener(runtime);
+  const begin = dispatchRegisteredWorkerRequest(listener, {
+    kind: "tx_begin",
+    txId: "close-tx",
+    mode: "immediate",
+    sessionId: "close-session",
+  });
+  await beginStarted.promise;
+  const close = dispatchRegisteredWorkerRequest(listener, { kind: "close" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const closeWaitedForBegin = close.state[0] === 0 && !pinnedClient.released;
+  beginGate.resolve();
+  await waitForState(begin.state);
+  await waitForState(close.state);
+
+  assert.equal(closeWaitedForBegin, true);
+  assert.deepEqual(begin.messages, [{ ok: true, result: true }]);
+  assert.deepEqual(close.messages, [{ ok: true, result: true }]);
+  assert.deepEqual(
+    pinnedClient.calls.map((call) => call.sql),
+    ["BEGIN", "ROLLBACK"],
+  );
+  assert.deepEqual(pinnedClient.releaseArguments, [true]);
+  assert.equal(poolEndCount, 1);
+  assert.equal(runtime.sessions.size, 0);
+  assert.equal(runtime.transactions.size, 0);
+  assert.equal(runtime.transactionSessionIds.size, 0);
+});
+
+test("keeps the registered request queue live after response delivery fails", async () => {
+  const calls: string[] = [];
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onQuery: async (sql) => {
+          calls.push(sql);
+          return { rowCount: 1, rows: [] };
+        },
+      }),
+    },
+  );
+  const listener = captureRegisteredWorkerListener(runtime);
+  listener({
+    request: { kind: "exec", sql: "FIRST" },
+    signal: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+    port: {
+      postMessage() {
+        throw new Error("response port closed");
+      },
+      close() {},
+    },
+  });
+  const second = dispatchRegisteredWorkerRequest(listener, { kind: "exec", sql: "SECOND" });
+  await waitForState(second.state);
+
+  assert.deepEqual(second.messages, [{ ok: true, result: { changes: 1, lastInsertRowid: undefined } }]);
+  assert.deepEqual(calls, ["FIRST", "SECOND"]);
+});
+
 async function postToWorkerHandler(
   runtime: PostgresSyncWorkerRuntime,
   request: Parameters<typeof respondToPostgresSyncWorkerMessage>[1]["request"],
@@ -468,6 +860,50 @@ async function waitForState(state: Int32Array): Promise<void> {
   }
 }
 
+function captureRegisteredWorkerListener(runtime: PostgresSyncWorkerRuntime): (message: unknown) => void {
+  let listener: ((message: unknown) => void) | undefined;
+  registerPostgresSyncWorkerMessageHandler(
+    {
+      on(event, callback) {
+        assert.equal(event, "message");
+        listener = callback as (message: unknown) => void;
+        return this;
+      },
+    },
+    runtime,
+  );
+  assert.ok(listener);
+  return listener;
+}
+
+function dispatchRegisteredWorkerRequest(
+  listener: (message: unknown) => void,
+  request: Parameters<typeof respondToPostgresSyncWorkerMessage>[1]["request"],
+): { state: Int32Array; messages: PostgresWorkerResponse[] } {
+  const signal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const state = new Int32Array(signal);
+  const messages: PostgresWorkerResponse[] = [];
+  listener({
+    request,
+    signal,
+    port: {
+      postMessage(message: PostgresWorkerResponse) {
+        messages.push(message);
+      },
+      close() {},
+    },
+  });
+  return { state, messages };
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function createFakePool(
   input: {
     onQuery?: (
@@ -498,16 +934,19 @@ function createFakeTransactionClient(
 ): PostgresSyncWorkerTransactionClient & {
   calls: Array<{ sql: string; params?: unknown[] }>;
   released: boolean;
+  releaseArguments: Array<boolean | undefined>;
 } {
   const client = {
     calls: [] as Array<{ sql: string; params?: unknown[] }>,
     released: false,
+    releaseArguments: [] as Array<boolean | undefined>,
     async query<T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: unknown[]) {
       client.calls.push({ sql, params });
       return { rowCount, rows: rows as T[] };
     },
-    release() {
+    release(destroy?: boolean) {
       client.released = true;
+      client.releaseArguments.push(destroy);
     },
   };
   return client;

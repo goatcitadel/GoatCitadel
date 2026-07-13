@@ -4,8 +4,9 @@ import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { Pool, type PoolClient } from "pg";
 import { PostgresDatabaseClient } from "./client.js";
+import { quotePostgresIdentifier } from "./migration-ledger-compatibility.js";
 import { applyPostgresMigrationsSync, runPostgresMigrations } from "./migrator.js";
-import { POSTGRES_MIGRATIONS } from "./migrations.js";
+import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./migrations.js";
 import { PostgresSyncDatabaseClient } from "./sync.js";
 import { CommsDeliveryRepository } from "../comms-delivery-repo.js";
 import { ApprovalEffectRepository } from "../approval-effect-repo.js";
@@ -31,6 +32,47 @@ const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 
 function escapePostgresLiteral(value: string): string {
   return value.replaceAll("'", "''");
+}
+
+async function waitForProofSignal<T>(
+  signal: Promise<void>,
+  operation: Promise<T>,
+  description: string,
+  timeoutMs = 7_000,
+): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  const operationSettled = operation.then(
+    () => {
+      throw new Error(`${description} operation completed before the expected proof signal.`);
+    },
+    (error: unknown) => {
+      throw error;
+    },
+  );
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(`${description} proof signal timed out.`)), timeoutMs);
+  });
+  try {
+    await Promise.race([signal, operationSettled, timedOut]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function waitForOperation<T>(operation: Promise<T>, description: string, timeoutMs = 7_000): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(`${description} timed out.`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timedOut]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 test(
@@ -1516,6 +1558,2319 @@ test(
       await pool.query(`DROP TABLE IF EXISTS ${tableName}`);
       await pool.query(`DROP TABLE IF EXISTS ${migrationsTable}`);
       await pool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres accepts a durable quoted current schema after an emptied temp namespace",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage.migration_"${suffix}`;
+    const quotedSchema = quotePostgresIdentifier(schemaName);
+    const migrationsTable = `quoted_schema_migrations_${suffix}`;
+    const effectsTable = `quoted_schema_effects_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const pool = new Pool({ connectionString, max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString, database: "goatcitadel_test" },
+      { pool, migrationsTable },
+    );
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${quotedSchema}`);
+      const session = await pool.connect();
+      await session.query(`SET search_path TO ${quotedSchema}`);
+      await session.query("CREATE TEMPORARY TABLE unrelated_temp_probe (sentinel TEXT)");
+      await session.query("DROP TABLE unrelated_temp_probe");
+      const backendPid = (await session.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]?.pid;
+      assert.equal(
+        (await session.query<{ schema_name: string }>("SELECT current_schema() AS schema_name")).rows[0]?.schema_name,
+        schemaName,
+      );
+      session.release();
+
+      const result = await runPostgresMigrations(client, [
+        {
+          version: 1,
+          name: "create_quoted_schema_effect",
+          sql: `CREATE TABLE ${effectsTable} (effect_id INTEGER PRIMARY KEY)`,
+        },
+      ]);
+      assert.deepEqual(result.appliedVersions, [1]);
+      assert.equal((await client.queryOne<{ pid: number }>("SELECT pg_backend_pid() AS pid"))?.pid, backendPid);
+      const durableTables = await adminPool.query<{ table_name: string }>(
+        `SELECT table_name
+         FROM information_schema.tables
+         WHERE table_schema = $1 AND table_name = ANY($2::text[])
+         ORDER BY table_name`,
+        [schemaName, [effectsTable, migrationsTable]],
+      );
+      assert.deepEqual(
+        durableTables.rows.map((row) => row.table_name),
+        [effectsTable, migrationsTable].sort(),
+      );
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects temporary migration objects and retires async and sync sessions",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_temp_objects_${suffix}`;
+    const asyncLedger = `async_temp_object_migrations_${suffix}`;
+    const typeLedger = `async_temp_type_migrations_${suffix}`;
+    const syncLedger = `sync_temp_object_migrations_${suffix}`;
+    const asyncEffect = `async_temp_object_effect_${suffix}`;
+    const typeEffect = `async_temp_type_effect_${suffix}`;
+    const syncEffect = `sync_temp_object_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const asyncPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const typePool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const asyncClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: asyncPool, migrationsTable: asyncLedger },
+    );
+    const typeClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: typePool, migrationsTable: typeLedger },
+    );
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+
+      const asyncSession = await asyncPool.connect();
+      const asyncContaminatedPid = (await asyncSession.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]
+        ?.pid;
+      await asyncSession.query(`CREATE TEMPORARY TABLE ${asyncEffect} (sentinel TEXT)`);
+      asyncSession.release();
+      await assert.rejects(
+        runPostgresMigrations(asyncClient, [
+          { version: 1, name: "async_temp_object_probe", sql: `CREATE TABLE ${asyncEffect} (effect_id INTEGER)` },
+        ]),
+        /temporary relation .* contaminates the pinned migration session/,
+      );
+      const asyncReplacement = await asyncClient.queryOne<{ pid: number; relation: string | null }>(
+        `SELECT pg_backend_pid() AS pid, to_regclass('pg_temp.${asyncEffect}')::text AS relation`,
+      );
+      assert.notEqual(asyncReplacement?.pid, asyncContaminatedPid);
+      assert.equal(asyncReplacement?.relation, null);
+
+      const typeSession = await typePool.connect();
+      const typeContaminatedPid = (await typeSession.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]
+        ?.pid;
+      await typeSession.query("CREATE DOMAIN pg_temp.text AS pg_catalog.text");
+      typeSession.release();
+      await assert.rejects(
+        runPostgresMigrations(typeClient, [
+          { version: 1, name: "async_temp_type_probe", sql: `CREATE TABLE ${typeEffect} (payload TEXT)` },
+        ]),
+        /temporary type .* contaminates the pinned migration session/,
+      );
+      assert.notEqual(
+        (await typeClient.queryOne<{ pid: number }>("SELECT pg_backend_pid() AS pid"))?.pid,
+        typeContaminatedPid,
+      );
+
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-temp-object-migration-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      const syncContaminatedPid = syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid;
+      syncClient.exec(`CREATE TEMPORARY TABLE ${syncEffect} (sentinel TEXT)`);
+      assert.throws(
+        () =>
+          applyPostgresMigrationsSync(syncClient as PostgresSyncDatabaseClient, {
+            migrationsTable: syncLedger,
+            migrations: [
+              { version: 1, name: "sync_temp_object_probe", sql: `CREATE TABLE ${syncEffect} (effect_id INTEGER)` },
+            ],
+          }),
+        /temporary relation .* contaminates the pinned migration session/,
+      );
+      const syncReplacementPid = syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid;
+      assert.notEqual(syncReplacementPid, syncContaminatedPid);
+
+      syncClient.exec("CREATE TEMPORARY TABLE empty_namespace_probe (sentinel TEXT)");
+      syncClient.exec("DROP TABLE empty_namespace_probe");
+      const cleanSyncPid = syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid;
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: syncLedger,
+        migrations: [
+          { version: 1, name: "sync_empty_temp_probe", sql: `CREATE TABLE ${syncEffect} (effect_id INTEGER)` },
+        ],
+      });
+      assert.equal(syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid, cleanSyncPid);
+
+      const durableState = await adminPool.query<{ relation_name: string; relation: string | null }>(
+        `SELECT relation_name, to_regclass($1 || '.' || relation_name)::text AS relation
+         FROM unnest($2::text[]) AS relation_name
+         ORDER BY relation_name`,
+        [schemaName, [asyncLedger, asyncEffect, typeLedger, typeEffect, syncLedger, syncEffect]],
+      );
+      assert.deepEqual(
+        durableState.rows,
+        [
+          { relation_name: asyncEffect, relation: null },
+          { relation_name: asyncLedger, relation: null },
+          { relation_name: syncEffect, relation: `${schemaName}.${syncEffect}` },
+          { relation_name: syncLedger, relation: `${schemaName}.${syncLedger}` },
+          { relation_name: typeEffect, relation: null },
+          { relation_name: typeLedger, relation: null },
+        ].sort((left, right) => left.relation_name.localeCompare(right.relation_name)),
+      );
+    } finally {
+      syncClient?.close();
+      await Promise.allSettled([asyncClient.close(), typeClient.close()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects pooled transaction and advisory-lock contamination without committing prior work",
+  {
+    skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane",
+    timeout: 20_000,
+  },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_session_state_${suffix}`;
+    const asyncLedger = `async_session_state_migrations_${suffix}`;
+    const syncLedger = `sync_session_state_migrations_${suffix}`;
+    const asyncPriorEffect = `async_prior_uncommitted_${suffix}`;
+    const syncPriorEffect = `sync_prior_uncommitted_${suffix}`;
+    const asyncEffect = `async_session_state_effect_${suffix}`;
+    const syncEffect = `sync_session_state_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const asyncPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const asyncClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: asyncPool, migrationsTable: asyncLedger },
+    );
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+
+      const asyncSession = await asyncPool.connect();
+      await asyncSession.query("BEGIN");
+      await asyncSession.query(`CREATE TABLE ${asyncPriorEffect} (effect_id INTEGER)`);
+      const asyncTransactionPid = (await asyncSession.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]
+        ?.pid;
+      asyncSession.release();
+      await assert.rejects(
+        runPostgresMigrations(asyncClient, [
+          { version: 1, name: "async_session_state", sql: `CREATE TABLE ${asyncEffect} (effect_id INTEGER)` },
+        ]),
+        /already inside a transaction before lock acquisition/,
+      );
+      assert.notEqual(
+        (await asyncClient.queryOne<{ pid: number }>("SELECT pg_backend_pid() AS pid"))?.pid,
+        asyncTransactionPid,
+      );
+
+      const asyncLockSession = await asyncPool.connect();
+      const asyncLockPid = (
+        await asyncLockSession.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid, " +
+            "pg_catalog.pg_advisory_lock_shared(2147483000, pg_catalog.pg_backend_pid())",
+        )
+      ).rows[0]?.pid;
+      asyncLockSession.release();
+      await assert.rejects(
+        runPostgresMigrations(asyncClient, [
+          { version: 1, name: "async_session_state", sql: `CREATE TABLE ${asyncEffect} (effect_id INTEGER)` },
+        ]),
+        /already held an advisory lock before lock acquisition/,
+      );
+      assert.notEqual(
+        (await asyncClient.queryOne<{ pid: number }>("SELECT pg_backend_pid() AS pid"))?.pid,
+        asyncLockPid,
+      );
+      assert.deepEqual(
+        (
+          await runPostgresMigrations(asyncClient, [
+            { version: 1, name: "async_session_state", sql: `CREATE TABLE ${asyncEffect} (effect_id INTEGER)` },
+          ])
+        ).appliedVersions,
+        [1],
+      );
+
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-session-state-migration-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      syncClient.exec("BEGIN");
+      syncClient.exec(`CREATE TABLE ${syncPriorEffect} (effect_id INTEGER)`);
+      const syncTransactionPid = syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid;
+      assert.throws(
+        () =>
+          applyPostgresMigrationsSync(syncClient as PostgresSyncDatabaseClient, {
+            migrationsTable: syncLedger,
+            migrations: [
+              { version: 1, name: "sync_session_state", sql: `CREATE TABLE ${syncEffect} (effect_id INTEGER)` },
+            ],
+          }),
+        /already inside a transaction before lock acquisition/,
+      );
+      assert.notEqual(
+        syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid,
+        syncTransactionPid,
+      );
+
+      const syncLockPid = syncClient
+        .prepare("SELECT pg_backend_pid() AS pid, pg_catalog.pg_advisory_lock(2147482001)")
+        .get<{ pid: number }>()?.pid;
+      assert.throws(
+        () =>
+          applyPostgresMigrationsSync(syncClient as PostgresSyncDatabaseClient, {
+            migrationsTable: syncLedger,
+            migrations: [
+              { version: 1, name: "sync_session_state", sql: `CREATE TABLE ${syncEffect} (effect_id INTEGER)` },
+            ],
+          }),
+        /already held an advisory lock before lock acquisition/,
+      );
+      assert.notEqual(syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid, syncLockPid);
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: syncLedger,
+        migrations: [{ version: 1, name: "sync_session_state", sql: `CREATE TABLE ${syncEffect} (effect_id INTEGER)` }],
+      });
+
+      const state = await adminPool.query<{
+        async_prior: string | null;
+        sync_prior: string | null;
+        async_ledger: string | null;
+        async_effect: string | null;
+        sync_ledger: string | null;
+        sync_effect: string | null;
+      }>(
+        `SELECT to_regclass($1)::text AS async_prior,
+                to_regclass($2)::text AS sync_prior,
+                to_regclass($3)::text AS async_ledger,
+                to_regclass($4)::text AS async_effect,
+                to_regclass($5)::text AS sync_ledger,
+                to_regclass($6)::text AS sync_effect`,
+        [
+          `${schemaName}.${asyncPriorEffect}`,
+          `${schemaName}.${syncPriorEffect}`,
+          `${schemaName}.${asyncLedger}`,
+          `${schemaName}.${asyncEffect}`,
+          `${schemaName}.${syncLedger}`,
+          `${schemaName}.${syncEffect}`,
+        ],
+      );
+      assert.deepEqual(state.rows[0], {
+        async_prior: null,
+        sync_prior: null,
+        async_ledger: `${schemaName}.${asyncLedger}`,
+        async_effect: `${schemaName}.${asyncEffect}`,
+        sync_ledger: `${schemaName}.${syncLedger}`,
+        sync_effect: `${schemaName}.${syncEffect}`,
+      });
+    } finally {
+      syncClient?.close();
+      await asyncClient.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects a removed migration schema after preflight",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_schema_identity_${suffix}`;
+    const effectTable = `schema_identity_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool },
+    );
+    const originalPreflight = client.assertMigrationsTableNotShadowed.bind(client);
+    let droppedAfterPreflight = false;
+    client.assertMigrationsTableNotShadowed = async (pinnedClient) => {
+      const identity = await originalPreflight(pinnedClient);
+      if (!droppedAfterPreflight) {
+        droppedAfterPreflight = true;
+        await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
+      }
+      return identity;
+    };
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await assert.rejects(
+        runPostgresMigrations(client, [
+          { version: 1, name: "schema_identity_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+        ]),
+        /migration schema .* changed after preflight/,
+      );
+      assert.equal(droppedAfterPreflight, true);
+      const replacement = await client.queryOne<{
+        ledger: string | null;
+        effect: string | null;
+      }>(
+        `SELECT to_regclass('pg_temp.schema_migrations')::text AS ledger,
+                to_regclass('pg_temp.${effectTable}')::text AS effect`,
+      );
+      assert.deepEqual(replacement, { ledger: null, effect: null });
+      assert.equal(
+        (
+          await adminPool.query<{ schema_name: string | null }>(
+            "SELECT nspname AS schema_name FROM pg_catalog.pg_namespace WHERE nspname = $1",
+            [schemaName],
+          )
+        ).rows[0],
+        undefined,
+      );
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres does not redirect migration effects after a guarded schema rename",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_rename_${suffix}`;
+    const movedSchemaName = `${schemaName}_moved`;
+    const ledgerTable = `rename_migrations_${suffix}`;
+    const effectTable = `rename_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+    const originalConfigure = client.configureMigrationTransaction.bind(client);
+    let configureCalls = 0;
+    client.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
+      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
+      configureCalls += 1;
+      if (configureCalls === 2) {
+        await adminPool.query(`ALTER SCHEMA ${schemaName} RENAME TO ${movedSchemaName}`);
+      }
+    };
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await assert.rejects(
+        runPostgresMigrations(client, [
+          { version: 1, name: "schema_rename_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+        ]),
+        /no schema has been selected to create in/,
+      );
+      assert.equal(configureCalls, 2);
+      const state = await adminPool.query<{ ledger_rows: number; effect: string | null }>(
+        `SELECT (SELECT COUNT(*)::int FROM ${movedSchemaName}.${ledgerTable}) AS ledger_rows,
+                to_regclass($1)::text AS effect`,
+        [`${movedSchemaName}.${effectTable}`],
+      );
+      assert.deepEqual(state.rows[0], { ledger_rows: 0, effect: null });
+      assert.equal(
+        (
+          await adminPool.query<{ schema_name: string }>(
+            "SELECT nspname AS schema_name FROM pg_catalog.pg_namespace WHERE nspname = $1",
+            [schemaName],
+          )
+        ).rows[0],
+        undefined,
+      );
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${movedSchemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rolls back replacement-schema migration effects before commit",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_replacement_${suffix}`;
+    const movedSchemaName = `${schemaName}_moved`;
+    const ledgerTable = `replacement_migrations_${suffix}`;
+    const effectTable = `replacement_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+    const originalConfigure = client.configureMigrationTransaction.bind(client);
+    let configureCalls = 0;
+    client.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
+      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
+      configureCalls += 1;
+      if (configureCalls === 2) {
+        await adminPool.query(`
+          ALTER SCHEMA ${schemaName} RENAME TO ${movedSchemaName};
+          CREATE SCHEMA ${schemaName};
+          CREATE TABLE ${schemaName}.${ledgerTable} (
+            version pg_catalog.int4 PRIMARY KEY,
+            name pg_catalog.text NOT NULL,
+            applied_at pg_catalog.timestamptz NOT NULL DEFAULT pg_catalog.now()
+          );
+        `);
+      }
+    };
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await assert.rejects(
+        runPostgresMigrations(client, [
+          { version: 1, name: "schema_replacement_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+        ]),
+        /migration schema .* changed after preflight/,
+      );
+      assert.equal(configureCalls, 2);
+      const state = await adminPool.query<{
+        moved_ledger_rows: number;
+        replacement_ledger_rows: number;
+        moved_effect: string | null;
+        replacement_effect: string | null;
+      }>(
+        `SELECT
+           (SELECT COUNT(*)::int FROM ${movedSchemaName}.${ledgerTable}) AS moved_ledger_rows,
+           (SELECT COUNT(*)::int FROM ${schemaName}.${ledgerTable}) AS replacement_ledger_rows,
+           to_regclass($1)::text AS moved_effect,
+           to_regclass($2)::text AS replacement_effect`,
+        [`${movedSchemaName}.${effectTable}`, `${schemaName}.${effectTable}`],
+      );
+      assert.deepEqual(state.rows[0], {
+        moved_ledger_rows: 0,
+        replacement_ledger_rows: 0,
+        moved_effect: null,
+        replacement_effect: null,
+      });
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${movedSchemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres health fails closed after a guarded schema rename",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_health_rename_${suffix}`;
+    const movedSchemaName = `${schemaName}_moved`;
+    const ledgerTable = `health_rename_migrations_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+    const originalConfigure = client.configureMigrationTransaction.bind(client);
+    let renamed = false;
+    client.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
+      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
+      if (!renamed) {
+        renamed = true;
+        await adminPool.query(`ALTER SCHEMA ${schemaName} RENAME TO ${movedSchemaName}`);
+      }
+    };
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      const result = await client.healthCheck();
+      assert.equal(renamed, true);
+      assert.equal(result.reachable, false);
+      assert.match(result.issues[0] ?? "", /does not exist|changed after preflight/);
+      const state = await adminPool.query<{ ledger: string | null }>("SELECT to_regclass($1)::text AS ledger", [
+        `${movedSchemaName}.${ledgerTable}`,
+      ]);
+      assert.equal(state.rows[0]?.ledger, null);
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${movedSchemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres serializes concurrent fresh-schema health initialization",
+  {
+    skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane",
+    timeout: 15_000,
+  },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_health_concurrency_${suffix}`;
+    const ledgerTable = `health_concurrency_migrations_${suffix}`;
+    const firstApplicationName = `health-concurrency-first-${suffix}`;
+    const secondApplicationName = `health-concurrency-second-${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const firstUrl = new URL(connectionString);
+    firstUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    firstUrl.searchParams.set("application_name", firstApplicationName);
+    const secondUrl = new URL(connectionString);
+    secondUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    secondUrl.searchParams.set("application_name", secondApplicationName);
+    const firstClient = new PostgresDatabaseClient(
+      { connectionString: firstUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: firstUrl.toString(), max: 1 }), migrationsTable: ledgerTable },
+    );
+    const secondClient = new PostgresDatabaseClient(
+      { connectionString: secondUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: secondUrl.toString(), max: 1 }), migrationsTable: ledgerTable },
+    );
+    let releaseFirstLock: (() => void) | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      let firstLockResolve: (() => void) | undefined;
+      const firstLock = new Promise<void>((resolve) => {
+        firstLockResolve = resolve;
+      });
+      const firstLockRelease = new Promise<void>((resolve) => {
+        releaseFirstLock = resolve;
+      });
+      const originalFirstWithLock = firstClient.withMigrationLock.bind(firstClient);
+      firstClient.withMigrationLock = (callback, options) =>
+        originalFirstWithLock(async (pinnedClient) => {
+          firstLockResolve?.();
+          await firstLockRelease;
+          return callback(pinnedClient);
+        }, options);
+
+      let secondLockAcquired = false;
+      const originalSecondWithLock = secondClient.withMigrationLock.bind(secondClient);
+      secondClient.withMigrationLock = (callback, options) =>
+        originalSecondWithLock(async (pinnedClient) => {
+          secondLockAcquired = true;
+          return callback(pinnedClient);
+        }, options);
+
+      const firstHealth = firstClient.healthCheck();
+      await waitForProofSignal(firstLock, firstHealth, "first health advisory lock");
+      const secondHealth = secondClient.healthCheck();
+      const secondResult = await waitForOperation(secondHealth, "contended health check", 2_000);
+      assert.equal(secondResult.reachable, true);
+      assert.equal(secondResult.migrationVersion, undefined);
+      assert.match(secondResult.issues[0] ?? "", /migration work is in progress/);
+      assert.equal(secondLockAcquired, false);
+
+      releaseFirstLock?.();
+      releaseFirstLock = undefined;
+      const firstResult = await waitForOperation(firstHealth, "first health completion", 5_000);
+      assert.equal(firstResult.reachable, true);
+      const retryResult = await waitForOperation(secondClient.healthCheck(), "health retry after lock release", 2_000);
+      assert.equal(retryResult.reachable, true);
+      assert.deepEqual(retryResult.issues, []);
+      assert.equal(secondLockAcquired, true);
+      const ledger = await adminPool.query<{ ledger: string | null }>("SELECT to_regclass($1)::text AS ledger", [
+        `${schemaName}.${ledgerTable}`,
+      ]);
+      assert.equal(ledger.rows[0]?.ledger, `${schemaName}.${ledgerTable}`);
+    } finally {
+      releaseFirstLock?.();
+      await Promise.allSettled([firstClient.close(), secondClient.close()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres accepts pg_database_owner ownership for the current database owner",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const ledgerTable = `public_owner_migrations_${suffix}`;
+    const effectTable = `public_owner_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", "-csearch_path=public");
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: scopedUrl.toString(), max: 1 }), migrationsTable: ledgerTable },
+    );
+
+    try {
+      const ownership = await adminPool.query<{
+        current_role_name: string;
+        database_owner: string;
+        schema_owner: string;
+      }>(`
+        SELECT CURRENT_USER::text AS current_role_name,
+               pg_catalog.pg_get_userbyid(database.datdba)::text AS database_owner,
+               pg_catalog.pg_get_userbyid(namespace.nspowner)::text AS schema_owner
+        FROM pg_catalog.pg_database AS database
+        CROSS JOIN pg_catalog.pg_namespace AS namespace
+        WHERE database.datname = pg_catalog.current_database()
+          AND namespace.nspname = 'public'
+      `);
+      assert.equal(ownership.rows[0]?.current_role_name, ownership.rows[0]?.database_owner);
+      assert.equal(ownership.rows[0]?.schema_owner, "pg_database_owner");
+      assert.deepEqual(
+        (
+          await runPostgresMigrations(client, [
+            { version: 1, name: "public_database_owner", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+          ])
+        ).appliedVersions,
+        [1],
+      );
+      const state = await adminPool.query<{ ledger: string | null; effect: string | null }>(
+        "SELECT to_regclass($1)::text AS ledger, to_regclass($2)::text AS effect",
+        [`public.${ledgerTable}`, `public.${effectTable}`],
+      );
+      assert.deepEqual(state.rows[0], {
+        ledger: ledgerTable,
+        effect: effectTable,
+      });
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP TABLE IF EXISTS public.${effectTable}`);
+      await adminPool.query(`DROP TABLE IF EXISTS public.${ledgerTable}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres resolves quoted effective-role ownership without regrole text casts",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const roleName = `Gc Owner ${suffix}`;
+    const quotedRoleName = quotePostgresIdentifier(roleName);
+    const schemaName = `coverage_quoted_owner_${suffix}`;
+    const ledgerTable = `quoted_owner_migrations_${suffix}`;
+    const effectTable = `quoted_owner_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+
+    try {
+      await adminPool.query(`CREATE ROLE ${quotedRoleName} NOLOGIN`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${quotedRoleName}`);
+      const session = await pool.connect();
+      await session.query(`SET ROLE ${quotedRoleName}`);
+      session.release();
+      assert.deepEqual(
+        (
+          await runPostgresMigrations(client, [
+            { version: 1, name: "quoted_role_owner", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+          ])
+        ).appliedVersions,
+        [1],
+      );
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${quotedRoleName}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects a split schema-owner and migration-role topology",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const ownerRole = `split_owner_${suffix}`;
+    const migrationRole = `split_migrator_${suffix}`;
+    const schemaName = `coverage_split_owner_${suffix}`;
+    const ledgerTable = `split_owner_migrations_${suffix}`;
+    const effectTable = `split_owner_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const databaseName = (
+      await adminPool.query<{ database_name: string }>("SELECT pg_catalog.current_database() AS database_name")
+    ).rows[0]!.database_name;
+    const quotedDatabaseName = quotePostgresIdentifier(databaseName);
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: databaseName },
+      { pool, migrationsTable: ledgerTable },
+    );
+
+    try {
+      await adminPool.query(`CREATE ROLE ${ownerRole} NOLOGIN`);
+      await adminPool.query(`CREATE ROLE ${migrationRole} NOLOGIN`);
+      await adminPool.query(`GRANT CREATE ON DATABASE ${quotedDatabaseName} TO ${ownerRole}`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${ownerRole}`);
+      await adminPool.query(`GRANT USAGE, CREATE ON SCHEMA ${schemaName} TO ${migrationRole}`);
+      await adminPool.query(`
+        CREATE TABLE ${schemaName}.${ledgerTable} (
+          version pg_catalog.int4 PRIMARY KEY,
+          name pg_catalog.text NOT NULL,
+          applied_at pg_catalog.timestamptz NOT NULL DEFAULT pg_catalog.now()
+        );
+        ALTER TABLE ${schemaName}.${ledgerTable} OWNER TO ${migrationRole};
+      `);
+      const session = await pool.connect();
+      await session.query(`SET ROLE ${migrationRole}`);
+      session.release();
+
+      await assert.rejects(
+        runPostgresMigrations(client, [
+          { version: 1, name: "split_owner_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+        ]),
+        /migration role must own schema/,
+      );
+      const state = await adminPool.query<{ ledger_rows: number; effect: string | null }>(
+        `SELECT (SELECT COUNT(*)::int FROM ${schemaName}.${ledgerTable}) AS ledger_rows,
+                to_regclass($1)::text AS effect`,
+        [`${schemaName}.${effectTable}`],
+      );
+      assert.deepEqual(state.rows[0], { ledger_rows: 0, effect: null });
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`REVOKE CREATE ON DATABASE ${quotedDatabaseName} FROM ${ownerRole}`).catch(() => undefined);
+      await adminPool.query(`DROP ROLE IF EXISTS ${migrationRole}`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${ownerRole}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects shared CREATE authority and pre-existing foreign-owned relations",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const migrationRole = `exclusive_migrator_${suffix}`;
+    const creatorRole = `external_creator_${suffix}`;
+    const schemaName = `coverage_exclusive_create_${suffix}`;
+    const ledgerTable = `exclusive_migrations_${suffix}`;
+    const effectTable = `exclusive_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+    const migration: PostgresMigration = {
+      version: 1,
+      name: "exclusive_create_probe",
+      sql: `CREATE TABLE IF NOT EXISTS ${effectTable} (expected_shape INTEGER)`,
+    };
+    const setMigrationRole = async (): Promise<void> => {
+      const session = await pool.connect();
+      await session.query(`SET ROLE ${migrationRole}`);
+      session.release();
+    };
+
+    try {
+      await adminPool.query(`CREATE ROLE ${migrationRole} NOLOGIN`);
+      await adminPool.query(`CREATE ROLE ${creatorRole} NOLOGIN`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${migrationRole}`);
+      await adminPool.query(`GRANT USAGE, CREATE ON SCHEMA ${schemaName} TO ${creatorRole}`);
+      const creatorSession = await adminPool.connect();
+      try {
+        await creatorSession.query("BEGIN");
+        await creatorSession.query(`SET LOCAL ROLE ${creatorRole}`);
+        await creatorSession.query(`CREATE TABLE ${schemaName}.${effectTable} (wrong_shape TEXT)`);
+        await creatorSession.query("COMMIT");
+      } finally {
+        creatorSession.release();
+      }
+
+      await setMigrationRole();
+      await assert.rejects(runPostgresMigrations(client, [migration]), /grants CREATE to another role or PUBLIC/);
+
+      await adminPool.query(`REVOKE CREATE ON SCHEMA ${schemaName} FROM ${creatorRole}`);
+      await setMigrationRole();
+      await assert.rejects(runPostgresMigrations(client, [migration]), /contains relation .* owned by another role/);
+
+      await adminPool.query(`DROP TABLE ${schemaName}.${effectTable}`);
+      await setMigrationRole();
+      assert.deepEqual((await runPostgresMigrations(client, [migration])).appliedVersions, [1]);
+      const columns = await adminPool.query<{ column_name: string; data_type: string }>(
+        `SELECT column_name, data_type
+         FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = $2
+         ORDER BY ordinal_position`,
+        [schemaName, effectTable],
+      );
+      assert.deepEqual(columns.rows, [{ column_name: "expected_shape", data_type: "integer" }]);
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${creatorRole}`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${migrationRole}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres waits out pre-existing DDL before trusting exclusive schema authority",
+  {
+    skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane",
+    timeout: 15_000,
+  },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const migrationRole = `barrier_migrator_${suffix}`;
+    const creatorRole = `barrier_creator_${suffix}`;
+    const migrationPassword = `Migration_${suffix}_p9!`;
+    const creatorPassword = `Creator_${suffix}_p9!`;
+    const schemaName = `coverage_ddl_barrier_${suffix}`;
+    const ledgerTable = `barrier_migrations_${suffix}`;
+    const foreignEffectTable = `barrier_foreign_effect_${suffix}`;
+    const migrationEffectTable = `barrier_migration_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const migrationUrl = new URL(connectionString);
+    migrationUrl.username = migrationRole;
+    migrationUrl.password = migrationPassword;
+    migrationUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const creatorUrl = new URL(connectionString);
+    creatorUrl.username = creatorRole;
+    creatorUrl.password = creatorPassword;
+    const migrationPool = new Pool({ connectionString: migrationUrl.toString(), max: 1 });
+    const creatorPool = new Pool({ connectionString: creatorUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: migrationUrl.toString(), database: "goatcitadel_test" },
+      { pool: migrationPool, migrationsTable: ledgerTable },
+    );
+    let creatorSession: PoolClient | undefined;
+    let releaseBarrierClassification: (() => void) | undefined;
+
+    try {
+      await adminPool.query(
+        `CREATE ROLE ${migrationRole} LOGIN PASSWORD '${escapePostgresLiteral(migrationPassword)}'`,
+      );
+      await adminPool.query(`CREATE ROLE ${creatorRole} LOGIN PASSWORD '${escapePostgresLiteral(creatorPassword)}'`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${migrationRole}`);
+      await adminPool.query(`GRANT USAGE, CREATE ON SCHEMA ${schemaName} TO ${creatorRole}`);
+      creatorSession = await creatorPool.connect();
+      await creatorSession.query("BEGIN");
+      await creatorSession.query(`CREATE TABLE ${schemaName}.${foreignEffectTable} (wrong_shape TEXT)`);
+      const creatorTransaction = await creatorSession.query<{ active_xid: string }>(
+        "SELECT pg_catalog.pg_current_xact_id()::pg_catalog.text AS active_xid",
+      );
+      const creatorTransactionId = creatorTransaction.rows[0]?.active_xid;
+      assert.match(creatorTransactionId ?? "", /^\d+$/);
+      await adminPool.query(`REVOKE CREATE ON SCHEMA ${schemaName} FROM ${creatorRole}`);
+
+      let barrierClassificationResolve: (() => void) | undefined;
+      const barrierClassification = new Promise<void>((resolve) => {
+        barrierClassificationResolve = resolve;
+      });
+      const barrierClassificationRelease = new Promise<void>((resolve) => {
+        releaseBarrierClassification = resolve;
+      });
+      const originalBarrier = client.awaitMigrationSchemaQuiescence.bind(client);
+      client.awaitMigrationSchemaQuiescence = async (pinnedClient) => {
+        const observedClient = new Proxy(pinnedClient, {
+          get(target, property) {
+            if (property !== "query") {
+              return Reflect.get(target, property, target);
+            }
+            return async (sql: string, params?: unknown[]) => {
+              const result = await target.query(sql, params);
+              const classification = result.rows[0] as
+                | {
+                    transaction_status?: unknown;
+                    observed_database_count?: unknown;
+                    current_database_observed?: unknown;
+                  }
+                | undefined;
+              if (
+                sql.includes("observed_database_count") &&
+                params?.[0] === creatorTransactionId &&
+                classification?.transaction_status === "in progress" &&
+                classification.observed_database_count === "1" &&
+                classification.current_database_observed === true
+              ) {
+                barrierClassificationResolve?.();
+                barrierClassificationResolve = undefined;
+                await barrierClassificationRelease;
+              }
+              return result;
+            };
+          },
+        }) as PoolClient;
+        return originalBarrier(observedClient);
+      };
+      const migrationPromise = runPostgresMigrations(client, [
+        {
+          version: 1,
+          name: "preexisting_ddl_barrier",
+          sql: `CREATE TABLE ${migrationEffectTable} (expected_shape INTEGER)`,
+        },
+      ]);
+      await waitForProofSignal(barrierClassification, migrationPromise, "current-database migration barrier");
+      await creatorSession.query("COMMIT");
+      releaseBarrierClassification?.();
+      releaseBarrierClassification = undefined;
+
+      await assert.rejects(migrationPromise, /gained relation .* owned by another role after preflight/);
+      const state = await adminPool.query<{
+        ledger: string | null;
+        migration_effect: string | null;
+        column_name: string;
+        data_type: string;
+      }>(
+        `SELECT to_regclass($1)::text AS ledger, to_regclass($2)::text AS migration_effect, column_name, data_type
+         FROM information_schema.columns
+         WHERE table_schema = $3 AND table_name = $4
+         ORDER BY ordinal_position`,
+        [`${schemaName}.${ledgerTable}`, `${schemaName}.${migrationEffectTable}`, schemaName, foreignEffectTable],
+      );
+      assert.deepEqual(state.rows, [
+        { ledger: null, migration_effect: null, column_name: "wrong_shape", data_type: "text" },
+      ]);
+    } finally {
+      releaseBarrierClassification?.();
+      await creatorSession?.query("ROLLBACK").catch(() => undefined);
+      creatorSession?.release();
+      await Promise.allSettled([client.close(), creatorPool.end()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${creatorRole}`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${migrationRole}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres migration quiescence ignores transactions in another database",
+  {
+    skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane",
+    timeout: 15_000,
+  },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const migrationRole = `barrier_db_migrator_${suffix}`;
+    const otherRole = `barrier_db_other_${suffix}`;
+    const migrationPassword = `Migration_${suffix}_p9!`;
+    const otherPassword = `Other_${suffix}_p9!`;
+    const schemaName = `coverage_db_barrier_${suffix}`;
+    const ledgerTable = `db_barrier_migrations_${suffix}`;
+    const effectTable = `db_barrier_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const migrationUrl = new URL(connectionString);
+    migrationUrl.username = migrationRole;
+    migrationUrl.password = migrationPassword;
+    migrationUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const targetDatabase = decodeURIComponent(migrationUrl.pathname.replace(/^\//, ""));
+    const otherDatabase = targetDatabase === "postgres" ? "template1" : "postgres";
+    const otherUrl = new URL(connectionString);
+    otherUrl.username = otherRole;
+    otherUrl.password = otherPassword;
+    otherUrl.pathname = `/${otherDatabase}`;
+    otherUrl.searchParams.delete("options");
+    const migrationPool = new Pool({ connectionString: migrationUrl.toString(), max: 1 });
+    const otherPool = new Pool({ connectionString: otherUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: migrationUrl.toString(), database: targetDatabase },
+      { pool: migrationPool, migrationsTable: ledgerTable },
+    );
+    let otherSession: PoolClient | undefined;
+
+    try {
+      await adminPool.query(
+        `CREATE ROLE ${migrationRole} LOGIN PASSWORD '${escapePostgresLiteral(migrationPassword)}'`,
+      );
+      await adminPool.query(`CREATE ROLE ${otherRole} LOGIN PASSWORD '${escapePostgresLiteral(otherPassword)}'`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${migrationRole}`);
+      otherSession = await otherPool.connect();
+      await otherSession.query("BEGIN");
+      const otherTransaction = await otherSession.query<{ active_xid: string }>(
+        "SELECT pg_catalog.pg_current_xact_id()::pg_catalog.text AS active_xid",
+      );
+      const otherTransactionId = otherTransaction.rows[0]?.active_xid;
+      assert.match(otherTransactionId ?? "", /^\d+$/);
+
+      let snapshotCapturedOtherTransaction = false;
+      let otherDatabaseClassificationResolve: (() => void) | undefined;
+      const otherDatabaseClassification = new Promise<void>((resolve) => {
+        otherDatabaseClassificationResolve = resolve;
+      });
+      const originalBarrier = client.awaitMigrationSchemaQuiescence.bind(client);
+      client.awaitMigrationSchemaQuiescence = async (pinnedClient) => {
+        const observedClient = new Proxy(pinnedClient, {
+          get(target, property) {
+            if (property !== "query") {
+              return Reflect.get(target, property, target);
+            }
+            return async (sql: string, params?: unknown[]) => {
+              const result = await target.query(sql, params);
+              if (sql.includes("pg_catalog.pg_snapshot_xip")) {
+                snapshotCapturedOtherTransaction = result.rows.some((row) => {
+                  const activeXid = (row as { active_xid?: unknown }).active_xid;
+                  return activeXid === otherTransactionId;
+                });
+              }
+              const classifiedTransactionId = params?.[0];
+              if (sql.includes("observed_database_count") && classifiedTransactionId === otherTransactionId) {
+                assert.equal(snapshotCapturedOtherTransaction, true);
+                assert.deepEqual(result.rows[0], {
+                  transaction_status: "in progress",
+                  observed_database_count: "1",
+                  current_database_observed: false,
+                });
+                otherDatabaseClassificationResolve?.();
+                otherDatabaseClassificationResolve = undefined;
+              }
+              return result;
+            };
+          },
+        }) as PoolClient;
+        return originalBarrier(observedClient);
+      };
+
+      const migrationPromise = runPostgresMigrations(client, [
+        {
+          version: 1,
+          name: "current_database_only_barrier",
+          sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)`,
+        },
+      ]);
+      await waitForProofSignal(
+        otherDatabaseClassification,
+        migrationPromise,
+        "cross-database migration classification",
+      );
+      assert.deepEqual((await migrationPromise).appliedVersions, [1]);
+      const effect = await adminPool.query<{ effect: string | null }>("SELECT to_regclass($1)::text AS effect", [
+        `${schemaName}.${effectTable}`,
+      ]);
+      assert.equal(effect.rows[0]?.effect, `${schemaName}.${effectTable}`);
+    } finally {
+      await otherSession?.query("ROLLBACK").catch(() => undefined);
+      otherSession?.release();
+      await Promise.allSettled([client.close(), otherPool.end()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${otherRole}`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${migrationRole}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres migration guards support a least-privilege schema owner",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const roleName = `migration_owner_${suffix}`;
+    const rolePassword = `Migration_${suffix}_p9!`;
+    const schemaName = `coverage_migration_owner_${suffix}`;
+    const asyncLedger = `owner_async_migrations_${suffix}`;
+    const syncLedger = `owner_sync_migrations_${suffix}`;
+    const asyncEffect = `owner_async_effect_${suffix}`;
+    const syncEffect = `owner_sync_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.username = roleName;
+    scopedUrl.password = rolePassword;
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const asyncPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const asyncClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: asyncPool, migrationsTable: asyncLedger },
+    );
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${escapePostgresLiteral(rolePassword)}'`);
+      await adminPool.query(`CREATE SCHEMA ${schemaName} AUTHORIZATION ${roleName}`);
+
+      const asyncMigrations: PostgresMigration[] = [
+        { version: 1, name: "least_privilege_async", sql: `CREATE TABLE ${asyncEffect} (effect_id INTEGER)` },
+      ];
+      assert.deepEqual((await runPostgresMigrations(asyncClient, asyncMigrations)).appliedVersions, [1]);
+      const originalConfigure = asyncClient.configureMigrationTransaction.bind(asyncClient);
+      let configureCalls = 0;
+      let concurrentDropCode: string | undefined;
+      asyncClient.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
+        await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
+        configureCalls += 1;
+        if (configureCalls === 2) {
+          const dropSession = await adminPool.connect();
+          try {
+            await dropSession.query("BEGIN");
+            await dropSession.query("SET LOCAL lock_timeout = '300ms'");
+            try {
+              await dropSession.query(`DROP SCHEMA ${schemaName} CASCADE`);
+              concurrentDropCode = "dropped";
+            } catch (error) {
+              concurrentDropCode =
+                error && typeof error === "object" && "code" in error ? String(error.code) : String(error);
+            }
+            await dropSession.query("ROLLBACK");
+          } finally {
+            dropSession.release();
+          }
+        }
+      };
+      assert.deepEqual(
+        (
+          await runPostgresMigrations(asyncClient, [
+            ...asyncMigrations,
+            { version: 2, name: "least_privilege_drop_guard", sql: "SELECT 1" },
+          ])
+        ).appliedVersions,
+        [2],
+      );
+      asyncClient.configureMigrationTransaction = originalConfigure;
+      assert.equal(concurrentDropCode, "55P03");
+      assert.equal((await asyncClient.healthCheck()).reachable, true);
+
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-least-privilege-migration-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: syncLedger,
+        migrations: [
+          { version: 1, name: "least_privilege_sync", sql: `CREATE TABLE ${syncEffect} (effect_id INTEGER)` },
+        ],
+      });
+
+      const relations = await adminPool.query<{ table_name: string }>(
+        `SELECT table_name
+         FROM information_schema.tables
+         WHERE table_schema = $1 AND table_name = ANY($2::text[])
+         ORDER BY table_name`,
+        [schemaName, [asyncLedger, asyncEffect, syncLedger, syncEffect]],
+      );
+      assert.deepEqual(
+        relations.rows.map((row) => row.table_name),
+        [asyncLedger, asyncEffect, syncLedger, syncEffect].sort(),
+      );
+    } finally {
+      syncClient?.close();
+      await asyncClient.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.query(`DROP ROLE IF EXISTS ${roleName}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects system schemas as migration owners",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const ledgerTable = `system_schema_migrations_${suffix}`;
+    const effectTable = `system_schema_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const systemUrl = new URL(connectionString);
+    systemUrl.searchParams.set("options", "-csearch_path=information_schema");
+    const client = new PostgresDatabaseClient(
+      { connectionString: systemUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: systemUrl.toString(), max: 1 }), migrationsTable: ledgerTable },
+    );
+
+    try {
+      await assert.rejects(
+        runPostgresMigrations(client, [
+          { version: 1, name: "system_schema_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+        ]),
+        /system schema "information_schema" cannot own GoatCitadel migration state/,
+      );
+      const state = await adminPool.query<{ ledger: string | null; effect: string | null }>(
+        `SELECT to_regclass($1)::text AS ledger, to_regclass($2)::text AS effect`,
+        [`information_schema.${ledgerTable}`, `information_schema.${effectTable}`],
+      );
+      assert.deepEqual(state.rows[0], { ledger: null, effect: null });
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP TABLE IF EXISTS information_schema.${ledgerTable}`);
+      await adminPool.query(`DROP TABLE IF EXISTS information_schema.${effectTable}`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects duplicate async migration ledger rows before payload execution",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_duplicate_migration_ledger_${suffix}`;
+    const ledgerTable = `duplicate_migrations_${suffix}`;
+    const effectTable = `duplicate_migration_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      {
+        pool: new Pool({ connectionString: scopedUrl.toString(), max: 1 }),
+        migrationsTable: ledgerTable,
+      },
+    );
+
+    try {
+      await adminPool.query(`
+        CREATE SCHEMA ${schemaName};
+        CREATE TABLE ${schemaName}.${ledgerTable} (
+          version INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        INSERT INTO ${schemaName}.${ledgerTable} (version, name)
+        VALUES (1, 'duplicate_probe'), (1, 'duplicate_probe');
+      `);
+      await assert.rejects(
+        runPostgresMigrations(client, [
+          { version: 1, name: "duplicate_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
+        ]),
+        /migration ledger contains duplicate version 1/,
+      );
+      const state = await adminPool.query<{ ledger_count: string; effect: string | null }>(
+        `SELECT (SELECT COUNT(*)::text FROM ${schemaName}.${ledgerTable}) AS ledger_count,
+                to_regclass($1)::text AS effect`,
+        [`${schemaName}.${effectTable}`],
+      );
+      assert.deepEqual(state.rows[0], { ledger_count: "2", effect: null });
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres health checks reject ephemeral migration state and retire the session",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_ephemeral_health_${suffix}`;
+    const ledgerTable = `ephemeral_health_migrations_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=pg_temp,${schemaName}`);
+    const pool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool, migrationsTable: ledgerTable },
+    );
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      const session = await pool.connect();
+      await session.query("CREATE TEMPORARY TABLE health_temp_probe (sentinel TEXT)");
+      await session.query("DROP TABLE health_temp_probe");
+      const contaminatedPid = (await session.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]?.pid;
+      session.release();
+
+      const result = await client.healthCheck();
+      assert.equal(result.reachable, false);
+      assert.match(result.issues[0] ?? "", /temporary current schema cannot own the migrations table/);
+      assert.notEqual((await client.queryOne<{ pid: number }>("SELECT pg_backend_pid() AS pid"))?.pid, contaminatedPid);
+      assert.equal(
+        (
+          await adminPool.query<{ relation: string | null }>("SELECT to_regclass($1)::text AS relation", [
+            `${schemaName}.${ledgerTable}`,
+          ])
+        ).rows[0]?.relation,
+        null,
+      );
+    } finally {
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres migration locks ignore search-path function shadowing",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_lock_shadow_${suffix}`;
+    const quotedSchema = quotePostgresIdentifier(schemaName);
+    const asyncLedger = `async_lock_migrations_${suffix}`;
+    const syncLedger = `sync_lock_migrations_${suffix}`;
+    const asyncEffect = `async_lock_effect_${suffix}`;
+    const syncEffect = `sync_lock_effect_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},pg_catalog,public`);
+    const asyncClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: scopedUrl.toString(), max: 1 }), migrationsTable: asyncLedger },
+    );
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`
+        CREATE SCHEMA ${quotedSchema};
+        CREATE TABLE ${quotedSchema}.hook_log (kind TEXT NOT NULL);
+
+        CREATE DOMAIN ${quotedSchema}.text AS pg_catalog.text;
+        CREATE DOMAIN ${quotedSchema}.integer AS pg_catalog.int4;
+        CREATE DOMAIN ${quotedSchema}.timestamptz AS pg_catalog.timestamptz;
+
+        CREATE FUNCTION ${quotedSchema}.now() RETURNS pg_catalog.timestamptz AS $$
+        BEGIN
+          INSERT INTO ${quotedSchema}.hook_log(kind) VALUES ('fake_now');
+          RETURN '2000-01-01T00:00:00Z'::pg_catalog.timestamptz;
+        END;
+        $$ LANGUAGE plpgsql VOLATILE;
+
+        CREATE FUNCTION ${quotedSchema}.pg_advisory_lock(BIGINT) RETURNS VOID AS $$
+        BEGIN
+          INSERT INTO ${quotedSchema}.hook_log(kind) VALUES ('fake_lock');
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE FUNCTION ${quotedSchema}.pg_try_advisory_lock(BIGINT) RETURNS BOOLEAN AS $$
+        BEGIN
+          INSERT INTO ${quotedSchema}.hook_log(kind) VALUES ('fake_try_lock');
+          RETURN TRUE;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE FUNCTION ${quotedSchema}.pg_advisory_unlock(BIGINT) RETURNS BOOLEAN AS $$
+        BEGIN
+          INSERT INTO ${quotedSchema}.hook_log(kind) VALUES ('fake_unlock');
+          RETURN TRUE;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE FUNCTION ${quotedSchema}.fake_text_concat(
+          left_value pg_catalog.text,
+          right_value pg_catalog.text
+        ) RETURNS pg_catalog.text AS $$
+        BEGIN
+          INSERT INTO ${quotedSchema}.hook_log(kind) VALUES ('fake_concat');
+          RETURN pg_catalog.concat(left_value, right_value);
+        END;
+        $$ LANGUAGE plpgsql VOLATILE;
+
+        CREATE OPERATOR ${quotedSchema}.|| (
+          LEFTARG = pg_catalog.text,
+          RIGHTARG = pg_catalog.text,
+          FUNCTION = ${quotedSchema}.fake_text_concat
+        );
+      `);
+
+      assert.deepEqual(
+        (
+          await runPostgresMigrations(asyncClient, [
+            {
+              version: 1,
+              name: "async_lock_shadow_probe",
+              sql:
+                `CREATE TABLE ${asyncEffect} (` +
+                "effect_id INTEGER PRIMARY KEY, payload TEXT NOT NULL DEFAULT 'ok', " +
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            },
+          ])
+        ).appliedVersions,
+        [1],
+      );
+
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-lock-shadow-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: syncLedger,
+        migrations: [
+          {
+            version: 1,
+            name: "sync_lock_shadow_probe",
+            sql:
+              `CREATE TABLE ${syncEffect} (` +
+              "effect_id INTEGER PRIMARY KEY, payload TEXT NOT NULL DEFAULT 'ok', " +
+              "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+          },
+        ],
+      });
+
+      const hooks = await adminPool.query<{ kind: string }>(`SELECT kind FROM ${quotedSchema}.hook_log`);
+      assert.deepEqual(hooks.rows, []);
+      const columnTypes = await adminPool.query<{
+        table_name: string;
+        column_name: string;
+        type_schema: string;
+      }>(
+        `
+          SELECT relation.relname AS table_name,
+                 attribute.attname AS column_name,
+                 type_namespace.nspname AS type_schema
+          FROM pg_catalog.pg_class AS relation
+          JOIN pg_catalog.pg_namespace AS relation_namespace
+            ON relation_namespace.oid = relation.relnamespace
+          JOIN pg_catalog.pg_attribute AS attribute
+            ON attribute.attrelid = relation.oid
+          JOIN pg_catalog.pg_type AS column_type
+            ON column_type.oid = attribute.atttypid
+          JOIN pg_catalog.pg_namespace AS type_namespace
+            ON type_namespace.oid = column_type.typnamespace
+          WHERE relation_namespace.nspname = $1
+            AND relation.relname = ANY($2::pg_catalog.text[])
+            AND attribute.attnum > 0
+            AND NOT attribute.attisdropped
+          ORDER BY relation.relname, attribute.attnum
+        `,
+        [schemaName, [asyncLedger, syncLedger, asyncEffect, syncEffect]],
+      );
+      assert.equal(columnTypes.rows.length, 12);
+      assert.deepEqual(new Set(columnTypes.rows.map((row) => row.type_schema)), new Set(["pg_catalog"]));
+    } finally {
+      syncClient?.close();
+      await asyncClient.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres repairs only the exact pre-v47 ledger aliases before requiring canonical history",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_v47_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString() });
+    const client = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    const repairSlice = POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 32 && migration.version <= 47);
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    const seedLegacyLedger = async (): Promise<void> => {
+      await scopedPool.query("DROP TABLE IF EXISTS schema_migrations");
+      await scopedPool.query(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      for (const migration of repairSlice.filter((candidate) => candidate.version < 47)) {
+        await scopedPool.query("INSERT INTO schema_migrations (version, name) VALUES ($1, $2)", [
+          migration.version,
+          migration.version === 32
+            ? "cron_jobs_workdir_and_context_from"
+            : migration.version === 33
+              ? "cron_jobs_last_run_output_and_run_id"
+              : migration.name,
+        ]);
+      }
+    };
+
+    const assertCanonicalRepair = async (): Promise<void> => {
+      const rows = await scopedPool.query<{ version: number; name: string }>(
+        "SELECT version, name FROM schema_migrations WHERE version IN (32, 33, 47) ORDER BY version",
+      );
+      assert.deepEqual(rows.rows, [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+    };
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await seedLegacyLedger();
+
+      const asyncResult = await runPostgresMigrations(client, repairSlice);
+      assert.deepEqual(asyncResult.appliedVersions, [47]);
+      await assertCanonicalRepair();
+      await scopedPool.query(
+        "UPDATE schema_migrations SET name = 'cron_jobs_workdir_and_context_from' WHERE version = 32",
+      );
+      await assert.rejects(runPostgresMigrations(client, repairSlice), /migration ledger mismatch at version 32/);
+
+      await seedLegacyLedger();
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-v47-ledger-repair-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      applyPostgresMigrationsSync(syncClient, { migrations: repairSlice });
+      await assertCanonicalRepair();
+      syncClient
+        .prepare("UPDATE schema_migrations SET name = 'cron_jobs_workdir_and_context_from' WHERE version = 32")
+        .run();
+      assert.throws(
+        () => applyPostgresMigrationsSync(syncClient as PostgresSyncDatabaseClient, { migrations: repairSlice }),
+        /migration ledger mismatch at version 32/,
+      );
+    } finally {
+      syncClient?.close();
+      await client.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres bridges frozen v47 to configured ledgers without touching permanent default history",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_v47_custom_${suffix}`;
+    const shadowLedger = `shadow_migrations_${suffix}`;
+    const ephemeralAsyncLedger = `ephemeral_async_migrations_${suffix}`;
+    const ephemeralSyncLedger = `ephemeral_sync_migrations_${suffix}`;
+    const guardLedger = `guard_migrations_${suffix}`;
+    const lateAsyncLedger = `late_async_migrations_${suffix}`;
+    const lateSyncLedger = `late_sync_migrations_${suffix}`;
+    const asyncLedger = `async_migrations_${suffix}`;
+    const syncLedger = `sync_migrations_${suffix}`;
+    const rollbackLedger = `rollback_migrations_${suffix}`;
+    const noopAsyncLedger = `noop_async_migrations_${suffix}`;
+    const noopSyncLedger = `noop_sync_migrations_${suffix}`;
+    const suppressRepairFunction = `suppress_history_repair_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const migrationsThroughRepair = POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 47);
+    let guardClient: PostgresDatabaseClient | undefined;
+    let shadowClient: PostgresDatabaseClient | undefined;
+    let ephemeralAsyncClient: PostgresDatabaseClient | undefined;
+    let ephemeralSyncClient: PostgresSyncDatabaseClient | undefined;
+    let lateAsyncClient: PostgresDatabaseClient | undefined;
+    let lateSyncClient: PostgresSyncDatabaseClient | undefined;
+    let asyncClient: PostgresDatabaseClient | undefined;
+    let rollbackClient: PostgresDatabaseClient | undefined;
+    let noopAsyncClient: PostgresDatabaseClient | undefined;
+    let syncClient: PostgresSyncDatabaseClient | undefined;
+
+    const createLedger = async (tableName: string, legacyAliases: boolean, rejectRepair = false): Promise<void> => {
+      await scopedPool.query(`
+        CREATE TABLE ${tableName} (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          ${
+            rejectRepair
+              ? ", CONSTRAINT reject_canonical_history CHECK (name NOT IN ('state_validation_quarantine', 'cron_jobs_workdir_context_from_run_output_run_id'))"
+              : ""
+          }
+        )
+      `);
+      for (const migration of migrationsThroughRepair.filter((candidate) => candidate.version < 47)) {
+        await scopedPool.query(`INSERT INTO ${tableName} (version, name) VALUES ($1, $2)`, [
+          migration.version,
+          legacyAliases && migration.version === 32
+            ? "cron_jobs_workdir_and_context_from"
+            : legacyAliases && migration.version === 33
+              ? "cron_jobs_last_run_output_and_run_id"
+              : migration.name,
+        ]);
+      }
+    };
+
+    const readRepairRows = async (tableName: string): Promise<Array<{ version: number; name: string }>> =>
+      (
+        await scopedPool.query<{ version: number; name: string }>(
+          `SELECT version, name FROM ${tableName} WHERE version IN (32, 33, 47) ORDER BY version`,
+        )
+      ).rows;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await scopedPool.query(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await scopedPool.query(
+        `INSERT INTO schema_migrations (version, name) VALUES
+          (32, 'cron_jobs_workdir_and_context_from'),
+          (33, 'cron_jobs_last_run_output_and_run_id')`,
+      );
+
+      await createLedger(shadowLedger, false);
+      const shadowPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+      const shadowSession = await shadowPool.connect();
+      const shadowBackendPid = (await shadowSession.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]
+        ?.pid;
+      await shadowSession.query(`
+        CREATE TEMPORARY TABLE ${shadowLedger} (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      shadowSession.release();
+      shadowClient = new PostgresDatabaseClient(
+        { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+        { pool: shadowPool, migrationsTable: shadowLedger },
+      );
+      await assert.rejects(
+        runPostgresMigrations(shadowClient, migrationsThroughRepair),
+        /temporary relation .* shadows the configured migrations table/,
+      );
+      assert.equal(
+        (await readRepairRows(shadowLedger)).some((row) => row.version === 47),
+        false,
+      );
+      const shadowReplacement = await shadowClient.queryOne<{ pid: number; relation: string | null }>(
+        `SELECT pg_backend_pid() AS pid, to_regclass('pg_temp.${shadowLedger}')::text AS relation`,
+      );
+      assert.notEqual(shadowReplacement?.pid, shadowBackendPid);
+      assert.equal(shadowReplacement?.relation, null);
+      await shadowClient.close();
+      shadowClient = undefined;
+
+      const tempCurrentUrl = new URL(scopedUrl.toString());
+      tempCurrentUrl.searchParams.set("options", `-csearch_path=pg_temp,${schemaName}`);
+      await createLedger(ephemeralAsyncLedger, false);
+      const ephemeralAsyncPool = new Pool({ connectionString: tempCurrentUrl.toString(), max: 1 });
+      const ephemeralAsyncSession = await ephemeralAsyncPool.connect();
+      const ephemeralAsyncBackendPid = (
+        await ephemeralAsyncSession.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+      ).rows[0]?.pid;
+      ephemeralAsyncSession.release();
+      ephemeralAsyncClient = new PostgresDatabaseClient(
+        { connectionString: tempCurrentUrl.toString(), database: "goatcitadel_test" },
+        { pool: ephemeralAsyncPool, migrationsTable: ephemeralAsyncLedger },
+      );
+      await assert.rejects(
+        runPostgresMigrations(ephemeralAsyncClient, migrationsThroughRepair),
+        /temporary current schema cannot own the migrations table/,
+      );
+      assert.equal(
+        (await readRepairRows(ephemeralAsyncLedger)).some((row) => row.version === 47),
+        false,
+      );
+      const ephemeralAsyncReplacement = await ephemeralAsyncClient.queryOne<{ pid: number }>(
+        "SELECT pg_backend_pid() AS pid",
+      );
+      assert.notEqual(ephemeralAsyncReplacement?.pid, ephemeralAsyncBackendPid);
+      await ephemeralAsyncClient.close();
+      ephemeralAsyncClient = undefined;
+
+      await createLedger(ephemeralSyncLedger, false);
+      ephemeralSyncClient = new PostgresSyncDatabaseClient({
+        connectionString: tempCurrentUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-temp-current-schema-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      const ephemeralSyncBackendPid = ephemeralSyncClient
+        .prepare("SELECT pg_backend_pid() AS pid")
+        .get<{ pid: number }>()?.pid;
+      assert.throws(
+        () =>
+          applyPostgresMigrationsSync(ephemeralSyncClient as PostgresSyncDatabaseClient, {
+            migrationsTable: ephemeralSyncLedger,
+            migrations: migrationsThroughRepair,
+          }),
+        /temporary current schema cannot own the migrations table/,
+      );
+      assert.equal(
+        (await readRepairRows(ephemeralSyncLedger)).some((row) => row.version === 47),
+        false,
+      );
+      const ephemeralSyncReplacement = ephemeralSyncClient
+        .prepare("SELECT pg_backend_pid() AS pid")
+        .get<{ pid: number }>();
+      assert.notEqual(ephemeralSyncReplacement?.pid, ephemeralSyncBackendPid);
+      ephemeralSyncClient.close();
+      ephemeralSyncClient = undefined;
+
+      await createLedger(guardLedger, false);
+      const guardPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+      const guardSession = await guardPool.connect();
+      const guardBackendPid = (await guardSession.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]
+        ?.pid;
+      await guardSession.query("CREATE TEMPORARY TABLE schema_migrations (sentinel TEXT)");
+      guardSession.release();
+      guardClient = new PostgresDatabaseClient(
+        { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+        { pool: guardPool, migrationsTable: guardLedger },
+      );
+      await assert.rejects(
+        runPostgresMigrations(guardClient, migrationsThroughRepair),
+        /temporary relation .* contaminates the pinned migration session/,
+      );
+      assert.equal(
+        (await readRepairRows(guardLedger)).some((row) => row.version === 47),
+        false,
+      );
+      assert.equal(
+        (
+          await scopedPool.query<{ relation: string | null }>(
+            "SELECT to_regclass('state_validation_quarantine')::text AS relation",
+          )
+        ).rows[0]?.relation,
+        null,
+      );
+      const guardReplacement = await guardClient.queryOne<{ pid: number; relation: string | null }>(
+        "SELECT pg_backend_pid() AS pid, to_regclass('pg_temp.schema_migrations')::text AS relation",
+      );
+      assert.notEqual(guardReplacement?.pid, guardBackendPid);
+      assert.equal(guardReplacement?.relation, null);
+      await guardClient.close();
+      guardClient = undefined;
+
+      const lateTempUrl = new URL(scopedUrl.toString());
+      lateTempUrl.searchParams.set("options", `-csearch_path=${schemaName},pg_temp`);
+      await createLedger(lateAsyncLedger, false);
+      lateAsyncClient = new PostgresDatabaseClient(
+        { connectionString: lateTempUrl.toString(), database: "goatcitadel_test" },
+        {
+          pool: new Pool({ connectionString: lateTempUrl.toString(), max: 1 }),
+          migrationsTable: lateAsyncLedger,
+        },
+      );
+      assert.deepEqual((await runPostgresMigrations(lateAsyncClient, migrationsThroughRepair)).appliedVersions, [47]);
+      assert.deepEqual(await readRepairRows(lateAsyncLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+
+      await createLedger(lateSyncLedger, false);
+      lateSyncClient = new PostgresSyncDatabaseClient({
+        connectionString: lateTempUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-v47-late-temp-search-path-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      applyPostgresMigrationsSync(lateSyncClient, {
+        migrationsTable: lateSyncLedger,
+        migrations: migrationsThroughRepair,
+      });
+      assert.deepEqual(await readRepairRows(lateSyncLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+      assert.deepEqual(await readRepairRows("schema_migrations"), [
+        { version: 32, name: "cron_jobs_workdir_and_context_from" },
+        { version: 33, name: "cron_jobs_last_run_output_and_run_id" },
+      ]);
+      assert.equal(
+        (
+          await scopedPool.query<{ relation: string | null }>(
+            "SELECT to_regclass('state_validation_quarantine')::text AS relation",
+          )
+        ).rows[0]?.relation,
+        "state_validation_quarantine",
+      );
+      await lateAsyncClient.close();
+      lateAsyncClient = undefined;
+      lateSyncClient.close();
+      lateSyncClient = undefined;
+
+      await createLedger(asyncLedger, false);
+      asyncClient = new PostgresDatabaseClient(
+        { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+        { pool: new Pool({ connectionString: scopedUrl.toString(), max: 1 }), migrationsTable: asyncLedger },
+      );
+      assert.deepEqual((await runPostgresMigrations(asyncClient, migrationsThroughRepair)).appliedVersions, [47]);
+      assert.deepEqual((await runPostgresMigrations(asyncClient, migrationsThroughRepair)).appliedVersions, []);
+      assert.deepEqual(await readRepairRows(asyncLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+      assert.equal(
+        (
+          await asyncClient.queryOne<{ relation: string | null }>(
+            "SELECT to_regclass('pg_temp.schema_migrations')::text AS relation",
+          )
+        )?.relation,
+        null,
+      );
+
+      await createLedger(syncLedger, true);
+      syncClient = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-real-postgres-v47-custom-ledger-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: syncLedger,
+        migrations: migrationsThroughRepair,
+      });
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: syncLedger,
+        migrations: migrationsThroughRepair,
+      });
+      assert.deepEqual(await readRepairRows(syncLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+      assert.equal(
+        syncClient
+          .prepare("SELECT to_regclass('pg_temp.schema_migrations')::text AS relation")
+          .get<{ relation: string | null }>()?.relation,
+        null,
+      );
+
+      assert.deepEqual(await readRepairRows("schema_migrations"), [
+        { version: 32, name: "cron_jobs_workdir_and_context_from" },
+        { version: 33, name: "cron_jobs_last_run_output_and_run_id" },
+      ]);
+      const runtimeState = await scopedPool.query<{ current_schema: string; relation: string | null }>(
+        "SELECT current_schema() AS current_schema, to_regclass('state_validation_quarantine')::text AS relation",
+      );
+      assert.equal(runtimeState.rows[0]?.current_schema, schemaName);
+      assert.equal(runtimeState.rows[0]?.relation, "state_validation_quarantine");
+
+      await scopedPool.query("DROP TABLE state_validation_quarantine");
+      await createLedger(rollbackLedger, true, true);
+      rollbackClient = new PostgresDatabaseClient(
+        { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+        { pool: new Pool({ connectionString: scopedUrl.toString(), max: 1 }), migrationsTable: rollbackLedger },
+      );
+      await assert.rejects(runPostgresMigrations(rollbackClient, migrationsThroughRepair), /reject_canonical_history/);
+      assert.deepEqual(await readRepairRows(rollbackLedger), [
+        { version: 32, name: "cron_jobs_workdir_and_context_from" },
+        { version: 33, name: "cron_jobs_last_run_output_and_run_id" },
+      ]);
+      assert.equal(
+        (
+          await rollbackClient.queryOne<{ relation: string | null }>(
+            "SELECT to_regclass('pg_temp.schema_migrations')::text AS relation",
+          )
+        )?.relation,
+        null,
+      );
+      assert.equal(
+        (
+          await scopedPool.query<{ relation: string | null }>(
+            "SELECT to_regclass('state_validation_quarantine')::text AS relation",
+          )
+        ).rows[0]?.relation,
+        null,
+      );
+
+      await scopedPool.query(`ALTER TABLE ${rollbackLedger} DROP CONSTRAINT reject_canonical_history`);
+      assert.deepEqual((await runPostgresMigrations(rollbackClient, migrationsThroughRepair)).appliedVersions, [47]);
+      assert.deepEqual(await readRepairRows(rollbackLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+
+      await scopedPool.query("DROP TABLE state_validation_quarantine");
+      await createLedger(noopAsyncLedger, true);
+      await scopedPool.query(`
+        CREATE FUNCTION ${suppressRepairFunction}() RETURNS trigger AS $$
+        BEGIN
+          IF OLD.version IN (32, 33) AND NEW.name IS DISTINCT FROM OLD.name THEN
+            RETURN OLD;
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER suppress_history_repair
+        BEFORE UPDATE OF name ON ${noopAsyncLedger}
+        FOR EACH ROW EXECUTE FUNCTION ${suppressRepairFunction}();
+      `);
+      noopAsyncClient = new PostgresDatabaseClient(
+        { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+        { pool: new Pool({ connectionString: scopedUrl.toString(), max: 1 }), migrationsTable: noopAsyncLedger },
+      );
+      await assert.rejects(
+        runPostgresMigrations(noopAsyncClient, migrationsThroughRepair),
+        /migration ledger mismatch at version 32/,
+      );
+      assert.deepEqual(await readRepairRows(noopAsyncLedger), [
+        { version: 32, name: "cron_jobs_workdir_and_context_from" },
+        { version: 33, name: "cron_jobs_last_run_output_and_run_id" },
+      ]);
+      assert.equal(
+        (
+          await noopAsyncClient.queryOne<{ relation: string | null }>(
+            "SELECT to_regclass('pg_temp.schema_migrations')::text AS relation",
+          )
+        )?.relation,
+        null,
+      );
+      assert.equal(
+        (
+          await scopedPool.query<{ relation: string | null }>(
+            "SELECT to_regclass('state_validation_quarantine')::text AS relation",
+          )
+        ).rows[0]?.relation,
+        null,
+      );
+      await scopedPool.query(`DROP TRIGGER suppress_history_repair ON ${noopAsyncLedger}`);
+      assert.deepEqual((await runPostgresMigrations(noopAsyncClient, migrationsThroughRepair)).appliedVersions, [47]);
+      assert.deepEqual(await readRepairRows(noopAsyncLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+
+      await scopedPool.query("DROP TABLE state_validation_quarantine");
+      await createLedger(noopSyncLedger, true);
+      await scopedPool.query(`
+        CREATE TRIGGER suppress_history_repair
+        BEFORE UPDATE OF name ON ${noopSyncLedger}
+        FOR EACH ROW EXECUTE FUNCTION ${suppressRepairFunction}();
+      `);
+      assert.throws(
+        () =>
+          applyPostgresMigrationsSync(syncClient as PostgresSyncDatabaseClient, {
+            migrationsTable: noopSyncLedger,
+            migrations: migrationsThroughRepair,
+          }),
+        /migration ledger mismatch at version 32/,
+      );
+      assert.deepEqual(await readRepairRows(noopSyncLedger), [
+        { version: 32, name: "cron_jobs_workdir_and_context_from" },
+        { version: 33, name: "cron_jobs_last_run_output_and_run_id" },
+      ]);
+      assert.equal(
+        syncClient
+          .prepare("SELECT to_regclass('pg_temp.schema_migrations')::text AS relation")
+          .get<{ relation: string | null }>()?.relation,
+        null,
+      );
+      assert.equal(
+        (
+          await scopedPool.query<{ relation: string | null }>(
+            "SELECT to_regclass('state_validation_quarantine')::text AS relation",
+          )
+        ).rows[0]?.relation,
+        null,
+      );
+      await scopedPool.query(`DROP TRIGGER suppress_history_repair ON ${noopSyncLedger}`);
+      applyPostgresMigrationsSync(syncClient, {
+        migrationsTable: noopSyncLedger,
+        migrations: migrationsThroughRepair,
+      });
+      assert.deepEqual(await readRepairRows(noopSyncLedger), [
+        { version: 32, name: "state_validation_quarantine" },
+        { version: 33, name: "cron_jobs_workdir_context_from_run_output_run_id" },
+        { version: 47, name: "state_validation_quarantine_history_repair" },
+      ]);
+    } finally {
+      ephemeralSyncClient?.close();
+      lateSyncClient?.close();
+      syncClient?.close();
+      await Promise.allSettled([
+        guardClient?.close(),
+        shadowClient?.close(),
+        ephemeralAsyncClient?.close(),
+        lateAsyncClient?.close(),
+        asyncClient?.close(),
+        rollbackClient?.close(),
+        noopAsyncClient?.close(),
+      ]);
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres serializes same-build concurrent migration runners",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_same_${suffix}`;
+    const migrationsTable = `migration_same_ledger_${suffix}`;
+    const effectsTable = `migration_same_effects_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const clientA = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: scopedUrl.toString() }), migrationsTable },
+    );
+    const clientB = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: scopedUrl.toString() }), migrationsTable },
+    );
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await adminPool.query(`
+        CREATE TABLE ${schemaName}.${migrationsTable} (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE ${schemaName}.${effectsTable} (
+          effect_id BIGSERIAL PRIMARY KEY,
+          runner TEXT NOT NULL
+        );
+      `);
+      const migration = {
+        version: 1,
+        name: "same_build_concurrent_startup",
+        sql: `SELECT pg_sleep(0.8); INSERT INTO ${effectsTable} (runner) VALUES ('same-build')`,
+      } satisfies PostgresMigration;
+
+      const results = await Promise.all([
+        runPostgresMigrations(clientA, [migration]),
+        runPostgresMigrations(clientB, [migration]),
+      ]);
+
+      assert.deepEqual(
+        results.map((result) => result.appliedVersions).sort((left, right) => left.length - right.length),
+        [[], [1]],
+      );
+      const effects = await adminPool.query<{ runner: string }>(
+        `SELECT runner FROM ${schemaName}.${effectsTable} ORDER BY effect_id`,
+      );
+      assert.deepEqual(effects.rows, [{ runner: "same-build" }]);
+    } finally {
+      await Promise.allSettled([clientA.close(), clientB.close()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects a divergent concurrent migration before its payload commits",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_divergent_${suffix}`;
+    const migrationsTable = `migration_divergent_ledger_${suffix}`;
+    const effectsTable = `migration_divergent_effects_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const clientA = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: scopedUrl.toString() }), migrationsTable },
+    );
+    const clientB = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: new Pool({ connectionString: scopedUrl.toString() }), migrationsTable },
+    );
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await adminPool.query(`
+        CREATE TABLE ${schemaName}.${migrationsTable} (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE ${schemaName}.${effectsTable} (
+          effect_id BIGSERIAL PRIMARY KEY,
+          runner TEXT NOT NULL
+        );
+      `);
+      const outcomes = await Promise.allSettled([
+        runPostgresMigrations(clientA, [
+          {
+            version: 1,
+            name: "divergent_runner_a",
+            sql: `SELECT pg_sleep(0.8); INSERT INTO ${effectsTable} (runner) VALUES ('runner-a')`,
+          },
+        ]),
+        runPostgresMigrations(clientB, [
+          {
+            version: 1,
+            name: "divergent_runner_b",
+            sql: `SELECT pg_sleep(0.8); INSERT INTO ${effectsTable} (runner) VALUES ('runner-b')`,
+          },
+        ]),
+      ]);
+
+      const fulfilled = outcomes.filter((outcome) => outcome.status === "fulfilled");
+      const rejected = outcomes.filter((outcome) => outcome.status === "rejected");
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+      assert.match(String(rejected[0]?.reason), /migration ledger mismatch at version 1/);
+
+      const ledger = await adminPool.query<{ name: string }>(
+        `SELECT name FROM ${schemaName}.${migrationsTable} WHERE version = 1`,
+      );
+      const effects = await adminPool.query<{ runner: string }>(
+        `SELECT runner FROM ${schemaName}.${effectsTable} ORDER BY effect_id`,
+      );
+      assert.equal(ledger.rows.length, 1);
+      assert.deepEqual(
+        effects.rows,
+        ledger.rows[0]?.name === "divergent_runner_a" ? [{ runner: "runner-a" }] : [{ runner: "runner-b" }],
+      );
+    } finally {
+      await Promise.allSettled([clientA.close(), clientB.close()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres sync migrators serialize divergent startup on one pinned worker session",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_sync_migration_${suffix}`;
+    const migrationsTable = `sync_migration_ledger_${suffix}`;
+    const effectsTable = `sync_migration_effects_${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const runtimeModuleExtension = import.meta.url.endsWith(".js") ? ".js" : ".ts";
+    const commonWorkerData = {
+      tsxApiUrl: import.meta.resolve("tsx/esm/api"),
+      postgresModuleUrl: new URL(`./sync${runtimeModuleExtension}`, import.meta.url).href,
+      migratorModuleUrl: new URL(`./migrator${runtimeModuleExtension}`, import.meta.url).href,
+      connectionOptions: {
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: "goatcitadel-sync-migration-concurrency-test",
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      },
+      migrationsTable,
+    };
+    let workerA: Worker | undefined;
+    let workerB: Worker | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await adminPool.query(`
+        CREATE TABLE ${schemaName}.${migrationsTable} (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE ${schemaName}.${effectsTable} (
+          effect_id BIGSERIAL PRIMARY KEY,
+          runner TEXT NOT NULL
+        );
+      `);
+      workerA = new Worker(MIGRATION_RUNNER_WORKER_SOURCE, {
+        eval: true,
+        workerData: {
+          ...commonWorkerData,
+          migration: {
+            version: 1,
+            name: "sync_divergent_runner_a",
+            sql: `SELECT pg_sleep(0.8); INSERT INTO ${effectsTable} (runner) VALUES ('runner-a')`,
+          },
+        },
+      });
+      workerB = new Worker(MIGRATION_RUNNER_WORKER_SOURCE, {
+        eval: true,
+        workerData: {
+          ...commonWorkerData,
+          migration: {
+            version: 1,
+            name: "sync_divergent_runner_b",
+            sql: `SELECT pg_sleep(0.8); INSERT INTO ${effectsTable} (runner) VALUES ('runner-b')`,
+          },
+        },
+      });
+
+      const outcomes = await Promise.all([waitForMigrationRunner(workerA), waitForMigrationRunner(workerB)]);
+      assert.equal(outcomes.filter((outcome) => outcome.type === "done").length, 1);
+      const failed = outcomes.filter((outcome) => outcome.type === "error");
+      assert.equal(failed.length, 1);
+      assert.match(failed[0]?.error ?? "", /migration ledger mismatch at version 1/);
+
+      const ledger = await adminPool.query<{ name: string }>(
+        `SELECT name FROM ${schemaName}.${migrationsTable} WHERE version = 1`,
+      );
+      const effects = await adminPool.query<{ runner: string }>(
+        `SELECT runner FROM ${schemaName}.${effectsTable} ORDER BY effect_id`,
+      );
+      assert.deepEqual(
+        effects.rows,
+        ledger.rows[0]?.name === "sync_divergent_runner_a" ? [{ runner: "runner-a" }] : [{ runner: "runner-b" }],
+      );
+    } finally {
+      await Promise.allSettled([workerA?.terminate(), workerB?.terminate()]);
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
     }
   },
 );
@@ -3739,6 +6094,74 @@ function waitForA2ABindingCreateWorker(worker: Worker): Promise<{
     worker.on("exit", onExit);
   });
 }
+
+function waitForMigrationRunner(worker: Worker): Promise<{ type: "done" | "error"; error?: string }> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+      worker.off("exit", onExit);
+    };
+    const onMessage = (message: unknown) => {
+      if (!message || typeof message !== "object") {
+        return;
+      }
+      const typed = message as { type?: unknown; error?: unknown };
+      if (typed.type === "done" || typed.type === "error") {
+        cleanup();
+        resolve({
+          type: typed.type,
+          ...(typed.error === undefined ? {} : { error: String(typed.error) }),
+        });
+      }
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = (code: number) => {
+      cleanup();
+      reject(new Error(`Migration runner exited before reporting completion (code ${code}).`));
+    };
+    worker.on("message", onMessage);
+    worker.on("error", onError);
+    worker.on("exit", onExit);
+  });
+}
+
+const MIGRATION_RUNNER_WORKER_SOURCE = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+
+  void (async () => {
+    let db;
+    try {
+      const { tsImport } = await import(workerData.tsxApiUrl);
+      const { PostgresSyncDatabaseClient } = await tsImport(
+        workerData.postgresModuleUrl,
+        workerData.postgresModuleUrl,
+      );
+      const { applyPostgresMigrationsSync } = await tsImport(
+        workerData.migratorModuleUrl,
+        workerData.migratorModuleUrl,
+      );
+      db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
+      applyPostgresMigrationsSync(db, {
+        migrationsTable: workerData.migrationsTable,
+        migrations: [workerData.migration],
+      });
+      parentPort.postMessage({ type: "done" });
+    } catch (error) {
+      parentPort.postMessage({
+        type: "error",
+        error: error instanceof Error ? error.stack ?? error.message : String(error),
+      });
+    } finally {
+      if (db) {
+        db.close();
+      }
+    }
+  })();
+`;
 
 const DELEGATION_STEP_PATCH_WORKER_SOURCE = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");

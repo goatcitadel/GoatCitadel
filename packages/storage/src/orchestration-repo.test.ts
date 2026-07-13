@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
 
@@ -257,7 +257,7 @@ describe("OrchestrationRepository", () => {
     `);
     const markApplied = legacy.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)");
     for (let version = 1; version < 93; version += 1) {
-      markApplied.run(version, `legacy-${version}`, "2026-02-27T00:00:00.000Z");
+      markApplied.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version), "2026-02-27T00:00:00.000Z");
     }
     legacy
       .prepare("INSERT INTO orchestration_plans (plan_id, plan_json, created_at, updated_at) VALUES (?, ?, ?, ?)")

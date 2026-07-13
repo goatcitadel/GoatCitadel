@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 
 const createdFiles: string[] = [];
 
@@ -48,7 +48,7 @@ describe("sqlite chat branching migration", () => {
       VALUES (?, ?, '2026-03-07T00:00:00.000Z')
     `);
     for (let version = 1; version <= 24; version += 1) {
-      insertMigration.run(version, `legacy-${version}`);
+      insertMigration.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version));
     }
     legacy.close();
 
@@ -122,7 +122,7 @@ describe("sqlite chat branching migration", () => {
       VALUES (?, ?, '2026-03-07T00:00:00.000Z')
     `);
     for (let version = 1; version <= 24; version += 1) {
-      insertMigration.run(version, `legacy-${version}`);
+      insertMigration.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version));
     }
 
     legacy.exec(`
