@@ -123,7 +123,7 @@ function buildProps(overrides: Record<string, unknown> = {}): TimelineProps {
     onDenyPending: vi.fn(),
     onSubmitUserInput: vi.fn(),
     ...overrides,
-  } as TimelineProps;
+  } as unknown as TimelineProps;
 }
 
 function renderTimeline(props: TimelineProps): string {
@@ -156,14 +156,14 @@ describe("ThreadedTimeline loop 25 branch tails", () => {
   it("covers alternate delegation status tones without changing status copy", () => {
     const coworkProps = buildProps();
     coworkProps.mode = "cowork";
-    coworkProps.delegationRun.status = "partial";
-    coworkProps.delegationRun.steps[0].status = "completed";
+    coworkProps.delegationRun!.status = "partial";
+    coworkProps.delegationRun!.steps[0]!.status = "completed";
     const coworkMarkup = renderTimeline(coworkProps);
     expect(coworkMarkup).toContain("partial");
     expect(coworkMarkup).toContain("Agentic activity");
 
     const completedProps = buildProps();
-    completedProps.delegationRun.status = "completed";
+    completedProps.delegationRun!.status = "completed";
     const completedMarkup = renderTimeline(completedProps);
     expect(completedMarkup).toContain("completed");
   });
