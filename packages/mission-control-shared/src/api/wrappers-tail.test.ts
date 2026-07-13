@@ -366,6 +366,7 @@ describe("shared API wrapper tail coverage", () => {
       items: Array.from({ length: 3 }, (_, index) => ({ id: `meet-${index}` })),
     });
     await expect(voice.fetchGoogleMeetSessions(2)).resolves.toEqual([{ id: "meet-0" }, { id: "meet-1" }]);
+    expect(apiMocks.request.mock.calls.at(-1)?.[0]).toBe("/api/v1/voice/google-meet/sessions?limit=2");
     await expectCall(voice.transcribeVoice({ bytesBase64: "abc" }), "/api/v1/voice/transcribe", { method: "POST" });
     await expectCall(voice.fetchVoiceStatus(), "/api/v1/voice/status");
     await expectCall(voice.fetchVoiceRuntimeStatus(), "/api/v1/voice/runtime");

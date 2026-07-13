@@ -269,6 +269,11 @@ export interface ToolInvocationRuntimeOptions {
 export interface ToolInvocationCoordinator {
   invokeTool(request: ToolInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<ToolInvokeResult>;
   invokeMcpTool(input: McpInvokeRequest, options?: ToolInvocationRuntimeOptions): Promise<McpInvokeResponse>;
+  invokeApprovedExternalRuntimeTool(
+    request: ToolInvokeRequest,
+    markExternalCallStarted?: () => void,
+  ): Promise<ToolInvokeResult>;
+  invokeApprovedMcpRuntime(input: McpInvokeRequest, markExternalCallStarted?: () => void): Promise<McpInvokeResponse>;
 }
 
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
@@ -808,6 +813,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return overridePolicyFailure;
     }
     const startedAt = Date.now();
+    const toolRunId = `approved:${normalizedRequest.sessionId}:${startedAt}`;
     this.host.recordDevDiagnostic?.({
       level: "debug",
       category: "tools",
@@ -815,7 +821,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       message: "Starting approved external runtime invocation",
       sessionId: normalizedRequest.sessionId,
       taskId: normalizedRequest.taskId,
-      toolRunId: `approved:${normalizedRequest.sessionId}:${startedAt}`,
+      toolRunId,
       toolName: normalizedRequest.toolName,
       runtimeKind: "tool.invocation.override",
       runtimeStatus: "started",
@@ -875,7 +881,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         sessionId: normalizedRequest.sessionId,
         runId: linkedRunId,
         approvalId: result.approvalId,
-        toolCallHashes: [result.auditEventId],
+        toolCallHashes: [result.auditEventId ?? toolRunId],
         metadata: {
           runtime: "plugin_override",
           toolName: normalizedRequest.toolName,

@@ -40,6 +40,10 @@ const talkListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
+const meetListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
 const meetStartSchema = z.object({
   meetingUrl: z.string().url(),
   displayName: z.string().optional(),
@@ -168,9 +172,13 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.services.voice.stopVoiceWake());
   });
 
-  fastify.get("/api/v1/voice/google-meet/sessions", async (_request, reply) => {
+  fastify.get("/api/v1/voice/google-meet/sessions", async (request, reply) => {
+    const parsed = meetListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
     return reply.send({
-      items: fastify.services.voice.listGoogleMeetSessions(),
+      items: fastify.services.voice.listGoogleMeetSessions(parsed.data.limit),
     });
   });
 

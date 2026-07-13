@@ -11,21 +11,6 @@ import {
   resolveEvalAssetsPackPath,
 } from "./prompt-pack/security-eval.js";
 
-const log = logger.child("prompt-pack-service");
-const DEFAULT_WORKSPACE_ID = "default";
-const OVERALL_V7_PACK_FILE = "goatcitadel_prompt_pack_v7_overall.md";
-
-// Built-in packs import with a fixed packId so re-imports update in place
-// instead of accumulating duplicate packs. Entries without a name defer to
-// the pack file's Pack-Version label for name/sourceLabel provenance.
-const BUILTIN_PROMPT_PACKS: Record<string, { file: string; name?: string; sourceLabelFromBasename?: boolean }> = {
-  "security-red-team-v6": {
-    file: SECURITY_RED_TEAM_PACK_FILE,
-    name: "Defensive Security Evaluation",
-    sourceLabelFromBasename: true,
-  },
-  "overall-v7": { file: OVERALL_V7_PACK_FILE },
-};
 import type {
   CapabilityTrendSeries,
   ChatMemoryMode,
@@ -175,7 +160,6 @@ import {
   parsePromptfooLikeConfig,
   readPromptPackExportRecord as readPromptPackExportRecordFromFile,
   readPromptPackPromptfooExportRecord as readPromptPackPromptfooExportRecordFromFile,
-  resolvePromptPackExportArchiveDir as resolvePromptPackExportArchiveDirForRoot,
   resolvePromptPackExportPath as resolvePromptPackExportPathForRoot,
   resolvePromptPackPromptfooExportPath as resolvePromptPackPromptfooExportPathForRoot,
   resolvePromptPackPromptfooSnapshotPath as resolvePromptPackPromptfooSnapshotPathForRoot,
@@ -204,6 +188,22 @@ import {
   formatPromptPackMetadataValues,
   pickReplayBaselineScore,
 } from "./prompt-pack/report-trends.js";
+
+const log = logger.child("prompt-pack-service");
+const DEFAULT_WORKSPACE_ID = "default";
+const OVERALL_V7_PACK_FILE = "goatcitadel_prompt_pack_v7_overall.md";
+
+// Built-in packs import with a fixed packId so re-imports update in place
+// instead of accumulating duplicate packs. Entries without a name defer to
+// the pack file's Pack-Version label for name/sourceLabel provenance.
+const BUILTIN_PROMPT_PACKS: Record<string, { file: string; name?: string; sourceLabelFromBasename?: boolean }> = {
+  "security-red-team-v6": {
+    file: SECURITY_RED_TEAM_PACK_FILE,
+    name: "Defensive Security Evaluation",
+    sourceLabelFromBasename: true,
+  },
+  "overall-v7": { file: OVERALL_V7_PACK_FILE },
+};
 import {
   PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS,
   PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS,
@@ -1667,28 +1667,23 @@ export class PromptPackService {
       { key: "review_rate", threshold: 0.2 },
     ];
     return {
-      items: capabilities.map((entry) => ({
-        capability: entry.key,
-        points:
+      items: capabilities.map((entry) => {
+        const points =
           entry.key === "run_failure_rate"
             ? buildPromptPackRunFailureRateSeries(runs)
             : entry.key === "review_rate"
               ? buildPromptPackReviewRateSeries(scores)
-              : buildPromptPackCapabilitySeriesV2(scores, entry.key),
-        threshold: entry.threshold,
-        breached:
-          entry.threshold !== undefined
-            ? evaluatePromptPackTrendThreshold(
-                entry.key,
-                entry.threshold,
-                entry.key === "run_failure_rate"
-                  ? buildPromptPackRunFailureRateSeries(runs)
-                  : entry.key === "review_rate"
-                    ? buildPromptPackReviewRateSeries(scores)
-                    : buildPromptPackCapabilitySeriesV2(scores, entry.key),
-              )
-            : undefined,
-      })),
+              : buildPromptPackCapabilitySeriesV2(scores, entry.key);
+        return {
+          capability: entry.key,
+          points,
+          threshold: entry.threshold,
+          breached:
+            entry.threshold !== undefined
+              ? evaluatePromptPackTrendThreshold(entry.key, entry.threshold, points)
+              : undefined,
+        };
+      }),
     };
   }
 
@@ -2454,10 +2449,6 @@ export class PromptPackService {
     return resolvePromptPackPromptfooExportPathForRoot(this.ctx.config.rootDir, pack);
   }
 
-  private resolvePromptPackExportArchiveDir(): string {
-    return resolvePromptPackExportArchiveDirForRoot(this.ctx.config.rootDir);
-  }
-
   private resolvePromptPackSnapshotPath(report: PromptPackReportRecord, generatedAt: string): string {
     return resolvePromptPackSnapshotPathForRoot({
       rootDir: this.ctx.config.rootDir,
@@ -2604,8 +2595,6 @@ export class PromptPackService {
     ].join("\n");
 
     let attemptCount = 0;
-    const fallbackUsed = false;
-    const repairedSchema = false;
     try {
       const createJudgeCompletion = async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
         let lastError: Error | undefined;
@@ -2679,8 +2668,8 @@ export class PromptPackService {
         return {
           error: "Model judge returned invalid structured output.",
           attemptCount,
-          fallbackUsed,
-          repairedSchema,
+          fallbackUsed: false,
+          repairedSchema: false,
           judgeProviderId: providerId,
           judgeModel: model,
         };
@@ -2691,15 +2680,15 @@ export class PromptPackService {
           error: "Model judge omitted one or more required score keys.",
           attemptCount,
           fallbackUsed: true,
-          repairedSchema,
+          repairedSchema: false,
         };
       }
       return {
         scores,
         rationale: typeof payload.rationale === "string" ? payload.rationale.trim().slice(0, 900) : undefined,
         attemptCount,
-        fallbackUsed,
-        repairedSchema,
+        fallbackUsed: false,
+        repairedSchema: false,
         judgeProviderId: providerId,
         judgeModel: model,
       };
@@ -2707,8 +2696,8 @@ export class PromptPackService {
       return {
         error: (error as Error).message,
         attemptCount,
-        fallbackUsed,
-        repairedSchema,
+        fallbackUsed: false,
+        repairedSchema: false,
         judgeProviderId: providerId,
         judgeModel: model,
       };

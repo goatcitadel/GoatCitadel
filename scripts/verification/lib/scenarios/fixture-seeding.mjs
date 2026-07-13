@@ -1,3 +1,12 @@
+/**
+ * Seeds the complete Mission Control Next verification dataset through the gateway API.
+ *
+ * @param {string} gatewayUrl gateway base URL
+ * @param {object} [options={}] scenario-specific fixture controls
+ * @param {object} deps request, assertion, UUID, and file-mtime dependencies
+ * @returns {Promise<object>} identifiers and metadata for the seeded verification scenario
+ * @throws {Error} when required seed or thread identifiers are missing
+ */
 export async function seedMissionControlNextFixture(gatewayUrl, options = {}, deps) {
   const {
     assertOk,
@@ -29,19 +38,20 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     threadResponse.body?.activeLeafTurnId ??
     threadResponse.body?.turns?.at?.(-1)?.turnId;
 
-  if (artifactTurnId) {
-    const artifactResponse = await requestJson(
-      gatewayUrl,
-      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(artifactTurnId)}/generated-artifact`,
-      {
-        method: "POST",
-        body: {
-          supersedeLatest: true,
-        },
-      },
-    );
-    assertOk(artifactResponse, "create mission-control-next generated artifact");
+  if (!artifactTurnId) {
+    throw new Error(`mission-control-next verification thread ${sessionId} did not return an artifact turn`);
   }
+  const artifactResponse = await requestJson(
+    gatewayUrl,
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(artifactTurnId)}/generated-artifact`,
+    {
+      method: "POST",
+      body: {
+        supersedeLatest: true,
+      },
+    },
+  );
+  assertOk(artifactResponse, "create mission-control-next generated artifact");
 
   // Seed a pending-user-input prompt on a SEPARATE session BEFORE the approval
   // scenario, so the chat-approval session remains the most-recently-active

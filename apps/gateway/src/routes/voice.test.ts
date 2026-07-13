@@ -497,6 +497,11 @@ describe("voice routes", () => {
     expect((await app.inject({ method: "GET", url: "/api/v1/voice/google-meet/sessions" })).json()).toEqual({
       items: [{ sessionId: "meet-1", state: "active" }],
     });
+    expect(listGoogleMeetSessions).toHaveBeenLastCalledWith(20);
+    expect((await app.inject({ method: "GET", url: "/api/v1/voice/google-meet/sessions?limit=6" })).statusCode).toBe(
+      200,
+    );
+    expect(listGoogleMeetSessions).toHaveBeenLastCalledWith(6);
     expect(
       (
         await app.inject({

@@ -405,7 +405,7 @@ export class DurableRunService {
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly workerId = randomUUID();
   private readonly activeRunAbortControllers = new Map<string, { controller: AbortController; leaseOwnerId: string }>();
-  private readonly generalChatPostCommitInFlight = new Map<string, Promise<boolean>>();
+  private readonly generalChatPostCommitInFlight = new Map<string, { work: Promise<boolean> }>();
   private lastEventLoopLagMs = 0;
   private lastEventLoopLagAt: string | undefined;
   private leaseAcquisitionPausedUntilMs = 0;
@@ -914,14 +914,15 @@ export class DurableRunService {
   async reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
     const inFlight = this.generalChatPostCommitInFlight.get(runId);
     if (inFlight) {
-      return inFlight;
+      return inFlight.work;
     }
     const work = this.reconcileGeneralChatPostCommitInternal(runId);
-    this.generalChatPostCommitInFlight.set(runId, work);
+    const inFlightEntry = { work };
+    this.generalChatPostCommitInFlight.set(runId, inFlightEntry);
     try {
       return await work;
     } finally {
-      if (this.generalChatPostCommitInFlight.get(runId) === work) {
+      if (this.generalChatPostCommitInFlight.get(runId) === inFlightEntry) {
         this.generalChatPostCommitInFlight.delete(runId);
       }
     }

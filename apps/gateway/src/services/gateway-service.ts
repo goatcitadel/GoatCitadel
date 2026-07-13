@@ -8435,7 +8435,3 @@ function readRecordString(record: Record<string, unknown>, key: string): string 
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
-
-function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? { ...value } : undefined;
-}

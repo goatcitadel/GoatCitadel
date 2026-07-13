@@ -72,8 +72,12 @@ export async function fetchGoogleMeetPrerequisiteStatus(
 }
 
 export async function fetchGoogleMeetSessions(limit = 10): Promise<GoogleMeetSessionRecord[]> {
-  const response = await request<{ items: GoogleMeetSessionRecord[] }>("/api/v1/voice/google-meet/sessions");
-  return response.items.slice(0, Math.max(1, Math.min(100, Math.trunc(limit) || 10)));
+  const normalizedLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 10));
+  const query = new URLSearchParams({ limit: String(normalizedLimit) });
+  const response = await request<{ items: GoogleMeetSessionRecord[] }>(
+    `/api/v1/voice/google-meet/sessions?${query.toString()}`,
+  );
+  return response.items.slice(0, normalizedLimit);
 }
 
 export async function startGoogleMeetSession(input: GoogleMeetSessionStartRequest): Promise<GoogleMeetSessionRecord> {

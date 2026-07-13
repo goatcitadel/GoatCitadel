@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 
-function buildProps(overrides: Record<string, unknown> = {}): any {
+type TimelineProps = ComponentProps<typeof ThreadedTimeline>["props"];
+
+function buildProps(overrides: Record<string, unknown> = {}): TimelineProps {
   const turn = {
     turnId: "turn-1",
     userMessage: {
@@ -120,12 +123,16 @@ function buildProps(overrides: Record<string, unknown> = {}): any {
     onDenyPending: vi.fn(),
     onSubmitUserInput: vi.fn(),
     ...overrides,
-  };
+  } as TimelineProps;
+}
+
+function renderTimeline(props: TimelineProps): string {
+  return renderToStaticMarkup(<ThreadedTimeline props={props} />);
 }
 
 describe("ThreadedTimeline loop 25 branch tails", () => {
   it("renders non-cowork delegation status, fallback routing, branch switchers, and stitched output", () => {
-    const markup = renderToStaticMarkup(<ThreadedTimeline props={buildProps()} />);
+    const markup = renderTimeline(buildProps());
 
     expect(markup).toContain("Code QA");
     expect(markup).toContain("failed");
@@ -140,7 +147,7 @@ describe("ThreadedTimeline loop 25 branch tails", () => {
   });
 
   it("keeps the delegation summary absent when no active delegation run is attached", () => {
-    const markup = renderToStaticMarkup(<ThreadedTimeline props={buildProps({ delegationRun: null })} />);
+    const markup = renderTimeline(buildProps({ delegationRun: null }));
 
     expect(markup).not.toContain("Code QA");
     expect(markup).toContain("Initial answer.");
@@ -151,13 +158,13 @@ describe("ThreadedTimeline loop 25 branch tails", () => {
     coworkProps.mode = "cowork";
     coworkProps.delegationRun.status = "partial";
     coworkProps.delegationRun.steps[0].status = "completed";
-    const coworkMarkup = renderToStaticMarkup(<ThreadedTimeline props={coworkProps} />);
+    const coworkMarkup = renderTimeline(coworkProps);
     expect(coworkMarkup).toContain("partial");
     expect(coworkMarkup).toContain("Agentic activity");
 
     const completedProps = buildProps();
     completedProps.delegationRun.status = "completed";
-    const completedMarkup = renderToStaticMarkup(<ThreadedTimeline props={completedProps} />);
+    const completedMarkup = renderTimeline(completedProps);
     expect(completedMarkup).toContain("completed");
   });
 });
