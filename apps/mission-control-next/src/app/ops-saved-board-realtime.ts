@@ -44,7 +44,7 @@ export function publishOpsSavedBoardRealtimeEvent(event: RealtimeEvent): void {
     try {
       handler(signal);
     } catch {
-      // One route subscriber cannot block other canonical refresh consumers.
+      // Intentionally ignore this non-fatal subscriber failure so one route subscriber cannot block other canonical refresh consumers.
     }
   }
 }
