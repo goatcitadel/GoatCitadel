@@ -1,8 +1,10 @@
 # OpenClaw Parity Completion Program
 
-Last updated: 2026-04-10
+Last updated: 2026-07-12
 
 This program tracks the remaining closeout order for the full parity program.
+
+The current broad-capability implementation program is [OPENCLAW_HERMES_PARITY_PROGRAM.md](./OPENCLAW_HERMES_PARITY_PROGRAM.md). The completion order below is retained for the original contract-backed OpenClaw epic set.
 
 ## Open Epics
 
