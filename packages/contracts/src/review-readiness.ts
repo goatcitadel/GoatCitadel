@@ -14,12 +14,34 @@ export type RuntimeBuildKind = "development" | "source" | "packaged";
 export type RuntimeBuildIntegrity = "clean" | "modified" | "unknown";
 export type RuntimeBuildIdentitySource = "git_checkout" | "packaged_manifest" | "unavailable";
 export type ReleaseCertificateState = "absent" | "malformed" | "parsed";
+export type CertificateAttestationStatus =
+  | "not_applicable"
+  | "missing"
+  | "pending"
+  | "verified"
+  | "invalid"
+  | "unavailable";
+export type RuntimePayloadIntegrityStatus =
+  | "not_applicable"
+  | "unverified"
+  | "pending"
+  | "verified"
+  | "mismatch"
+  | "unavailable";
 
 export type ReleaseIdentityReasonCode =
   | "certificate_absent"
   | "certificate_malformed"
+  | "certificate_attestation_missing"
+  | "certificate_attestation_invalid"
+  | "certificate_attestation_pending"
+  | "certificate_attestation_unavailable"
   | "identity_sha_unavailable"
   | "identity_integrity_unavailable"
+  | "runtime_payload_integrity_unverified"
+  | "runtime_payload_integrity_pending"
+  | "runtime_payload_integrity_mismatch"
+  | "runtime_payload_integrity_unavailable"
   | "source_modified"
   | "certificate_sha_mismatch"
   | "certificate_version_mismatch"
@@ -53,6 +75,20 @@ export interface RuntimeReleaseIdentity {
   };
   acceptedFailureCount: number;
   acceptedFailures: string[];
+  certificateAttestation: {
+    status: CertificateAttestationStatus;
+    verifiedAt?: string;
+    issuer?: string;
+    identity?: string;
+  };
+  runtimePayloadIntegrity: {
+    status: RuntimePayloadIntegrityStatus;
+    verifiedAt?: string;
+    target?: string;
+    manifestSha256?: string;
+    fileCount?: number;
+    totalBytes?: number;
+  };
   reasonCodes: ReleaseIdentityReasonCode[];
   reasons: string[];
 }
@@ -87,7 +123,8 @@ export interface ReviewReadinessSummary {
     artifacts: Array<{
       name: string;
       platformArch: string;
-      signatureStatus: "signed" | "unsigned" | "experimental";
+      /** Display-only signature inventory; never publisher-attestation proof. */
+      signatureStatus: "signed" | "unsigned" | "experimental" | "unverified";
       sha256: string;
       sizeBytes: number;
       sourceWorkflow: string;

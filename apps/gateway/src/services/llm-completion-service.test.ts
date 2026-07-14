@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionRequest } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ModelUsageAttributionContext } from "@goatcitadel/contracts";
+import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } from "@goatcitadel/gateway-core";
 import { createChatCompletion, createChatCompletionStream, type LlmCompletionHost } from "./llm-completion-service.js";
 
 vi.mock("node:sqlite", () => ({
@@ -138,6 +139,49 @@ async function collectStream(stream: AsyncGenerator<Record<string, unknown>>): P
 }
 
 describe("createChatCompletionStream", () => {
+  it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
+    "never retries or falls back after canonical usage persistence fails (%s)",
+    async (errorName) => {
+      const settlementError = new Error("canonical settlement failed after tool call timeout 503");
+      settlementError.name = errorName;
+      let calls = 0;
+      const host = createHost(async function* () {
+        calls += 1;
+        const unreachableChunks: Record<string, unknown>[] = [];
+        yield* unreachableChunks;
+        throw settlementError;
+      });
+
+      const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+      expect(calls).toBe(1);
+      expect(result.chunks).toEqual([]);
+      expect(result.error).toBe(settlementError);
+    },
+  );
+
+  it("never retries or falls back after accepted lease renewal persistence fails", async () => {
+    const renewalError = new ModelUsageDispatchPersistenceError(
+      "usage-renewal-fault",
+      "renew_accepted_lease",
+      new Error("accepted lease renewal write failed"),
+    );
+    let calls = 0;
+    const host = createHost(async function* () {
+      calls += 1;
+      const unreachableChunks: Record<string, unknown>[] = [];
+      yield* unreachableChunks;
+      throw renewalError;
+    });
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(calls).toBe(1);
+    expect(result.chunks).toEqual([]);
+    expect(result.error).toBe(renewalError);
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+
   it("does not retry a tool-protocol failure after partial output was already emitted", async () => {
     const calls: string[] = [];
     const host = createHost(async function* (request) {
@@ -283,6 +327,23 @@ describe("createChatCompletionStream", () => {
         fallbackUsed: true,
         fallbackProviderId: "backup",
       }),
+    );
+  });
+
+  it("retains canonical stream event ids in the final completion envelope", async () => {
+    const host = createHost(async function* () {
+      yield {
+        choices: [{ delta: { content: "done" } }],
+        model_usage_event_id: "usage-event-1",
+        model_usage_event_ids: ["usage-event-1", "usage-event-2"],
+      };
+    });
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    expect(result.chunks.at(-1)).toEqual(
+      expect.objectContaining({ model_usage_event_ids: ["usage-event-1", "usage-event-2"] }),
     );
   });
 
@@ -526,6 +587,116 @@ describe("createChatCompletionStream", () => {
 });
 
 describe("createChatCompletion", () => {
+  it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
+    "never retries or falls back after canonical usage persistence fails (%s)",
+    async (errorName) => {
+      const settlementError = new Error("canonical settlement failed after tool call timeout 503");
+      settlementError.name = errorName;
+      const completion = vi.fn(async () => {
+        throw settlementError;
+      });
+      const host = createCompletionHost({ completion });
+
+      await expect(createChatCompletion(host, createRequest())).rejects.toBe(settlementError);
+      expect(completion).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not retry or fall back when a second stable-generation invocation collides with canonical dispatch identity", async () => {
+    const duplicate = new ModelUsageDispatchUncertainError(
+      "Provider dispatch identity already exists (succeeded); advance dispatchGeneration before re-dispatch",
+      { eventId: "usage-existing-generation" },
+    );
+    const completion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "first result" }, finish_reason: "stop" }],
+      })
+      .mockRejectedValueOnce(duplicate);
+    const host = createCompletionHost({ completion });
+    const stableAttribution = {
+      operationId: "stable-operation",
+      dispatchGeneration: "stable-operation:generation-1",
+    };
+
+    await createChatCompletion(host, createRequest(), stableAttribution);
+    await expect(createChatCompletion(host, createRequest(), stableAttribution)).rejects.toBe(duplicate);
+
+    expect(completion).toHaveBeenCalledTimes(2);
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+
+  it("uses one logical operation and explicit repair/fallback ordinals for every provider call", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "unused",
+        choices: [{ index: 0, message: { role: "assistant", content: "unused" }, finish_reason: "stop" }],
+      }),
+    });
+    const attributions: ModelUsageAttributionContext[] = [];
+    host.llmService.chatCompletions = vi.fn(
+      async (request: ChatCompletionRequest, attribution: ModelUsageAttributionContext) => {
+        attributions.push(attribution);
+        const providerId = request.providerId ?? "primary";
+        if (providerId === "primary") throw new Error("primary hard fail");
+        return {
+          model: request.model ?? "backup-model",
+          choices: [{ index: 0, message: { role: "assistant", content: "fallback" }, finish_reason: "stop" }],
+          modelUsageEventIds: ["usage-fallback"],
+        };
+      },
+    ) as never;
+    const request = {
+      ...createRequest(),
+      reasoning: { effort: "high" as const },
+      memory: { sessionId: "session-1", turnId: "turn-1", runId: "durable-1", taskId: "task-1" },
+    };
+
+    const response = await createChatCompletion(host, request, {
+      operationId: "operation-1",
+      dispatchGeneration: "generation-1",
+      workspaceId: "workspace-trusted",
+    });
+
+    expect(response.modelUsageEventIds).toEqual(["usage-fallback"]);
+    expect(attributions).toHaveLength(4);
+    expect(attributions.map((item) => item.operationId)).toEqual(Array(4).fill("operation-1"));
+    expect(attributions.map((item) => item.dispatchGeneration)).toEqual(Array(4).fill("generation-1"));
+    expect(attributions.map((item) => item.attemptIndex)).toEqual([0, 1, 2, 3]);
+    expect(attributions.map((item) => item.repairIndex)).toEqual([0, 1, 2, 2]);
+    expect(attributions.map((item) => item.fallbackIndex)).toEqual([0, 0, 0, 1]);
+    expect(attributions.map((item) => item.callKind)).toEqual([
+      "chat_initial",
+      "chat_repair",
+      "chat_repair",
+      "chat_fallback",
+    ]);
+    expect(attributions.every((item) => item.requestedProviderId === "primary")).toBe(true);
+    expect(attributions.every((item) => item.requestedModelId === "primary-model")).toBe(true);
+    expect(attributions.every((item) => item.reasoningDisposition === "honored")).toBe(true);
+    expect(attributions.every((item) => item.reasoningReasonCode === "requested_reasoning_preserved")).toBe(true);
+    expect(attributions.every((item) => item.workspaceId === "workspace-trusted")).toBe(true);
+    expect(attributions.every((item) => item.sessionId === "session-1")).toBe(true);
+  });
+
+  it("records provider-default reasoning when no effort was explicitly requested", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      }),
+    });
+
+    await createChatCompletion(host, createRequest());
+
+    const attribution = (host.llmService.chatCompletions as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as
+      | ModelUsageAttributionContext
+      | undefined;
+    expect(attribution?.reasoningDisposition).toBe("provider_default");
+    expect(attribution?.reasoningReasonCode).toBe("no_explicit_reasoning_request");
+  });
+
   it("applies model-selection and request hook patches before the provider call", async () => {
     const host = createCompletionHost({
       completion: async (request) => ({
@@ -579,6 +750,7 @@ describe("createChatCompletion", () => {
           { role: "user", content: "appended" },
         ],
       }),
+      expect.objectContaining({ callKind: "chat_initial", attemptIndex: 0 }),
     );
     expect(response.routing).toEqual(
       expect.objectContaining({

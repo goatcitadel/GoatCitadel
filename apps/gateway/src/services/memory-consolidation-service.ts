@@ -2,11 +2,14 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatTurnTraceRecord,
+  ModelUsageAttributionContext,
   TraceMemoryCandidateInput,
   TraceMemoryCandidateRecord,
   TraceMemoryCandidateType,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 // Governed background memory consolidation (competitive-gap program phase A3).
 //
@@ -63,7 +66,10 @@ export interface MemoryConsolidationDeps {
   ) => boolean;
   listCompletedTurnTracesSince: (sinceIso: string, limit: number) => ChatTurnTraceRecord[];
   readTranscriptOrEmpty: (sessionId: string) => Promise<TranscriptEvent[]>;
-  createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
+  createChatCompletion: (
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ) => Promise<ChatCompletionResponse>;
   resolveModelDefaults: () => { providerId?: string; model?: string };
   proposeTraceMemoryCandidate: (
     input: TraceMemoryCandidateInput,
@@ -156,8 +162,11 @@ export class MemoryConsolidationService {
       summary.sessionsSampled += 1;
       let drafted: DraftedCandidate[];
       try {
-        drafted = await this.draftSessionCandidates(session.sessionId, session.turnIds[0]);
+        drafted = await this.draftSessionCandidates(session.sessionId, watermark, session.turnIds[0]);
       } catch (error) {
+        if (isAuthoritativeModelUsageAccountingError(error)) {
+          throw error;
+        }
         summary.sessionsFailed += 1;
         this.deps.recordDevDiagnostic?.({
           level: "warn",
@@ -218,23 +227,40 @@ export class MemoryConsolidationService {
     return summary;
   }
 
-  private async draftSessionCandidates(sessionId: string, turnId?: string): Promise<DraftedCandidate[]> {
+  private async draftSessionCandidates(
+    sessionId: string,
+    watermark: string,
+    turnId?: string,
+  ): Promise<DraftedCandidate[]> {
     const events = await this.deps.readTranscriptOrEmpty(sessionId);
     const digest = buildTranscriptDigest(events);
     if (digest.length < MIN_DIGEST_CHARS) {
       return [];
     }
     const defaults = this.deps.resolveModelDefaults();
-    const completion = await this.deps.createChatCompletion({
-      providerId: defaults.providerId,
-      model: defaults.model,
-      messages: [
-        { role: "system", content: CONSOLIDATION_SYSTEM_PROMPT },
-        { role: "user", content: digest },
-      ],
-      temperature: 0,
-      max_tokens: 900,
-    });
+    const completion = await this.deps.createChatCompletion(
+      {
+        providerId: defaults.providerId,
+        model: defaults.model,
+        messages: [
+          { role: "system", content: CONSOLIDATION_SYSTEM_PROMPT },
+          { role: "user", content: digest },
+        ],
+        temperature: 0,
+        max_tokens: 900,
+      },
+      createUtilityModelUsageAttribution({
+        operationId: `memory-consolidation:${encodeURIComponent(watermark)}:${encodeURIComponent(sessionId)}`,
+        utilityKind: "memory_candidate_consolidation",
+        requestedProviderId: defaults.providerId,
+        requestedModelId: defaults.model,
+        lineage: {
+          sessionId,
+          turnId,
+          agentId: "memory-consolidator",
+        },
+      }),
+    );
     const rawContent = completion.choices?.[0]
       ? (completion.choices[0] as { message?: { content?: string } }).message?.content
       : undefined;

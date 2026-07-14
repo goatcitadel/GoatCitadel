@@ -45,8 +45,11 @@ export function createWorkspacesRoutePort(deps: WorkspacesRoutePortDependencies)
     deps.storage.workspaces.get(deps.normalizeWorkspaceId(workspaceId));
 
   return {
-    archiveWorkspace: (workspaceId) => {
-      const archived = deps.storage.workspaces.archive(deps.normalizeWorkspaceId(workspaceId));
+    archiveWorkspace: (workspaceId, expectedRevision: number) => {
+      const archived = deps.storage.workspaces.archiveWithRevision(
+        deps.normalizeWorkspaceId(workspaceId),
+        expectedRevision,
+      );
       deps.publishRealtime("workspace_archived", "system", {
         workspaceId: archived.workspaceId,
       });
@@ -68,16 +71,23 @@ export function createWorkspacesRoutePort(deps: WorkspacesRoutePortDependencies)
       citadelId?.trim()
         ? deps.storage.workspaces.listByCitadel(citadelId, view, limit)
         : deps.storage.workspaces.list(view, limit),
-    restoreWorkspace: (workspaceId) => {
-      const restored = deps.storage.workspaces.restore(deps.normalizeWorkspaceId(workspaceId));
+    restoreWorkspace: (workspaceId, expectedRevision: number) => {
+      const restored = deps.storage.workspaces.restoreWithRevision(
+        deps.normalizeWorkspaceId(workspaceId),
+        expectedRevision,
+      );
       deps.publishRealtime("workspace_restored", "system", {
         workspaceId: restored.workspaceId,
       });
       return restored;
     },
     updateGlobalGuidance: (docType, content) => deps.updateGlobalGuidance(docType, content),
-    updateWorkspace: (workspaceId: string, input: WorkspaceUpdateInput) => {
-      const updated = deps.storage.workspaces.update(deps.normalizeWorkspaceId(workspaceId), input);
+    updateWorkspace: (workspaceId: string, input: WorkspaceUpdateInput, expectedRevision: number) => {
+      const updated = deps.storage.workspaces.updateWithRevision(
+        deps.normalizeWorkspaceId(workspaceId),
+        input,
+        expectedRevision,
+      );
       deps.publishRealtime("workspace_updated", "system", {
         workspaceId: updated.workspaceId,
         name: updated.name,

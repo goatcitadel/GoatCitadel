@@ -246,14 +246,14 @@ describe("ImprovementService runtime coverage", () => {
     ).toThrow(/Repair candidate not found/);
   });
 
-  it("recovers interrupted replay runs and reads prompt-lab improvement signals", () => {
+  it("recovers interrupted replay runs and reads prompt-lab improvement signals", async () => {
     const harness = createHarness();
 
     harness.service.startScheduler();
     harness.service.startScheduler();
     harness.service.stopScheduler();
     harness.service.stopScheduler();
-    harness.service.ensureWeeklyImprovementCronJob();
+    await harness.service.ensureWeeklyImprovementCronJob();
     // First-run default is disabled (codex finding #27) — operator opts in
     // from Mission Control settings before the weekly job ships chat/tool
     // traces to the LLM judge.
@@ -520,6 +520,9 @@ function createHarness(): Harness {
   const routingPolicies: Record<string, unknown> = {};
   const ctx: ServiceContext = {
     storage,
+    cronSpecOwner: {
+      reconcileSpec: async (cronSpec) => storage.cronJobs.reconcileSpec(cronSpec),
+    },
     config: {} as never,
     llmService: {} as never,
     policyEngine: {} as never,

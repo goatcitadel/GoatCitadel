@@ -193,17 +193,17 @@ describe("route service facades", () => {
       method: "getCandidateDetail",
       args: ["candidate-1"],
     });
-    expect(service.promoteCapabilityCandidate("candidate-1", "version-2")).toEqual({
+    expect(service.promoteCapabilityCandidate("candidate-1", 7, "version-2")).toEqual({
       method: "promoteCandidate",
-      args: ["candidate-1", "version-2"],
+      args: ["candidate-1", 7, "version-2"],
     });
-    expect(service.revokeCapabilityCandidate("candidate-1")).toEqual({
+    expect(service.revokeCapabilityCandidate("candidate-1", 8)).toEqual({
       method: "revokeCandidate",
-      args: ["candidate-1", undefined],
+      args: ["candidate-1", 8, undefined],
     });
-    expect(service.rollbackCapabilityCandidate("candidate-1", "version-1")).toEqual({
+    expect(service.rollbackCapabilityCandidate("candidate-1", "version-1", 9)).toEqual({
       method: "rollbackCandidate",
-      args: ["candidate-1", "version-1"],
+      args: ["candidate-1", "version-1", 9],
     });
     expect(service.listCodeModeRuns()).toEqual({ method: "listCodeModeRuns", args: [100] });
     expect(service.getCodeModeRun("run-1")).toEqual({ method: "getCodeModeRun", args: ["run-1"] });

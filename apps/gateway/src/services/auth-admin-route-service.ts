@@ -3,6 +3,8 @@ import type {
   BackupManifestRecord,
   CompanionSessionExchangeInput,
   CompanionSessionRefreshInput,
+  DatabaseCutoverRequest,
+  DatabaseCutoverResponse,
   DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   DeviceAccessRequestCreateInput,
   RetentionPolicy,
@@ -48,7 +50,7 @@ export interface AuthAdminRoutePort {
   revokeCompanionSession(sessionId: string, actorId: string): unknown;
   revokeDeviceAccessGrant(grantId: string, actorId: string): Promise<DeviceAccessGrantContractRecord>;
   rotateCompanionSession(input: CompanionSessionRefreshInput): unknown;
-  runDatabaseCutover(input: unknown): unknown;
+  runDatabaseCutover(input: DatabaseCutoverRequest): Promise<DatabaseCutoverResponse>;
   updateRetentionPolicy(patch: Partial<RetentionPolicy>): RetentionPolicy;
   verifyBackup(input: unknown): unknown;
   verifyDatabaseCutover(input: unknown): unknown;
@@ -133,7 +135,7 @@ export class AuthAdminRouteService {
     return this.gateway.verifyBackup(input);
   }
 
-  public runDatabaseCutover(input: unknown) {
+  public runDatabaseCutover(input: DatabaseCutoverRequest) {
     return this.gateway.runDatabaseCutover(input);
   }
 

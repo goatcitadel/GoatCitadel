@@ -55,6 +55,52 @@ export interface EnvFileLoadResult {
   skipped: string[];
 }
 
+export interface LocalEnvFileSnapshot {
+  path?: string;
+  existed: boolean;
+  contents?: string;
+}
+
+export interface LocalEnvVarValue {
+  path?: string;
+  present: boolean;
+  value?: string;
+}
+
+/**
+ * Captures the complete local credential file so a multi-owner config
+ * transaction can restore byte-for-byte state after a later owner fails.
+ */
+export function captureLocalEnvFileSnapshot(options?: { rootDir?: string }): LocalEnvFileSnapshot {
+  const envPath = resolveWritableEnvFilePath(options);
+  if (!envPath || !fs.existsSync(envPath)) {
+    return { path: envPath, existed: false };
+  }
+  return {
+    path: envPath,
+    existed: true,
+    contents: fs.readFileSync(envPath, "utf8"),
+  };
+}
+
+/** Restores a snapshot captured above without projecting any credential bytes. */
+export function restoreLocalEnvFileSnapshot(snapshot: LocalEnvFileSnapshot): void {
+  if (!snapshot.path) {
+    return;
+  }
+  if (!snapshot.existed) {
+    try {
+      fs.unlinkSync(snapshot.path);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    return;
+  }
+  writeCredentialFileAtomicSync(snapshot.path, snapshot.contents ?? "");
+}
+
 let loaded = false;
 
 export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLoadResult {
@@ -102,12 +148,39 @@ export function detectEnvFilePath(options?: { rootDir?: string }): string | unde
   return undefined;
 }
 
+/** Reads one value from the durable local env file without applying process-env precedence. */
+export function readLocalEnvVar(key: string, options?: { rootDir?: string }): LocalEnvVarValue {
+  const validatedKey = key.trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(validatedKey)) {
+    throw new Error(`Invalid env var key: ${key}`);
+  }
+  const envPath = detectEnvFilePath(options);
+  if (!envPath) {
+    return { path: resolveWritableEnvFilePath(options), present: false };
+  }
+  const parsed = parseEnv(fs.readFileSync(envPath, "utf8"));
+  if (!Object.prototype.hasOwnProperty.call(parsed, validatedKey)) {
+    return { path: envPath, present: false };
+  }
+  return { path: envPath, present: true, value: parsed[validatedKey] };
+}
+
 export function resolveWritableEnvFilePath(options?: { rootDir?: string }): string | undefined {
   const envRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
   const cwd = process.cwd();
+  const explicitRoot = options?.rootDir ? path.resolve(options.rootDir) : undefined;
+
+  // An explicit runtime root is authoritative. Do not let the developer
+  // checkout's marker redirect a detached/test/runtime root to the wrong .env.
+  if (explicitRoot) {
+    const explicitEnvPath = path.join(explicitRoot, ".env");
+    if (repoHasConfigMarker(explicitRoot) || fs.existsSync(explicitEnvPath)) {
+      return explicitEnvPath;
+    }
+  }
 
   const rootCandidates = [
-    options?.rootDir ? path.resolve(options.rootDir) : undefined,
+    explicitRoot,
     envRoot ? path.resolve(envRoot) : undefined,
     cwd,
     path.resolve(cwd, ".."),
@@ -281,4 +354,8 @@ function serializeEnvValue(value: string): string {
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t");
   return `"${escaped}"`;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }

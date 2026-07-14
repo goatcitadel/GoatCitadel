@@ -88,7 +88,10 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     });
     created.workspace = true;
   } else if (workspace.lifecycleStatus === "archived") {
-    workspace = fastify.services.workspaces.restoreWorkspace(workspace.workspaceId) as WorkspaceRecord;
+    workspace = fastify.services.workspaces.restoreWorkspace(
+      workspace.workspaceId,
+      workspace.revision,
+    ) as WorkspaceRecord;
     notes.push("Restored the existing archived demo workspace.");
   }
   if (!workspace) {

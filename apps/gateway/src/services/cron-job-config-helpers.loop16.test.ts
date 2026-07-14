@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureCostReportCronJob,
@@ -9,7 +9,6 @@ import {
   ensureUpdateReviewCronJob,
   getCronJobsConfigPath,
   loadCronJobsFromConfig,
-  persistCronJobsConfig,
 } from "./cron-job-config-helpers.js";
 
 const TEMP_ROOTS: string[] = [];
@@ -28,7 +27,7 @@ describe("cron job config helpers", () => {
     const host = createHost(await makeRoot());
 
     await expect(loadCronJobsFromConfig(host)).resolves.toBeUndefined();
-    expect(host.storage.runImmediateTransaction).not.toHaveBeenCalled();
+    expect(host.cronConfigGenerationOwner.reconcileSpec).not.toHaveBeenCalled();
 
     await writeFile(
       getCronJobsConfigPath(host),
@@ -60,8 +59,7 @@ describe("cron job config helpers", () => {
 
     await loadCronJobsFromConfig(host);
 
-    expect(host.storage.runImmediateTransaction).toHaveBeenCalledTimes(1);
-    expect(host.storage.cronJobs.upsertIfChanged).toHaveBeenCalledWith(
+    expect(host.cronConfigGenerationOwner.reconcileSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         jobId: "daily-review",
         name: "Daily Review",
@@ -70,77 +68,14 @@ describe("cron job config helpers", () => {
         description: "Existing description",
         enabled: true,
         endAt: "2026-06-01T00:00:00.000Z",
-        lastRunAt: "2026-05-01T00:00:00.000Z",
-        nextRunAt: futureNextRunAt,
         schedule: "0 8 * * *",
         workdir: "F:/existing",
         contextFrom: "upstream-existing",
-        lastRunOutput: "existing output",
-        lastRunId: "run-existing",
-        lastRunEvidenceEnvelopeId: "env-existing",
       }),
     );
   });
 
-  it("persists the cron config shape and records unified config persistence", async () => {
-    const host = createHost(await makeRoot());
-    host.storage.cronJobs.list.mockReturnValueOnce([
-      {
-        jobId: "job-1",
-        name: "Job One",
-        action: "task",
-        actionConfig: { taskId: "task-1" },
-        description: "Run a task",
-        schedule: "*/15 * * * *",
-        enabled: true,
-        endAt: undefined,
-        lastRunAt: "2026-05-01T00:00:00.000Z",
-        nextRunAt: "2026-05-01T00:15:00.000Z",
-        workdir: "F:/code/personal-ai",
-        contextFrom: "upstream-job",
-        lastRunOutput: "alert body",
-        lastRunId: "run-1",
-        lastRunStatus: "failed",
-        lastRunEvidenceEnvelopeId: "env-run-1",
-        lastFailureAt: "2026-05-01T00:01:00.000Z",
-        lastFailure: { message: "provider refused", code: "ProviderError" },
-        failureCount: 2,
-        backoffUntil: "2026-05-01T00:05:00.000Z",
-      },
-    ]);
-
-    persistCronJobsConfig(host);
-
-    const raw = await readFile(getCronJobsConfigPath(host), "utf8");
-    expect(JSON.parse(raw)).toEqual({
-      jobs: [
-        {
-          jobId: "job-1",
-          name: "Job One",
-          action: "task",
-          actionConfig: { taskId: "task-1" },
-          description: "Run a task",
-          schedule: "*/15 * * * *",
-          enabled: true,
-          lastRunAt: "2026-05-01T00:00:00.000Z",
-          lastRunOutput: "alert body",
-          lastRunId: "run-1",
-          lastRunStatus: "failed",
-          lastRunEvidenceEnvelopeId: "env-run-1",
-          lastFailureAt: "2026-05-01T00:01:00.000Z",
-          lastFailure: { message: "provider refused", code: "ProviderError" },
-          failureCount: 2,
-          backoffUntil: "2026-05-01T00:05:00.000Z",
-          nextRunAt: "2026-05-01T00:15:00.000Z",
-          workdir: "F:/code/personal-ai",
-          contextFrom: "upstream-job",
-        },
-      ],
-    });
-    expect(host.persistUnifiedConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves existing enabled and schedule state when ensuring built-in cron jobs", () => {
+  it("preserves existing operator spec state when ensuring built-in cron jobs", async () => {
     const host = createHost("F:/tmp/goatcitadel");
     host.storage.cronJobs.get.mockImplementation((jobId: string) => ({
       jobId,
@@ -151,23 +86,20 @@ describe("cron job config helpers", () => {
       nextRunAt: "2026-05-02T00:00:00.000Z",
     }));
 
-    ensurePrivateBetaBackupCronJob(host);
-    ensureMemoryFlushCronJob(host);
-    ensureCostReportCronJob(host);
-    ensureUpdateReviewCronJob(host);
+    await ensurePrivateBetaBackupCronJob(host);
+    await ensureMemoryFlushCronJob(host);
+    await ensureCostReportCronJob(host);
+    await ensureUpdateReviewCronJob(host);
 
-    expect(host.storage.cronJobs.upsertIfChanged).toHaveBeenCalledTimes(4);
-    for (const [record, now] of host.storage.cronJobs.upsertIfChanged.mock.calls) {
+    expect(host.cronConfigGenerationOwner.reconcileSpec).toHaveBeenCalledTimes(4);
+    for (const [record] of host.cronConfigGenerationOwner.reconcileSpec.mock.calls) {
       expect(record).toEqual(
         expect.objectContaining({
           enabled: false,
           description: expect.stringContaining("custom description"),
           endAt: "2026-06-01T00:00:00.000Z",
-          lastRunAt: "2026-05-01T00:00:00.000Z",
-          nextRunAt: "2026-05-02T00:00:00.000Z",
         }),
       );
-      expect(new Date(now as string).toString()).not.toBe("Invalid Date");
     }
   });
 
@@ -216,7 +148,7 @@ describe("cron job config helpers", () => {
     await loadCronJobsFromConfig(host);
 
     const actionsByJobId = new Map(
-      host.storage.cronJobs.upsertIfChanged.mock.calls.map(([record]) => [record.jobId, record.action]),
+      host.cronConfigGenerationOwner.reconcileSpec.mock.calls.map(([record]) => [record.jobId, record.action]),
     );
     expect(actionsByJobId).toEqual(
       new Map([
@@ -243,11 +175,10 @@ function createHost(rootDir: string) {
     storage: {
       cronJobs: {
         get: vi.fn(),
-        list: vi.fn(() => []),
-        upsertIfChanged: vi.fn(),
       },
-      runImmediateTransaction: vi.fn((callback: () => void) => callback()),
     },
-    persistUnifiedConfig: vi.fn(),
+    cronConfigGenerationOwner: {
+      reconcileSpec: vi.fn(async (record) => ({ ...record, revision: 1 })),
+    },
   };
 }

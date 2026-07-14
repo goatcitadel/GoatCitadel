@@ -19,7 +19,13 @@ export function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     // path never runs them.
     prepare: (sql) => {
       let stmt: ReturnType<DatabaseClient["prepare"]> | undefined;
-      const resolve = () => (stmt ??= inner.prepare(sql));
+      // The facade deliberately exercises PostgreSQL branches while SQLite
+      // supplies deterministic local rows. Row-lock clauses have no SQLite
+      // equivalent and are already provided by its enclosing transaction, so
+      // remove only those clauses for the backing engine. Keep every other
+      // PostgreSQL-shaped statement intact so dialect drift still fails loud.
+      const sqliteBackingSql = sql.replace(/\s+FOR\s+UPDATE(?:\s+SKIP\s+LOCKED)?/giu, "");
+      const resolve = () => (stmt ??= inner.prepare(sqliteBackingSql));
       return {
         run: (...params: unknown[]) => resolve().run(...params),
         get: (...params: unknown[]) => resolve().get(...params),

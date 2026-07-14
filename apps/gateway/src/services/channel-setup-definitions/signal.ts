@@ -19,12 +19,11 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bridge_dependent",
-      contentVersion: "2026.07.signal.v2",
+      contentVersion: "2026.07.signal.v3",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary:
-        "Configure a Signal bridge endpoint, optional account id, a default recipient for outbound sends, and optional inbound polling.",
+      introSummary: "Configure an outbound-only Signal bridge endpoint and a default recipient for sends.",
       prerequisites: [
         "A running Signal bridge endpoint that GoatCitadel can reach.",
         "A sandbox recipient or group for manual send confirmation.",
@@ -40,7 +39,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "Signal ships as a narrow outbound bridge. Guided setup now runs a live sandbox send against that exact send path, but it does not imply richer actions beyond the current bridge lane. Optional inbound polling reads new messages from the same local bridge on a fixed interval — it needs the account id, applies the connection sender allowlist, and handles plain-text messages only.",
+              "Signal is outbound-only. Guided setup runs a live sandbox send against the JSON-RPC send path. GoatCitadel does not call the bridge receive endpoint because the current bridge has no acknowledgement or replay contract; a crash between destructive receive and local commit could otherwise lose a message.",
             ),
           ],
         },
@@ -83,24 +82,6 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
               looksLike: "+15551234567 or group identifier",
               canChangeLater: true,
             },
-            {
-              key: "inboundEnabled",
-              label: "Enable inbound polling",
-              type: "boolean",
-              required: false,
-              explanation:
-                "When enabled, GoatCitadel polls the bridge receive endpoint for new messages so Signal becomes bidirectional. Requires the Account ID above, and inbound senders stay governed by the connection allowlist.",
-              canChangeLater: true,
-            },
-            {
-              key: "pollIntervalSeconds",
-              label: "Poll interval (seconds)",
-              type: "text",
-              required: false,
-              explanation: "How often to poll the bridge for inbound messages. Defaults to 10 seconds; minimum 5.",
-              looksLike: "10",
-              canChangeLater: true,
-            },
           ],
         },
         {
@@ -116,15 +97,15 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
       ],
     },
     adapter: {
-      adapterVersion: "2026.04.signal.v1",
+      adapterVersion: "2026.07.signal.v2",
       secretFieldKeys: [],
     },
     validation: {
-      validationVersion: "2026.04.signal.v1",
+      validationVersion: "2026.07.signal.v2",
       levels: ["structural", "semantic"],
     },
     testing: {
-      testVersion: "2026.04.signal.v1",
+      testVersion: "2026.07.signal.v2",
       levels: ["structural", "semantic", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
@@ -157,14 +138,13 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const inboundEnabled = readSignalBoolean(config, "inboundEnabled");
+      const legacyInboundEnabled = readSignalBoolean(config, "inboundEnabled") === true;
+      const legacyPollIntervalConfigured = config.pollIntervalSeconds !== undefined;
       return {
         draft: {
           baseUrl: readString(config, "baseUrl") ?? readString(config, "bridgeUrl"),
           accountId: readString(config, "accountId"),
           defaultRecipient: readString(config, "defaultRecipient"),
-          inboundEnabled,
-          pollIntervalSeconds: readSignalPollInterval(config),
         },
         hydration: {
           status: "clean",
@@ -172,10 +152,13 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
             baseUrl: readString(config, "baseUrl") || readString(config, "bridgeUrl") ? "configured" : "missing",
             accountId: readString(config, "accountId") ? "configured" : "unknown",
             defaultRecipient: readString(config, "defaultRecipient") ? "configured" : "missing",
-            inboundEnabled: inboundEnabled !== undefined ? "configured" : "unknown",
-            pollIntervalSeconds: readSignalPollInterval(config) !== undefined ? "configured" : "unknown",
           },
-          warnings: [],
+          warnings:
+            legacyInboundEnabled || legacyPollIntervalConfigured
+              ? [
+                  "Deprecated Signal inbound polling settings were found. They are blocked and will be removed when this outbound-only draft is finalized because the bridge has no acknowledgement/replay contract.",
+                ]
+              : [],
           rawLegacyConfig: config,
         },
       };
@@ -185,8 +168,6 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
         baseUrl: readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl"),
         accountId: readString(draft.draft, "accountId"),
         defaultRecipient: readString(draft.draft, "defaultRecipient"),
-        inboundEnabled: readSignalBoolean(draft.draft, "inboundEnabled"),
-        pollIntervalSeconds: readSignalPollInterval(draft.draft),
       });
     },
     validate(draft) {
@@ -204,22 +185,22 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
       if (draft.draft.inboundEnabled !== undefined && inboundEnabled === undefined) {
         issues.push(malformedFieldIssue("inboundEnabled", "Inbound polling toggle must be true or false."));
       }
-      if (inboundEnabled === true && !readString(draft.draft, "accountId")) {
+      if (inboundEnabled === true) {
         issues.push(
-          requiredFieldIssue(
-            "accountId",
-            "Account ID is required when inbound polling is enabled — the bridge receive endpoint is per-account.",
+          malformedFieldIssue(
+            "inboundEnabled",
+            "Signal inbound polling is blocked because the current bridge receive endpoint has no acknowledgement/replay contract.",
           ),
         );
       }
       const rawPollInterval = draft.draft.pollIntervalSeconds;
       if (rawPollInterval !== undefined && rawPollInterval !== null && String(rawPollInterval).trim() !== "") {
-        const pollInterval = readSignalPollInterval(draft.draft);
-        if (pollInterval === undefined) {
-          issues.push(
-            malformedFieldIssue("pollIntervalSeconds", "Poll interval must be a whole number of seconds (minimum 5)."),
-          );
-        }
+        issues.push(
+          malformedFieldIssue(
+            "pollIntervalSeconds",
+            "Signal polling is deprecated and unsupported; remove this legacy field.",
+          ),
+        );
       }
       return issues;
     },
@@ -241,20 +222,4 @@ function readSignalBoolean(record: Record<string, unknown>, key: string): boolea
     }
   }
   return undefined;
-}
-
-const SIGNAL_MIN_POLL_INTERVAL_SECONDS = 5;
-const SIGNAL_MAX_POLL_INTERVAL_SECONDS = 3_600;
-
-function readSignalPollInterval(record: Record<string, unknown>): number | undefined {
-  const value = record.pollIntervalSeconds;
-  const parsed =
-    typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value.trim()) : undefined;
-  if (parsed === undefined || !Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-    return undefined;
-  }
-  if (parsed < SIGNAL_MIN_POLL_INTERVAL_SECONDS || parsed > SIGNAL_MAX_POLL_INTERVAL_SECONDS) {
-    return undefined;
-  }
-  return parsed;
 }

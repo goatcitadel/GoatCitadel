@@ -9,6 +9,8 @@ import type {
 } from "@goatcitadel/contracts";
 
 export interface RuntimeSettings {
+  /** Monotonic optimistic-concurrency token. Clients must treat it as opaque. */
+  revision: number;
   environment: string;
   deploymentProfile: DeploymentProfile;
   toolApprovalMode: ToolApprovalMode;
@@ -111,7 +113,7 @@ export interface RuntimeSettings {
     chatThinkingStreamV1Enabled?: boolean;
     /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
     channelVoiceInboundV1Enabled?: boolean;
-    /** Signal inbound poller (phase B1b). Absent/false (default) ⇒ the bridge poll loop never starts; Signal stays outbound-only. */
+    /** Deprecated compatibility value; true emits a blocked-setting diagnostic but never enables Signal receive. */
     signalInboundV1Enabled?: boolean;
     /** Round-3 kill switch: planner triviality-skip + speed-model drafting. Absent/false ⇒ feature ON. */
     plannerFastPathV1Disabled?: boolean;

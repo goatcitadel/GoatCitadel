@@ -6,7 +6,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { ChatCompletionRequest, ChatCompletionResponse, ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatTurnTraceRecord,
+  ModelUsageAttributionContext,
+} from "@goatcitadel/contracts";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
@@ -20,6 +25,7 @@ import {
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
   insertMemoryContextMessage,
+  isAuthoritativeModelUsageAccountingError,
   shouldAttemptCrossProviderFallback,
   shouldReportProviderRetryCooldownExhausted,
   shouldRetryToolProtocolError,
@@ -54,6 +60,7 @@ const TOOL_PROTOCOL_RETRY_MINIMAL_THINKING = 2;
 export async function createChatCompletion(
   host: LlmCompletionHost,
   request: ChatCompletionRequest,
+  attributionInput: ModelUsageAttributionContext = {},
 ): Promise<ChatCompletionResponse> {
   const completionStartedAt = Date.now();
   host.recordDevDiagnostic({
@@ -209,6 +216,18 @@ export async function createChatCompletion(
   const primaryModel = hookableRequest.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
   const primaryRuntimeTarget = { providerId: primaryProviderId, model: primaryModel, provider: primaryProvider };
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
+  const usageAttribution = createCompletionUsageAttribution({
+    input: attributionInput,
+    defaultCallKind: "chat_initial",
+    workspaceId: chatHookWorkspaceId,
+    sessionId: memoryInput?.sessionId,
+    turnId: memoryInput?.turnId,
+    durableRunId: memoryInput?.runId,
+    taskId: memoryInput?.taskId,
+    requestedProviderId: primaryProviderId,
+    requestedModelId: primaryModel,
+    requestedReasoningLevel: hookableRequest.reasoning?.effort,
+  });
   const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
   const routing: ChatTurnTraceRecord["routing"] = {
     primaryProviderId,
@@ -242,10 +261,17 @@ export async function createChatCompletion(
     ) {
       try {
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-        response = await host.llmService.chatCompletions({
-          ...attemptRequest,
-          timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-        });
+        response = await host.llmService.chatCompletions(
+          {
+            ...attemptRequest,
+            timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
+          },
+          usageAttribution.next({
+            callKind: index === 0 ? undefined : "chat_repair",
+            repairIndex: index,
+            dispatchedReasoningEffort: attemptRequest.reasoning?.effort,
+          }),
+        );
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
         routing.effectiveApiStyle = host.llmService.resolveExecutionApiStyle(
@@ -290,6 +316,10 @@ export async function createChatCompletion(
           },
         });
 
+        if (isAuthoritativeModelUsageAccountingError(lastError)) {
+          break attemptLoop;
+        }
+
         if (
           transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
           shouldRetryTransientProviderError(lastError)
@@ -313,7 +343,7 @@ export async function createChatCompletion(
       host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
       primaryProviderId,
     );
-    for (const fallback of fallbacks) {
+    fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
       for (
         let transientRetryIndex = 0;
         transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
@@ -321,12 +351,24 @@ export async function createChatCompletion(
       ) {
         try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-          response = await host.llmService.chatCompletions({
-            ...normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
-            providerId: fallback.providerId,
-            model: fallback.model,
-            timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
-          });
+          const fallbackRequest = normalizeToolProtocolRetryRequest(
+            hookableRequest,
+            TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
+          );
+          response = await host.llmService.chatCompletions(
+            {
+              ...fallbackRequest,
+              providerId: fallback.providerId,
+              model: fallback.model,
+              timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
+            },
+            usageAttribution.next({
+              callKind: "chat_fallback",
+              fallbackIndex: fallbackOrdinal + 1,
+              repairIndex: TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
+              dispatchedReasoningEffort: fallbackRequest.reasoning?.effort,
+            }),
+          );
           host.recordDevDiagnostic({
             level: "info",
             category: "chat",
@@ -357,6 +399,9 @@ export async function createChatCompletion(
           break;
         } catch (error) {
           lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
+          if (isAuthoritativeModelUsageAccountingError(lastError)) {
+            break fallbackLoop;
+          }
           if (
             transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
             shouldRetryTransientProviderError(lastError)
@@ -508,6 +553,7 @@ export async function createChatCompletion(
 export async function* createChatCompletionStream(
   host: LlmCompletionHost,
   request: ChatCompletionRequest,
+  attributionInput: ModelUsageAttributionContext = {},
 ): AsyncGenerator<Record<string, unknown>> {
   const completionStartedAt = Date.now();
   const chatHookWorkspaceId = host.resolveChatCompletionHookWorkspaceId(request);
@@ -598,6 +644,18 @@ export async function* createChatCompletionStream(
   const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
   const primaryRuntimeTarget = { providerId: primaryProviderId, model: primaryModel, provider: primaryProvider };
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
+  const usageAttribution = createCompletionUsageAttribution({
+    input: attributionInput,
+    defaultCallKind: "chat_initial",
+    workspaceId: chatHookWorkspaceId,
+    sessionId: memoryInput?.sessionId,
+    turnId: memoryInput?.turnId,
+    durableRunId: memoryInput?.runId,
+    taskId: memoryInput?.taskId,
+    requestedProviderId: primaryProviderId,
+    requestedModelId: primaryModel,
+    requestedReasoningLevel: withContext.reasoning?.effort,
+  });
   const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
   const routing: ChatTurnTraceRecord["routing"] = {
     primaryProviderId,
@@ -617,6 +675,7 @@ export async function* createChatCompletionStream(
   const shouldBufferForTransform = host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
   const bufferedChunks: Array<Record<string, unknown>> = [];
   const telemetryChunks: Array<Record<string, unknown>> = [];
+  const canonicalUsageEventIds = new Set<string>();
   const retryAttempts = [
     withContext,
     normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_NORMALIZED),
@@ -648,12 +707,19 @@ export async function* createChatCompletionStream(
           : attemptRequest.signal
             ? AbortSignal.any([attemptRequest.signal, idleAbort.signal])
             : idleAbort.signal;
-        const providerStream = host.llmService.chatCompletionsStream({
-          ...attemptRequest,
-          stream: true,
-          timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-          signal: attemptSignal,
-        });
+        const providerStream = host.llmService.chatCompletionsStream(
+          {
+            ...attemptRequest,
+            stream: true,
+            timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
+            signal: attemptSignal,
+          },
+          usageAttribution.next({
+            callKind: index === 0 ? undefined : "chat_repair",
+            repairIndex: index,
+            dispatchedReasoningEffort: attemptRequest.reasoning?.effort,
+          }),
+        );
         const attemptStream = idleWatchdogDisabled
           ? providerStream
           : withStreamIdleWatchdog(providerStream, {
@@ -679,6 +745,7 @@ export async function* createChatCompletionStream(
           attemptStreamed = true;
           streamed = true;
           appendTelemetryChunk(telemetryChunks, chunk);
+          collectCanonicalUsageEventIds(canonicalUsageEventIds, chunk);
           if (shouldBufferForTransform) {
             bufferedChunks.push(chunk);
           } else {
@@ -729,6 +796,10 @@ export async function* createChatCompletionStream(
             emittedOutput: attemptStreamed,
           },
         });
+        if (isAuthoritativeModelUsageAccountingError(lastError)) {
+          if (attemptStreamed) streamFailedAfterEmit = true;
+          break attemptLoop;
+        }
         if (attemptStreamed) {
           streamFailedAfterEmit = true;
           break attemptLoop;
@@ -783,12 +854,12 @@ export async function* createChatCompletionStream(
     throw lastError ?? new Error("chat completion stream failed after emitting output");
   }
 
-  if (!streamed && allowCrossProviderFallback) {
+  if (!streamed && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
     const fallbacks = filterCrossProviderFallbackTargets(
       host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
       primaryProviderId,
     );
-    for (const fallback of fallbacks) {
+    fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
       for (
         let transientRetryIndex = 0;
         transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
@@ -807,14 +878,22 @@ export async function* createChatCompletionStream(
             : fallbackRetryRequest.signal
               ? AbortSignal.any([fallbackRetryRequest.signal, idleAbort.signal])
               : idleAbort.signal;
-          const fallbackProviderStream = host.llmService.chatCompletionsStream({
-            ...fallbackRetryRequest,
-            providerId: fallback.providerId,
-            model: fallback.model,
-            stream: true,
-            timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
-            signal: fallbackSignal,
-          });
+          const fallbackProviderStream = host.llmService.chatCompletionsStream(
+            {
+              ...fallbackRetryRequest,
+              providerId: fallback.providerId,
+              model: fallback.model,
+              stream: true,
+              timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
+              signal: fallbackSignal,
+            },
+            usageAttribution.next({
+              callKind: "chat_fallback",
+              fallbackIndex: fallbackOrdinal + 1,
+              repairIndex: TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
+              dispatchedReasoningEffort: fallbackRetryRequest.reasoning?.effort,
+            }),
+          );
           const fallbackStream = idleWatchdogDisabled
             ? fallbackProviderStream
             : withStreamIdleWatchdog(fallbackProviderStream, {
@@ -840,6 +919,7 @@ export async function* createChatCompletionStream(
             attemptStreamed = true;
             streamed = true;
             appendTelemetryChunk(telemetryChunks, chunk);
+            collectCanonicalUsageEventIds(canonicalUsageEventIds, chunk);
             if (shouldBufferForTransform) {
               bufferedChunks.push(chunk);
             } else {
@@ -879,6 +959,10 @@ export async function* createChatCompletionStream(
               emittedOutput: attemptStreamed,
             },
           });
+          if (isAuthoritativeModelUsageAccountingError(lastError)) {
+            if (attemptStreamed) streamFailedAfterEmit = true;
+            break fallbackLoop;
+          }
           if (attemptStreamed) {
             streamFailedAfterEmit = true;
             break;
@@ -1080,6 +1164,7 @@ export async function* createChatCompletionStream(
 
   const finalChunk: Record<string, unknown> = {
     routing,
+    ...(canonicalUsageEventIds.size > 0 ? { model_usage_event_ids: [...canonicalUsageEventIds] } : {}),
   };
   if (memoryContext) {
     finalChunk.memoryContext = {
@@ -1098,6 +1183,98 @@ function appendTelemetryChunk(target: Array<Record<string, unknown>>, chunk: Rec
   target.push(chunk);
   if (target.length > 20) {
     target.shift();
+  }
+}
+
+function createCompletionUsageAttribution(input: {
+  input: ModelUsageAttributionContext;
+  defaultCallKind: NonNullable<ModelUsageAttributionContext["callKind"]>;
+  workspaceId?: string;
+  sessionId?: string;
+  turnId?: string;
+  durableRunId?: string;
+  taskId?: string;
+  requestedProviderId: string;
+  requestedModelId: string;
+  requestedReasoningLevel?: string;
+}): {
+  next: (
+    overrides?: Pick<
+      ModelUsageAttributionContext,
+      "callKind" | "fallbackIndex" | "repairIndex" | "dispatchedReasoningEffort"
+    >,
+  ) => ModelUsageAttributionContext;
+} {
+  const base: ModelUsageAttributionContext = {
+    ...input.input,
+    operationId: input.input.operationId?.trim() || `completion:${randomUUID()}`,
+    dispatchGeneration: input.input.dispatchGeneration?.trim() || randomUUID(),
+    callKind: input.input.callKind ?? input.defaultCallKind,
+    requestedProviderId: input.input.requestedProviderId?.trim() || input.requestedProviderId,
+    requestedModelId: input.input.requestedModelId?.trim() || input.requestedModelId,
+    requestedReasoningLevel:
+      input.input.requestedReasoningLevel?.trim() || input.requestedReasoningLevel?.trim() || undefined,
+    workspaceId: input.input.workspaceId?.trim() || input.workspaceId?.trim() || undefined,
+    sessionId: input.input.sessionId?.trim() || input.sessionId?.trim() || undefined,
+    turnId: input.input.turnId?.trim() || input.turnId?.trim() || undefined,
+    durableRunId: input.input.durableRunId?.trim() || input.durableRunId?.trim() || undefined,
+    taskId: input.input.taskId?.trim() || input.taskId?.trim() || undefined,
+    fallbackIndex: input.input.fallbackIndex ?? 0,
+    repairIndex: input.input.repairIndex ?? 0,
+  };
+  let nextAttemptIndex = input.input.attemptIndex ?? 0;
+  return {
+    next: (overrides = {}) => {
+      const requestedReasoningLevel = base.requestedReasoningLevel?.trim() || undefined;
+      const dispatchedReasoningEffort =
+        overrides.dispatchedReasoningEffort?.trim() || base.dispatchedReasoningEffort?.trim() || undefined;
+      const derivedReasoning = deriveReasoningDisposition(requestedReasoningLevel, dispatchedReasoningEffort);
+      return {
+        ...base,
+        ...overrides,
+        callKind: overrides.callKind ?? base.callKind,
+        attemptIndex: nextAttemptIndex++,
+        fallbackIndex: overrides.fallbackIndex ?? base.fallbackIndex,
+        repairIndex: overrides.repairIndex ?? base.repairIndex,
+        requestedReasoningLevel,
+        dispatchedReasoningEffort,
+        reasoningDisposition: base.reasoningDisposition ?? derivedReasoning.disposition,
+        reasoningReasonCode: base.reasoningReasonCode?.trim() || derivedReasoning.reasonCode,
+      };
+    },
+  };
+}
+
+function deriveReasoningDisposition(
+  requestedReasoningLevel: string | undefined,
+  dispatchedReasoningEffort: string | undefined,
+): {
+  disposition: NonNullable<ModelUsageAttributionContext["reasoningDisposition"]>;
+  reasonCode: string;
+} {
+  if (!requestedReasoningLevel) {
+    return { disposition: "provider_default", reasonCode: "no_explicit_reasoning_request" };
+  }
+  if (requestedReasoningLevel === dispatchedReasoningEffort) {
+    return { disposition: "honored", reasonCode: "requested_reasoning_preserved" };
+  }
+  return {
+    disposition: "downgraded",
+    reasonCode: dispatchedReasoningEffort
+      ? "reasoning_effort_changed_before_dispatch"
+      : "reasoning_effort_removed_before_dispatch",
+  };
+}
+
+function collectCanonicalUsageEventIds(target: Set<string>, chunk: Record<string, unknown>): void {
+  const candidates = [
+    ...(Array.isArray(chunk.model_usage_event_ids) ? chunk.model_usage_event_ids : []),
+    chunk.model_usage_event_id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate.trim();
+    if (normalized && normalized.length <= 256 && target.size < 256) target.add(normalized);
   }
 }
 

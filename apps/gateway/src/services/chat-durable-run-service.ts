@@ -4,6 +4,7 @@ import type {
   ChatMessageRecord,
   ChatTurnTraceRecord,
   ChatTurnBranchKind,
+  ChatRoutedContextSnapshotRecord,
   DurableCheckpointRecord,
   DurableRunCreateRequest,
   DurableRunRecord,
@@ -11,8 +12,19 @@ import type {
   DurableRunTimelineEvent,
 } from "@goatcitadel/contracts";
 import { isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
-import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import {
+  sealChatTurnCapabilityProfile,
+  rebindChatRoutedContextSnapshot,
+  verifyChatRoutedContextSnapshot,
+  verifyChatTurnCapabilityCatalogBinding,
+  verifyChatTurnCapabilitySkillBindings,
+  type Storage,
+} from "@goatcitadel/storage";
+import {
+  resolvePreparedTurnMode,
+  upsertChatCapabilityProfileSystemInstruction,
+  type PreparedAgentChatTurn,
+} from "./chat-turn-prep-service.js";
 import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 
 export const AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY = "autonomousChatPostCommitPending";
@@ -231,6 +243,7 @@ interface ChatToolArtifactSummaryStore {
 
 export interface ChatDurableRunBeginDeps {
   shouldUseDurableExecution: boolean;
+  runImmediateTransaction?<T>(callback: () => T): T;
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
   buildDurablePayloadRecord(
     prepared: PreparedAgentChatTurn,
@@ -251,6 +264,11 @@ export interface ChatDurableRunBeginDeps {
   ): void;
   /** When present, the initial durable chat-turn trace is persisted through this store. */
   chatTurnTraces?: Pick<Storage["chatTurnTraces"], "get" | "create">;
+  capabilityCatalogSnapshots?: Pick<Storage["capabilityCatalogSnapshots"], "create">;
+  chatTurnCapabilityProfiles?: Pick<Storage["chatTurnCapabilityProfiles"], "create">;
+  routedContextSnapshots?: Pick<Storage["routedContextSnapshots"], "create">;
+  skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
+  onDurableRunCommitted?(run: DurableRunRecord): void;
   requestDurableRunProcessing(runId: string): void;
 }
 
@@ -275,38 +293,225 @@ export function beginDurableChatRun(
   threadEventType: ChatDurableThreadEventType,
   options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
 ): DurableRunRecord | undefined {
+  const inputCarriesContextRefs = hasOwnRoutedContextRefs(input);
+  const provisionalRoutedContextSnapshot = readPreparedRoutedContextSnapshot(prepared);
   if (!deps.shouldUseDurableExecution) {
+    if (inputCarriesContextRefs || provisionalRoutedContextSnapshot) {
+      throw new Error(`Chat turn ${prepared.turnId} cannot execute routed context without durable admission.`);
+    }
     return undefined;
   }
-  const mode = resolvePreparedTurnMode(prepared);
-  const run = deps.createDurableRun({
-    runId: options?.runId,
-    workflowKey: "chat.turn.execute",
-    payload: deps.buildDurablePayloadRecord(prepared, input, threadEventType),
-    metadata: {
-      surface: mode,
-      autoPromoted: mode === "chat",
-      objective: prepared.content,
-    },
-  });
-  options?.mutationLifecycle?.markCommitted();
-  if (deps.chatTurnTraces) {
-    persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
+  if (Boolean(deps.chatTurnCapabilityProfiles) !== Boolean(deps.capabilityCatalogSnapshots)) {
+    throw new Error("Durable Chat capability admission stores are incompletely configured.");
   }
-  deps.persistChatStreamChunk(
-    {
-      type: "message_start",
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      messageId: prepared.assistantMessageId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-    },
-    run.runId,
-  );
+  if (
+    (deps.chatTurnCapabilityProfiles || deps.capabilityCatalogSnapshots) &&
+    (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot)
+  ) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} cannot be admitted without its capability profile.`);
+  }
+  const mode = resolvePreparedTurnMode(prepared);
+  const runId = options?.runId ?? randomUUID();
+  if (inputCarriesContextRefs && !provisionalRoutedContextSnapshot) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} cannot persist live routed-context references.`);
+  }
+  if (provisionalRoutedContextSnapshot) {
+    assertPreparedRoutedContextSnapshotBinding(prepared, provisionalRoutedContextSnapshot);
+  }
+  if (provisionalRoutedContextSnapshot && !deps.runImmediateTransaction) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} requires atomic routed-context admission.`);
+  }
+  if (provisionalRoutedContextSnapshot && !deps.routedContextSnapshots) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} cannot persist its routed-context snapshot.`);
+  }
+  if (provisionalRoutedContextSnapshot && !deps.chatTurnTraces) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} cannot persist its routed-context trace binding.`);
+  }
+  if (prepared.capabilityProfile?.identity.durableRunId && prepared.capabilityProfile.identity.durableRunId !== runId) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} is already bound to another durable run.`);
+  }
+  let run!: DurableRunRecord;
+  const admit = (beforeStreamPersist?: () => void) => {
+    if (prepared.capabilityProfile && !prepared.capabilityProfile.identity.durableRunId) {
+      const { hashes: _hashes, ...draft } = prepared.capabilityProfile;
+      prepared.capabilityProfile = sealChatTurnCapabilityProfile({
+        ...draft,
+        identity: {
+          ...draft.identity,
+          durableRunId: runId,
+        },
+      });
+      prepared.history = upsertChatCapabilityProfileSystemInstruction(
+        prepared.history ?? [],
+        prepared.capabilityProfile,
+      );
+    }
+    assertPreparedChatCapabilityAdmissionBindings(deps, prepared);
+    if (prepared.capabilityCatalogSnapshot && deps.capabilityCatalogSnapshots) {
+      prepared.capabilityCatalogSnapshot = deps.capabilityCatalogSnapshots.create(prepared.capabilityCatalogSnapshot);
+    }
+    if (prepared.capabilityProfile && deps.chatTurnCapabilityProfiles) {
+      prepared.capabilityProfile = deps.chatTurnCapabilityProfiles.create(prepared.capabilityProfile);
+    }
+    let routedContextSnapshot: ChatRoutedContextSnapshotRecord | undefined;
+    if (provisionalRoutedContextSnapshot) {
+      if (!prepared.capabilityProfile || !deps.routedContextSnapshots) {
+        throw new Error(`Durable Chat turn ${prepared.turnId} has an incomplete routed-context admission bundle.`);
+      }
+      routedContextSnapshot = rebindChatRoutedContextSnapshot(provisionalRoutedContextSnapshot, {
+        profileId: prepared.capabilityProfile.profileId,
+        profileHash: prepared.capabilityProfile.hashes.profileHash,
+      });
+      assertPreparedRoutedContextSnapshotBinding(prepared, routedContextSnapshot);
+      routedContextSnapshot = deps.routedContextSnapshots.create(routedContextSnapshot);
+      verifyChatRoutedContextSnapshot(routedContextSnapshot);
+      assertPreparedRoutedContextSnapshotBinding(prepared, routedContextSnapshot);
+      writePreparedRoutedContextSnapshot(prepared, routedContextSnapshot);
+    }
+    const durablePayload = buildDurableRoutedContextPayload(
+      deps.buildDurablePayloadRecord(prepared, input, threadEventType),
+      routedContextSnapshot,
+    );
+    run = deps.createDurableRun({
+      runId,
+      workflowKey: "chat.turn.execute",
+      payload: durablePayload,
+      metadata: {
+        surface: mode,
+        autoPromoted: mode === "chat",
+        objective: prepared.content,
+        ...(prepared.capabilityProfile
+          ? {
+              capabilityProfileId: prepared.capabilityProfile.profileId,
+              capabilityProfileHash: prepared.capabilityProfile.hashes.profileHash,
+            }
+          : {}),
+      },
+    });
+    if (deps.chatTurnTraces) {
+      persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
+    }
+    beforeStreamPersist?.();
+    deps.persistChatStreamChunk(
+      {
+        type: "message_start",
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        messageId: prepared.assistantMessageId,
+        parentTurnId: prepared.parentTurnId,
+        branchKind: prepared.branchKind,
+        sourceTurnId: prepared.sourceTurnId,
+      },
+      run.runId,
+    );
+  };
+  if (deps.runImmediateTransaction) {
+    deps.runImmediateTransaction(admit);
+    options?.mutationLifecycle?.markCommitted();
+  } else {
+    // Compatibility for legacy/profile-less hosts: durable creation itself is
+    // already committed before the first stream chunk is attempted.
+    admit(() => options?.mutationLifecycle?.markCommitted());
+  }
+  deps.onDurableRunCommitted?.(run);
   deps.requestDurableRunProcessing(run.runId);
   return run;
+}
+
+type PreparedAgentChatTurnWithRoutedContext = PreparedAgentChatTurn & {
+  routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
+};
+
+function hasOwnRoutedContextRefs(input: ChatSendMessageRequest): boolean {
+  const request = input as ChatSendMessageRequest & { contextRefs?: unknown };
+  return Object.prototype.hasOwnProperty.call(request, "contextRefs") && request.contextRefs !== undefined;
+}
+
+function readPreparedRoutedContextSnapshot(
+  prepared: PreparedAgentChatTurn,
+): ChatRoutedContextSnapshotRecord | undefined {
+  const snapshot = (prepared as PreparedAgentChatTurnWithRoutedContext).routedContextSnapshot;
+  if (!snapshot) {
+    return undefined;
+  }
+  verifyChatRoutedContextSnapshot(snapshot);
+  return snapshot;
+}
+
+function writePreparedRoutedContextSnapshot(
+  prepared: PreparedAgentChatTurn,
+  snapshot: ChatRoutedContextSnapshotRecord,
+): void {
+  (prepared as PreparedAgentChatTurnWithRoutedContext).routedContextSnapshot = snapshot;
+}
+
+function assertPreparedRoutedContextSnapshotBinding(
+  prepared: PreparedAgentChatTurn,
+  snapshot: ChatRoutedContextSnapshotRecord,
+): void {
+  const profile = prepared.capabilityProfile;
+  if (
+    !profile ||
+    snapshot.turnId !== prepared.turnId ||
+    snapshot.sessionId !== prepared.session.sessionId ||
+    snapshot.workspaceId !== prepared.workspaceId ||
+    snapshot.capabilityProfileId !== profile.profileId ||
+    snapshot.capabilityProfileHash !== profile.hashes.profileHash ||
+    snapshot.budget.effectiveProviderId !== profile.selection.effectiveProviderId ||
+    snapshot.budget.effectiveModel !== profile.selection.effectiveModel
+  ) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} has a mismatched routed-context snapshot.`);
+  }
+}
+
+function buildDurableRoutedContextPayload(
+  payload: Record<string, unknown>,
+  snapshot: ChatRoutedContextSnapshotRecord | undefined,
+): Record<string, unknown> {
+  if (!snapshot) {
+    return payload;
+  }
+  if (!payload.request || typeof payload.request !== "object" || Array.isArray(payload.request)) {
+    throw new Error(`Durable Chat turn ${snapshot.turnId} produced a malformed routed-context payload.`);
+  }
+  const { contextRefs: _requestContextRefs, ...request } = payload.request as Record<string, unknown>;
+  const { contextRefs: _topLevelContextRefs, ...withoutTopLevelRefs } = payload;
+  const sanitized = {
+    ...withoutTopLevelRefs,
+    request,
+    routedContextSnapshotId: snapshot.snapshotId,
+    routedContextSnapshotHash: snapshot.snapshotHash,
+  };
+  assertDurablePayloadContainsNoRawRoutedContext(sanitized, snapshot.turnId);
+  return sanitized;
+}
+
+function assertDurablePayloadContainsNoRawRoutedContext(payload: Record<string, unknown>, turnId: string): void {
+  const forbiddenKeys = new Set([
+    "contextrefs",
+    "routedcontext",
+    "routedcontextsnapshot",
+    "routedcontextsources",
+    "resolvedroutedcontextsources",
+    "routedcontextentries",
+    "routedcontexttext",
+    "admittedtext",
+    "sourcecontent",
+  ]);
+  const visit = (value: unknown): boolean => {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.some(visit);
+    }
+    return Object.entries(value as Record<string, unknown>).some(
+      ([key, nested]) => forbiddenKeys.has(key.toLowerCase()) || visit(nested),
+    );
+  };
+  if (visit(payload)) {
+    throw new Error(`Durable Chat turn ${turnId} payload contains raw routed-context evidence.`);
+  }
 }
 
 /**
@@ -323,6 +528,45 @@ export function persistInitialDurableChatTurnTrace(
   persistInitialChatTurnTrace(deps, prepared, input, run);
 }
 
+/** Persist the immutable capability evidence before any provider/tool execution. */
+export function persistPreparedChatCapabilityAdmission(
+  deps: {
+    capabilityCatalogSnapshots: Pick<Storage["capabilityCatalogSnapshots"], "create">;
+    chatTurnCapabilityProfiles: Pick<Storage["chatTurnCapabilityProfiles"], "create">;
+    skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
+  },
+  prepared: PreparedAgentChatTurn,
+): void {
+  if (Boolean(prepared.capabilityProfile) !== Boolean(prepared.capabilityCatalogSnapshot)) {
+    throw new Error(`Chat turn ${prepared.turnId} has an incomplete capability admission bundle.`);
+  }
+  if (!prepared.capabilityProfile) {
+    return;
+  }
+  if (!prepared.capabilityCatalogSnapshot) {
+    throw new Error(`Chat turn ${prepared.turnId} has an incomplete capability admission bundle.`);
+  }
+  assertPreparedChatCapabilityAdmissionBindings(deps, prepared);
+  prepared.capabilityCatalogSnapshot = deps.capabilityCatalogSnapshots.create(prepared.capabilityCatalogSnapshot);
+  prepared.capabilityProfile = deps.chatTurnCapabilityProfiles.create(prepared.capabilityProfile);
+}
+
+function assertPreparedChatCapabilityAdmissionBindings(
+  deps: {
+    skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
+  },
+  prepared: PreparedAgentChatTurn,
+): void {
+  if (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot) {
+    return;
+  }
+  verifyChatTurnCapabilityCatalogBinding(prepared.capabilityProfile, prepared.capabilityCatalogSnapshot);
+  if (prepared.capabilityProfile.selection.trustedSkills.length > 0 && !deps.skillLifecycle) {
+    throw new Error(`Chat turn ${prepared.turnId} cannot verify its trusted skill lifecycle bindings.`);
+  }
+  verifyChatTurnCapabilitySkillBindings(prepared.capabilityProfile, deps.skillLifecycle?.list() ?? []);
+}
+
 /**
  * Persist the initial running trace that makes a streamed turn durable enough
  * for cancellation/idempotency ownership before its first SSE payload.
@@ -333,8 +577,10 @@ export function persistInitialChatTurnTrace(
   input: ChatSendMessageRequest,
   run?: DurableRunRecord,
 ): void {
+  const routedContextSnapshot = readPreparedRoutedContextSnapshot(prepared);
   try {
-    deps.chatTurnTraces.get(prepared.turnId);
+    const existing = deps.chatTurnTraces.get(prepared.turnId);
+    assertTraceRoutedContextBinding(existing, routedContextSnapshot);
     return;
   } catch (error) {
     if (!(error instanceof NotFoundError)) {
@@ -350,18 +596,24 @@ export function persistInitialChatTurnTrace(
     sourceTurnId: prepared.sourceTurnId,
     status: "running",
     mode: resolvePreparedTurnMode(prepared),
-    model: input.model ?? prepared.prefs.model,
+    model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
     webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
     memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
     thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
     speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
     subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
     effectiveToolAutonomy: prepared.effectiveToolAutonomy,
+    capabilitySnapshotId: prepared.capabilityProfile?.catalog.snapshotId,
+    capabilityProfileId: prepared.capabilityProfile?.profileId,
+    capabilityProfileHash: prepared.capabilityProfile?.hashes.profileHash,
     routing: {
-      primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-      primaryModel: input.model ?? prepared.prefs.model,
-      effectiveProviderId: input.providerId ?? prepared.prefs.providerId,
-      effectiveModel: input.model ?? prepared.prefs.model,
+      primaryProviderId:
+        prepared.capabilityProfile?.selection.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
+      primaryModel: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+      effectiveProviderId:
+        prepared.capabilityProfile?.selection.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
+      effectiveModel: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+      ...(routedContextSnapshot ? { routedContext: buildRoutedContextBindingReceipt(routedContextSnapshot) } : {}),
       modelRouter: prepared.modelRouterDecision,
     },
     ...(run
@@ -373,6 +625,38 @@ export function persistInitialChatTurnTrace(
         }
       : {}),
   });
+}
+
+function buildRoutedContextBindingReceipt(snapshot: ChatRoutedContextSnapshotRecord) {
+  return {
+    snapshotId: snapshot.snapshotId,
+    snapshotHash: snapshot.snapshotHash,
+    sourceRequestHash: snapshot.sourceRequestHash,
+    contentHash: snapshot.contentHash,
+  };
+}
+
+function assertTraceRoutedContextBinding(
+  trace: ChatTurnTraceRecord,
+  snapshot: ChatRoutedContextSnapshotRecord | undefined,
+): void {
+  const binding = trace.routing.routedContext;
+  if (!snapshot) {
+    if (binding) {
+      throw new Error(`Chat turn ${trace.turnId} has stale routed-context trace evidence.`);
+    }
+    return;
+  }
+  const expected = buildRoutedContextBindingReceipt(snapshot);
+  if (
+    !binding ||
+    binding.snapshotId !== expected.snapshotId ||
+    binding.snapshotHash !== expected.snapshotHash ||
+    binding.sourceRequestHash !== expected.sourceRequestHash ||
+    binding.contentHash !== expected.contentHash
+  ) {
+    throw new Error(`Chat turn ${trace.turnId} has a mismatched routed-context trace binding.`);
+  }
 }
 
 /** Patch a chat-turn trace, tolerating a trace that was never created for the turn. */

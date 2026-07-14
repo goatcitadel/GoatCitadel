@@ -6,7 +6,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { renderDoctorReport, runDoctor as runSharedDoctor } from "../doctor/engine.js";
 import { loadLocalEnvFile } from "../env-file.js";
-import { TuiApiClient } from "./api-client.js";
+import { TuiApiClient, isTuiApiRequestError } from "./api-client.js";
 import { TuiLiveFeed } from "./live-feed.js";
 import {
   HOME_VIEW_CHOICES,
@@ -406,7 +406,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
         { name: "off", value: "off" },
       ],
     });
-    const thinkingLevel = await select<"off" | "minimal" | "standard" | "extended" | "deep">({
+    const thinkingLevel = await select<"off" | "minimal" | "standard" | "extended" | "deep" | "max" | "ultra">({
       message: "Thinking level",
       choices: [
         { name: "off", value: "off" },
@@ -414,6 +414,8 @@ async function viewChat(client: TuiApiClient): Promise<void> {
         { name: "standard", value: "standard" },
         { name: "extended", value: "extended" },
         { name: "deep", value: "deep" },
+        { name: "max (supported models only)", value: "max" },
+        { name: "ultra (supported models only)", value: "ultra" },
       ],
     });
     const speedMode = await select<"standard" | "fast">({
@@ -487,7 +489,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
   let mode: "chat" | "cowork" | "code" = "chat";
   let webMode: "auto" | "off" | "quick" | "deep" = "auto";
   let memoryMode: "auto" | "on" | "off" = "auto";
-  let thinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep" = "standard";
+  let thinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep" | "max" | "ultra" = "standard";
   let speedMode: "standard" | "fast" = "standard";
   let subagentPolicy: "off" | "ask_when_useful" | "auto_when_useful" = "ask_when_useful";
   let agentMode = true;
@@ -533,7 +535,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
         { name: "off", value: "off" },
       ],
     });
-    thinkingLevel = await select<"off" | "minimal" | "standard" | "extended" | "deep">({
+    thinkingLevel = await select<"off" | "minimal" | "standard" | "extended" | "deep" | "max" | "ultra">({
       message: "Thinking level",
       choices: [
         { name: "off", value: "off" },
@@ -541,6 +543,8 @@ async function viewChat(client: TuiApiClient): Promise<void> {
         { name: "standard", value: "standard" },
         { name: "extended", value: "extended" },
         { name: "deep", value: "deep" },
+        { name: "max (supported models only)", value: "max" },
+        { name: "ultra (supported models only)", value: "ultra" },
       ],
     });
     speedMode = await select<"standard" | "fast">({
@@ -1210,14 +1214,21 @@ async function viewCron(client: TuiApiClient): Promise<void> {
   if (!confirmed) {
     return;
   }
-  const result =
-    action === "run"
-      ? await client.runCronJob(jobId)
-      : action === "start"
-        ? await client.startCronJob(jobId)
+  let result: Record<string, unknown>;
+  if (action === "run") {
+    result = await client.runCronJob(jobId);
+  } else {
+    const revision = jobs.items.find((job) => job.jobId === jobId)?.revision;
+    if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) {
+      throw new Error(`Cron job ${jobId} is missing a positive revision; refresh the cron list and retry.`);
+    }
+    result =
+      action === "start"
+        ? await client.startCronJob(jobId, revision)
         : action === "pause"
-          ? await client.pauseCronJob(jobId)
-          : await client.deleteCronJob(jobId);
+          ? await client.pauseCronJob(jobId, revision)
+          : await client.deleteCronJob(jobId, revision);
+  }
   console.log(JSON.stringify(result, null, 2));
   await pause();
 }
@@ -1671,6 +1682,11 @@ async function viewTasks(client: TuiApiClient): Promise<void> {
   }
 
   if (action === "update") {
+    const currentTask = items.find((task) => String(task.taskId ?? "") === taskId.trim());
+    const expectedRevision = Number(currentTask?.revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      throw new Error(`Task ${taskId.trim()} is not in the current canonical task list. Refresh and try again.`);
+    }
     const status = await select({
       message: "New status",
       choices: [
@@ -1691,7 +1707,7 @@ async function viewTasks(client: TuiApiClient): Promise<void> {
     if (!confirmed) {
       return;
     }
-    await client.updateTask(taskId.trim(), { status });
+    await client.updateTask(taskId.trim(), { expectedRevision, status });
     console.log("Task updated.");
     await pause();
     return;
@@ -2207,6 +2223,7 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
       return;
     }
     const result = await client.onboardingBootstrap({
+      expectedRevision: state.settings.revision,
       toolApprovalMode,
       budgetMode,
       markComplete: false,
@@ -2257,7 +2274,7 @@ async function viewSettings(client: TuiApiClient, profilePath: string, profileNa
     if (!confirmed) {
       return;
     }
-    await client.patchRuntimeSettings({ budgetMode });
+    await client.patchRuntimeSettings({ expectedRevision: settings.revision, budgetMode });
     console.log("Budget mode updated.");
     await pause();
     return;
@@ -2276,7 +2293,7 @@ async function viewSettings(client: TuiApiClient, profilePath: string, profileNa
     if (!confirmed) {
       return;
     }
-    await client.patchRuntimeSettings({ toolApprovalMode });
+    await client.patchRuntimeSettings({ expectedRevision: settings.revision, toolApprovalMode });
     console.log("Tool approval mode updated.");
     await pause();
     return;
@@ -2402,12 +2419,42 @@ async function handleCapabilitySuggestions(
       console.log(renderBox("Cannot enable", ["The installed skill ID is missing from this suggestion."], "danger"));
       return;
     }
-    const updated = await client.updateSkillState(suggestion.candidateId, {
-      state: "enabled",
-      note: "Enabled from TUI capability suggestion.",
-    });
-    console.log(renderBox("Skill enabled", [`Skill ID: ${updated.skillId}`, "Retry your request now."], "success"));
-    return;
+    const canonicalSkills = await client.listSkills();
+    const expectedRevision = canonicalSkills.items.find((item) => item.skillId === suggestion.candidateId)?.revision;
+    if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new Error(
+        `Skill ${suggestion.candidateId} is missing a positive canonical revision; refresh the skill list and retry explicitly.`,
+      );
+    }
+    try {
+      const updated = await client.updateSkillState(suggestion.candidateId, {
+        expectedRevision,
+        state: "enabled",
+        note: "Enabled from TUI capability suggestion.",
+      });
+      console.log(renderBox("Skill enabled", [`Skill ID: ${updated.skillId}`, "Retry your request now."], "success"));
+      return;
+    } catch (error) {
+      if (!isTuiSkillWriteConflict(error)) {
+        throw error;
+      }
+      const refreshedSkills = await client.listSkills();
+      const refreshed = refreshedSkills.items.find((item) => item.skillId === suggestion.candidateId);
+      console.log(
+        renderBox(
+          "Skill changed before enable",
+          [
+            `Enable intent preserved for ${suggestion.candidateId}.`,
+            refreshed && typeof refreshed.revision === "number"
+              ? `Canonical revision is now ${refreshed.revision}.`
+              : "The skill is no longer present in the canonical skill list.",
+            "No update was replayed. Choose Enable skill now again explicitly after reviewing the refreshed state.",
+          ],
+          "warning",
+        ),
+      );
+      return;
+    }
   }
 
   if (next === "install") {
@@ -2512,6 +2559,13 @@ async function handleCapabilitySuggestions(
       ),
     );
   }
+}
+
+function isTuiSkillWriteConflict(error: unknown): boolean {
+  if (!isTuiApiRequestError(error) || error.status !== 409) {
+    return false;
+  }
+  return asRecord(error.body)?.code === "WRITE_CONFLICT";
 }
 
 function isCodeSessionLike(session: Record<string, unknown>): boolean {

@@ -6,18 +6,27 @@ import type {
   ChatSessionCreateInput,
   ChatSessionRecord,
   LlmRuntimeConfig,
+  ModelUsageAttributionContext,
   RealtimeEvent,
   WorkspaceCreateInput,
   WorkspaceRecord,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import type { AcquireLocalEmbeddingLease } from "@goatcitadel/policy-engine";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 
 export interface DevVerificationRouteDependencies {
   readonly storage: Storage;
+  readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
-  createChatCompletion(input: ChatCompletionRequest): Promise<ChatCompletionResponse>;
-  createChatCompletionStream(input: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>>;
+  createChatCompletion(
+    input: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
+  createChatCompletionStream(
+    input: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): AsyncGenerator<Record<string, unknown>>;
   createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
   createWorkspace(input: WorkspaceCreateInput): WorkspaceRecord;
   getLlmConfig(): LlmRuntimeConfig;
@@ -41,21 +50,23 @@ export interface DevVerificationRouteDependencies {
 
 export class DevVerificationRouteService {
   public readonly storage: Storage;
+  public readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
 
   public constructor(private readonly deps: DevVerificationRouteDependencies) {
     this.storage = deps.storage;
+    this.acquireLocalEmbeddingLease = deps.acquireLocalEmbeddingLease;
   }
 
   public createApproval(input: ApprovalCreateInput) {
     return this.deps.createApproval(input);
   }
 
-  public createChatCompletion(input: ChatCompletionRequest) {
-    return this.deps.createChatCompletion(input);
+  public createChatCompletion(input: ChatCompletionRequest, attribution: ModelUsageAttributionContext) {
+    return this.deps.createChatCompletion(input, attribution);
   }
 
-  public createChatCompletionStream(input: ChatCompletionRequest) {
-    return this.deps.createChatCompletionStream(input);
+  public createChatCompletionStream(input: ChatCompletionRequest, attribution: ModelUsageAttributionContext) {
+    return this.deps.createChatCompletionStream(input, attribution);
   }
 
   public createChatSession(input: ChatSessionCreateInput) {

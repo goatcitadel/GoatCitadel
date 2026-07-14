@@ -7,6 +7,12 @@ const allowlist = new Set([
   "apps/gateway/src/services/memory-item-helpers.ts",
   "apps/gateway/src/services/memory-lifecycle-service.ts",
 ]);
+const contentFreeProvenanceConstants = new Map([
+  [
+    "apps/gateway/src/services/memory-journey-producer.ts",
+    new Set(['const MEMORY_HISTORY_PROVENANCE_OWNER = "memory_change_history" as const;']),
+  ],
+]);
 
 const files = await collectFiles(servicesRoot);
 const hits = [];
@@ -24,14 +30,16 @@ for (const filePath of files) {
       file: relPath,
       line: index + 1,
       text: line.trim(),
-      allowlisted: allowlist.has(relPath),
+      allowlisted: allowlist.has(relPath) || contentFreeProvenanceConstants.get(relPath)?.has(line.trim()) === true,
     });
   }
 }
 
 const blockingHits = hits.filter((hit) => !hit.allowlisted);
 if (blockingHits.length > 0) {
-  console.error(`[check:memory-ownership] found ${blockingHits.length} non-allowlisted memory SQL ownership references.`);
+  console.error(
+    `[check:memory-ownership] found ${blockingHits.length} non-allowlisted memory SQL ownership references.`,
+  );
   for (const hit of blockingHits) {
     console.error(`  - ${hit.file}:${hit.line} ${hit.text}`);
   }

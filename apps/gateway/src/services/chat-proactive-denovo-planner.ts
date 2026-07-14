@@ -1,10 +1,15 @@
+import { createHash } from "node:crypto";
 import type {
   AgentCommitmentRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
   LlmApiStyle,
+  ModelUsageAttributionContext,
   TaskRecord,
 } from "@goatcitadel/contracts";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { runBoundedUtilityModelCall } from "./utility-model-call.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 /**
  * De-novo origination planner (P1-F5).
@@ -52,7 +57,10 @@ export interface DeNovoPlanContext {
 
 export interface DeNovoPlannerModelDeps {
   /** Cheap, read-only model call (the same judge/explainer chokepoint as F3). */
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   /** Cheap-model defaults (mirrors the explainer judge-model resolution). */
   resolveModelDefaults(): { providerId?: string; model?: string };
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
@@ -60,6 +68,8 @@ export interface DeNovoPlannerModelDeps {
   /** Abort signal so a slow plan never outlives its tick. */
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Server-owned durable/proactive lineage supplied by the runtime owner. */
+  modelUsageAttribution?: ModelUsageAttributionContext;
 }
 
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -128,12 +138,17 @@ export async function planDeNovoActions(
 
   let response: ChatCompletionResponse;
   try {
-    response = await withTimeout(
-      deps.createChatCompletion(request),
-      deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      "de-novo planner timed out",
-    );
-  } catch {
+    const attribution = deps.modelUsageAttribution ?? buildStandaloneDeNovoAttribution(context, request);
+    response = await runBoundedUtilityModelCall({
+      timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMessage: "de-novo planner timed out",
+      parentSignal: deps.signal,
+      start: (boundedSignal) => deps.createChatCompletion({ ...request, signal: boundedSignal }, attribution),
+    });
+  } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     // Hidden best-effort pass: a planner failure never surfaces — just no action.
     return { confidence: 0.1, reasoningSummary: "De-novo planner unavailable.", actions: [] };
   }
@@ -143,6 +158,29 @@ export async function planDeNovoActions(
     return { confidence: 0.1, reasoningSummary: "De-novo planner returned no content.", actions: [] };
   }
   return parsePlan(content);
+}
+
+function buildStandaloneDeNovoAttribution(
+  context: DeNovoPlanContext,
+  request: ChatCompletionRequest,
+): ModelUsageAttributionContext {
+  const contextFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        commitmentIds: context.commitments.map((item) => item.commitmentId),
+        openTaskId: context.openTask?.taskId,
+        recentAssistantText: context.recentAssistantText,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 32);
+  return createUtilityModelUsageAttribution({
+    operationId: `proactive-denovo:${contextFingerprint}`,
+    utilityKind: "proactive_denovo_planning",
+    requestedProviderId: request.providerId,
+    requestedModelId: request.model,
+    lineage: { agentId: "proactive-planner" },
+  });
 }
 
 // ── prompt builders ──────────────────────────────────────────────────
@@ -302,20 +340,6 @@ function extractMessageContent(response: ChatCompletionResponse): string {
       .join("\n");
   }
   return "";
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
 }
 
 function truncate(value: string, maxLength: number): string {

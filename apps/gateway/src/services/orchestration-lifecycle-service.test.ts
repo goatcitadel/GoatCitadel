@@ -283,6 +283,7 @@ function createRuntimeDeps(overrides: RuntimeDepsOverrides = {}): OrchestrationL
         worktreeBaseRef: "HEAD",
       })),
       release: vi.fn(async () => undefined),
+      ensureLeaseForExecution: vi.fn((run) => run),
       ...overrides.worktrees,
     },
     phaseExecutor: {
@@ -354,7 +355,18 @@ function createRaceStore(): {
 describe("orchestration-lifecycle-service", () => {
   it("creates a run with durable and worktree ownership", async () => {
     const host = createHost();
-    const runtime = createRuntimeDeps();
+    const runtime = createRuntimeDeps({
+      worktrees: {
+        allocate: vi.fn(async () => ({
+          worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          worktreeStatus: "ready" as const,
+          worktreeBaseRef: "HEAD",
+          worktreeLeaseOwnerId: "gateway-owner-1",
+          worktreeLeaseGeneration: 4,
+          worktreeLeaseExpiresAt: "2026-04-12T00:05:00.000Z",
+        })),
+      },
+    });
     const plan = buildPlan();
 
     const result = await createOrchestrationPlan(host, runtime, plan, {
@@ -374,6 +386,9 @@ describe("orchestration-lifecycle-service", () => {
       authActorSource: "loopback",
       permissionProfileId: "trusted-local-power",
       localOperatorOverrideId: "override-1",
+      worktreeLeaseOwnerId: "gateway-owner-1",
+      worktreeLeaseGeneration: 4,
+      worktreeLeaseExpiresAt: "2026-04-12T00:05:00.000Z",
     });
     expect(host.storage.orchestration.upsertPlan).toHaveBeenCalledWith(plan, "default");
     expect(host.storage.orchestration.createRun).toHaveBeenCalledWith(
@@ -1160,6 +1175,186 @@ describe("orchestration-lifecycle-service", () => {
       }),
     );
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));
+  });
+
+  it("adopts a restarted worktree generation before phase execution and commits under the new fence", async () => {
+    let currentRun: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      worktreeLeaseOwnerId: "gateway-before-restart",
+      worktreeLeaseGeneration: 1,
+      worktreeLeaseExpiresAt: "2026-04-12T00:00:01.000Z",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        ...base.storage,
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => currentRun),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            currentRun = value;
+            return value;
+          }),
+        },
+      },
+    });
+    const ensureLeaseForExecution = vi.fn((run: OrchestrationRun) => {
+      currentRun = {
+        ...run,
+        worktreeLeaseOwnerId: "gateway-after-restart",
+        worktreeLeaseGeneration: 2,
+        worktreeLeaseExpiresAt: "2026-04-12T00:05:00.000Z",
+      };
+      return currentRun;
+    });
+    const execute = vi.fn(async () => ({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "completed" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:02.000Z",
+      outputSummary: "completed under generation 2",
+      outputText: "completed under generation 2",
+      costUsd: 0.5,
+    }));
+    const runtime = createRuntimeDeps({
+      worktrees: { ensureLeaseForExecution },
+      phaseExecutor: { execute },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("paused");
+    expect(ensureLeaseForExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreeLeaseOwnerId: "gateway-before-restart",
+        worktreeLeaseGeneration: 1,
+      }),
+    );
+    expect(ensureLeaseForExecution.mock.invocationCallOrder[0]).toBeLessThan(execute.mock.invocationCallOrder[0]!);
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run: expect.objectContaining({
+          worktreeLeaseOwnerId: "gateway-after-restart",
+          worktreeLeaseGeneration: 2,
+        }),
+      }),
+    );
+    expect(currentRun).toMatchObject({
+      worktreeLeaseOwnerId: "gateway-after-restart",
+      worktreeLeaseGeneration: 2,
+    });
+  });
+
+  it("does not invoke the phase executor while the pre-restart worktree lease is still active", async () => {
+    const base = createHost();
+    const activeRun: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      worktreeLeaseOwnerId: "gateway-before-restart",
+      worktreeLeaseGeneration: 1,
+      worktreeLeaseExpiresAt: "2026-04-12T00:05:00.000Z",
+    };
+    const host = createHost({
+      storage: {
+        ...base.storage,
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => activeRun),
+        },
+      },
+    });
+    const execute = vi.fn();
+    const leaseBlocked = new Error("worktree remains owned by the pre-restart gateway");
+    leaseBlocked.name = "DurableWorkerInterruptionError";
+    const runtime = createRuntimeDeps({
+      worktrees: {
+        ensureLeaseForExecution: vi.fn(() => {
+          throw leaseBlocked;
+        }),
+      },
+      phaseExecutor: { execute },
+    });
+
+    await expect(executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"))).rejects.toBe(
+      leaseBlocked,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale phase commit after a restarted owner adopts a newer generation", async () => {
+    let currentRun: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      worktreeLeaseOwnerId: "gateway-owner-1",
+      worktreeLeaseGeneration: 4,
+      worktreeLeaseExpiresAt: "2026-04-12T00:05:00.000Z",
+    };
+    const base = createHost();
+    const updateRun = vi.fn((value: OrchestrationRun) => {
+      currentRun = value;
+      return value;
+    });
+    const host = createHost({
+      storage: {
+        ...base.storage,
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => currentRun),
+          updateRun,
+        },
+      },
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => {
+          currentRun = {
+            ...currentRun,
+            status: "running",
+            executionState: "running",
+            worktreeStatus: "ready",
+            worktreeLeaseOwnerId: "gateway-owner-2",
+            worktreeLeaseGeneration: 5,
+            worktreeLeaseExpiresAt: "2026-04-12T00:05:00.000Z",
+          };
+          return {
+            phaseId: "phase-1",
+            ownerAgentId: "agent-1",
+            status: "completed" as const,
+            startedAt: "2026-04-12T00:00:01.000Z",
+            finishedAt: "2026-04-12T00:00:02.000Z",
+            outputSummary: "stale completion",
+            outputText: "stale completion",
+            costUsd: 0.5,
+          };
+        }),
+      },
+    });
+
+    await expect(
+      executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1")),
+    ).rejects.toMatchObject({
+      name: "DurableWorkerInterruptionError",
+      message: expect.stringContaining("lost worktree owner gateway-owner-1 generation 4"),
+    });
+    expect(currentRun).toMatchObject({
+      status: "running",
+      executionState: "running",
+      worktreeStatus: "ready",
+      worktreeLeaseOwnerId: "gateway-owner-2",
+      worktreeLeaseGeneration: 5,
+    });
+    expect(updateRun).toHaveBeenCalledTimes(1);
   });
 
   it("records durable execution checkpoints and run events in lifecycle order", async () => {

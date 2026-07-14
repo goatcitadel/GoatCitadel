@@ -13,6 +13,7 @@ import {
   type DurableRunServiceLogger,
 } from "./durable-run-service.js";
 import { GENERAL_CHAT_POST_COMMIT_EFFECTS, type GeneralChatPostCommitProgress } from "./chat-durable-run-service.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 describe("DurableRunService", () => {
   it("applies the workflow timeout to Cowork chat turn runs as a watchdog", () => {
@@ -374,6 +375,133 @@ describe("DurableRunService", () => {
     expect(runs.get("run-1")?.lastError).toBeUndefined();
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
+
+  it("does not claim queued worker work after shared-host pause closes admission", async () => {
+    const run = createRun("run-paused-before-claim", "queued");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn();
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" });
+    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: lifecycle,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+    try {
+      service.startWorker();
+      await Promise.allSettled([...backgroundTasks]);
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(runs.get(run.runId)).toMatchObject({ status: "queued", leaseOwnerId: undefined });
+      expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeByKind: { worker: 0 } });
+    } finally {
+      service.stopWorker();
+    }
+  });
+
+  it("force-drains an active durable worker and resumes its preserved lease after restart", async () => {
+    const run = createRun("run-force-drain-resume", "queued");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const firstTasks = new Set<Promise<void>>();
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    let executionStarted!: () => void;
+    const executionStartedPromise = new Promise<void>((resolve) => (executionStarted = resolve));
+    const firstExecute = vi.fn(async (_run: DurableRunRecord, context: { signal: AbortSignal }) => {
+      executionStarted();
+      await new Promise<void>((_resolve, reject) => {
+        context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+      });
+    });
+    const first = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+      backgroundTasks: firstTasks,
+      sharedHostLifecycle: lifecycle,
+      workflowRegistry: {
+        executeWorkflow: firstExecute,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+    try {
+      first.startWorker();
+      await executionStartedPromise;
+      expect(runs.get(run.runId)).toMatchObject({ status: "running", leaseOwnerId: expect.any(String) });
+
+      await expect(
+        lifecycle.drain({ mode: "force", timeoutMs: 10, reason: "terminate", actorId: "ops" }),
+      ).resolves.toMatchObject({ outcome: "closing" });
+      await Promise.allSettled([...firstTasks]);
+      expect(runs.get(run.runId)).toMatchObject({ status: "running", leaseOwnerId: expect.any(String) });
+    } finally {
+      first.stopWorker();
+    }
+
+    const interrupted = runs.get(run.runId);
+    if (!interrupted) throw new Error("interrupted durable run disappeared");
+    runs.set(run.runId, {
+      ...interrupted,
+      leaseHeartbeatAt: "2026-03-14T00:00:00.000Z",
+      leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+    });
+    const secondTasks = new Set<Promise<void>>();
+    const secondExecute = vi.fn(async (resumed: DurableRunRecord) => {
+      updateRun(runs, resumed.runId, { status: "completed", finishedAt: "2026-03-14T00:00:05.000Z" });
+    });
+    const second = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+      backgroundTasks: secondTasks,
+      workflowRegistry: {
+        executeWorkflow: secondExecute,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+    second.startWorker();
+    await Promise.allSettled([...secondTasks]);
+    second.stopWorker();
+
+    expect(secondExecute).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)).toMatchObject({ status: "completed" });
+  });
+
+  it("leaves approval-blocked durable work parked while pause reaches quiescence", async () => {
+    const waiting = {
+      ...createRun("run-waiting-on-approval-during-drain", "waiting"),
+      metadata: { waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-1" } },
+    };
+    const runs = new Map<string, DurableRunRecord>([[waiting.runId, waiting]]);
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn();
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: lifecycle,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+    try {
+      service.startWorker();
+      await Promise.allSettled([...backgroundTasks]);
+      await expect(
+        lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" }),
+      ).resolves.toMatchObject({ outcome: "quiesced" });
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(runs.get(waiting.runId)).toMatchObject({
+        status: "waiting",
+        metadata: { waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-1" } },
+      });
+    } finally {
+      service.stopWorker();
+    }
   });
 
   it("recovers a database-expired lease even when the worker clock is slow", async () => {

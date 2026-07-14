@@ -30,6 +30,22 @@ export const reviewReadinessRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/review/identity", operatorOnly, async (request, reply) => {
+    try {
+      return reply.send(fastify.gatewayRuntime.reviewReadinessService.getRuntimeIdentity());
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/review/readiness/runtime-release/refresh", operatorOnly, async (request, reply) => {
+    try {
+      return reply.send(await fastify.gatewayRuntime.reviewReadinessService.refreshRuntimeReleaseTrust());
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.post("/api/v1/review/findings/import", operatorOnly, async (request, reply) => {
     try {
       const body = importFindingsSchema.parse(request.body);

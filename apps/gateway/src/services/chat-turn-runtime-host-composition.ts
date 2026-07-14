@@ -72,6 +72,7 @@ function composeSessionPreparation(
   | "prepareAgentChatTurn"
   | "recordRuntimeDecision"
   | "resolveBasePromptCapabilityCatalog"
+  | "resolveChatRoutedContextSources"
   | "resolveRuntimeGuidance"
   | "resolveThreadKnowledgeContext"
   | "routeFromSession"
@@ -99,6 +100,7 @@ function composeSessionPreparation(
     resolveBasePromptCapabilityCatalog: source.resolveBasePromptCapabilityCatalog
       ? () => source.resolveBasePromptCapabilityCatalog?.() ?? { toolNames: [] }
       : undefined,
+    resolveChatRoutedContextSources: (input) => source.resolveChatRoutedContextSources(input),
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
     resolveThreadKnowledgeContext: (sessionId, query) => source.resolveThreadKnowledgeContext(sessionId, query),
     routeFromSession: (session) => source.routeFromSession(session),
@@ -204,6 +206,7 @@ function composeRoutingAndPlanning(
   | "collectCapabilityUpgradeSuggestions"
   | "collectSpecialistCandidateSuggestions"
   | "createChatCompletion"
+  | "executeChatModelCouncil"
   | "listLlmModels"
   | "recordDevDiagnostic"
   | "resolveFallbackTargets"
@@ -214,7 +217,13 @@ function composeRoutingAndPlanning(
     buildChatOrchestrationSummary: (input) => source.buildChatOrchestrationSummary(input),
     collectCapabilityUpgradeSuggestions: (input) => source.collectCapabilityUpgradeSuggestions(input),
     collectSpecialistCandidateSuggestions: (input) => source.collectSpecialistCandidateSuggestions(input),
-    createChatCompletion: (request) => source.createChatCompletion(request),
+    createChatCompletion: (request, attribution) => source.createChatCompletion(request, attribution),
+    executeChatModelCouncil: source.executeChatModelCouncil
+      ? (prepared, signal) =>
+          source.executeChatModelCouncil?.(prepared, signal) as ReturnType<
+            NonNullable<ChatTurnRuntimeHost["executeChatModelCouncil"]>
+          >
+      : undefined,
     listLlmModels: source.listLlmModels
       ? (providerId) => source.listLlmModels?.(providerId) ?? Promise.resolve([])
       : undefined,

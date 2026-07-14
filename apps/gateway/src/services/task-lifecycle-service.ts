@@ -39,7 +39,7 @@ const AGENTIC_CONTROL_IDEMPOTENCY_ROUTE = "/internal/agentic-controls";
 const AGENTIC_RUNTIME_CONTROL_CLAIM_LEASE_MS = 60_000;
 
 type BulkTaskRevisionGuard = {
-  expectedUpdatedAtByTaskId?: Record<string, string>;
+  expectedRevisionsByTaskId: Record<string, number>;
 };
 
 export type BulkTaskAction = BulkTaskRevisionGuard &
@@ -142,10 +142,14 @@ export class TaskLifecycleService {
     input: { status: TaskStatus; agenticContext: Partial<AgenticTaskContext> },
   ): TaskRecord {
     const current = this.deps.storage.tasks.get(taskId);
-    return this.deps.storage.tasks.update(taskId, {
-      status: input.status,
-      agenticContext: mergeAgenticContext(current.agenticContext, input.agenticContext),
-    });
+    return this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      {
+        status: input.status,
+        agenticContext: mergeAgenticContext(current.agenticContext, input.agenticContext),
+      },
+      current.revision,
+    );
   }
 
   /** Publishes the already-committed aggregate task snapshot. */
@@ -166,9 +170,13 @@ export class TaskLifecycleService {
     if (existingDurableRunId === durableRunId) {
       return current;
     }
-    return this.deps.storage.tasks.update(taskId, {
-      agenticContext: mergeAgenticContext(current.agenticContext, { durableRunId }),
-    });
+    return this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      {
+        agenticContext: mergeAgenticContext(current.agenticContext, { durableRunId }),
+      },
+      current.revision,
+    );
   }
 
   /** Publishes an A2A durable-run link only after the caller commits binding and task truth. */
@@ -259,7 +267,18 @@ export class TaskLifecycleService {
   }
 
   public updateTask(taskId: string, input: TaskUpdateInput, options?: TaskWorkspaceAccessOptions): TaskRecord {
-    this.requireTaskInWorkspace(taskId, options);
+    const current = this.requireTaskInWorkspace(taskId, options);
+    return this.updateTaskWithRevision(taskId, input, current.revision, options);
+  }
+
+  public updateTaskWithRevision(
+    taskId: string,
+    input: TaskUpdateInput,
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
+    assertTaskExpectedRevision(current, expectedRevision);
     if (input.status === "done") {
       const deliverables = this.deps.storage.taskDeliverables.countByTask(taskId);
       if (deliverables < 1) {
@@ -269,7 +288,7 @@ export class TaskLifecycleService {
       }
     }
 
-    const updated = this.deps.storage.tasks.update(taskId, input);
+    const updated = this.deps.storage.tasks.updateWithRevision(taskId, input, expectedRevision);
     this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
     return updated;
   }
@@ -280,8 +299,19 @@ export class TaskLifecycleService {
     options?: TaskWorkspaceAccessOptions,
   ): TaskRecord {
     const current = this.requireTaskInWorkspace(taskId, options);
+    return this.emitDistressSignalWithRevision(taskId, input, current.revision, options);
+  }
+
+  public emitDistressSignalWithRevision(
+    taskId: string,
+    input: EmitDistressInput,
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
+    assertTaskExpectedRevision(current, expectedRevision);
     const next = emitDistressSignal(current.distressSignals, input);
-    const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
+    const updated = this.deps.storage.tasks.updateWithRevision(taskId, { distressSignals: next }, expectedRevision);
     const newSignal = next.find((s) => !current.distressSignals?.some((existing) => existing.signalId === s.signalId));
     this.publishTaskEvent(
       "task_distress_emitted",
@@ -298,6 +328,18 @@ export class TaskLifecycleService {
     options?: TaskWorkspaceAccessOptions,
   ): TaskRecord {
     const current = this.requireTaskInWorkspace(taskId, options);
+    return this.resolveDistressSignalWithRevision(taskId, signalId, input, current.revision, options);
+  }
+
+  public resolveDistressSignalWithRevision(
+    taskId: string,
+    signalId: string,
+    input: { resolvedBy?: string },
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
+    assertTaskExpectedRevision(current, expectedRevision);
     const next = resolveDistressSignal(current.distressSignals, signalId, input);
     const matched = current.distressSignals?.some((s) => s.signalId === signalId && !s.resolvedAt);
     if (!matched) {
@@ -305,7 +347,7 @@ export class TaskLifecycleService {
         message: `No unresolved distress signal with signalId="${signalId}" on task ${taskId}`,
       });
     }
-    const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
+    const updated = this.deps.storage.tasks.updateWithRevision(taskId, { distressSignals: next }, expectedRevision);
     this.publishTaskEvent(
       "task_distress_resolved",
       { taskId, signalId, resolvedBy: input.resolvedBy },
@@ -315,15 +357,26 @@ export class TaskLifecycleService {
   }
 
   public setRetryBudget(taskId: string, maxRetries: number, options?: TaskWorkspaceAccessOptions): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
+    return this.setRetryBudgetWithRevision(taskId, maxRetries, current.revision, options);
+  }
+
+  public setRetryBudgetWithRevision(
+    taskId: string,
+    maxRetries: number,
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskRecord {
     if (!Number.isInteger(maxRetries) || maxRetries < 0) {
       throw new ValidationError({ message: "maxRetries must be a non-negative integer" });
     }
     const current = this.requireTaskInWorkspace(taskId, options);
+    assertTaskExpectedRevision(current, expectedRevision);
     const retryBudget: TaskRetryBudget = {
       maxRetries,
       retryCount: current.retryBudget?.retryCount ?? 0,
     };
-    return this.deps.storage.tasks.update(taskId, { retryBudget });
+    return this.deps.storage.tasks.updateWithRevision(taskId, { retryBudget }, expectedRevision);
   }
 
   public recordRetryAttempt(taskId: string, reason: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
@@ -339,7 +392,7 @@ export class TaskLifecycleService {
       exhaustedAt: exhausted ? now : budget.exhaustedAt,
     };
     if (!exhausted) {
-      const updated = this.deps.storage.tasks.update(taskId, { retryBudget });
+      const updated = this.deps.storage.tasks.updateWithRevision(taskId, { retryBudget }, current.revision);
       this.publishTaskEvent(
         "task_retry_attempted",
         { taskId, retryCount: nextCount, reason },
@@ -353,11 +406,15 @@ export class TaskLifecycleService {
       title: "Retry budget exhausted",
       summary: reason,
     });
-    const updated = this.deps.storage.tasks.update(taskId, {
-      retryBudget,
-      distressSignals,
-      status: "blocked",
-    });
+    const updated = this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      {
+        retryBudget,
+        distressSignals,
+        status: "blocked",
+      },
+      current.revision,
+    );
     this.publishTaskEvent(
       "task_retry_budget_exhausted",
       { taskId, retryCount: nextCount, reason },
@@ -399,7 +456,7 @@ export class TaskLifecycleService {
     if (agenticContext) {
       update.agenticContext = agenticContext;
     }
-    const updated = this.deps.storage.tasks.update(taskId, update);
+    const updated = this.deps.storage.tasks.updateWithRevision(taskId, update, current.revision);
     if (agenticContext) {
       this.deps.recordAgenticDiagnosticSignal?.({ task: updated, diagnostic });
     }
@@ -412,31 +469,53 @@ export class TaskLifecycleService {
   }
 
   public bulkUpdateTasks(input: BulkTaskAction, options?: TaskWorkspaceAccessOptions): TaskRecord[] {
-    const currentTasks = input.taskIds.map((taskId) => this.requireTaskInWorkspace(taskId, options));
-    for (const task of currentTasks) {
-      assertBulkTaskRevisionIsCurrent(input, task);
-    }
-    return currentTasks.map((current) => {
-      const taskId = current.taskId;
-      if (input.action === "unblock") {
-        const retryBudget = current.retryBudget
-          ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined }
-          : undefined;
-        const updated = this.deps.storage.tasks.update(taskId, {
-          status: "assigned",
-          retryBudget,
-        });
-        this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
-        return updated;
+    validateBulkTaskRevisionSet(input);
+    const committed = this.deps.storage.runImmediateTransaction(() => {
+      const lockedByTaskId = new Map<string, TaskRecord>();
+      for (const taskId of [...input.taskIds].sort()) {
+        const task = this.deps.storage.tasks.getForUpdate(taskId);
+        if (!this.isTaskAllowedForWorkspace(task, options)) {
+          throw new NotFoundError({ entity: "Task", id: taskId });
+        }
+        assertTaskExpectedRevision(task, input.expectedRevisionsByTaskId[taskId]!);
+        lockedByTaskId.set(taskId, task);
       }
-      if (input.action === "retry") {
-        return this.recordRetryAttempt(taskId, input.reason, options);
+      if (input.action === "close") {
+        for (const taskId of input.taskIds) {
+          if (this.deps.storage.taskDeliverables.countByTask(taskId) < 1) {
+            throw new ValidationError({
+              message: `Cannot mark task ${taskId} done without at least one deliverable`,
+            });
+          }
+        }
       }
-      if (input.action === "reassign") {
-        return this.updateTask(taskId, { assignedAgentId: input.assignedAgentId }, options);
-      }
-      return this.updateTask(taskId, { status: "done" }, options);
+
+      return input.taskIds.map((taskId) => {
+        const current = lockedByTaskId.get(taskId)!;
+        const expectedRevision = input.expectedRevisionsByTaskId[taskId]!;
+        return this.deps.storage.tasks.updateWithRevision(
+          taskId,
+          buildBulkTaskUpdate(current, input),
+          expectedRevision,
+        );
+      });
     });
+
+    for (const task of committed) {
+      const eventType = input.action === "retry" ? retryTaskEventType(task) : "task_updated";
+      this.publishTaskEvent(
+        eventType,
+        input.action === "retry"
+          ? {
+              taskId: task.taskId,
+              retryCount: task.retryBudget?.retryCount ?? 0,
+              reason: input.reason,
+            }
+          : { task },
+        buildTaskRealtimeLinks(task),
+      );
+    }
+    return committed;
   }
 
   public async verifyTaskArtifacts(
@@ -445,6 +524,17 @@ export class TaskLifecycleService {
     options?: TaskWorkspaceAccessOptions,
   ): Promise<TaskRecord> {
     const current = this.requireTaskInWorkspace(taskId, options);
+    return this.verifyTaskArtifactsWithRevision(taskId, claims, current.revision, options);
+  }
+
+  public async verifyTaskArtifactsWithRevision(
+    taskId: string,
+    claims: TaskArtifactClaim[],
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord> {
+    const current = this.requireTaskInWorkspace(taskId, options);
+    assertTaskExpectedRevision(current, expectedRevision);
     if (!this.deps.probers) {
       throw new ValidationError({ message: "Artifact verification probers not configured" });
     }
@@ -461,11 +551,15 @@ export class TaskLifecycleService {
           summary: `${missingCount} missing, ${failedCount} unreachable`,
         })
       : current.distressSignals;
-    const updated = this.deps.storage.tasks.update(taskId, {
-      artifactVerification: merged,
-      distressSignals,
-      status: hasFailures ? "blocked" : current.status,
-    });
+    const updated = this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      {
+        artifactVerification: merged,
+        distressSignals,
+        status: hasFailures ? "blocked" : current.status,
+      },
+      expectedRevision,
+    );
     this.publishTaskEvent(
       "task_artifacts_verified",
       { taskId, verifiedCount: verification.filter((v) => v.status === "verified").length, missingCount, failedCount },
@@ -678,6 +772,7 @@ export class TaskLifecycleService {
 
     return {
       runId: normalizedRunId,
+      taskRevision: rootTask.revision,
       boardId: rootTask.agenticContext?.boardId,
       generatedAt: new Date().toISOString(),
       nodes,
@@ -734,9 +829,13 @@ export class TaskLifecycleService {
   public updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): TaskRecord {
     const updated = this.deps.storage.runImmediateTransaction(() => {
       const current = this.deps.storage.tasks.getForUpdate(taskId);
-      return this.deps.storage.tasks.update(taskId, {
-        agenticContext: mergeAgenticContext(current.agenticContext, patch),
-      });
+      return this.deps.storage.tasks.updateWithRevision(
+        taskId,
+        {
+          agenticContext: mergeAgenticContext(current.agenticContext, patch),
+        },
+        current.revision,
+      );
     });
     this.publishTaskEvent(
       "agentic_context_updated",
@@ -784,13 +883,17 @@ export class TaskLifecycleService {
       createdAt: input.createdAt ?? new Date().toISOString(),
       resolvedAt: input.resolvedAt,
     };
-    this.deps.storage.tasks.update(taskId, {
-      agenticContext: {
-        ...(task.agenticContext ?? {}),
-        diagnostics: [...(task.agenticContext?.diagnostics ?? []), diagnostic],
-        failureClass: task.agenticContext?.failureClass ?? mapDiagnosticToFailureClass(diagnostic.code),
+    const updatedTask = this.deps.storage.tasks.updateWithRevision(
+      taskId,
+      {
+        agenticContext: {
+          ...(task.agenticContext ?? {}),
+          diagnostics: [...(task.agenticContext?.diagnostics ?? []), diagnostic],
+          failureClass: task.agenticContext?.failureClass ?? mapDiagnosticToFailureClass(diagnostic.code),
+        },
       },
-    });
+      task.revision,
+    );
     this.appendTaskActivity(
       taskId,
       {
@@ -801,7 +904,7 @@ export class TaskLifecycleService {
       options,
     );
     try {
-      this.deps.recordAgenticDiagnosticSignal?.({ task, diagnostic });
+      this.deps.recordAgenticDiagnosticSignal?.({ task: updatedTask, diagnostic });
     } catch (error) {
       try {
         this.appendTaskActivity(
@@ -841,6 +944,8 @@ export class TaskLifecycleService {
     if (existing) {
       return buildValidatedIdempotentControlReplay(task, input, existing);
     }
+    const expectedRevision = input.expectedRevision ?? task.revision;
+    assertTaskExpectedRevision(task, expectedRevision);
 
     const identity = {
       method: AGENTIC_CONTROL_IDEMPOTENCY_METHOD,
@@ -991,6 +1096,7 @@ export class TaskLifecycleService {
     try {
       const committed = this.deps.storage.runImmediateTransaction(() => {
         const current = this.deps.storage.tasks.getForUpdate(task.taskId);
+        assertTaskExpectedRevision(current, expectedRevision);
         const outcome = this.reconcileAgenticControlCommit(
           current,
           input,
@@ -1004,14 +1110,19 @@ export class TaskLifecycleService {
           runtimeReportedStatus,
           controlId,
         );
-        if (outcome.nextStatus || outcome.nextAgenticStatus) {
-          this.deps.storage.tasks.update(task.taskId, {
-            ...(outcome.nextStatus ? { status: outcome.nextStatus } : {}),
-            agenticContext: mergeAgenticContext(current.agenticContext, {
-              ...(outcome.nextAgenticStatus ? { status: outcome.nextAgenticStatus } : {}),
-            }),
-          });
-        }
+        const updatedTask =
+          outcome.nextStatus || outcome.nextAgenticStatus
+            ? this.deps.storage.tasks.updateWithRevision(
+                task.taskId,
+                {
+                  ...(outcome.nextStatus ? { status: outcome.nextStatus } : {}),
+                  agenticContext: mergeAgenticContext(current.agenticContext, {
+                    ...(outcome.nextAgenticStatus ? { status: outcome.nextAgenticStatus } : {}),
+                  }),
+                },
+                expectedRevision,
+              )
+            : current;
         const persistedActivity = this.deps.storage.taskActivities.append(
           task.taskId,
           {
@@ -1036,6 +1147,7 @@ export class TaskLifecycleService {
         const response: AgenticControlResponse = {
           action: input.action,
           taskId: task.taskId,
+          taskRevision: updatedTask.revision,
           runId: current.agenticContext?.runId,
           status: outcome.responseStatus,
           runtimeEffect: outcome.runtimeEffect,
@@ -1142,6 +1254,7 @@ export class TaskLifecycleService {
     const response: AgenticControlResponse = {
       action: input.action,
       taskId: task.taskId,
+      taskRevision: task.revision,
       runId: task.agenticContext?.runId,
       status: "rejected",
       runtimeEffect: options.runtimeEffect,
@@ -1151,13 +1264,19 @@ export class TaskLifecycleService {
     try {
       const committed = this.deps.storage.runImmediateTransaction(() => {
         const current = this.deps.storage.tasks.getForUpdate(task.taskId);
-        const updatedTask = this.deps.storage.tasks.update(task.taskId, {
-          agenticContext: {
-            ...(current.agenticContext ?? {}),
-            diagnostics: [...(current.agenticContext?.diagnostics ?? []), diagnostic],
-            failureClass: current.agenticContext?.failureClass ?? mapDiagnosticToFailureClass(diagnostic.code),
+        const expectedRevision = input.expectedRevision ?? task.revision;
+        assertTaskExpectedRevision(current, expectedRevision);
+        const updatedTask = this.deps.storage.tasks.updateWithRevision(
+          task.taskId,
+          {
+            agenticContext: {
+              ...(current.agenticContext ?? {}),
+              diagnostics: [...(current.agenticContext?.diagnostics ?? []), diagnostic],
+              failureClass: current.agenticContext?.failureClass ?? mapDiagnosticToFailureClass(diagnostic.code),
+            },
           },
-        });
+          expectedRevision,
+        );
         const diagnosticActivity = this.deps.storage.taskActivities.append(
           task.taskId,
           {
@@ -1190,7 +1309,7 @@ export class TaskLifecycleService {
       this.publishDelegationActivity(committed.diagnosticActivity);
       this.publishDelegationActivity(committed.controlActivity);
       this.mirrorAgenticControlDiagnostic(committed.updatedTask, diagnostic);
-      return response;
+      return { ...response, taskRevision: committed.updatedTask.revision };
     } catch (error) {
       this.failAgenticControlMutation(options.mutationClaim, options.now);
       throw error;
@@ -1326,7 +1445,22 @@ export class TaskLifecycleService {
     if (!existing) {
       return false;
     }
-    const deleted = this.deps.storage.tasks.softDelete(taskId, deletedBy, deleteReason);
+    return this.softDeleteTaskWithRevision(taskId, existing.revision, deletedBy, deleteReason, options);
+  }
+
+  public softDeleteTaskWithRevision(
+    taskId: string,
+    expectedRevision: number,
+    deletedBy?: string,
+    deleteReason?: string,
+    options?: TaskWorkspaceAccessOptions,
+  ): boolean {
+    const existing = this.findTaskInWorkspace(taskId, options);
+    if (!existing) {
+      return false;
+    }
+    assertTaskExpectedRevision(existing, expectedRevision);
+    const deleted = this.deps.storage.tasks.softDeleteWithRevision(taskId, expectedRevision, deletedBy, deleteReason);
     if (deleted) {
       this.publishTaskEvent("task_deleted", { taskId, mode: "soft" }, buildTaskRealtimeLinks(existing, taskId));
     }
@@ -1334,10 +1468,24 @@ export class TaskLifecycleService {
   }
 
   public restoreTask(taskId: string, options?: TaskWorkspaceAccessOptions): boolean {
-    if (!this.findTaskInWorkspace(taskId, options)) {
+    const existing = this.findTaskInWorkspace(taskId, options);
+    if (!existing) {
       return false;
     }
-    const restored = this.deps.storage.tasks.restore(taskId);
+    return this.restoreTaskWithRevision(taskId, existing.revision, options);
+  }
+
+  public restoreTaskWithRevision(
+    taskId: string,
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): boolean {
+    const existing = this.findTaskInWorkspace(taskId, options);
+    if (!existing) {
+      return false;
+    }
+    assertTaskExpectedRevision(existing, expectedRevision);
+    const restored = this.deps.storage.tasks.restoreWithRevision(taskId, expectedRevision);
     if (restored) {
       this.publishTaskEvent(
         "task_restored",
@@ -1353,7 +1501,20 @@ export class TaskLifecycleService {
     if (!existing) {
       return false;
     }
-    const deleted = this.deps.storage.tasks.hardDelete(taskId);
+    return this.hardDeleteTaskWithRevision(taskId, existing.revision, options);
+  }
+
+  public hardDeleteTaskWithRevision(
+    taskId: string,
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ): boolean {
+    const existing = this.findTaskInWorkspace(taskId, options);
+    if (!existing) {
+      return false;
+    }
+    assertTaskExpectedRevision(existing, expectedRevision);
+    const deleted = this.deps.storage.tasks.hardDeleteWithRevision(taskId, expectedRevision);
     if (deleted) {
       this.publishTaskEvent("task_deleted", { taskId, mode: "hard" }, buildTaskRealtimeLinks(existing, taskId));
     }
@@ -1555,15 +1716,100 @@ export function buildTaskRealtimeLinks(
   };
 }
 
-function assertBulkTaskRevisionIsCurrent(input: BulkTaskAction, task: TaskRecord): void {
-  const expectedUpdatedAt = input.expectedUpdatedAtByTaskId?.[task.taskId];
-  if (!expectedUpdatedAt || expectedUpdatedAt === task.updatedAt) {
+function validateBulkTaskRevisionSet(input: BulkTaskAction): void {
+  if (input.taskIds.length === 0) {
+    throw new ValidationError({ field: "taskIds", message: "At least one taskId is required." });
+  }
+  const taskIds = new Set(input.taskIds);
+  if (taskIds.size !== input.taskIds.length) {
+    throw new ValidationError({ field: "taskIds", message: "Bulk taskIds must be unique." });
+  }
+  const revisionTaskIds = Object.keys(input.expectedRevisionsByTaskId);
+  for (const taskId of taskIds) {
+    if (!Object.prototype.hasOwnProperty.call(input.expectedRevisionsByTaskId, taskId)) {
+      throw new ValidationError({
+        field: `expectedRevisionsByTaskId.${taskId}`,
+        message: `A positive expected revision is required for task ${taskId}.`,
+      });
+    }
+    validateExpectedRevision(input.expectedRevisionsByTaskId[taskId]!, `expectedRevisionsByTaskId.${taskId}`);
+  }
+  const extraTaskId = revisionTaskIds.find((taskId) => !taskIds.has(taskId));
+  if (extraTaskId) {
+    throw new ValidationError({
+      field: `expectedRevisionsByTaskId.${extraTaskId}`,
+      message: `Revision supplied for task ${extraTaskId}, which is not part of this bulk action.`,
+    });
+  }
+}
+
+function buildBulkTaskUpdate(current: TaskRecord, input: BulkTaskAction): TaskUpdateInput {
+  if (input.action === "unblock") {
+    return {
+      status: "assigned",
+      retryBudget: current.retryBudget ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined } : undefined,
+    };
+  }
+  if (input.action === "retry") {
+    const budget = current.retryBudget ?? { maxRetries: 0, retryCount: 0 };
+    const retryCount = budget.retryCount + 1;
+    const now = new Date().toISOString();
+    const exhausted = retryCount > budget.maxRetries;
+    const retryBudget: TaskRetryBudget = {
+      ...budget,
+      retryCount,
+      lastAttemptAt: now,
+      exhaustedAt: exhausted ? now : budget.exhaustedAt,
+    };
+    if (!exhausted) {
+      return { retryBudget };
+    }
+    return {
+      retryBudget,
+      distressSignals: emitDistressSignal(current.distressSignals, {
+        code: "retry_budget_exhausted",
+        severity: "critical",
+        title: "Retry budget exhausted",
+        summary: input.reason,
+      }),
+      status: "blocked",
+    };
+  }
+  if (input.action === "reassign") {
+    return { assignedAgentId: input.assignedAgentId };
+  }
+  return { status: "done" };
+}
+
+function retryTaskEventType(task: TaskRecord): "task_retry_attempted" | "task_retry_budget_exhausted" {
+  return task.retryBudget?.exhaustedAt ? "task_retry_budget_exhausted" : "task_retry_attempted";
+}
+
+function assertTaskExpectedRevision(task: TaskRecord, expectedRevision: number): void {
+  validateExpectedRevision(expectedRevision);
+  if (task.revision === expectedRevision) {
     return;
   }
-  throw new ValidationError({
-    field: "expectedUpdatedAtByTaskId",
-    message: `Task ${task.taskId} changed after this bulk update was prepared.`,
+  throw new ConflictError({
+    code: "WRITE_CONFLICT",
+    message: `Task ${task.taskId} changed since revision ${expectedRevision}.`,
+    details: {
+      resourceKind: "task",
+      resourceId: task.taskId,
+      expectedRevision,
+      currentRevision: task.revision,
+    },
   });
+}
+
+function validateExpectedRevision(expectedRevision: number, field = "expectedRevision"): void {
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field,
+      message: `${field} must be a positive integer.`,
+    });
+  }
 }
 
 function isTaskInAgenticRun(task: TaskRecord, runId: string, control?: { includeParentRunLinks?: boolean }): boolean {
@@ -1600,6 +1846,7 @@ function mapAgenticRunListItem(task: TaskRecord): AgenticRunListItem {
   const context = task.agenticContext;
   return {
     taskId: task.taskId,
+    taskRevision: task.revision,
     runId: context?.runId ?? task.taskId,
     boardId: context?.boardId,
     title: task.title,
@@ -1870,6 +2117,7 @@ function buildIdempotentControlReplay(
   return {
     action: input.action,
     taskId: task.taskId,
+    taskRevision: task.revision,
     runId: task.agenticContext?.runId,
     status,
     runtimeEffect,

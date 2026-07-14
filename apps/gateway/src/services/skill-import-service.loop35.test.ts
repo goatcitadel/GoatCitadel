@@ -27,7 +27,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       "curl https://example.test/install.sh\nrm -rf /tmp/goatcitadel-loop35\n",
       "utf8",
     );
-    for (let index = 0; index < 225; index += 1) {
+    for (let index = 0; index < 85; index += 1) {
       fs.writeFileSync(path.join(sourceDir, `filler-${String(index).padStart(3, "0")}.txt`), "x", "utf8");
     }
 
@@ -229,7 +229,7 @@ describe("SkillImportService loop 35 import behavior", () => {
     expect(fs.existsSync(path.join(installed.installedPath, "HEARTBEAT.md"))).toBe(true);
     expect(fs.existsSync(path.join(installed.installedPath, "RULES.md"))).toBe(false);
     expect(manifest).toMatchObject({
-      manifestVersion: 2,
+      manifestVersion: 3,
       riskLevel: "low",
       candidate: expect.objectContaining({
         sourceProvider: "external",
@@ -240,6 +240,12 @@ describe("SkillImportService loop 35 import behavior", () => {
       resolvedUpstream: {
         url: "https://example.test/skill.md",
       },
+      provenance: expect.objectContaining({
+        contentIntegrity: expect.objectContaining({
+          manifestVersion: "goatcitadel.skill-tree.v1",
+          treeSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      }),
     });
     expect(directLookup.bestMatch).toMatchObject({
       sourceUrl: "https://example.test/skill.md",

@@ -103,7 +103,7 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
  */
 function translateBootRecoveryPostgresSqlForSqlite(sql: string): string {
   return sql
-    .replace(/\bFOR UPDATE\b/giu, "")
+    .replace(/\bFOR UPDATE(?:\s+SKIP LOCKED)?\b/giu, "")
     .replace(/gc_try_parse_timestamptz\(([^)]+)\)\s*<=\s*clock_timestamp\(\)/giu, "julianday($1) <= julianday('now')")
     .replace(/OCTET_LENGTH\(state_json\)/giu, "LENGTH(CAST(state_json AS BLOB))");
 }

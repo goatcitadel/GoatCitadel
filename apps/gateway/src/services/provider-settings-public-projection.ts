@@ -50,6 +50,19 @@ export function projectLlmConfigPublicValue<T>(value: T): T {
   return output as T;
 }
 
+/** Preserves only the strict, secret-free auth-readiness DTO on provider-list routes. */
+export function projectLlmProviderSummariesPublicValue<T>(value: T): T {
+  const projected = projectProviderRuntimePublicValue(value);
+  if (!isRecord(value) || !isRecord(projected)) return projected;
+  const originalItems = Array.isArray(value.items) ? value.items : undefined;
+  const projectedItems = Array.isArray(projected.items) ? projected.items : undefined;
+  if (!originalItems || !projectedItems) return projected;
+  return {
+    ...projected,
+    items: originalItems.map((item, index) => projectProviderSummaryMetadata(item, projectedItems[index])),
+  } as T;
+}
+
 /** Preserves the typed auth-readiness plan while projecting executable settings and status diagnostics. */
 export function projectSettingsPublicValue<T>(value: T): T {
   const projected = projectProviderRuntimePublicValue(value);
@@ -617,9 +630,11 @@ function countRedactionMarkers(value: string): number {
 }
 
 function projectProviderConfigMetadata(original: unknown, projected: unknown): unknown {
-  if (!isRecord(original) || !isRecord(projected) || !isRecord(original.request)) {
+  if (!isRecord(original) || !isRecord(projected)) {
     return projected;
   }
+  const output = projectProviderSummaryMetadata(original, projected);
+  if (!isRecord(output) || !isRecord(original.request)) return output;
   const projectedRequest = isRecord(projected.request) ? projected.request : {};
   const request: Record<string, unknown> = { ...projectedRequest };
   if (isRecord(original.request.auth)) {
@@ -634,7 +649,33 @@ function projectProviderConfigMetadata(original: unknown, projected: unknown): u
         : {}),
     };
   }
-  return { ...projected, request };
+  return { ...output, request };
+}
+
+function projectProviderSummaryMetadata(original: unknown, projected: unknown): unknown {
+  if (!isRecord(original) || !isRecord(projected)) return projected;
+  const authReadiness = projectProviderAuthReadiness(original.authReadiness);
+  return authReadiness ? { ...projected, authReadiness } : projected;
+}
+
+function projectProviderAuthReadiness(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["status", "source", "liveVerified", "reasonCode", "credentialKind"].includes(key))) {
+    return undefined;
+  }
+  const status = String(value.status ?? "");
+  const source = String(value.source ?? "");
+  const reasonCode = String(value.reasonCode ?? "");
+  if (
+    !/^(?:configured|ready|missing|invalid|unknown|unavailable)$/u.test(status) ||
+    !/^(?:keychain|env|adc_file|metadata|none)$/u.test(source) ||
+    typeof value.liveVerified !== "boolean" ||
+    !/^[a-z][a-z0-9_]{0,63}$/u.test(reasonCode)
+  ) {
+    return undefined;
+  }
+  return { status, source, liveVerified: value.liveVerified, reasonCode };
 }
 
 function projectProviderAuthMetadata(value: Record<string, unknown>): Record<string, unknown> {

@@ -1,3 +1,8 @@
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { observePromptSettlement } from "./prompt-settlement.js";
+
+const CHILD_TIMEOUT = Symbol("child-timeout");
+
 export interface ChildDepthInput {
   depth: number;
   maxDepth: number;
@@ -65,20 +70,26 @@ export async function runWithChildTimeout<T>(input: ChildTimeoutInput<T>): Promi
       notifyLateSettle(input.onLateSettle, { status: "failed", error, elapsedMs: Date.now() - startedAt });
     },
   );
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+  const timeoutPromise = new Promise<typeof CHILD_TIMEOUT>((resolve) => {
     timeoutHandle = setTimeout(() => {
       timedOut = true;
-      reject(
-        new SubagentBudgetError(
-          "timeout_exceeded",
-          `timeout_exceeded: child run exceeded ${input.timeoutSeconds}s budget`,
-        ),
-      );
       controller.abort();
+      resolve(CHILD_TIMEOUT);
     }, timeoutMs);
   });
   try {
-    return await Promise.race([runPromise, timeoutPromise]);
+    const first = await Promise.race([runPromise, timeoutPromise]);
+    if (first !== CHILD_TIMEOUT) return first;
+
+    const terminal = await observePromptSettlement(runPromise);
+    if (terminal.status === "rejected" && isAuthoritativeModelUsageAccountingError(terminal.error)) {
+      throw terminal.error;
+    }
+    const timeoutError = new SubagentBudgetError(
+      "timeout_exceeded",
+      `timeout_exceeded: child run exceeded ${input.timeoutSeconds}s budget`,
+    );
+    throw timeoutError;
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);

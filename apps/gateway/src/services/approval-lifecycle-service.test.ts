@@ -729,6 +729,95 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["approve", "approved", "resolved_approved"],
+    ["reject", "rejected", "resolved_rejected"],
+    ["edit", "edited", "resolved_edited"],
+  ] as const)(
+    "records a content-free, source-linked Journey event for %s resolution",
+    async (decision, status, action) => {
+      const host = createApprovalHarness({
+        approvalLinkage: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          taskId: "task-1",
+          durableRunId: "durable-1",
+        },
+      });
+
+      await resolveApproval(host, "approval-1", {
+        decision,
+        resolvedBy: "operator-1",
+        ...(decision === "edit" ? { editedPayload: { secret: "must-not-project" } } : {}),
+      });
+
+      expect(host.storage.governanceJourneyEvents.create).toHaveBeenCalledOnce();
+      const journey = host.storage.governanceJourneyEvents.create.mock.calls[0]?.[0];
+      expect(journey).toMatchObject({
+        schemaVersion: "goatcitadel.journey-event.v1",
+        eventId: "approval:journey:approval-event-1",
+        idempotencyKey: "approval:lifecycle:approval-event-1",
+        scopeKind: "workspace",
+        workspaceId: "workspace-1",
+        eventType: "approval_lifecycle",
+        subjectKind: "approval",
+        subjectId: "approval-1",
+        action,
+        actorId: "operator-1",
+        actorType: "operator",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-1",
+        sourceKind: "approval_event",
+        sourceId: "approval-event-1",
+        trustDisposition: status,
+        poisoningStatus: "clean",
+        evidenceRefs: [{ owner: "approval", refId: "approval-1" }],
+        provenance: {
+          sourceRequired: true,
+          approvalRequired: false,
+          taskId: "task-1",
+          durableRunId: "durable-1",
+        },
+        summary: { decision, status, expired: false },
+        occurredAt: "2026-04-11T00:01:00.000Z",
+        recordedAt: "2026-04-11T00:01:00.000Z",
+      });
+      expect(journey?.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
+      expect(JSON.stringify(journey)).not.toContain("must-not-project");
+    },
+  );
+
+  it("does not invent a Journey scope when approval workspace linkage is missing", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1" } });
+
+    await resolveApproval(host, "approval-1", {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+
+    expect(host.storage.approvals.get("approval-1").status).toBe("approved");
+    expect(host.storage.governanceJourneyEvents.create).not.toHaveBeenCalled();
+  });
+
+  it("rolls resolution back when its Journey record cannot commit", async () => {
+    const host = createApprovalHarness();
+    host.storage.governanceJourneyEvents.create.mockImplementationOnce(() => {
+      throw new Error("journey store unavailable");
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      }),
+    ).rejects.toThrow("journey store unavailable");
+
+    expect(host.storage.approvals.get("approval-1").status).toBe("pending");
+    expect(host.enqueueApprovalResolutionEffects).not.toHaveBeenCalled();
+  });
+
   it("expires every remaining remote token before enqueueing effects for a terminal resolution", async () => {
     const host = createApprovalHarness();
     host.storage.remoteActionTokens.expirePendingByApprovalId = vi.fn(() => 2);
@@ -808,6 +897,16 @@ describe("approval lifecycle service", () => {
       expect.arrayContaining([expect.objectContaining({ operationId: "approval.resolve.audit" })]),
     );
     expect(host.storage.remoteActionTokens.expirePendingByApprovalId).toHaveBeenCalledWith("approval-1");
+    expect(host.storage.governanceJourneyEvents.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "expired",
+        actorId: "system:approval-expiry",
+        actorType: "system",
+        sourceKind: "approval_event",
+        approvalId: "approval-1",
+        summary: { decision: "expired", status: "rejected", expired: true },
+      }),
+    );
   });
 
   it("allows only one expiry winner and leaves duplicate resolvers on terminal truth", async () => {
@@ -2644,6 +2743,7 @@ function createApprovalHarness(input?: {
   resolvedAt?: string;
   codeModeRun?: CodeModeRunRecord;
   codeModeRuns?: CodeModeRunRecord[];
+  approvalLinkage?: ApprovalRequest["linkage"];
   shellExplainerPolicy?: ApprovalLifecycleHost["shellExplainerPolicy"];
 }) {
   const pendingAction = input?.pendingAction;
@@ -2661,11 +2761,14 @@ function createApprovalHarness(input?: {
       ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
     },
     preview: {},
-    linkage: {
-      sessionId: "session-1",
-      workspaceId: "workspace-1",
-      ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
-    },
+    linkage:
+      input && Object.prototype.hasOwnProperty.call(input, "approvalLinkage")
+        ? input.approvalLinkage
+        : {
+            sessionId: "session-1",
+            workspaceId: "workspace-1",
+            ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
+          },
     createdAt: "2026-04-11T00:00:00.000Z",
     resolvedAt: input?.resolvedAt,
     expiresAt: input?.expiresAt,
@@ -2761,13 +2864,27 @@ function createApprovalHarness(input?: {
     listByApprovalId: vi.fn(() => []),
     expirePendingByApprovalId: vi.fn(() => 0),
   };
+  let approvalEventCounter = 0;
 
   const host = {
     storage: {
       approvals,
       approvalEvents: {
-        append: vi.fn(),
+        append: vi.fn((event: Record<string, unknown>) => {
+          approvalEventCounter += 1;
+          return {
+            eventId: `approval-event-${approvalEventCounter}`,
+            approvalId: String(event.approvalId),
+            eventType: event.eventType,
+            actorId: String(event.actorId),
+            timestamp: "2026-04-11T00:01:00.000Z",
+            payload: event.payload,
+          };
+        }),
         listByApprovalId: vi.fn(() => []),
+      },
+      governanceJourneyEvents: {
+        create: vi.fn((event: Record<string, unknown>) => event),
       },
       pendingApprovalActions: {
         find: vi.fn(() => pendingAction),

@@ -16,10 +16,7 @@ import {
   type VaultKeyProvider,
 } from "./citadels-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
-import {
-  CapabilityScopeRouteService,
-  type CapabilityScopeRouteServiceDeps,
-} from "./capability-scope-route-service.js";
+import { CapabilityScopeRouteService, type CapabilityScopeRouteServiceDeps } from "./capability-scope-route-service.js";
 import {
   createCapabilityPacksRouteService,
   type CapabilityPacksRoutePort,
@@ -30,6 +27,7 @@ import {
   type ChatAttachmentsRoutePort,
   type ChatAttachmentsRouteService,
 } from "./chat-attachments-route-service.js";
+import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
   createChatDelegateRouteService,
   type ChatDelegateRoutePort,
@@ -62,10 +60,7 @@ import {
   type ChannelSetupRouteService,
 } from "./channel-setup-route-service.js";
 import { createCommsRouteService, type CommsRoutePort, type CommsRouteService } from "./comms-route-service.js";
-import {
-  createComplianceRouteService,
-  type ComplianceRouteService,
-} from "./compliance-export-route-service.js";
+import { createComplianceRouteService, type ComplianceRouteService } from "./compliance-export-route-service.js";
 import type { ComplianceExportServiceDeps } from "./compliance-export-service.js";
 import {
   createConnectorsRouteService,
@@ -126,6 +121,7 @@ import {
   type KnowledgeRoutePort,
   type KnowledgeRouteService,
 } from "./knowledge-route-service.js";
+import type { JourneyTimelineRouteService } from "./journey-timeline-route-service.js";
 import type { LocalAiRouteService } from "./local-ai-route-service.js";
 import {
   createLlamaCppRouteService,
@@ -142,6 +138,7 @@ import { createMeshRouteService, type MeshRoutePort, type MeshRouteService } fro
 import { createMobileRouteService, type MobileRoutePort, type MobileRouteService } from "./mobile-route-service.js";
 import { createNpuRouteService, type NpuRoutePort, type NpuRouteService } from "./npu-route-service.js";
 import type { PersonalOpsRouteService } from "./personal-ops-route-service.js";
+import type { OpsSavedBoardService } from "./ops-saved-board-service.js";
 import {
   createOnboardingRouteService,
   type OnboardingRoutePort,
@@ -192,6 +189,8 @@ import {
   type WorkspacesRoutePort,
   type WorkspacesRouteService,
 } from "./workspaces-route-service.js";
+import type { WorkspacePathBridgeRouteService } from "../routes/workspace-path-bridge.js";
+import type { ExternalSourceRouteService } from "./external-source-route-service.js";
 export interface GatewayRouteServices {
   a2a: A2ARouteService;
   addons: AddonsRouteService;
@@ -206,6 +205,7 @@ export interface GatewayRouteServices {
   capabilities: CapabilitiesRouteService;
   capabilityPacks: CapabilityPacksRouteService;
   chatAttachments: ChatAttachmentsRouteService;
+  chatCompactionBreakerActions: ChatCompactionBreakerActionService;
   chatDelegate: ChatDelegateRouteService;
   chatMessages: ChatMessagesRouteService;
   chatProjects: ChatProjectsRouteService;
@@ -225,6 +225,7 @@ export interface GatewayRouteServices {
   durable: DurableRouteService;
   evidence: EvidenceRouteService;
   evidenceReceipts: EvidenceReceiptsRouteService;
+  externalSources?: ExternalSourceRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;
   health: HealthRouteService;
@@ -233,6 +234,7 @@ export interface GatewayRouteServices {
   integrations: IntegrationRouteService;
   integrationWebhooks: IntegrationWebhookRouteService;
   knowledge: KnowledgeRouteService;
+  journeyTimeline?: JourneyTimelineRouteService;
   localAi: LocalAiRouteService;
   llamaCpp: LlamaCppRouteService;
   llm: LlmRouteService;
@@ -244,6 +246,7 @@ export interface GatewayRouteServices {
   mobile: MobileRouteService;
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;
+  opsSavedBoards?: OpsSavedBoardService;
   onboarding: OnboardingRouteService;
   obsidian: ObsidianRouteService;
   orchestration: OrchestrationRouteService;
@@ -260,6 +263,7 @@ export interface GatewayRouteServices {
   toolsInvoke: ToolsInvokeRouteService;
   updateScout: UpdateScoutRouteService;
   voice: VoiceRouteService;
+  workspacePathBridge?: WorkspacePathBridgeRouteService;
   workspaces: WorkspacesRouteService;
 }
 
@@ -279,6 +283,7 @@ export interface GatewayRouteServiceDependencies {
   capabilities: CapabilitiesRoutePort;
   capabilityPacks: CapabilityPacksRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
+  chatCompactionBreakerActions: ChatCompactionBreakerActionService;
   chatDelegate: ChatDelegateRoutePort;
   chatMessages: ChatMessagesRoutePort;
   chatProjects: ChatProjectsRoutePort;
@@ -351,6 +356,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
+    chatCompactionBreakerActions: deps.chatCompactionBreakerActions,
     chatDelegate: createChatDelegateRouteService(deps.chatDelegate),
     chatMessages: createChatMessagesRouteService(deps.chatMessages),
     chatProjects: createChatProjectsRouteService(deps.chatProjects),

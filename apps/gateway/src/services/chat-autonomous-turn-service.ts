@@ -1,13 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
+  ChatTurnTraceRecord,
   ChatSendMessageRequest,
   CronAgentTurnConfig,
   CronJobRecord,
+  CronRunExecutionToken,
+  DurableRunRecord,
   PermissionProfileRecord,
   TaskRecord,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import { sealChatTurnCapabilityProfile, type Storage } from "@goatcitadel/storage";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
 import {
   type AutonomousTurnKind,
@@ -52,6 +56,41 @@ type HeartbeatTickDeps = Parameters<typeof runHeartbeatTick>[0];
 type CommitmentSweepCoreDeps = Parameters<typeof runCommitmentSweepCore>[0];
 type DurableRunForTrace = Parameters<typeof chatDurableRunService.persistInitialDurableChatTurnTrace>[3];
 
+const CRON_CHAT_ADMISSION_IDENTITY_VERSION = "cron.chat.admission.v1" as const;
+
+/**
+ * Immutable child identity for one canonically admitted cron occurrence.
+ *
+ * The cron-run owner token remains the fencing authority. Child ids are
+ * derived only from its canonical run id so a crash at any point between the
+ * user-message write and durable-run creation can safely re-enter the same
+ * admission without creating a second Chat turn.
+ */
+export interface CronChatAdmissionIdentity {
+  version: typeof CRON_CHAT_ADMISSION_IDENTITY_VERSION;
+  cronRunId: string;
+  jobId: string;
+  executionGeneration: number;
+  userMessageId: string;
+  turnId: string;
+  assistantMessageId: string;
+  durableRunId: string;
+}
+
+export interface EnqueuedAutonomousChatTurn {
+  runId: string;
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  admissionIdentity?: CronChatAdmissionIdentity;
+}
+
+export type CronAgentTurnRunOutcome = AgentTurnCronRunOutcome & {
+  userMessageId?: string;
+  assistantMessageId?: string;
+  admissionIdentity?: CronChatAdmissionIdentity;
+};
+
 export interface ChatAutonomousTurnDeps {
   storage: Pick<
     Storage,
@@ -60,13 +99,16 @@ export interface ChatAutonomousTurnDeps {
     | "chatSessionMeta"
     | "chatSessionPrefs"
     | "chatTurnTraces"
+    | "capabilityCatalogSnapshots"
+    | "chatTurnCapabilityProfiles"
+    | "skillLifecycle"
     | "permissionProfiles"
     | "sessions"
     | "runImmediateTransaction"
   >;
   cron: Pick<CronAutomationService, "listCronJobs" | "getCronJob" | "deleteCronJob" | "createCronJob">;
   isFeatureEnabled(flag: "autonomyV1Disabled" | "durableKernelV1Enabled"): boolean;
-  createCronInboxTask(job: CronJobRecord): TaskRecord;
+  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string }): TaskRecord;
   getSessionAutonomyPrefs: HeartbeatTickDeps["getSessionAutonomyPrefs"];
   patchSessionAutonomyPrefs(sessionId: string, patch: { proactiveMode: "off" }): void;
   listChatSessions(query: { scope: "mission"; view: "active"; limit?: number }): Array<{
@@ -89,13 +131,22 @@ export interface ChatAutonomousTurnDeps {
   prepareAgentChatTurn(
     sessionId: string,
     request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext },
-    options: { ingestUserMessage: boolean },
+    options: {
+      ingestUserMessage: boolean;
+      userMessageId?: string;
+      turnId?: string;
+      assistantMessageId?: string;
+      parentTurnId?: string;
+      capabilityProfileId?: string;
+      capabilityProfileHash?: string;
+    },
   ): Promise<PreparedAgentChatTurn>;
   buildDurableChatTurnPayloadRecord(
     prepared: PreparedAgentChatTurn,
     request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext },
   ): Record<string, unknown>;
   createDurableRun(input: {
+    runId?: string;
     workflowKey: "chat.turn.execute";
     payload: Record<string, unknown>;
     metadata: Record<string, unknown>;
@@ -112,6 +163,7 @@ export interface ChatAutonomousTurnDeps {
     },
     runId: string,
   ): unknown;
+  onDurableRunCommitted?(run: DurableRunForTrace & { runId: string }): void;
   requestDurableRunProcessing(runId: string): void;
 }
 
@@ -121,13 +173,19 @@ export async function runCronAgentTurn(
     job: CronJobRecord;
     runId: string;
     config: CronAgentTurnConfig;
+    /** Canonical cron-run owner. When present, deterministic child admission is mandatory. */
+    cronRun?: CronRunExecutionToken;
   },
-): Promise<AgentTurnCronRunOutcome> {
+): Promise<CronAgentTurnRunOutcome> {
+  const cronRun = input.cronRun ? assertCronRunOwnsInvocation(input.cronRun, input) : undefined;
+  const admissionIdentity = cronRun ? buildCronChatAdmissionIdentity(cronRun) : undefined;
+  const inboxTaskId = cronRun ? buildCronInboxTaskId(cronRun) : undefined;
   const autonomyDisabled = deps.isFeatureEnabled("autonomyV1Disabled");
   if (autonomyDisabled || input.config.inertInboxFallback) {
-    const task = deps.createCronInboxTask(input.job);
+    const task = deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
     return { mode: "inbox", taskId: task.taskId };
   }
+  // Validate the canonical cron owner before creating or mutating a session.
   const sessionId = ensureCronAgentSession(deps, input.job.jobId, input.config.sessionId);
   const createdBy = input.config.createdBy;
   const systemActorId = createdBy?.operatorId?.trim() || createdBy?.authActorId?.trim() || "system-cron";
@@ -139,7 +197,7 @@ export async function runCronAgentTurn(
     systemActorId,
   });
   if ("failClosedReason" in scheduledPolicy) {
-    const task = deps.createCronInboxTask(input.job);
+    const task = deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
     return {
       mode: "inbox",
       taskId: task.taskId,
@@ -157,12 +215,16 @@ export async function runCronAgentTurn(
     deliverMode: input.config.deliverMode ?? "always",
     policyContext: scheduledPolicy.policyContext,
     profilePosture: scheduledPolicy.profilePosture,
+    admissionIdentity,
   });
   return {
     mode: "agent_turn",
     durableRunId: run?.runId,
     sessionId,
     turnId: run?.turnId,
+    userMessageId: run?.userMessageId,
+    assistantMessageId: run?.assistantMessageId,
+    admissionIdentity: run?.admissionIdentity,
     profilePosture: scheduledPolicy.profilePosture,
   };
 }
@@ -431,8 +493,10 @@ export async function enqueueAutonomousChatTurn(
     policyContext?: ToolPolicyActorContext;
     profilePosture?: AgentTurnCronRunOutcome["profilePosture"];
     commitmentId?: string;
+    /** Deterministic cron-only child identity. Heartbeat/commitment/proactive callers omit it. */
+    admissionIdentity?: CronChatAdmissionIdentity;
   },
-): Promise<{ runId: string; turnId: string } | undefined> {
+): Promise<EnqueuedAutonomousChatTurn | undefined> {
   if (!deps.isFeatureEnabled("durableKernelV1Enabled")) {
     throw new Error("agent_turn cron execution requires durable execution (durableKernelV1Enabled).");
   }
@@ -457,47 +521,306 @@ export async function enqueueAutonomousChatTurn(
     permissionProfileId,
     policyContext,
   };
-  const prepared = await deps.prepareAgentChatTurn(input.sessionId, request, { ingestUserMessage: true });
-  const run = deps.createDurableRun({
-    workflowKey: "chat.turn.execute",
-    payload: deps.buildDurableChatTurnPayloadRecord(prepared, request),
-    metadata: {
-      surface: chatTurnPrepService.resolvePreparedTurnMode(prepared),
-      objective: prepared.content,
-      autonomous: {
-        kind,
-        systemActorId: input.systemActorId,
-        reason: input.reason,
-        deliverMode: input.deliverMode,
-        ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
-        ...(input.profilePosture ? { profilePosture: input.profilePosture } : {}),
-        ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
-      },
-    },
-  });
+  const admissionIdentity = input.admissionIdentity;
+  if (admissionIdentity) {
+    assertCronChatAdmissionIdentity(admissionIdentity, input.sessionId);
+  }
+  // Synthetic creator-intersection profiles must be visible while the
+  // server-owned capability profile is resolved, not only after admission.
   if (policyContext.permissionProfile && policyContext.permissionProfileId) {
     deps.registerSyntheticPermissionProfile(policyContext.permissionProfile);
   }
-  chatDurableRunService.persistInitialDurableChatTurnTrace(
-    { chatTurnTraces: deps.storage.chatTurnTraces },
-    prepared,
-    request,
-    run,
+  const existingAdmissionTrace = admissionIdentity
+    ? readOwnedCronChatAdmissionTrace(deps, input.sessionId, admissionIdentity)
+    : undefined;
+  const prepared = await deps.prepareAgentChatTurn(input.sessionId, request, {
+    // `false` still ingests on the first attempt because no existing message is
+    // present. On retry it tells prep to adopt the exact deterministic user
+    // message after prep has verified session, role, and content ownership.
+    ingestUserMessage: !admissionIdentity,
+    ...(admissionIdentity
+      ? {
+          userMessageId: admissionIdentity.userMessageId,
+          turnId: admissionIdentity.turnId,
+          assistantMessageId: admissionIdentity.assistantMessageId,
+          // A replay after the child has advanced the session leaf must retain
+          // the immutable parent captured by the originally admitted trace.
+          ...(existingAdmissionTrace ? { parentTurnId: existingAdmissionTrace.parentTurnId } : {}),
+          ...(existingAdmissionTrace?.capabilityProfileId && existingAdmissionTrace.capabilityProfileHash
+            ? {
+                capabilityProfileId: existingAdmissionTrace.capabilityProfileId,
+                capabilityProfileHash: existingAdmissionTrace.capabilityProfileHash,
+              }
+            : {}),
+        }
+      : {}),
+  });
+  if (admissionIdentity) {
+    assertPreparedCronChatAdmission(prepared, admissionIdentity);
+  }
+  // A profile must be bound before persistence, so profiled turns preallocate
+  // their run id. Profile-less compatibility hosts retain the historical
+  // createDurableRun-owned id behavior.
+  const durableRunId = admissionIdentity?.durableRunId ?? (prepared.capabilityProfile ? randomUUID() : undefined);
+  const capabilityStoresPresent = Boolean(
+    deps.storage.capabilityCatalogSnapshots && deps.storage.chatTurnCapabilityProfiles,
   );
-  deps.persistChatStreamChunk(
-    {
-      type: "message_start",
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      messageId: prepared.assistantMessageId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
+  if (Boolean(deps.storage.capabilityCatalogSnapshots) !== Boolean(deps.storage.chatTurnCapabilityProfiles)) {
+    throw new Error("Autonomous Chat capability admission stores are incompletely configured.");
+  }
+  if (capabilityStoresPresent && (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot)) {
+    throw new Error(`Autonomous Chat turn ${prepared.turnId} cannot be admitted without its capability profile.`);
+  }
+  if (prepared.capabilityProfile) {
+    if (!durableRunId) {
+      throw new Error(`Autonomous Chat turn ${prepared.turnId} could not allocate a durable profile binding.`);
+    }
+    const boundRunId = prepared.capabilityProfile.identity.durableRunId;
+    if (boundRunId && boundRunId !== durableRunId) {
+      throw new Error(
+        `Autonomous Chat turn ${prepared.turnId} capability profile is bound to a different durable run.`,
+      );
+    }
+    if (!boundRunId) {
+      const { hashes: _hashes, ...draft } = prepared.capabilityProfile;
+      prepared.capabilityProfile = sealChatTurnCapabilityProfile({
+        ...draft,
+        identity: { ...draft.identity, durableRunId },
+      });
+      prepared.history = chatTurnPrepService.upsertChatCapabilityProfileSystemInstruction(
+        prepared.history ?? [],
+        prepared.capabilityProfile,
+      );
+    }
+  }
+  const basePayload = deps.buildDurableChatTurnPayloadRecord(prepared, request);
+  const payload = admissionIdentity
+    ? {
+        ...basePayload,
+        cronAdmission: admissionIdentity,
+      }
+    : basePayload;
+  const metadata = {
+    surface: chatTurnPrepService.resolvePreparedTurnMode(prepared),
+    objective: prepared.content,
+    autonomous: {
+      kind,
+      systemActorId: input.systemActorId,
+      reason: input.reason,
+      deliverMode: input.deliverMode,
+      ...(input.deliveryChannel ? { deliveryChannel: input.deliveryChannel } : {}),
+      ...(input.profilePosture ? { profilePosture: input.profilePosture } : {}),
+      ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
     },
-    run.runId,
-  );
+    ...(admissionIdentity
+      ? {
+          cronRunId: admissionIdentity.cronRunId,
+          cronJobId: admissionIdentity.jobId,
+          cronExecutionGeneration: admissionIdentity.executionGeneration,
+          cronAdmission: admissionIdentity,
+        }
+      : {}),
+  };
+  let run!: DurableRunForTrace & { runId: string };
+  const admit = () => {
+    if (prepared.capabilityProfile && prepared.capabilityCatalogSnapshot && capabilityStoresPresent) {
+      chatDurableRunService.persistPreparedChatCapabilityAdmission(
+        {
+          capabilityCatalogSnapshots: deps.storage.capabilityCatalogSnapshots,
+          chatTurnCapabilityProfiles: deps.storage.chatTurnCapabilityProfiles,
+          skillLifecycle: deps.storage.skillLifecycle,
+        },
+        prepared,
+      );
+    }
+    run = deps.createDurableRun({
+      ...(durableRunId ? { runId: durableRunId } : {}),
+      workflowKey: "chat.turn.execute",
+      payload,
+      metadata,
+    });
+    if (admissionIdentity) {
+      assertOwnedCronChatDurableRun(run, admissionIdentity, payload);
+    }
+    chatDurableRunService.persistInitialDurableChatTurnTrace(
+      { chatTurnTraces: deps.storage.chatTurnTraces },
+      prepared,
+      request,
+      run,
+    );
+    deps.persistChatStreamChunk(
+      {
+        type: "message_start",
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        messageId: prepared.assistantMessageId,
+        parentTurnId: prepared.parentTurnId,
+        branchKind: prepared.branchKind,
+        sourceTurnId: prepared.sourceTurnId,
+      },
+      run.runId,
+    );
+  };
+  if (typeof deps.storage.runImmediateTransaction === "function") {
+    deps.storage.runImmediateTransaction(admit);
+  } else {
+    // Compatibility for isolated test hosts. Production Storage always owns
+    // this transaction boundary.
+    admit();
+  }
+  deps.onDurableRunCommitted?.(run);
   deps.requestDurableRunProcessing(run.runId);
-  return { runId: run.runId, turnId: prepared.turnId };
+  return {
+    runId: run.runId,
+    turnId: prepared.turnId,
+    userMessageId: prepared.userEventId,
+    assistantMessageId: prepared.assistantMessageId,
+    ...(admissionIdentity ? { admissionIdentity } : {}),
+  };
+}
+
+/** Build byte-stable child ids from one canonical cron-run id. */
+export function buildCronChatAdmissionIdentity(token: CronRunExecutionToken): CronChatAdmissionIdentity {
+  const cronRunId = token.runId.trim();
+  const jobId = token.jobId.trim();
+  const executionGeneration = token.executionGeneration;
+  if (!cronRunId) {
+    throw new Error("Deterministic cron Chat admission requires a canonical cron run id.");
+  }
+  if (!jobId) {
+    throw new Error("Deterministic cron Chat admission requires a cron job id.");
+  }
+  if (!Number.isSafeInteger(executionGeneration) || executionGeneration < 1) {
+    throw new Error("Deterministic cron Chat admission requires a positive execution generation.");
+  }
+  const digest = createHash("sha256")
+    .update(`${CRON_CHAT_ADMISSION_IDENTITY_VERSION}\0${cronRunId}`)
+    .digest("hex")
+    .slice(0, 40);
+  return {
+    version: CRON_CHAT_ADMISSION_IDENTITY_VERSION,
+    cronRunId,
+    jobId,
+    executionGeneration,
+    userMessageId: `msg_cron_user_${digest}`,
+    turnId: `turn_cron_${digest}`,
+    assistantMessageId: `msg_cron_assistant_${digest}`,
+    durableRunId: `run_cron_chat_${digest}`,
+  };
+}
+
+/** Stable inert-inbox task identity for the same canonical cron occurrence. */
+export function buildCronInboxTaskId(token: CronRunExecutionToken): string {
+  const cronRunId = token.runId.trim();
+  const jobId = token.jobId.trim();
+  if (!cronRunId || !jobId || !Number.isSafeInteger(token.executionGeneration) || token.executionGeneration < 1) {
+    throw new Error("Deterministic cron inbox admission requires a valid canonical cron-run token.");
+  }
+  const digest = createHash("sha256").update(`cron.inbox.task.v1\0${cronRunId}`).digest("hex").slice(0, 40);
+  return `task_cron_inbox_${digest}`;
+}
+
+function assertCronRunOwnsInvocation(
+  token: CronRunExecutionToken,
+  input: Pick<Parameters<typeof runCronAgentTurn>[1], "job" | "runId">,
+): CronRunExecutionToken {
+  const cronRunId = input.runId.trim();
+  const jobId = input.job.jobId.trim();
+  if (token.runId.trim() !== cronRunId || token.jobId.trim() !== jobId) {
+    throw new Error(
+      `Cron Chat admission owner mismatch: invocation ${jobId}/${cronRunId} does not match the canonical cron-run token.`,
+    );
+  }
+  return token;
+}
+
+function assertCronChatAdmissionIdentity(identity: CronChatAdmissionIdentity, sessionId: string): void {
+  const expected = buildCronChatAdmissionIdentity({
+    runId: identity.cronRunId,
+    jobId: identity.jobId,
+    executionGeneration: identity.executionGeneration,
+  });
+  if (!cronChatAdmissionIdentityMatches(identity, expected)) {
+    throw new Error(`Cron Chat admission identity for session ${sessionId} is not canonically derived.`);
+  }
+}
+
+function assertPreparedCronChatAdmission(prepared: PreparedAgentChatTurn, identity: CronChatAdmissionIdentity): void {
+  if (
+    prepared.userEventId !== identity.userMessageId ||
+    prepared.turnId !== identity.turnId ||
+    prepared.assistantMessageId !== identity.assistantMessageId
+  ) {
+    throw new Error(`Prepared cron Chat child does not match admission identity ${identity.cronRunId}.`);
+  }
+}
+
+function readOwnedCronChatAdmissionTrace(
+  deps: Pick<ChatAutonomousTurnDeps, "storage">,
+  sessionId: string,
+  identity: CronChatAdmissionIdentity,
+): ChatTurnTraceRecord | undefined {
+  let trace: ChatTurnTraceRecord;
+  try {
+    trace = deps.storage.chatTurnTraces.get(identity.turnId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+  const conflicts = [
+    trace.sessionId !== sessionId ? "session" : undefined,
+    trace.userMessageId !== identity.userMessageId ? "user_message" : undefined,
+    trace.assistantMessageId !== undefined && trace.assistantMessageId !== identity.assistantMessageId
+      ? "assistant_message"
+      : undefined,
+    trace.branchKind !== "append" ? "branch" : undefined,
+    trace.sourceTurnId !== undefined ? "source_turn" : undefined,
+    trace.durable?.runId !== identity.durableRunId ? "durable_run" : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (conflicts.length > 0) {
+    throw new Error(
+      `Deterministic cron Chat trace ${identity.turnId} is owned by a conflicting admission (${conflicts.join(", ")}).`,
+    );
+  }
+  return trace;
+}
+
+function assertOwnedCronChatDurableRun(
+  run: DurableRunRecord,
+  identity: CronChatAdmissionIdentity,
+  expectedPayload: Record<string, unknown>,
+): void {
+  const metadata = run.metadata;
+  if (
+    run.runId !== identity.durableRunId ||
+    run.workflowKey !== "chat.turn.execute" ||
+    JSON.stringify(run.payload) !== JSON.stringify(expectedPayload) ||
+    metadata?.cronRunId !== identity.cronRunId ||
+    metadata?.cronJobId !== identity.jobId ||
+    metadata?.cronExecutionGeneration !== identity.executionGeneration ||
+    !cronChatAdmissionIdentityMatches(metadata?.cronAdmission, identity)
+  ) {
+    throw new Error(`Deterministic cron Chat child ${identity.durableRunId} is owned by a conflicting admission.`);
+  }
+}
+
+function cronChatAdmissionIdentityMatches(value: unknown, expected: CronChatAdmissionIdentity): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Partial<CronChatAdmissionIdentity>;
+  return (
+    candidate.version === expected.version &&
+    candidate.cronRunId === expected.cronRunId &&
+    candidate.jobId === expected.jobId &&
+    candidate.executionGeneration === expected.executionGeneration &&
+    candidate.userMessageId === expected.userMessageId &&
+    candidate.turnId === expected.turnId &&
+    candidate.assistantMessageId === expected.assistantMessageId &&
+    candidate.durableRunId === expected.durableRunId
+  );
 }
 
 /**
@@ -559,7 +882,7 @@ export async function scheduleManage(
     if (!owned) {
       throw new Error(`schedule.manage cancel refused: ${jobId} is not owned by the caller.`);
     }
-    const result = deps.cron.deleteCronJob(jobId);
+    const result = await deps.cron.deleteCronJob(jobId, existing.revision);
     return { op: "cancel", jobId: result.jobId, deleted: result.deleted };
   }
   // op === "create"
@@ -571,7 +894,7 @@ export async function scheduleManage(
     ...(createdByJobId ? { createdByJobId } : {}),
   });
   const jobId = generateScheduleJobId(deps, validated.name);
-  const created = deps.cron.createCronJob({
+  const created = await deps.cron.createCronJob({
     jobId,
     name: validated.name,
     action: "agent_turn",

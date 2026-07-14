@@ -456,11 +456,11 @@ describe("settings-auth-service durable settings", () => {
     });
 
     expect(settings.defaultToolProfile).toBe("minimal");
-    expect(host.persistToolPolicyConfig).toHaveBeenCalled();
-    expect(host.persistAssistantConfig).toHaveBeenCalled();
+    expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
+    expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
 
-  it("persists first-run tool profile and explicit approval mode together", () => {
+  it("builds first-run tool profile and approval mode without direct mirror persistence", () => {
     const host = buildHost();
 
     const settings = updateSettings(host, {
@@ -474,8 +474,8 @@ describe("settings-auth-service durable settings", () => {
     expect(host.config.toolPolicy.tools.approvalMode).toBe("approve_all");
     expect(host.config.assistant.defaultToolProfile).toBe("minimal");
     expect(host.config.assistant.toolApprovalMode).toBe("approve_all");
-    expect(host.persistToolPolicyConfig).toHaveBeenCalled();
-    expect(host.persistAssistantConfig).toHaveBeenCalled();
+    expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
+    expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
 
   it("rejects unknown legacy tool profile names when profiles are explicit", () => {
@@ -611,9 +611,9 @@ describe("settings-auth-service durable settings", () => {
     expect(host.llmService.updateNetworkAllowlist).toHaveBeenLastCalledWith(["api.openai.com", "localhost"], {
       enforce: true,
     });
-    expect(host.persistAssistantConfig).toHaveBeenCalledTimes(1);
-    expect(host.persistToolPolicyConfig).toHaveBeenCalledTimes(1);
-    expect(host.persistBudgetsConfig).toHaveBeenCalledTimes(1);
+    expect(host.persistAssistantConfig).not.toHaveBeenCalled();
+    expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
+    expect(host.persistBudgetsConfig).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe Firecrawl API key env-name settings", () => {
@@ -735,8 +735,8 @@ describe("settings-auth-service durable settings", () => {
           defaultModel: "gemma-local",
         }),
       });
-      expect(host.persistAssistantConfig).toHaveBeenCalled();
-      expect(host.persistLlmConfig).toHaveBeenCalled();
+      expect(host.persistAssistantConfig).not.toHaveBeenCalled();
+      expect(host.persistLlmConfig).not.toHaveBeenCalled();
     } finally {
       delete process.env.GOATCITADEL_MESH_JOIN_TOKEN;
     }
@@ -1257,7 +1257,7 @@ describe("settings-auth-service durable settings", () => {
     expect(host.llamaCppRuntime.start).toHaveBeenCalledWith("config_autostart");
   });
 
-  it("persists submitted provider keys through the secret path before updating LLM runtime config", () => {
+  it("rejects submitted provider keys before mutating secret, config, or persistence owners", () => {
     const host = buildHost();
     host.llmService.getProviderSecretStatus = vi.fn((providerId: string) => ({
       providerId,
@@ -1267,30 +1267,25 @@ describe("settings-auth-service durable settings", () => {
       apiKeyRef: `keychain:goatcitadel:provider:${providerId}`,
     }));
 
-    const settings = updateSettings(host, {
-      llm: {
-        upsertProvider: {
-          providerId: "openai",
-          label: "OpenAI",
-          baseUrl: "https://api.openai.com/v1",
-          apiStyle: "openai-responses",
-          defaultModel: "gpt-5.4-mini",
-          apiKey: " sk-live ",
-          apiKeyEnv: "OPENAI_API_KEY",
+    expect(() =>
+      updateSettings(host, {
+        llm: {
+          upsertProvider: {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-responses",
+            defaultModel: "gpt-5.4-mini",
+            apiKey: " sk-live ",
+            apiKeyEnv: "OPENAI_API_KEY",
+          },
         },
-      },
-    });
-
-    expect(host.llmService.setProviderApiKey).toHaveBeenCalledWith("openai", "sk-live");
-    expect(host.llmService.updateRuntimeConfig).toHaveBeenCalledWith({
-      upsertProvider: expect.objectContaining({
-        providerId: "openai",
-        apiKey: undefined,
-        apiKeyEnv: "OPENAI_API_KEY",
       }),
-    });
-    expect(host.persistLlmConfig).toHaveBeenCalled();
-    expect(settings.llm.providers).toEqual([]);
+    ).toThrow(/provider secret endpoint/i);
+
+    expect(host.llmService.setProviderApiKey).not.toHaveBeenCalled();
+    expect(host.llmService.updateRuntimeConfig).not.toHaveBeenCalled();
+    expect(host.persistLlmConfig).not.toHaveBeenCalled();
   });
 
   it("clears blank auth fields while preserving explicit loopback bypass updates in open mode", () => {

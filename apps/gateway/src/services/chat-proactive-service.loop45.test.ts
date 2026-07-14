@@ -577,6 +577,9 @@ function createStorage(state: HarnessState) {
         return checkpoint;
       },
     },
+    durableRunEvents: {
+      append: vi.fn(),
+    },
     approvals: {
       get: vi.fn(),
       mergeLinkage: vi.fn(),

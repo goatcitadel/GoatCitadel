@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
-import { createExecuteToolCallForTest, createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  createEffectAwareInvokeToolForTest,
+  createExecuteToolCallForTest,
+  createMockStorage,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 import { IMPROVEMENT_TUNE_SETTING_KEYS } from "./improvement-tune-reads.js";
 
 describe("ChatTurnAgentRunner tool preflight coverage", () => {
@@ -251,6 +255,7 @@ describe("ChatTurnAgentRunner tool preflight coverage", () => {
 function createExecuteToolCall(input: { invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult> }) {
   return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
+    invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(input.invokeTool),
     toolNames: ["browser.search", "browser.navigate", "http.get", "memory.search", "memory.write"],
   });
 }

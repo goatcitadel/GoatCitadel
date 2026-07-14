@@ -4,6 +4,7 @@ import type {
   RuntimeLifecycleHookTrigger,
 } from "@goatcitadel/contracts";
 import type { HooksService } from "./hooks-service.js";
+import type { ToolCallBeforeHookInterpositionBinding } from "./tool-runtime-interposition.js";
 
 type ObserveHooksService = Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
 
@@ -36,6 +37,8 @@ function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
     entityId: string;
     idempotencyDiscriminator?: string;
     payload: RuntimeLifecycleHookPayloadByTrigger[TTrigger];
+    expectedInterposition?: ToolCallBeforeHookInterpositionBinding;
+    beforeExternalDispatch?: () => void;
   },
 ): void {
   hooksService.enqueueAfterHooks({
@@ -45,6 +48,8 @@ function enqueueObserveHook<TTrigger extends RuntimeLifecycleHookTrigger>(
     entityId: input.entityId,
     ...(input.idempotencyDiscriminator ? { idempotencyDiscriminator: input.idempotencyDiscriminator } : {}),
     payload: input.payload as unknown as Record<string, unknown>,
+    ...(input.expectedInterposition ? { expectedInterposition: input.expectedInterposition } : {}),
+    ...(input.beforeExternalDispatch ? { beforeExternalDispatch: input.beforeExternalDispatch } : {}),
   });
 }
 

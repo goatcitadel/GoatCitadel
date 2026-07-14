@@ -19,9 +19,21 @@ import {
   normalizeChannelCommandInput,
 } from "./channel-command-contract.js";
 import { getPersonalityPreset, listPersonalityPresets, normalizePersonalityId } from "./channel-personalities.js";
+import type {
+  DurableInboundChannelAcceptInput,
+  DurableInboundChannelAcceptResult,
+} from "./channel-inbound-dispatch.js";
+import type {
+  InboundChannelCommandExecutionInput,
+  InboundChannelCommandResult,
+} from "./inbound-channel-event-service.js";
 
 const DEFAULT_DISCORD_WORKSPACE_ID = "default";
 const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
+const DISCORD_APPROVAL_VERSION_KEY = "discordApprovalVersion";
+const DISCORD_APPROVAL_DECISION_KEY = "discordApprovalDecision";
+const DISCORD_APPROVAL_LOOKUP_STATUS_KEY = "discordApprovalLookupStatus";
+const DISCORD_APPROVAL_ACTION_ID_KEY = "discordApprovalActionId";
 
 export interface DiscordRouteSessionRecord {
   connectionId: string;
@@ -80,6 +92,9 @@ export interface DiscordRuntimeBridgeHost {
     invalidate(): void;
   };
   assignChatSessionProject(sessionId: string, projectId?: string): unknown;
+  acceptInboundChannelEvent(input: DurableInboundChannelAcceptInput): Promise<DurableInboundChannelAcceptResult>;
+  awaitInboundChannelCommandResult(inboundEventId: string): Promise<InboundChannelCommandResult>;
+  findRemoteActionTokenId(token: string): string | undefined;
   cancelLatestActiveChatTurnForSession(
     sessionId: string,
     cancelledBy?: string,
@@ -124,6 +139,12 @@ export interface DiscordRuntimeBridgeHost {
   requireChatSession(sessionId: string): ChatSessionRecord;
   resolveApprovalWithRemoteToken(input: {
     token: string;
+    connectorId: string;
+    decision: ApprovalResolveInput["decision"];
+    resolvedBy?: string;
+  }): Promise<ApprovalResolveResult>;
+  resolveApprovalWithRemoteTokenId(input: {
+    tokenId: string;
     connectorId: string;
     decision: ApprovalResolveInput["decision"];
     resolvedBy?: string;
@@ -295,6 +316,169 @@ export function startNewDiscordRouteSession(
   return host.requireChatSession(createdSession.sessionId);
 }
 
+/**
+ * Persist a slash-command envelope before Discord receives its interaction
+ * acknowledgement. The durable inbound worker, rather than the provider
+ * callback, owns command execution and terminal result settlement.
+ */
+export async function acceptDiscordRuntimeSlashCommand(
+  host: DiscordRuntimeBridgeHost,
+  input: {
+    connectionId: string;
+    target: string;
+    actorId: string;
+    displayName?: string;
+    commandText: string;
+    sourceCommandId: string;
+    peer?: string;
+    room?: string;
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<DurableInboundChannelAcceptResult> {
+  const route = resolveDiscordInboundRoute(host, input);
+  const durableCommand = buildDurableDiscordCommand(host, input.commandText, input.metadata);
+  return host.acceptInboundChannelEvent({
+    channel: "discord",
+    connectionId: input.connectionId,
+    idempotencyKey: `discord:${input.connectionId}:interaction:${input.sourceCommandId}`,
+    eventType: "discord-gateway-slash-command",
+    bindingTarget: input.target,
+    dispatchKind: "command",
+    message: {
+      eventId: input.sourceCommandId,
+      account: input.connectionId,
+      peer: route.peer,
+      room: route.room,
+      threadId: route.threadId,
+      actorId: input.actorId,
+      actorType: "user",
+      content: durableCommand.commandText,
+      displayName: input.displayName,
+      metadata: durableCommand.metadata,
+    },
+  });
+}
+
+type DiscordApprovalDecision = "approve" | "reject";
+
+function buildDurableDiscordCommand(
+  host: DiscordRuntimeBridgeHost,
+  commandText: string,
+  metadata: Record<string, unknown> | undefined,
+): { commandText: string; metadata?: Record<string, unknown> } {
+  const command = normalizeChannelCommandInput(commandText, { platform: "discord" });
+  if (!command.approvalDecision || !command.command) {
+    return { commandText, metadata };
+  }
+  if (!command.approvalToken) {
+    return { commandText: command.command, metadata };
+  }
+  const approvalActionId = host.findRemoteActionTokenId(command.approvalToken);
+  return {
+    // The raw single-use bearer value must never cross the durable boundary.
+    commandText: command.command,
+    metadata: {
+      ...metadata,
+      [DISCORD_APPROVAL_VERSION_KEY]: 1,
+      [DISCORD_APPROVAL_DECISION_KEY]: command.approvalDecision,
+      [DISCORD_APPROVAL_LOOKUP_STATUS_KEY]: approvalActionId ? "resolved" : "not_found",
+      ...(approvalActionId ? { [DISCORD_APPROVAL_ACTION_ID_KEY]: approvalActionId } : {}),
+    },
+  };
+}
+
+function readDurableDiscordApproval(
+  metadata: Record<string, unknown> | undefined,
+): { decision: DiscordApprovalDecision; tokenId?: string } | undefined {
+  const version = metadata?.[DISCORD_APPROVAL_VERSION_KEY];
+  if (version === undefined) {
+    return undefined;
+  }
+  const decision = metadata?.[DISCORD_APPROVAL_DECISION_KEY];
+  const lookupStatus = metadata?.[DISCORD_APPROVAL_LOOKUP_STATUS_KEY];
+  const actionId = readString(metadata?.[DISCORD_APPROVAL_ACTION_ID_KEY]);
+  if (
+    version !== 1 ||
+    (decision !== "approve" && decision !== "reject") ||
+    (lookupStatus !== "resolved" && lookupStatus !== "not_found") ||
+    (lookupStatus === "resolved" && !actionId) ||
+    (lookupStatus === "not_found" && actionId)
+  ) {
+    throw new Error("Durable Discord approval command metadata is invalid.");
+  }
+  return { decision, tokenId: actionId };
+}
+
+function renderDiscordApprovalResolution(result: ApprovalResolveResult, decision: DiscordApprovalDecision): string {
+  return decision === "approve"
+    ? `Approved ${result.approval.approvalId}. GoatCitadel will resume any waiting work it can safely resume.`
+    : `Rejected ${result.approval.approvalId}. GoatCitadel will keep the requested action blocked.`;
+}
+
+/** Execute only the allowlisted Discord command event reconstructed from its durable envelope. */
+export async function executeDiscordRuntimeInboundCommand(
+  host: DiscordRuntimeBridgeHost,
+  input: InboundChannelCommandExecutionInput,
+): Promise<{ resultText: string }> {
+  if (input.channel !== "discord" || input.eventType !== "discord-gateway-slash-command") {
+    throw new Error(`Unsupported durable inbound command event: ${input.channel}/${input.eventType}`);
+  }
+  const target = input.bindingTarget?.trim();
+  if (!target) {
+    throw new Error("Durable Discord slash command is missing its binding target.");
+  }
+  if (input.operationKey !== input.idempotencyKey) {
+    throw new Error("Durable Discord slash command operation identity does not match its acceptance identity.");
+  }
+  const durableApproval = readDurableDiscordApproval(input.message.metadata);
+  if (durableApproval) {
+    const command = normalizeChannelCommandInput(input.message.content, { platform: "discord" });
+    if (command.approvalDecision !== durableApproval.decision || command.approvalToken) {
+      throw new Error("Durable Discord approval command does not match its secret-free command metadata.");
+    }
+    if (!durableApproval.tokenId) {
+      return { resultText: "The approval action token was not recognized. Request a fresh approval message." };
+    }
+    const result = await host.resolveApprovalWithRemoteTokenId({
+      tokenId: durableApproval.tokenId,
+      connectorId: `integration:${input.connectionId}`,
+      decision: durableApproval.decision,
+      resolvedBy: `discord:${input.message.actorId}`,
+    });
+    return { resultText: renderDiscordApprovalResolution(result, durableApproval.decision) };
+  }
+  const resultText = await handleDiscordRuntimeSlashCommand(host, {
+    connectionId: input.connectionId,
+    target,
+    actorId: input.message.actorId,
+    displayName: input.message.displayName,
+    commandText: input.message.content,
+    sourceCommandId: input.message.eventId,
+    peer: input.message.peer,
+    room: input.message.room,
+    threadId: input.message.threadId,
+    metadata: input.message.metadata,
+    operationKey: input.operationKey,
+  });
+  return { resultText };
+}
+
+/** Map durable terminal state to bounded provider-safe copy. */
+export async function awaitDiscordRuntimeSlashCommandResult(
+  host: DiscordRuntimeBridgeHost,
+  inboundEventId: string,
+): Promise<string> {
+  const result = await host.awaitInboundChannelCommandResult(inboundEventId);
+  if (result.status === "completed") {
+    return result.resultText;
+  }
+  if (result.status === "manual_reconciliation_required") {
+    return `Command was durably accepted but needs operator reconciliation before it can be retried. Event ${inboundEventId}.`;
+  }
+  return `Command was durably accepted but could not be completed. Inspect event ${inboundEventId} in GoatCitadel Ops.`;
+}
+
 export async function handleDiscordRuntimeSlashCommand(
   host: DiscordRuntimeBridgeHost,
   input: {
@@ -308,6 +492,7 @@ export async function handleDiscordRuntimeSlashCommand(
     room?: string;
     threadId?: string;
     metadata?: Record<string, unknown>;
+    operationKey?: string;
   },
 ): Promise<string> {
   const commandText = input.commandText.trim();
@@ -343,9 +528,7 @@ export async function handleDiscordRuntimeSlashCommand(
       decision: normalizedCommand.approvalDecision,
       resolvedBy: `discord:${input.actorId}`,
     });
-    return normalizedCommand.approvalDecision === "approve"
-      ? `Approved ${result.approval.approvalId}. GoatCitadel will resume any waiting work it can safely resume.`
-      : `Rejected ${result.approval.approvalId}. GoatCitadel will keep the requested action blocked.`;
+    return renderDiscordApprovalResolution(result, normalizedCommand.approvalDecision);
   }
   if (
     normalizedCommand.name === "status" ||
@@ -589,10 +772,14 @@ export async function handleDiscordRuntimeInbound(
   },
 ): Promise<void> {
   const route = resolveDiscordInboundRoute(host, input);
-  const ingestResult = await host.ingestChannelMessage(
-    "discord",
-    `discord:${input.connectionId}:${input.sourceMessageId}`,
-    {
+  await host.acceptInboundChannelEvent({
+    channel: "discord",
+    connectionId: input.connectionId,
+    idempotencyKey: `discord:${input.connectionId}:${input.sourceMessageId}`,
+    eventType: "discord-gateway-message",
+    bindingTarget: input.target,
+    dispatchKind: "agent_turn",
+    message: {
       eventId: input.sourceMessageId,
       account: input.connectionId,
       peer: route.peer,
@@ -604,109 +791,7 @@ export async function handleDiscordRuntimeInbound(
       displayName: input.displayName,
       metadata: input.metadata,
     },
-  );
-  host.setChatSessionBinding({
-    sessionId: ingestResult.session.sessionId,
-    transport: "integration",
-    connectionId: input.connectionId,
-    target: input.target,
-    writable: true,
   });
-  if (!ingestResult.deduped && host.hasRunningTurn(ingestResult.session.sessionId)) {
-    host.recordDevDiagnostic({
-      level: "warn",
-      category: "channels",
-      event: "discord.gateway.active_run_guard",
-      message:
-        "Discord inbound message was ingested, but reply generation was skipped because a run is already active.",
-      context: {
-        connectionId: input.connectionId,
-        sessionId: ingestResult.session.sessionId,
-        sourceMessageId: input.sourceMessageId,
-      },
-    });
-    return;
-  }
-  if (!ingestResult.deduped) {
-    await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "seen");
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "thinking");
-        const response = await host.respondToExistingChatMessage(ingestResult.session.sessionId, input.sourceMessageId);
-        await emitDiscordInboundActivity(
-          host,
-          input,
-          ingestResult.session.sessionId,
-          response.trace?.status === "waiting_for_approval" ? "waiting_approval" : "clear",
-          response.turnId,
-        );
-        return;
-      } catch (error) {
-        if (!host.isChatTurnWriteConflict(error)) {
-          await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "failed");
-          throw error;
-        }
-        if (attempt >= 3) {
-          host.recordDevDiagnostic({
-            level: "warn",
-            category: "channels",
-            event: "discord.gateway.reply_conflict",
-            message: "Discord inbound message was ingested, but reply generation conflicted with an active chat turn.",
-            context: {
-              connectionId: input.connectionId,
-              sessionId: ingestResult.session.sessionId,
-              sourceMessageId: input.sourceMessageId,
-              attempt,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
-          await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "failed");
-          return;
-        }
-        await wait(attempt * 750);
-      }
-    }
-  }
-}
-
-async function emitDiscordInboundActivity(
-  host: DiscordRuntimeBridgeHost,
-  input: {
-    connectionId: string;
-    target: string;
-    sourceMessageId: string;
-    threadId?: string;
-  },
-  sessionId: string,
-  phase: ChannelActivityInput["phase"],
-  turnId?: string,
-): Promise<void> {
-  try {
-    await host.emitChannelActivity({
-      connectionId: input.connectionId,
-      target: input.target,
-      messageId: input.sourceMessageId,
-      threadId: input.threadId,
-      sessionId,
-      turnId,
-      phase,
-      correlationId: `discord:${input.connectionId}:${input.sourceMessageId}`,
-    });
-  } catch (error) {
-    host.recordDevDiagnostic({
-      level: "warn",
-      category: "channels",
-      event: "discord.gateway.activity_failed",
-      message: "Discord gateway activity signal failed and the inbound reply flow continued.",
-      context: {
-        connectionId: input.connectionId,
-        sessionId,
-        sourceMessageId: input.sourceMessageId,
-        phase,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
 }
 
 export function cloneChatSessionContext(
@@ -728,8 +813,4 @@ export function cloneChatSessionContext(
   if (projectId) {
     host.assignChatSessionProject(targetSessionId, projectId);
   }
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

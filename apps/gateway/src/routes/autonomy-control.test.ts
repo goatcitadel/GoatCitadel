@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { autonomyControlRoutes } from "./autonomy-control.js";
 
 describe("autonomy control routes", () => {
@@ -23,6 +24,7 @@ describe("autonomy control routes", () => {
 
   it("returns autonomy status from the service", async () => {
     const getStatus = vi.fn(() => ({
+      revision: 7,
       killSwitchEngaged: false,
       autonomyEnabled: true,
       audit: { totalEntries: 3, unrevertedEntries: 1, byKind: [], recent: [] },
@@ -33,11 +35,11 @@ describe("autonomy control routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(getStatus).toHaveBeenCalledTimes(1);
-    expect(response.json()).toMatchObject({ autonomyEnabled: true, audit: { unrevertedEntries: 1 } });
+    expect(response.json()).toMatchObject({ revision: 7, autonomyEnabled: true, audit: { unrevertedEntries: 1 } });
   });
 
   it("forwards an optional recentLimit query", async () => {
-    const getStatus = vi.fn(() => ({ killSwitchEngaged: false, autonomyEnabled: true, audit: {} }));
+    const getStatus = vi.fn(() => ({ revision: 7, killSwitchEngaged: false, autonomyEnabled: true, audit: {} }));
     const instance = await buildApp({ getStatus });
 
     const response = await instance.inject({ method: "GET", url: "/api/v1/admin/autonomy/status?recentLimit=5" });
@@ -99,7 +101,8 @@ describe("autonomy control routes", () => {
   });
 
   it("toggles the master kill switch", async () => {
-    const setKillSwitch = vi.fn((disabled: boolean) => ({
+    const setKillSwitch = vi.fn(async (disabled: boolean, expectedRevision: number) => ({
+      revision: expectedRevision + 1,
       killSwitchEngaged: disabled,
       autonomyEnabled: !disabled,
       audit: { totalEntries: 0, unrevertedEntries: 0, byKind: [], recent: [] },
@@ -109,18 +112,80 @@ describe("autonomy control routes", () => {
     const response = await instance.inject({
       method: "POST",
       url: "/api/v1/admin/autonomy/kill-switch",
-      payload: { disabled: true },
+      payload: { disabled: true, expectedRevision: 7 },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(setKillSwitch).toHaveBeenCalledWith(true);
-    expect(response.json()).toMatchObject({ killSwitchEngaged: true, autonomyEnabled: false });
+    expect(setKillSwitch).toHaveBeenCalledWith(true, 7);
+    expect(response.json()).toMatchObject({ revision: 8, killSwitchEngaged: true, autonomyEnabled: false });
 
     const invalid = await instance.inject({
       method: "POST",
       url: "/api/v1/admin/autonomy/kill-switch",
-      payload: { disabled: "yes" },
+      payload: { disabled: "yes", expectedRevision: 8 },
     });
     expect(invalid.statusCode).toBe(400);
+  });
+
+  it.each([
+    { disabled: true },
+    { disabled: true, expectedRevision: 0 },
+    { disabled: true, expectedRevision: -1 },
+    { disabled: true, expectedRevision: 1.5 },
+  ])("rejects missing or non-positive integer kill-switch revisions: %j", async (payload) => {
+    const setKillSwitch = vi.fn();
+    const instance = await buildApp({ setKillSwitch });
+
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/v1/admin/autonomy/kill-switch",
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(setKillSwitch).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured 409 when a stale client attempts a kill-switch mutation", async () => {
+    const setKillSwitch = vi.fn(async () => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings changed after this client loaded them.",
+        details: { expectedRevision: 7, currentRevision: 8 },
+      });
+    });
+    const instance = await buildApp({ setKillSwitch });
+
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/v1/admin/autonomy/kill-switch",
+      payload: { disabled: true, expectedRevision: 7 },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      details: { expectedRevision: 7, currentRevision: 8 },
+    });
+    expect(setKillSwitch).toHaveBeenCalledWith(true, 7);
+  });
+
+  it("returns a structured 409 when status reads are generation-fenced", async () => {
+    const getStatus = vi.fn(() => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Config generation owner reconciliation is still pending.",
+        details: { currentRevision: 8, transactionState: "committed" },
+      });
+    });
+    const instance = await buildApp({ getStatus });
+
+    const response = await instance.inject({ method: "GET", url: "/api/v1/admin/autonomy/status" });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      details: { currentRevision: 8, transactionState: "committed" },
+    });
   });
 });

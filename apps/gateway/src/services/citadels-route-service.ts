@@ -18,6 +18,7 @@ import type {
   CitadelMemberInput,
   MasonAnswers,
   MasonSession,
+  ModelUsageAttributionContext,
   CitadelPassage,
   CitadelPassageInput,
   CitadelRecord,
@@ -48,9 +49,10 @@ import {
   validateCitadelBlueprint,
 } from "@goatcitadel/contracts";
 import { openValue, sealValue } from "@goatcitadel/contracts/citadel-vault-node";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 /** Interprets a freeform message into raw model output (the Mason's one LLM dependency). */
-export type MasonInterpret = (prompt: string) => Promise<string>;
+export type MasonInterpret = (prompt: string, attribution: ModelUsageAttributionContext) => Promise<string>;
 
 /**
  * Resolves the per-Citadel Vault master key. Returns undefined when the secret
@@ -343,7 +345,20 @@ export class CitadelsRouteService {
       return { ok: false, reason: "no_interpreter" };
     }
     const prompt = buildMasonInterpretPrompt(message, session.answers);
-    const raw = await this.masonInterpret(prompt);
+    const raw = await this.masonInterpret(
+      prompt,
+      createUtilityModelUsageAttribution({
+        operationId: `mason:${encodeURIComponent(session.sessionId)}:answer-extraction`,
+        utilityKind: "mason_answer_extraction",
+        lineage: {
+          // Mason sessions are global setup records and currently carry no
+          // trusted workspace or Chat-session binding. Keep that scope absent
+          // instead of deriving it from request metadata.
+          sessionId: session.sessionId,
+          agentId: "mason",
+        },
+      }),
+    );
     const patch = parseMasonInterpretResponse(raw);
     const updated = this.citadels.updateMasonSessionAnswers(sessionId, patch) ?? session;
     return { ok: true, session: updated };

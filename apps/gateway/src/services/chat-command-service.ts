@@ -18,8 +18,6 @@ import type {
   ChatSessionRecord,
   ChatThinkingLevel,
   ChatWebMode,
-  CapabilityProposalKind,
-  CapabilityProposalRecord,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   MemoryItemRecord,
@@ -30,6 +28,7 @@ import type {
   SkillImportSourceType,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
+import type { SkillLearningHistoryPage, SkillLearningResult } from "./skill-learning-service.js";
 import { getPersonalityPreset, normalizePersonalityId } from "./channel-personalities.js";
 import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
 import { handleGoalCommand } from "./chat-goal-command.js";
@@ -61,14 +60,24 @@ export interface ChatCommandDependencies {
     costTier?: McpServerRecord["costTier"];
     policy?: McpServerRecord["policy"];
   }): McpServerRecord;
-  createCapabilityProposal(input: {
-    proposalKind: CapabilityProposalKind;
-    title: string;
-    summary: string;
-    payload: Record<string, unknown>;
-    candidateId?: string;
-    activationTargetId?: string;
-  }): CapabilityProposalRecord;
+  learnSkillFromLatestTurn(input: {
+    sessionId: string;
+    correction: string;
+    actor: { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
+    idempotencyKey?: string;
+  }): Promise<SkillLearningResult>;
+  createSkillLearningHistoryDryRun(input: {
+    sessionId: string;
+    actor: { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
+    cursor?: string;
+  }): SkillLearningHistoryPage;
+  applySkillLearningHistorySelection(input: {
+    sessionId: string;
+    selectionToken: string;
+    reviewOutcome: "selected";
+    actor: { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
+    idempotencyKey?: string;
+  }): Promise<SkillLearningResult>;
   disconnectMcpServer(serverId: string): McpServerRecord;
   getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
   getMemoryMaintenanceStatus(workspaceId: string): {
@@ -254,6 +263,8 @@ export type ChatCommandResult = {
   prefs?: ChatSessionPrefsRecord;
   research?: ResearchSummaryRecord;
   session?: ChatSessionRecord;
+  learning?: SkillLearningResult;
+  learningHistory?: SkillLearningHistoryPage;
 };
 
 export type ChatCommandOptions = {
@@ -273,6 +284,7 @@ export type ChatCommandOptions = {
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   surface?: ToolPolicyActorContext["surface"];
+  idempotencyKey?: string;
 };
 
 export interface ChatCommandCatalogItem {
@@ -325,7 +337,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
     { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
     { command: "/undo", usage: "/undo [N]", description: "Remove the last N completed turns from this session." },
-    { command: "/think", usage: "/think off|minimal|standard|extended|deep", description: "Set thinking depth." },
+    {
+      command: "/think",
+      usage: "/think off|minimal|standard|extended|deep|max|ultra",
+      description: "Set thinking depth; max/ultra require explicit model support.",
+    },
     { command: "/speed", usage: "/speed standard|fast", description: "Set response speed preference." },
     {
       command: "/subagents",
@@ -342,8 +358,18 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     { command: "/reflect", usage: "/reflect off|on", description: "Toggle reflection retry mode." },
     {
       command: "/learn",
-      usage: "/learn <capability gap or reusable workflow>",
-      description: "Create a governed learning proposal without activating a skill.",
+      usage: "/learn into candidate skill <correction>",
+      description: "Record an explicit correction as governed evidence; stage only an inactive recurring candidate.",
+    },
+    {
+      command: "/learn",
+      usage: "/learn history [cursor]",
+      description: "Dry-run bounded history corrections without writing candidates or memory.",
+    },
+    {
+      command: "/learn",
+      usage: "/learn apply <selection-token>",
+      description: "Apply one explicitly selected history correction through the governed learning path.",
     },
     { command: "/research", usage: "/research <query>", description: "Run quick research for current session." },
     {
@@ -716,8 +742,8 @@ export async function parseChatCommand(
 
   if (command === "/think") {
     const thinkingLevel = (args[0] ?? "").toLowerCase() as ChatThinkingLevel;
-    if (!["off", "minimal", "standard", "extended", "deep"].includes(thinkingLevel)) {
-      return { ok: false, command, args, message: "Usage: /think off|minimal|standard|extended|deep" };
+    if (!["off", "minimal", "standard", "extended", "deep", "max", "ultra"].includes(thinkingLevel)) {
+      return { ok: false, command, args, message: "Usage: /think off|minimal|standard|extended|deep|max|ultra" };
     }
     const prefs = deps.updateChatSessionPrefs(sessionId, { thinkingLevel });
     return { ok: true, command, args, prefs, message: `Thinking level set to ${prefs.thinkingLevel}.` };
@@ -799,42 +825,56 @@ export async function parseChatCommand(
   }
 
   if (command === "/learn") {
-    const request = args.join(" ").trim();
-    if (!request) {
-      return { ok: false, command, args, message: "Usage: /learn <capability gap or reusable workflow>" };
+    const actor = {
+      actorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+    };
+    const exactCorrection = /^\/learn[ \t]+into[ \t]+candidate[ \t]+skill[ \t]([\s\S]+)$/iu.exec(commandText)?.[1];
+    if (exactCorrection !== undefined) {
+      const learning = await deps.learnSkillFromLatestTurn({
+        sessionId,
+        correction: exactCorrection,
+        actor,
+        idempotencyKey: options?.idempotencyKey,
+      });
+      return {
+        ok: true,
+        command,
+        args,
+        learning,
+        message: renderSkillLearningResult(learning),
+      };
     }
-    const workspaceId = deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(sessionId).workspaceId);
-    const proposal = deps.createCapabilityProposal({
-      proposalKind: "skill",
-      title: buildLearnCommandProposalTitle(request),
-      summary: `Governed learning proposal from chat: ${truncateCommandLine(request, 180)}`,
-      payload: {
-        proposalType: "learn_command_capability_proposal",
-        source: {
-          command,
-          sessionId,
-          workspaceId,
-        },
-        request,
-        governance: {
-          proposalOnly: true,
-          directMemoryWrite: false,
-          directSkillInstall: false,
-          directCallableActivation: false,
-          activationRequired: "operator_review",
-        },
-        suggestedNextSteps: [
-          "Review the proposal in the capability catalog.",
-          "Create or attach an inspectable candidate before enabling any callable skill.",
-          "Apply normal approval, provenance, and policy checks before activation.",
-        ],
-      },
-    });
+    if ((args[0] ?? "").toLowerCase() === "history" && args.length <= 2) {
+      const learningHistory = deps.createSkillLearningHistoryDryRun({
+        sessionId,
+        actor,
+        cursor: args[1],
+      });
+      return {
+        ok: true,
+        command,
+        args,
+        learningHistory,
+        message: renderSkillLearningHistory(learningHistory),
+      };
+    }
+    if ((args[0] ?? "").toLowerCase() === "apply" && args.length === 2 && args[1]) {
+      const learning = await deps.applySkillLearningHistorySelection({
+        sessionId,
+        selectionToken: args[1],
+        reviewOutcome: "selected",
+        actor,
+        idempotencyKey: options?.idempotencyKey,
+      });
+      return { ok: true, command, args, learning, message: renderSkillLearningResult(learning) };
+    }
     return {
-      ok: true,
+      ok: false,
       command,
       args,
-      message: `Created governed learning proposal ${proposal.proposalId}. Review-only: no memory was written, no skill was installed, and nothing was made callable.`,
+      message:
+        "Usage: /learn into candidate skill <correction> | /learn history [cursor] | /learn apply <selection-token>",
     };
   }
 
@@ -1478,16 +1518,62 @@ function resolveCommandActor(options: ChatCommandOptions | undefined): string {
   return options?.resolvedBy?.trim() || options?.authActorId?.trim() || options?.operatorId?.trim() || "chat-command";
 }
 
-function buildLearnCommandProposalTitle(request: string): string {
-  return `Learn: ${truncateCommandLine(request, 72)}`;
+function renderSkillLearningResult(result: SkillLearningResult): string {
+  const recurrence = `${result.recurrence.distinctSessionCount}/${result.recurrence.minimumDistinctSessions} distinct sessions`;
+  const boundary = "No durable memory was written and nothing was made callable.";
+  if (result.outcome === "candidate_created") {
+    return [
+      `Staged inactive learned candidate ${result.candidateId} (${result.versionId}) from ${recurrence}.`,
+      `Review proposal: ${result.proposalId}. Separate evaluation, approval, and promotion are still required.`,
+      boundary,
+    ].join("\n");
+  }
+  if (result.outcome === "evidence_recorded") {
+    const status = result.recurrence.automaticStagingEligible
+      ? "The evidence is linked to the existing governed candidate; no new version or proposal was created."
+      : "The recurrence threshold is not met, so no candidate or proposal was created.";
+    return [`Recorded clean correction evidence ${result.evidenceId} (${recurrence}).`, status, boundary].join("\n");
+  }
+  const blockers = result.blockerCodes.length > 0 ? result.blockerCodes.join(", ") : "unspecified_guard";
+  return [
+    `Recorded ${result.outcome} correction evidence ${result.evidenceId}; candidate staging was denied (${blockers}).`,
+    boundary,
+  ].join("\n");
 }
 
-function truncateCommandLine(value: string, maxLength: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
+function renderSkillLearningHistory(page: SkillLearningHistoryPage): string {
+  const lines = [
+    `History learning dry-run at sequence ${page.highWater.snapshotMaxSequence}; ${page.items.length} selection(s) pending explicit review.`,
+    "Dry-run only: no candidate, proposal, or memory write occurred.",
+  ];
+  for (const item of page.items) {
+    lines.push(
+      "",
+      `${item.selectionId}: ${item.title}${item.secretLike ? " [secret-like; previews suppressed]" : ""}`,
+      `correction provenance: ${renderCorrectionOrigin(item.correctionOrigin)}; actor ${item.correctionActor.actorType}/${item.correctionActor.actorIdLabel}; actor sha256 ${item.correctionActor.actorIdSha256}`,
+      `source sha256 ${item.sourceSha256}; correction sha256 ${item.correctionSha256}`,
+      ...(item.sourcePreview ? [`source: ${item.sourcePreview}`] : []),
+      ...(item.correctionPreview ? [`correction: ${item.correctionPreview}`] : []),
+      `Apply: /learn apply ${item.selectionToken}`,
+    );
   }
-  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  if (page.nextCursor) lines.push("", `Continue: /learn history ${page.nextCursor}`);
+  return lines.join("\n");
+}
+
+function renderCorrectionOrigin(origin: SkillLearningHistoryPage["items"][number]["correctionOrigin"]): string {
+  switch (origin) {
+    case "authenticated_operator":
+      return "authenticated operator";
+    case "model":
+      return "model/agent (will quarantine)";
+    case "tool":
+      return "tool (will quarantine)";
+    case "browser":
+      return "browser/external (will quarantine)";
+    default:
+      return "unknown/foreign (will quarantine)";
+  }
 }
 
 function formatDelegationCommandStatus(status: string | undefined): string {

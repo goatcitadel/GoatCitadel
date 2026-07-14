@@ -622,9 +622,9 @@ describe("GatewayService low-hanging facade delegation", () => {
     });
     await expect(GatewayService.prototype.pruneRetention.call(gateway)).resolves.toEqual({ options: {} });
     await expect(
-      GatewayService.prototype.runDatabaseCutover.call(gateway, { profile: "sqlite", execute: false }),
+      GatewayService.prototype.runDatabaseCutover.call(gateway, { profile: "local", execute: false }),
     ).resolves.toEqual({
-      input: { profile: "sqlite", execute: false },
+      input: { profile: "local", execute: false },
       cutover: true,
     });
     await expect(GatewayService.prototype.verifyDatabaseCutover.call(gateway, { source: "sqlite" })).resolves.toEqual({
@@ -681,7 +681,17 @@ describe("GatewayService low-hanging facade delegation", () => {
       enqueueResolutionEffects: vi.fn((approval: unknown, input: unknown) => [{ approval, input }]),
     };
 
-    expect(GatewayService.prototype.listToolCatalog.call(gateway)).toEqual([{ toolName: "browser.search" }]);
+    expect(GatewayService.prototype.listToolCatalog.call(gateway)).toEqual([
+      {
+        toolName: "browser.search",
+        effectPotential: {
+          version: "goatcitadel.tool-effect.v1",
+          potential: "unknown",
+          sourceKind: "browser",
+          reason: "browser_runtime_may_cross_boundary",
+        },
+      },
+    ]);
     expect(
       GatewayService.prototype.evaluateToolAccess.call(gateway, {
         toolName: "browser.search",
@@ -1620,6 +1630,93 @@ describe("GatewayService low-hanging facade delegation", () => {
     expect(gateway.commsSend).toHaveBeenCalledTimes(1);
   });
 
+  it("binds a durable inbound identity through Chat admission and delivery", async () => {
+    const gateway = createGatewayHarness();
+    gateway.withChatTurnWriteLease = vi.fn(
+      async (_sessionId: string, _operation: string, work: () => Promise<unknown>) => work(),
+    );
+    gateway.ensureChatMessageProjection = vi.fn(async () => undefined);
+    gateway.prepareAgentChatTurn = vi.fn(async () => ({ userEventId: "message-inbound", turnId: "turn-inbound" }));
+    gateway.consumePreparedAgentChatTurn = vi.fn(async () => ({
+      turnId: "turn-inbound",
+      assistantMessage: { messageId: "assistant-inbound", content: "durable reply" },
+    }));
+    gateway.ensureSessionInternalToolGrant = vi.fn();
+    gateway.commsSend = vi.fn(async () => ({ outcome: "executed", result: { deliveryId: "delivery-1" } }));
+    gateway.requireExecutedToolResult = vi.fn(() => ({
+      deliveryId: "delivery-1",
+      providerMessageId: "provider-reply-1",
+    }));
+    gateway.storage = {
+      chatMessages: {
+        get: vi.fn(() => ({
+          messageId: "message-inbound",
+          sessionId: "session-1",
+          role: "user",
+          content: "durable inbound prompt",
+        })),
+      },
+      chatSessionBindings: {
+        get: vi.fn(() => ({
+          transport: "integration",
+          connectionId: "telegram-1",
+          target: "chat-1",
+          writable: true,
+        })),
+      },
+    };
+    const onDurableRunLaunched = vi.fn();
+    const onDeliveryEnqueued = vi.fn();
+    const inboundDurableIdentity = {
+      userMessageId: "message-inbound",
+      turnId: "turn-inbound",
+      assistantMessageId: "assistant-inbound",
+      durableRunId: "durable-inbound",
+      deliveryIdempotencyKey: "delivery-key-inbound",
+      onDurableRunLaunched,
+      onDeliveryEnqueued,
+    };
+
+    await GatewayService.prototype.respondToExistingChatMessage.call(gateway, "session-1", "message-inbound", {
+      deliveryReplyToMessageId: "provider-source-1",
+      inboundDurableIdentity,
+    });
+
+    expect(gateway.prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      { content: "durable inbound prompt" },
+      expect.objectContaining({
+        ingestUserMessage: false,
+        userMessageId: "message-inbound",
+        turnId: "turn-inbound",
+        assistantMessageId: "assistant-inbound",
+      }),
+    );
+    expect(gateway.consumePreparedAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      { content: "durable inbound prompt" },
+      expect.any(Object),
+      "chat_thread_turn_appended",
+      undefined,
+      {
+        durableRunId: "durable-inbound",
+        requireDurableExecution: true,
+        onChildDurableRunLaunched: onDurableRunLaunched,
+      },
+    );
+    expect(gateway.commsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "delivery-key-inbound",
+        replyToMessageId: "provider-source-1",
+      }),
+    );
+    expect(onDeliveryEnqueued).toHaveBeenCalledWith({
+      deliveryId: "delivery-1",
+      providerMessageId: "provider-reply-1",
+      idempotencyKey: "delivery-key-inbound",
+    });
+  });
+
   it("rejects integration replies when source message or writable binding is missing", async () => {
     const gateway = createGatewayHarness();
     gateway.withChatTurnWriteLease = vi.fn(
@@ -1867,9 +1964,9 @@ describe("GatewayService low-hanging facade delegation", () => {
       providerId: "openai",
       model: "gpt-5.4-mini",
     });
-    expect(gateway.storage.chatSessionPrefs.patch).toHaveBeenCalledWith("session-1", {
-      model: "gpt-5.4-mini",
-    });
+    // Default normalization is a read-time projection. Persisting here would
+    // bypass the session aggregate revision/CAS owner.
+    expect(gateway.storage.chatSessionPrefs.patch).not.toHaveBeenCalled();
 
     expect(
       GatewayService.prototype.hydrateChatPrefsWithAutonomy.call(gateway, "session-1", {
@@ -1915,7 +2012,13 @@ describe("GatewayService low-hanging facade delegation", () => {
     const gateway = createGatewayHarness();
     const getCronJob = vi.fn();
     const setSystemSetting = vi.fn();
-    const upsertCronJob = vi.fn();
+    const mergeCronJobRuntimeTelemetry = vi.fn((jobId, patch) => ({
+      jobId,
+      name: "Private beta backup",
+      action: "backup",
+      enabled: true,
+      ...patch,
+    }));
     const createBackup = vi.fn(async () => ({
       backupId: "backup-1",
       outputPath: "backups/private-beta.zip",
@@ -1926,7 +2029,7 @@ describe("GatewayService low-hanging facade delegation", () => {
     gateway.storage = {
       cronJobs: {
         get: getCronJob,
-        upsert: upsertCronJob,
+        mergeRuntimeTelemetry: mergeCronJobRuntimeTelemetry,
       },
       systemSettings: {
         get: vi.fn(() => undefined),
@@ -1936,7 +2039,6 @@ describe("GatewayService low-hanging facade delegation", () => {
     gateway.createBackup = createBackup;
     gateway.pruneRetention = pruneRetention;
     gateway.publishRealtime = publishRealtime;
-    gateway.persistCronJobsConfig = vi.fn();
 
     getCronJob.mockReturnValueOnce({ jobId: "private-beta-backup", enabled: false });
     await (GatewayService.prototype as any).runPrivateBetaBackupSchedulerIfDue.call(gateway, { force: true });
@@ -1957,19 +2059,17 @@ describe("GatewayService low-hanging facade delegation", () => {
       expect(createBackup).toHaveBeenCalledWith({ name: "private-beta-20260515" });
       expect(pruneRetention).toHaveBeenCalledWith({ dryRun: false });
       expect(setSystemSetting).toHaveBeenCalledWith(expect.any(String), "2026-05-15");
-      expect(upsertCronJob).toHaveBeenCalledWith(
+      expect(mergeCronJobRuntimeTelemetry).toHaveBeenCalledWith(
+        "private-beta-backup",
         expect.objectContaining({
-          jobId: "private-beta-backup",
-          name: "Private beta backup",
-          enabled: true,
           lastRunAt: "2026-05-15T12:00:00.000Z",
           lastRunStatus: "ok",
           lastRunId: expect.any(String),
           failureCount: 0,
           nextRunAt: "2026-05-16T12:00:00.000Z",
         }),
+        "2026-05-15T12:00:00.000Z",
       );
-      expect(gateway.persistCronJobsConfig).toHaveBeenCalledTimes(1);
       expect(publishRealtime).toHaveBeenCalledWith("backup_created", "system", {
         type: "private_beta_daily_backup",
         backupId: "backup-1",
@@ -1983,7 +2083,13 @@ describe("GatewayService low-hanging facade delegation", () => {
 
   it("records private beta backup scheduler failure state and backoff", async () => {
     const gateway = createGatewayHarness();
-    const upsertCronJob = vi.fn((job) => job);
+    const mergeCronJobRuntimeTelemetry = vi.fn((jobId, patch) => ({
+      jobId,
+      name: "Private beta backup",
+      action: "backup",
+      enabled: true,
+      ...patch,
+    }));
     const createBackup = vi.fn(async () => {
       throw new Error("backup failed");
     });
@@ -1998,7 +2104,7 @@ describe("GatewayService low-hanging facade delegation", () => {
           actionConfig: {},
           failureCount: 1,
         })),
-        upsert: upsertCronJob,
+        mergeRuntimeTelemetry: mergeCronJobRuntimeTelemetry,
       },
       systemSettings: {
         get: vi.fn(() => undefined),
@@ -2007,7 +2113,6 @@ describe("GatewayService low-hanging facade delegation", () => {
     };
     gateway.createBackup = createBackup;
     gateway.publishRealtime = publishRealtime;
-    gateway.persistCronJobsConfig = vi.fn();
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:00:00.000Z"));
@@ -2016,9 +2121,9 @@ describe("GatewayService low-hanging facade delegation", () => {
         (GatewayService.prototype as any).runPrivateBetaBackupSchedulerIfDue.call(gateway, { force: true }),
       ).rejects.toThrow("backup failed");
 
-      expect(upsertCronJob).toHaveBeenCalledWith(
+      expect(mergeCronJobRuntimeTelemetry).toHaveBeenCalledWith(
+        "private-beta-backup",
         expect.objectContaining({
-          jobId: "private-beta-backup",
           lastRunAt: "2026-05-15T12:00:00.000Z",
           lastRunStatus: "failed",
           lastRunId: expect.any(String),
@@ -2027,8 +2132,8 @@ describe("GatewayService low-hanging facade delegation", () => {
           lastFailureAt: "2026-05-15T12:00:00.000Z",
           lastFailure: { message: "backup failed", code: "Error" },
         }),
+        "2026-05-15T12:00:00.000Z",
       );
-      expect(gateway.persistCronJobsConfig).toHaveBeenCalledTimes(1);
       expect(publishRealtime).toHaveBeenCalledWith(
         "cron_job_run",
         "cron",

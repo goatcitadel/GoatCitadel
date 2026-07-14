@@ -1,8 +1,20 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { MOBILE_NATIVE_CAPABILITY_IDS, type ChatSendMessageRequest } from "@goatcitadel/contracts";
+import {
+  CHAT_ROUTED_CONTEXT_MAX_LABEL_LENGTH,
+  CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH,
+  CHAT_ROUTED_CONTEXT_MAX_REFS,
+  CHAT_ROUTED_CONTEXT_CONTROL_PATTERN,
+  CHAT_ROUTED_CONTEXT_REF_PATTERN,
+  MOBILE_NATIVE_CAPABILITY_IDS,
+  NotFoundError,
+  type ChatSendMessageRequest,
+  type RoutingPreflightRequest,
+  type RoutingPreflightResult,
+} from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   projectChatContextManifestForPublic,
+  projectChatHistoryMessageForPublic,
   projectChatMessageForPublic,
 } from "../services/chat-secret-projection.js";
 import {
@@ -13,17 +25,99 @@ import {
   sendChatWriteError,
 } from "./chat.shared.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
+import { projectAndCapChatHistoryWindow, projectChatHistoryContinuation } from "../services/chat-history-service.js";
 
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
   cursor: z.string().optional(),
 });
 
+const chatHistoryReadSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1),
+    limit: z.coerce.number().int().positive().max(101).default(21),
+    cursor: z.string().trim().min(1).optional(),
+    cursorSequence: z.coerce.number().int().positive().safe().optional(),
+    direction: z.enum(["older", "newer"]).optional(),
+    offset: z.coerce.number().int().nonnegative().max(1_000_000).optional(),
+    snapshotMaxSequence: z.coerce.number().int().positive().safe().optional(),
+    snapshotMessageCount: z.coerce.number().int().nonnegative().safe().optional(),
+    messageId: z.string().trim().min(1).optional(),
+    sequence: z.coerce.number().int().positive().safe().optional(),
+    maxBytes: z.coerce.number().int().min(1_024).max(1_048_576).default(65_536),
+  })
+  .superRefine((value, context) => {
+    if (value.cursor !== undefined && value.offset !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "cursor and offset cannot be used together",
+        path: ["cursor"],
+      });
+    }
+    if ((value.messageId === undefined) !== (value.sequence === undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "messageId and sequence are required together",
+        path: [value.messageId === undefined ? "messageId" : "sequence"],
+      });
+    }
+    if (value.messageId !== undefined && (value.cursor !== undefined || value.offset !== undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "anchored history cannot be combined with cursor or offset",
+        path: [value.cursor !== undefined ? "cursor" : "offset"],
+      });
+    }
+    const continuationFields = [value.direction, value.cursorSequence].filter((item) => item !== undefined).length;
+    if (
+      continuationFields > 0 &&
+      (value.direction === undefined || value.cursor === undefined || value.cursorSequence === undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "direction, cursor, and cursorSequence are required together",
+        path: [value.direction === undefined ? "direction" : value.cursor === undefined ? "cursor" : "cursorSequence"],
+      });
+    }
+    if (value.direction !== undefined && (value.offset !== undefined || value.messageId !== undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "history continuation cannot be combined with offset or anchor identity",
+        path: [value.offset !== undefined ? "offset" : "messageId"],
+      });
+    }
+    if (value.snapshotMaxSequence !== undefined && value.offset === undefined && value.direction === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "snapshotMaxSequence requires offset pagination",
+        path: ["snapshotMaxSequence"],
+      });
+    }
+    if (value.snapshotMessageCount !== undefined && value.offset === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "snapshotMessageCount requires offset pagination",
+        path: ["snapshotMessageCount"],
+      });
+    }
+    if (value.direction !== undefined && value.snapshotMaxSequence === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "snapshotMaxSequence is required for history continuation",
+        path: ["snapshotMaxSequence"],
+      });
+    }
+  });
+
 const chatThreadQuerySchema = z.object({
   includeDecisionTrace: z
     .enum(["true", "false", "1", "0"])
     .transform((value) => value === "true" || value === "1")
     .optional(),
+});
+
+const capabilityProfileQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
 });
 
 const routeDecisionSchema = z.object({
@@ -43,6 +137,16 @@ const routeDecisionSchema = z.object({
   runtimeClass: z.enum(["local", "cloud", "unknown"]),
   blockedReason: z.string().optional(),
   degradedReason: z.string().optional(),
+  capabilityFingerprint: z.string().min(1).optional(),
+  capabilityContentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+  capabilityProfileSchemaVersion: z.literal("chat.turn.capability-profile.v1").optional(),
+  capabilityCompactionDimensionHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   fingerprint: z.string().min(1),
 });
 
@@ -79,6 +183,44 @@ const mobileContextSchema = z.object({
     .optional(),
 });
 
+const routedContextRefSchema = z
+  .object({
+    kind: z.enum(["attachment", "memory_item"]),
+    ref: z
+      .string()
+      .min(1)
+      .max(CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH)
+      .regex(CHAT_ROUTED_CONTEXT_REF_PATTERN, "ref contains unsupported characters")
+      .refine((value) => value === value.trim(), "ref must not contain surrounding whitespace"),
+    label: z
+      .string()
+      .min(1)
+      .max(CHAT_ROUTED_CONTEXT_MAX_LABEL_LENGTH)
+      .refine((value) => value === value.trim(), "label must not contain surrounding whitespace")
+      .refine((value) => !CHAT_ROUTED_CONTEXT_CONTROL_PATTERN.test(value), "label contains control characters")
+      .optional(),
+  })
+  .strict();
+
+const routedContextRefsSchema = z
+  .array(routedContextRefSchema)
+  .min(1)
+  .max(CHAT_ROUTED_CONTEXT_MAX_REFS)
+  .superRefine((refs, context) => {
+    const seen = new Set<string>();
+    refs.forEach((entry, index) => {
+      const key = `${entry.kind}\u0000${entry.ref}`;
+      if (seen.has(key)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "contextRefs must not contain duplicate sources",
+          path: [index],
+        });
+      }
+      seen.add(key);
+    });
+  });
+
 const sendMessageSchema = z.object({
   content: z.string().min(1),
   parts: z
@@ -113,6 +255,7 @@ const sendMessageSchema = z.object({
     )
     .optional(),
   mobileContext: z.array(mobileContextSchema).max(12).optional(),
+  contextRefs: routedContextRefsSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   routeDecision: routeDecisionSchema.optional(),
@@ -126,9 +269,15 @@ const sendMessageSchema = z.object({
   fullWebAccess: z.boolean().optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
-  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
   speedMode: z.enum(["standard", "fast"]).optional(),
   subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
+  modelCouncil: z
+    .object({
+      enabled: z.literal(true),
+    })
+    .strict()
+    .optional(),
   commandText: z.string().optional(),
   prefsOverride: z
     .object({
@@ -139,7 +288,7 @@ const sendMessageSchema = z.object({
       imageModel: z.string().optional(),
       webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
       memoryMode: z.enum(["auto", "on", "off"]).optional(),
-      thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+      thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
       speedMode: z.enum(["standard", "fast"]).optional(),
       subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
       toolAutonomy: z.enum(["safe_auto", "manual"]).optional(),
@@ -187,14 +336,21 @@ function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>
 const routePreflightSchema = z.object({
   action: z.enum(["send", "retry", "edit"]),
   turnId: z.string().optional(),
+  content: z.string().optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   mode: chatOnlyModeSchema.optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
-  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+  memoryMode: z.enum(["auto", "on", "off"]).optional(),
+  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
   speedMode: z.enum(["standard", "fast"]).optional(),
   subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
   prefsOverride: sendMessageSchema.shape.prefsOverride,
+  permissionProfileId: z.string().min(1).optional(),
+  localOperatorOverrideId: z.string().min(1).optional(),
+  policyRunId: z.string().min(1).optional(),
+  policyTaskId: z.string().min(1).optional(),
+  fullWebAccess: z.boolean().optional(),
 });
 
 const cancelTurnSchema = z.object({
@@ -235,6 +391,67 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return reply.send({ items: items.map(projectChatMessageForPublic) });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/history", async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    reply.header("pragma", "no-cache");
+    const params = sessionParamsSchema.safeParse(request.params);
+    const query = chatHistoryReadSchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      if (
+        query.data.direction !== undefined &&
+        query.data.cursor !== undefined &&
+        query.data.cursorSequence !== undefined &&
+        query.data.snapshotMaxSequence !== undefined
+      ) {
+        const raw = await fastify.services.chatMessages.readChatHistoryContinuation({
+          workspaceId: query.data.workspaceId,
+          sessionId: params.data.sessionId,
+          direction: query.data.direction,
+          cursorMessageId: query.data.cursor,
+          cursorSequence: query.data.cursorSequence,
+          snapshotMaxSequence: query.data.snapshotMaxSequence,
+          limit: query.data.limit,
+        });
+        return reply.send(projectChatHistoryContinuation(raw, query.data.maxBytes, projectChatHistoryMessageForPublic));
+      }
+      if (query.data.messageId !== undefined && query.data.sequence !== undefined) {
+        const raw = await fastify.services.chatMessages.readChatHistoryWindow(
+          {
+            workspaceId: query.data.workspaceId,
+            sessionId: params.data.sessionId,
+            messageId: query.data.messageId,
+            sequence: query.data.sequence,
+          },
+          query.data.limit,
+        );
+        return reply.send(projectAndCapChatHistoryWindow(raw, query.data.maxBytes, projectChatHistoryMessageForPublic));
+      }
+      const page = await fastify.services.chatMessages.listChatMessagePage({
+        workspaceId: query.data.workspaceId,
+        sessionId: params.data.sessionId,
+        limit: query.data.limit,
+        cursor: query.data.cursor,
+        offset: query.data.offset,
+        snapshotMaxSequence: query.data.snapshotMaxSequence,
+        snapshotMessageCount: query.data.snapshotMessageCount,
+      });
+      return reply.send({
+        ...page,
+        items: page.items.map(projectChatHistoryMessageForPublic),
+      });
+    } catch (error) {
+      return reply.code(error instanceof NotFoundError ? 404 : 400).send({ error: (error as Error).message });
     }
   });
 
@@ -290,6 +507,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         sessionId: params.data.sessionId,
         action: "send",
         body: body.data,
+        actor: request,
       });
       if (decisionRejected) {
         return;
@@ -318,7 +536,12 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      const result = await fastify.services.chatMessages.routePreflight(params.data.sessionId, body.data);
+      const result = await fastify.services.chatMessages.routePreflight(params.data.sessionId, {
+        ...body.data,
+        operatorId: request.authActorId,
+        authActorId: request.authActorId,
+        authActorSource: request.authActorSource,
+      });
       return reply.send(result);
     } catch (error) {
       return sendChatWriteError(reply, error);
@@ -357,6 +580,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         sessionId: params.data.sessionId,
         action: "send",
         body: body.data,
+        actor: request,
       });
       if (decisionRejected) {
         return;
@@ -420,6 +644,29 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return reply.send(projectChatContextManifestForPublic(detail));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/capability-profile", async (request, reply) => {
+    const params = turnParamsSchema.safeParse(request.params);
+    const query = capabilityProfileQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        await fastify.services.chatMessages.getChatTurnCapabilityProfile(params.data.sessionId, params.data.turnId, {
+          workspaceId: query.data.workspaceId,
+          operatorId: request.authActorId,
+        }),
+      );
+    } catch (error) {
+      return sendChatWriteError(reply, error);
     }
   });
 
@@ -493,6 +740,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         action: "retry",
         turnId: params.data.turnId,
         body: body.data,
+        actor: request,
       });
       if (decisionRejected) {
         return;
@@ -527,6 +775,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         action: "retry",
         turnId: params.data.turnId,
         body: body.data,
+        actor: request,
       });
       if (decisionRejected) {
         return;
@@ -567,6 +816,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         action: "edit",
         turnId: params.data.turnId,
         body: body.data,
+        actor: request,
       });
       if (decisionRejected) {
         return;
@@ -601,6 +851,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         action: "edit",
         turnId: params.data.turnId,
         body: body.data,
+        actor: request,
       });
       if (decisionRejected) {
         return;
@@ -653,16 +904,14 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
 async function requireFreshRouteDecision(
   reply: FastifyReply,
   chatMessages: {
-    routePreflight: (
-      sessionId: string,
-      input: z.infer<typeof routePreflightSchema>,
-    ) => Promise<{ decision: { fingerprint: string }; blockedReason?: string }>;
+    routePreflight: (sessionId: string, input: RoutingPreflightRequest) => Promise<RoutingPreflightResult>;
   },
   input: {
     sessionId: string;
     action: "send" | "retry" | "edit";
     turnId?: string;
     body: Partial<z.infer<typeof sendMessageSchema>> & { routeDecision?: z.infer<typeof routeDecisionSchema> };
+    actor?: Pick<FastifyRequest, "authActorId" | "authActorSource">;
   },
 ) {
   const decision = input.body.routeDecision;
@@ -698,14 +947,24 @@ async function requireFreshRouteDecision(
   const current = await chatMessages.routePreflight(input.sessionId, {
     action: input.action,
     turnId: input.turnId,
+    content: input.body.content,
     providerId: shouldReplayManualSelection ? decision.requestedProviderId : undefined,
     model: shouldReplayManualSelection ? decision.requestedModel : undefined,
     mode: input.body.mode,
     webMode: input.body.webMode,
+    memoryMode: input.body.memoryMode,
     thinkingLevel: input.body.thinkingLevel,
     speedMode: input.body.speedMode,
     subagentPolicy: input.body.subagentPolicy,
     prefsOverride: replayedPrefsOverride,
+    permissionProfileId: input.body.permissionProfileId,
+    localOperatorOverrideId: input.body.localOperatorOverrideId,
+    policyRunId: input.body.policyRunId,
+    policyTaskId: input.body.policyTaskId,
+    fullWebAccess: input.body.fullWebAccess,
+    operatorId: input.actor?.authActorId,
+    authActorId: input.actor?.authActorId,
+    authActorSource: input.actor?.authActorSource,
   });
   if (current.blockedReason) {
     sendRouteChanged(reply, "route_blocked", current.blockedReason);

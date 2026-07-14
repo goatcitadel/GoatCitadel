@@ -1,12 +1,14 @@
 /* eslint-disable max-lines -- Chat orchestration is still a centralized runtime coordinator pending a larger bounded-interface split. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
+  CapabilityCatalogEntry,
   ChatCitationRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatExecutionPlanRecord,
   ChatMode,
   ChatNormalizationProfile,
+  ChatRetrievalMode,
   ChatStreamChunkDraft,
   ChatStreamUsageRecord,
   ChatThinkingLevel,
@@ -15,41 +17,69 @@ import type {
   ChatTurnExecutionProfile,
   ChatTurnFailureClass,
   ChatTurnFailureRecord,
+  ChatTurnFirstProviderRequestUsageRecord,
   ChatTurnRepairKind,
   ChatTurnRepairSource,
   ChatTurnTraceRecord,
+  ChatTurnCapabilityProfileRecord,
+  ChatTurnCapabilityToolRuntimeOwnerBinding,
   ChatUserInputPromptRecord,
   ImageGenerationRequest,
   ImageGenerationResponse,
   ChatWebMode,
   McpInvokeRequest,
   McpInvokeResponse,
+  ModelUsageAttributionContext,
   ToolLoopDetectionConfig,
   ToolCatalogEntry,
+  ToolEffectEvidenceRef,
+  ToolEffectInvocationContext,
+  ToolEffectPotentialRecord,
+  ToolEffectReceiptEnvelope,
   ToolInvokeRequest,
   ToolInvokeResult,
   ToolPolicyActorContext,
+  RuntimeDecisionTraceAppendInput,
 } from "@goatcitadel/contracts";
 import {
+  canonicalJsonString,
+  buildToolEffectEvidence,
+  classifyToolEffectPotential,
   getChatTurnRecoveryAction,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   NotFoundError,
+  isToolEffectPotentialRecord,
   redactStructuredSecrets,
+  normalizeToolEffectEvidenceRefs,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  TOOL_EFFECT_CLASSIFICATION_VERSION,
+  TOOL_EFFECT_RECEIPT_VERSION,
 } from "@goatcitadel/contracts";
-import { logger } from "@goatcitadel/gateway-core";
+import {
+  isAuthoritativeModelUsageAccountingError,
+  logger,
+  ModelUsageDispatchUncertainError,
+} from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
-import type { Storage } from "@goatcitadel/storage";
+import {
+  verifyChatTurnCapabilityCatalogBinding,
+  verifyChatTurnCapabilityProfile,
+  verifyChatTurnCapabilitySkillBindings,
+  verifyCapabilityCatalogEntryUniqueness,
+  type Storage,
+} from "@goatcitadel/storage";
 import { EXPLICIT_WEB_PHRASES, hasLiveDataIntent, hasResearchListIntent } from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
   looksLikePromptLabPromptPackMarkdownImportPrompt,
   looksLikePromptLabPromptPackOperatorSurfacePrompt,
 } from "./prompt-pack-prompt-lab-detectors.js";
+import { observePromptSettlement, type PromptSettlement } from "./prompt-settlement.js";
 import {
   isPromptLabHarnessContent,
   looksLikeRepoGroundedInspectionPrompt,
 } from "./prompt-pack-harness-normalization.js";
+import { resolveChatReasoningEffort, resolvePromptLabReasoningEffort } from "./chat-reasoning-controls.js";
 import {
   LOCAL_PATH_TOOL_NAMES,
   LOCAL_QUERY_TOOL_NAMES,
@@ -96,7 +126,6 @@ import {
   type BrowserFallbackExecutorDeps,
 } from "./chat-turn-agent-runner/browser-fallback.js";
 import {
-  buildTraceUsageRecord,
   collectSourceAttributionFromToolRuns,
   parseUsageFromCompletion,
   resolveUsageCostSource,
@@ -170,6 +199,8 @@ import {
 import { buildPromptContextBudgetReceipt } from "./chat-agent-prompt-budget-receipt.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import { isDurableControlError } from "./durable-control-error.js";
+import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
+import type { ToolCallBeforeHookInterpositionBinding } from "./tool-runtime-interposition.js";
 import {
   classifyBrowserToolResult,
   extractBrowserToolUrl,
@@ -466,6 +497,8 @@ export interface ChatTurnAgentRunnerInput {
   sessionId: string;
   turnId: string;
   userMessageId: string;
+  /** Canonical persisted delegation step for a server-created worker turn. */
+  parentDelegationStepId?: string;
   parentTurnId?: string;
   branchKind?: ChatTurnBranchKind;
   sourceTurnId?: string;
@@ -475,6 +508,7 @@ export interface ChatTurnAgentRunnerInput {
   providerId?: string;
   webMode: ChatWebMode;
   memoryMode: "auto" | "on" | "off";
+  retrievalMode: ChatRetrievalMode;
   thinkingLevel: ChatThinkingLevel;
   speedMode?: "standard" | "fast";
   subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
@@ -494,6 +528,188 @@ export interface ChatTurnAgentRunnerInput {
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
   canonicalWriteFence?: <T>(work: () => T) => T;
+  /** Server-authored immutable upper bound for this governed turn. */
+  capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  /** Original admitted content when a durable continuation adds answered-prompt context. */
+  capabilityProfileContent?: string;
+  /** Stable provider/model/capability-selection dimension for compaction hysteresis. */
+  compactionDimensionHash?: string;
+  /**
+   * Server-authored linkage to the final routed-context snapshot. This carries
+   * hashes and identifiers only; routed refs and admitted content stay outside
+   * the model-usage attribution boundary.
+   */
+  serverContextUsageAttribution?: Readonly<{
+    contextSnapshotId: string;
+    contextIntentHash: string;
+    contextResolutionHash: string;
+  }>;
+}
+
+type ChatTurnContextUsageAttribution = Pick<
+  ModelUsageAttributionContext,
+  "contextSnapshotId" | "contextIntentHash" | "contextResolutionHash"
+>;
+
+function buildChatTurnContextUsageAttribution(
+  input: Pick<ChatTurnAgentRunnerInput, "serverContextUsageAttribution">,
+): ChatTurnContextUsageAttribution {
+  const attribution = input.serverContextUsageAttribution;
+  if (!attribution) return {};
+  return {
+    contextSnapshotId: attribution.contextSnapshotId,
+    contextIntentHash: attribution.contextIntentHash,
+    contextResolutionHash: attribution.contextResolutionHash,
+  };
+}
+
+export interface ResolvedChatTurnToolSchema {
+  tools: Array<Record<string, unknown>>;
+  modelToCanonical: Map<string, string>;
+  canonicalToModel: Map<string, string>;
+  policyDecisions: Array<{
+    toolName: string;
+    allowed: boolean;
+    requiresApproval: boolean;
+    reasonCodes: string[];
+    matchedGrantId?: string;
+  }>;
+}
+
+/** Deterministic fallback used only when the first provider request omits usage. */
+export function estimateFirstProviderRequestInputTokens(request: ChatCompletionRequest): number {
+  const serialized = canonicalJsonString({
+    messages: request.messages,
+    tools: request.tools ?? [],
+    toolChoice: request.tool_choice ?? null,
+    memory: request.memory ?? null,
+    reasoning: request.reasoning ?? null,
+    verbosity: request.verbosity ?? null,
+  });
+  const structuralOverhead = request.messages.length * 4 + (request.tools?.length ?? 0) * 8 + 3;
+  return Math.max(1, estimateTokensFromText(serialized) + structuralOverhead);
+}
+
+function toolSchemaFromCapabilityProfile(
+  input: ChatTurnAgentRunnerInput,
+  profile: ChatTurnCapabilityProfileRecord,
+  storage: Pick<Storage, "capabilityCatalogSnapshots" | "skillLifecycle">,
+  liveCallableEntries?: CapabilityCatalogEntry[],
+): ResolvedChatTurnToolSchema {
+  verifyChatTurnCapabilityProfile(profile);
+  const persistedCatalog = storage.capabilityCatalogSnapshots.get(profile.catalog.snapshotId);
+  verifyChatTurnCapabilityCatalogBinding(profile, persistedCatalog);
+  verifyChatTurnCapabilitySkillBindings(profile, storage.skillLifecycle.list());
+  verifyCurrentCallableCatalogDoesNotNarrowProfile(profile, persistedCatalog, liveCallableEntries);
+  if (profile.identity.sessionId !== input.sessionId || profile.identity.turnId !== input.turnId) {
+    throw new Error("Capability profile identity does not match the executing Chat turn.");
+  }
+  const assertExact = (label: string, frozen: unknown, executing: unknown) => {
+    if (frozen !== executing) {
+      throw new Error(`Capability profile ${label} does not match the executing Chat turn.`);
+    }
+  };
+  assertExact("provider", profile.selection.effectiveProviderId, input.providerId);
+  assertExact("model", profile.selection.effectiveModel, input.model);
+  assertExact(
+    "content",
+    profile.selection.contentHash,
+    createHash("sha256")
+      .update(canonicalJsonString(input.capabilityProfileContent ?? input.content))
+      .digest("hex"),
+  );
+  assertExact("mode", profile.selection.mode, input.mode);
+  assertExact("web mode", profile.selection.webMode, input.webMode);
+  assertExact("memory mode", profile.selection.memory.mode, input.memoryMode);
+  assertExact("memory retrieval mode", profile.selection.memory.retrievalMode, input.retrievalMode);
+  assertExact("thinking level", profile.selection.thinkingLevel, input.thinkingLevel);
+  assertExact("speed mode", profile.selection.speedMode, input.speedMode ?? "standard");
+  assertExact("subagent policy", profile.selection.subagentPolicy, input.subagentPolicy ?? "ask_when_useful");
+  assertExact("tool autonomy", profile.selection.toolAutonomy, input.toolAutonomy);
+  assertExact("operator identity", profile.identity.operatorId, input.operatorId);
+  assertExact("auth actor identity", profile.identity.authActorId, input.authActorId);
+  assertExact("auth actor source", profile.identity.authActorSource, input.authActorSource);
+  assertExact("permission profile", profile.governance.permission.profileId, input.permissionProfileId ?? "safe");
+  assertExact(
+    "local operator override",
+    profile.governance.permission.localOperatorOverrideId,
+    input.localOperatorOverrideId,
+  );
+
+  const modelToCanonical = new Map<string, string>();
+  const canonicalToModel = new Map<string, string>();
+  for (const binding of profile.selection.modelNameAllowMap) {
+    if (modelToCanonical.has(binding.modelName) || canonicalToModel.has(binding.canonicalName)) {
+      throw new Error("Capability profile contains duplicate tool-name bindings.");
+    }
+    modelToCanonical.set(binding.modelName, binding.canonicalName);
+    canonicalToModel.set(binding.canonicalName, binding.modelName);
+  }
+  const tools = profile.selection.tools.map((tool) => {
+    const definitionHash = createHash("sha256").update(canonicalJsonString(tool.providerDefinition)).digest("hex");
+    if (definitionHash !== tool.definitionHash) {
+      throw new Error(`Capability profile tool definition ${tool.canonicalName} failed hash verification.`);
+    }
+    if (
+      modelToCanonical.get(tool.modelName) !== tool.canonicalName ||
+      canonicalToModel.get(tool.canonicalName) !== tool.modelName
+    ) {
+      throw new Error(`Capability profile tool definition ${tool.canonicalName} is outside the frozen allow-map.`);
+    }
+    return tool.providerDefinition;
+  });
+  return {
+    tools,
+    modelToCanonical,
+    canonicalToModel,
+    policyDecisions: profile.governance.policyDecisions.map((decision) => ({
+      ...decision,
+      reasonCodes: [...decision.reasonCodes],
+    })),
+  };
+}
+
+function verifyCurrentCallableCatalogDoesNotNarrowProfile(
+  profile: ChatTurnCapabilityProfileRecord,
+  persistedCatalog: { callableEntries: CapabilityCatalogEntry[] },
+  liveCallableEntries: CapabilityCatalogEntry[] | undefined,
+): void {
+  if (profile.selection.tools.length === 0 && profile.selection.trustedSkills.length === 0) {
+    return;
+  }
+  if (!liveCallableEntries) {
+    throw new Error(`Capability profile ${profile.profileId} cannot verify the current callable catalog.`);
+  }
+  verifyCapabilityCatalogEntryUniqueness(liveCallableEntries, "current callable capability catalog");
+  const liveById = new Map(liveCallableEntries.map((entry) => [entry.capabilityId, entry]));
+  const persistedTools = new Map(
+    persistedCatalog.callableEntries
+      .filter((entry) => entry.kind === "tool" && entry.toolName)
+      .map((entry) => [entry.toolName as string, entry]),
+  );
+  const persistedSkills = new Map(
+    persistedCatalog.callableEntries
+      .filter((entry) => entry.kind === "skill" && entry.skillId)
+      .map((entry) => [entry.capabilityId, entry]),
+  );
+  const assertStillCallable = (entry: CapabilityCatalogEntry | undefined, label: string): void => {
+    const live = entry ? liveById.get(entry.capabilityId) : undefined;
+    if (!entry || !live || !live.callable || canonicalJsonString(live) !== canonicalJsonString(entry)) {
+      throw new Error(`Capability profile ${profile.profileId} ${label} is no longer in the current callable catalog.`);
+    }
+  };
+  for (const tool of profile.selection.tools) {
+    assertStillCallable(persistedTools.get(tool.canonicalName), `tool ${tool.canonicalName}`);
+  }
+  for (const skill of profile.selection.trustedSkills) {
+    const entry = persistedSkills.get(skill.capabilityId);
+    if (entry?.skillId !== skill.skillId) {
+      throw new Error(
+        `Capability profile ${profile.profileId} skill ${skill.skillId} has a malformed catalog binding.`,
+      );
+    }
+    assertStillCallable(entry, `skill ${skill.skillId}`);
+  }
 }
 
 export interface ChatTurnAgentRunnerResult {
@@ -501,6 +717,7 @@ export interface ChatTurnAgentRunnerResult {
   assistantContent: string;
   assistantModel?: string;
   usage?: ChatStreamUsageRecord;
+  modelUsageEventIds?: string[];
   requiresApproval?: {
     approvalId: string;
     toolName?: string;
@@ -512,12 +729,44 @@ export interface ChatTurnAgentRunnerResult {
 export interface ChatTurnAgentRunnerDeps {
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
-  createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
-  createChatCompletionStream?: (request: ChatCompletionRequest) => AsyncGenerator<Record<string, unknown>>;
-  generateImage?: (request: ImageGenerationRequest) => Promise<ImageGenerationResponse>;
+  /** Live callable catalog used only to enforce stricter removals or drift. */
+  listCapabilityCatalog?: (scope: "callable") => CapabilityCatalogEntry[];
+  createChatCompletion: (
+    request: ChatCompletionRequest,
+    attribution?: ModelUsageAttributionContext,
+  ) => Promise<ChatCompletionResponse>;
+  createChatCompletionStream?: (
+    request: ChatCompletionRequest,
+    attribution?: ModelUsageAttributionContext,
+  ) => AsyncGenerator<Record<string, unknown>>;
+  generateImage?: (
+    request: ImageGenerationRequest,
+    attribution?: ModelUsageAttributionContext,
+  ) => Promise<ImageGenerationResponse>;
   invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
+  /**
+   * Explicit capability seam for process-local effect correlation. Older
+   * hosts and narrow test doubles may implement only `invokeTool`; in that
+   * case the runner stays conservative and never claims executor-boundary or
+   * concrete-receipt proof that the host could not produce.
+   */
+  invokeToolWithEffectTruth?: (
+    request: ToolInvokeRequest,
+    options: {
+      executionFence: () => void;
+      auxiliaryEffectFence: () => void;
+      effectContext: ToolEffectInvocationContext;
+      effectPotential: ToolEffectPotentialRecord;
+      toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
+      toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
+      onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => void;
+      onEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
+    },
+  ) => Promise<ToolInvokeResult>;
   invokeMcpTool?: (request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => McpBrowserFallbackTarget[];
+  /** Canonical operator decision projection for ordinary Chat tool runs. */
+  recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => void;
   persistToolArtifact?: (input: {
     sessionId: string;
     turnId: string;
@@ -550,6 +799,7 @@ export interface ChatTurnAgentRunnerDeps {
     allowed: boolean;
     requiresApproval: boolean;
     reasonCodes: string[];
+    matchedGrantId?: string;
   };
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
@@ -578,6 +828,15 @@ export interface ChatTurnAgentRunnerDeps {
    * an in-flight call cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => boolean;
+  /** Override only for deterministic liveness tests; production defaults to 5 seconds. */
+  toolActivityHeartbeatMs?: number;
+}
+
+interface ToolEffectScope {
+  workspaceId?: string;
+  sessionId: string;
+  turnId: string;
+  runId?: string;
 }
 
 export function buildTurnToolPolicyContext(
@@ -613,17 +872,106 @@ export class ChatTurnAgentRunner {
     };
   }
 
+  /**
+   * Resolve the exact provider tool definitions used by both Chat preflight and
+   * final admission. Execution consumes the persisted result instead of
+   * repeating this live catalog read.
+   */
+  public async resolveCapabilityToolSchema(input: ChatTurnAgentRunnerInput): Promise<ResolvedChatTurnToolSchema> {
+    const normalizationProfile = input.normalizationProfile ?? "live";
+    const executionProfile = executionProfileFromNormalizationProfile(normalizationProfile);
+    const quickWebProfile = executionProfile === "quick_web";
+    const promptLabContract = parsePromptLabRunContract(input.content);
+    const promptLabHarnessTurnForIntent =
+      normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+    const suppressPromptLabCodeArtifactTools =
+      input.mode === "code" &&
+      promptLabHarnessTurnForIntent &&
+      !promptLabContractRequiresArtifactTools(promptLabContract);
+    const intentDetectionContent =
+      promptLabContract.userTask?.trim() || extractPrimaryUserTaskContent(input.content) || input.content;
+    const presentationArtifactIntent =
+      !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(input.content);
+    const intents = {
+      liveData:
+        detectLiveDataIntent(intentDetectionContent) ||
+        (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false),
+      webLookup:
+        detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
+        (intentDetectionContent !== input.content
+          ? detectWebLookupIntent(input.content, input.historyMessages)
+          : false),
+      localFile: detectLocalFileIntent(input.content),
+      presentationArtifact: presentationArtifactIntent,
+      documentArtifact:
+        !suppressPromptLabCodeArtifactTools &&
+        !presentationArtifactIntent &&
+        detectDocumentArtifactIntent(input.content),
+    };
+    if ((input.toolAutonomy === "manual" && !quickWebProfile) || promptLabContract.toolUseSuppressed) {
+      return {
+        tools: [],
+        modelToCanonical: new Map(),
+        canonicalToModel: new Map(),
+        policyDecisions: [],
+      };
+    }
+    return this.buildToolSchema(input, intents);
+  }
+
   private runCanonicalWrite<T>(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">, work: () => T): T {
     return input.canonicalWriteFence ? input.canonicalWriteFence(work) : work();
   }
 
-  private invokeTurnTool(turnInput: ChatTurnAgentRunnerInput, request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+  private invokeTurnTool(
+    turnInput: ChatTurnAgentRunnerInput,
+    request: ToolInvokeRequest,
+    effectOptions?: {
+      effectContext: ToolEffectInvocationContext;
+      effectPotential: ToolEffectPotentialRecord;
+      toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
+      toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
+      onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => void;
+      onEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
+      onExecutorDispatch: () => void;
+      onAuxiliaryEffectDispatch: () => void;
+    },
+  ): Promise<ToolInvokeResult> {
+    if (effectOptions && this.deps.invokeToolWithEffectTruth) {
+      const executionFence = (): void => {
+        effectOptions.onExecutorDispatch();
+      };
+      return this.deps.invokeToolWithEffectTruth(request, {
+        executionFence,
+        auxiliaryEffectFence: effectOptions.onAuxiliaryEffectDispatch,
+        effectContext: effectOptions.effectContext,
+        effectPotential: effectOptions.effectPotential,
+        toolCallBeforeHookInterposition: effectOptions.toolCallBeforeHookInterposition,
+        toolRuntimeOwner: effectOptions.toolRuntimeOwner,
+        onEffectPotentialEscalated: effectOptions.onEffectPotentialEscalated,
+        onEffectReceipt: effectOptions.onEffectReceipt,
+      });
+    }
+    if (effectOptions) {
+      // An invoke-only host cannot prove where policy ends and execution
+      // begins or that the frozen built-in owner still executes. Escalate even
+      // a planned safe read, then cross the conservative boundary before the
+      // opaque call; its return status is never pre-dispatch evidence.
+      effectOptions.onEffectPotentialEscalated({
+        version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+        potential: "unknown",
+        sourceKind: "unknown",
+        reason: "descriptor_incomplete_or_untrusted",
+      });
+      effectOptions.onExecutorDispatch();
+    }
     if (!turnInput.canonicalWriteFence) {
       return this.deps.invokeTool(request);
     }
-    return this.deps.invokeTool(request, {
-      executionFence: () => this.runCanonicalWrite(turnInput, () => undefined),
-    });
+    const executionFence = (): void => {
+      this.runCanonicalWrite(turnInput, () => undefined);
+    };
+    return this.deps.invokeTool(request, { executionFence });
   }
 
   private patchTurnTrace(
@@ -647,6 +995,64 @@ export class ChatTurnAgentRunner {
     patch: Parameters<Storage["chatToolRuns"]["patch"]>[1],
   ): ChatToolRunRecord {
     return this.runCanonicalWrite(input, () => this.deps.storage.chatToolRuns.patch(toolRunId, patch));
+  }
+
+  private resolveToolEffectPotential(input: ChatTurnAgentRunnerInput, toolName: string): ToolEffectPotentialRecord {
+    return resolveToolEffectPotentialForInvocation({
+      toolName,
+      capabilityProfile: input.capabilityProfile,
+      listToolCatalog: this.deps.listToolCatalog,
+    });
+  }
+
+  private resolveToolEffectScope(input: ChatTurnAgentRunnerInput, turnId: string): ToolEffectScope {
+    let workspaceId = input.capabilityProfile?.identity.workspaceId;
+    if (!workspaceId) {
+      try {
+        workspaceId = this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId;
+      } catch {
+        workspaceId = undefined;
+      }
+    }
+    return {
+      workspaceId,
+      sessionId: input.sessionId,
+      turnId,
+      runId: input.policyRunId,
+    };
+  }
+
+  private buildToolEffectPatch(input: {
+    potential: ToolEffectPotentialRecord;
+    phase: Parameters<typeof buildToolEffectEvidence>[0]["phase"];
+    concreteRefs?: readonly ToolEffectEvidenceRef[];
+  }) {
+    const concreteRefs = normalizeToolEffectEvidenceRefs(input.concreteRefs ?? []);
+    if (concreteRefs.length > 0) {
+      return {
+        // A trusted receipt contradicting a planned `none` classification is a
+        // fail-closed classifier drift signal. Never persist concrete + none.
+        effectPotential: "unknown" as const,
+        effectDisposition: null,
+        effectOutcomeKind: "concrete" as const,
+        effectEvidence: {
+          version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+          outcomeKind: "concrete" as const,
+          reason: "canonical_effect_receipt_linked" as const,
+          refs: concreteRefs,
+        },
+      };
+    }
+    const settlement = buildToolEffectEvidence({
+      potential: input.potential.potential,
+      phase: input.phase,
+    });
+    return {
+      effectPotential: input.potential.potential,
+      effectDisposition: settlement.disposition ?? null,
+      effectOutcomeKind: settlement.outcomeKind,
+      effectEvidence: settlement.evidence,
+    };
   }
 
   private upsertInlineApproval(
@@ -713,7 +1119,9 @@ export class ChatTurnAgentRunner {
   public async run(input: ChatTurnAgentRunnerInput): Promise<ChatTurnAgentRunnerResult> {
     const events: ChatStreamChunkDraft[] = [];
     for await (const chunk of this.runStream(input)) {
-      events.push(chunk);
+      if (chunk.type !== "tool_activity") {
+        events.push(chunk);
+      }
     }
     const doneTrace = events
       .filter((event) => event.type === "trace_update")
@@ -731,6 +1139,7 @@ export class ChatTurnAgentRunner {
       assistantContent: doneMessage?.content ?? "",
       assistantModel: doneTrace.model,
       usage: usageChunk?.usage,
+      modelUsageEventIds: usageChunk?.modelUsageEventIds,
       requiresApproval: approval
         ? {
             approvalId: approval.approvalId,
@@ -743,6 +1152,168 @@ export class ChatTurnAgentRunner {
   }
 
   public async *runStream(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
+    const wrapperAbortController = new AbortController();
+    const innerSignal = input.signal
+      ? AbortSignal.any([input.signal, wrapperAbortController.signal])
+      : wrapperAbortController.signal;
+    const stream = this.runStreamInternal({ ...input, signal: innerSignal });
+    const heartbeatMs = normalizeToolActivityHeartbeatMs(this.deps.toolActivityHeartbeatMs);
+    const preexistingStartedToolRunIds = new Set(
+      this.deps.storage.chatToolRuns
+        .listByTurn(input.turnId)
+        .filter((toolRun) => toolRun.status === "started")
+        .map((toolRun) => toolRun.toolRunId),
+    );
+    const announcedToolRunIds = new Set<string>();
+    const activitySequences = new Map<string, number>();
+    let pendingStep: ChatStreamPendingStep | undefined;
+    let probeImmediately = true;
+
+    try {
+      while (true) {
+        pendingStep ??= createChatStreamPendingStep(stream.next());
+        const outcome = await pendingStep.wait(probeImmediately ? 0 : heartbeatMs, input.signal);
+        if (outcome.kind === "tick") {
+          probeImmediately = false;
+          const activeToolRuns = this.deps.storage.chatToolRuns
+            .listByTurn(input.turnId)
+            .filter((toolRun) => toolRun.status === "started" && !preexistingStartedToolRunIds.has(toolRun.toolRunId));
+          const activityAtMs = Date.now();
+          for (const toolRun of activeToolRuns) {
+            if (!announcedToolRunIds.has(toolRun.toolRunId)) {
+              announcedToolRunIds.add(toolRun.toolRunId);
+              yield {
+                type: "tool_start",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                toolRun,
+              };
+              continue;
+            }
+            const activitySequence = (activitySequences.get(toolRun.toolRunId) ?? 0) + 1;
+            activitySequences.set(toolRun.toolRunId, activitySequence);
+            const startedAtMs = Date.parse(toolRun.startedAt);
+            yield {
+              type: "tool_activity",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              toolRunId: toolRun.toolRunId,
+              toolName: toolRun.toolName,
+              startedAt: toolRun.startedAt,
+              activityAt: new Date(activityAtMs).toISOString(),
+              activitySequence,
+              elapsedMs: Number.isFinite(startedAtMs) ? Math.max(0, activityAtMs - startedAtMs) : 0,
+            };
+          }
+          continue;
+        }
+
+        pendingStep = undefined;
+        probeImmediately = true;
+        if (outcome.step.done) {
+          return;
+        }
+        const chunk = outcome.step.value;
+        if (chunk.type === "tool_start") {
+          if (announcedToolRunIds.has(chunk.toolRun.toolRunId)) {
+            continue;
+          }
+          announcedToolRunIds.add(chunk.toolRun.toolRunId);
+        }
+        yield chunk;
+      }
+    } finally {
+      // Async-generator return is queued behind an already-pending next(). A
+      // tool implementation can ignore AbortSignal indefinitely, so awaiting
+      // the inner return here would also strand the wrapper and its consumer.
+      // When there is no pending step, await cleanup so canonical accounting
+      // faults from provider-stream return cannot be silently discarded.
+      const hasActiveOwnedToolRun = this.deps.storage.chatToolRuns
+        .listByTurn(input.turnId)
+        .some((toolRun) => toolRun.status === "started" && !preexistingStartedToolRunIds.has(toolRun.toolRunId));
+      wrapperAbortController.abort(createAbortError("Chat stream consumer closed"));
+      const cleanup = stream.return(undefined);
+      if (!pendingStep) {
+        if (hasActiveOwnedToolRun) {
+          await Promise.race([
+            cleanup.catch((error: unknown) => {
+              if (isAuthoritativeModelUsageAccountingError(error)) throw error;
+            }),
+            new Promise<void>((resolve) => setTimeout(resolve, 25)),
+          ]);
+        } else {
+          const cleanupSettlement = await observePromptSettlement(cleanup);
+          if (
+            cleanupSettlement.status === "rejected" &&
+            isAuthoritativeModelUsageAccountingError(cleanupSettlement.error)
+          ) {
+            await Promise.reject(cleanupSettlement.error);
+          }
+          if (cleanupSettlement.status === "pending") {
+            await Promise.reject(
+              new ModelUsageDispatchUncertainError(
+                "Chat stream cancellation was not acknowledged; same-generation retry is blocked pending reconciliation",
+                { cause: innerSignal.reason },
+              ),
+            );
+          }
+        }
+      } else if (!hasActiveOwnedToolRun) {
+        // A hung tool may keep the pending next() alive forever. Give both that
+        // exact step and the queued return a short bounded drain window, while
+        // still surfacing any authoritative accounting fault that settles in it.
+        const pendingSettlement = await pendingStep.observe();
+        let cleanupSettlement = await observePromptSettlement(cleanup);
+        if (pendingSettlement.status !== "pending" && cleanupSettlement.status === "pending") {
+          cleanupSettlement = await observePromptSettlement(cleanup);
+        }
+        for (const settlement of [pendingSettlement, cleanupSettlement]) {
+          if (settlement.status === "rejected" && isAuthoritativeModelUsageAccountingError(settlement.error)) {
+            await Promise.reject(settlement.error);
+          }
+        }
+        const pendingAcknowledged = pendingSettlement.status !== "pending";
+        const cleanupAcknowledged = cleanupSettlement.status !== "pending";
+        if (!pendingAcknowledged && !cleanupAcknowledged) {
+          await Promise.reject(
+            new ModelUsageDispatchUncertainError(
+              "Chat stream cancellation was not acknowledged; same-generation retry is blocked pending reconciliation",
+              { cause: innerSignal.reason },
+            ),
+          );
+        }
+        if (pendingSettlement.status === "fulfilled" && !pendingSettlement.value.done && !cleanupAcknowledged) {
+          await Promise.reject(
+            new ModelUsageDispatchUncertainError(
+              "Chat stream produced output but did not acknowledge cancellation; same-generation retry is blocked pending reconciliation",
+              { cause: innerSignal.reason },
+            ),
+          );
+        }
+      } else {
+        const boundedDrainMs = 25;
+        const authoritativeOnly = async (work: Promise<unknown>): Promise<Error | undefined> => {
+          try {
+            await work;
+            return undefined;
+          } catch (error) {
+            return isAuthoritativeModelUsageAccountingError(error) ? (error as Error) : undefined;
+          }
+        };
+        const [pendingFault, cleanupFault] = await Promise.all([
+          authoritativeOnly(pendingStep.wait(boundedDrainMs)),
+          Promise.race([
+            authoritativeOnly(cleanup),
+            new Promise<undefined>((resolve) => setTimeout(resolve, boundedDrainMs)),
+          ]),
+        ]);
+        const authoritativeFault = pendingFault ?? cleanupFault;
+        if (authoritativeFault) await Promise.reject(authoritativeFault);
+      }
+    }
+  }
+
+  private async *runStreamInternal(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
     const normalizationProfile = input.normalizationProfile ?? "live";
@@ -799,6 +1370,9 @@ export class ChatTurnAgentRunner {
         speedMode: input.speedMode ?? "standard",
         subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
         effectiveToolAutonomy: input.toolAutonomy,
+        capabilitySnapshotId: input.capabilityProfile?.catalog.snapshotId,
+        capabilityProfileId: input.capabilityProfile?.profileId,
+        capabilityProfileHash: input.capabilityProfile?.hashes.profileHash,
         routing: {
           executionProfile,
           liveDataIntent: intents.liveData,
@@ -867,10 +1441,14 @@ export class ChatTurnAgentRunner {
         promptLabRepoInspectionAssist ||
         promptLabPrefetchFilePaths.length > 0);
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabTaskForInspection);
-    const toolSchema =
-      (input.toolAutonomy === "manual" && !quickWebProfile) || promptLabContract.toolUseSuppressed
-        ? { tools: [], modelToCanonical: new Map<string, string>(), canonicalToModel: new Map<string, string>() }
-        : await this.buildToolSchema(input, intents);
+    const toolSchema = input.capabilityProfile
+      ? toolSchemaFromCapabilityProfile(
+          input,
+          input.capabilityProfile,
+          this.deps.storage,
+          this.deps.listCapabilityCatalog?.("callable"),
+        )
+      : await this.resolveCapabilityToolSchema(input);
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
     const promptLabConcreteReadToolName = promptLabShouldInspectFilesForTurn
       ? resolvePromptLabConcreteReadToolName(toolSchema.canonicalToModel, catalogToolNames)
@@ -936,23 +1514,122 @@ export class ChatTurnAgentRunner {
       costUsd: 0,
     };
     const usageCostSources = new Set<NonNullable<ChatStreamUsageRecord["costSource"]>>();
+    const observedUsageMetrics = new Set<"inputTokens" | "outputTokens" | "cachedInputTokens" | "costUsd">();
+    const canonicalUsageEventIds = new Set<string>();
+    const trustedUsageWorkspaceId = this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId;
+    const workerUsageAttribution = resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+    const completionUsageAttribution = (
+      logicalCall: string,
+      callKind: NonNullable<ModelUsageAttributionContext["callKind"]>,
+    ): ModelUsageAttributionContext => ({
+      operationId: `chat-turn:${input.turnId}:${logicalCall}`,
+      callKind:
+        workerUsageAttribution && (callKind === "chat_initial" || callKind === "chat_tool_loop")
+          ? "delegation_worker"
+          : callKind,
+      ...buildChatTurnContextUsageAttribution(input),
+      workspaceId: trustedUsageWorkspaceId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      durableRunId: input.policyRunId ?? workerUsageAttribution?.delegationRunId,
+      taskId: input.policyTaskId,
+      agentId: workerUsageAttribution?.agentId ?? "goatherder",
+      workerId: workerUsageAttribution?.workerId,
+      parentOperationId: workerUsageAttribution?.parentOperationId,
+    });
     let usageObserved = false;
     let completionLatencyMs = 0;
     let completionLatencyObserved = false;
     let providerCallCount = 0;
+    let firstProviderRequestUsage: ChatTurnFirstProviderRequestUsageRecord | undefined;
+    const beginProviderRequest = (request: ChatCompletionRequest): boolean => {
+      const isFirstRequest = providerCallCount === 0;
+      providerCallCount += 1;
+      if (isFirstRequest) {
+        firstProviderRequestUsage = {
+          effectiveInputTokens: estimateFirstProviderRequestInputTokens(request),
+          source: "deterministic_estimate",
+          availability: "unavailable",
+          unavailableReason: "provider_usage_missing",
+          ...(request.providerId ? { providerId: request.providerId } : {}),
+          ...(request.model ? { model: request.model } : {}),
+          ...(input.compactionDimensionHash ? { compactionDimensionHash: input.compactionDimensionHash } : {}),
+        };
+      }
+      return isFirstRequest;
+    };
+    const observeFirstProviderRequest = (
+      completion: ChatCompletionResponse,
+      usage: ChatStreamUsageRecord | null,
+    ): void => {
+      if (!firstProviderRequestUsage) {
+        return;
+      }
+      const expectedProviderId = firstProviderRequestUsage.providerId;
+      const expectedModel = firstProviderRequestUsage.model;
+      const routing = completion.routing;
+      const effectiveProviderId = routing?.effectiveProviderId ?? expectedProviderId;
+      const effectiveModel = routing?.effectiveModel ?? completion.model ?? expectedModel;
+      const fallbackRouteIsExplicit =
+        routing?.fallbackUsed !== true || Boolean(routing.effectiveProviderId && routing.effectiveModel);
+      const routeStillMatchesDimension = Boolean(
+        fallbackRouteIsExplicit &&
+        expectedProviderId &&
+        expectedModel &&
+        effectiveProviderId === expectedProviderId &&
+        effectiveModel === expectedModel,
+      );
+      const { compactionDimensionHash, unavailableReason, ...priorUsage } = firstProviderRequestUsage;
+      firstProviderRequestUsage = {
+        ...priorUsage,
+        ...(unavailableReason ? { unavailableReason } : {}),
+        ...(effectiveProviderId ? { providerId: effectiveProviderId } : {}),
+        ...(effectiveModel ? { model: effectiveModel } : {}),
+        ...(routeStillMatchesDimension && compactionDimensionHash ? { compactionDimensionHash } : {}),
+      };
+      if (usage?.inputTokens === undefined || !Number.isFinite(usage.inputTokens)) {
+        return;
+      }
+      const reportedInputTokens = Math.max(0, Math.floor(usage.inputTokens));
+      const { unavailableReason: _unavailableReason, ...reportedPriorUsage } = firstProviderRequestUsage;
+      firstProviderRequestUsage = {
+        ...reportedPriorUsage,
+        reportedInputTokens,
+        effectiveInputTokens: reportedInputTokens,
+        source: "provider_reported",
+        availability: "reported",
+      };
+    };
+    const markFirstProviderRequestFailed = (): void => {
+      if (firstProviderRequestUsage?.availability === "unavailable") {
+        firstProviderRequestUsage = {
+          ...firstProviderRequestUsage,
+          unavailableReason: "request_failed_before_usage",
+        };
+      }
+    };
     const accrueCompletionUsage = (usage: ChatStreamUsageRecord | null): void => {
       if (!usage) {
         return;
       }
       usageObserved = true;
-      usageTotals.inputTokens += usage.inputTokens ?? 0;
-      usageTotals.outputTokens += usage.outputTokens ?? 0;
-      usageTotals.cachedInputTokens += usage.cachedInputTokens ?? 0;
-      usageTotals.costUsd += usage.costUsd ?? 0;
+      for (const metric of ["inputTokens", "outputTokens", "cachedInputTokens", "costUsd"] as const) {
+        const value = usage[metric];
+        if (value === undefined) continue;
+        usageTotals[metric] += value;
+        observedUsageMetrics.add(metric);
+      }
       if (usage.costSource) {
         usageCostSources.add(usage.costSource);
       }
     };
+    const buildAccumulatedUsage = (): ChatStreamUsageRecord => ({
+      ...(observedUsageMetrics.has("inputTokens") ? { inputTokens: usageTotals.inputTokens } : {}),
+      ...(observedUsageMetrics.has("outputTokens") ? { outputTokens: usageTotals.outputTokens } : {}),
+      ...(observedUsageMetrics.has("cachedInputTokens") ? { cachedInputTokens: usageTotals.cachedInputTokens } : {}),
+      ...(observedUsageMetrics.has("costUsd") ? { costUsd: usageTotals.costUsd } : {}),
+      ...(resolveUsageCostSource(usageCostSources) ? { costSource: resolveUsageCostSource(usageCostSources) } : {}),
+    });
     let circuitBreakerReason: string | undefined;
     let circuitBreakerFailureClass: ChatTurnFailureClass | undefined;
     let suppressIncompleteCompletionRepair = false;
@@ -2372,17 +3049,22 @@ export class ChatTurnAgentRunner {
           };
 
           let completion: ChatCompletionResponse;
+          let completedFirstProviderRequest = false;
           const completionStartedAt = Date.now();
           try {
             if (this.deps.createChatCompletionStream) {
               let streamYieldedVisibleChunk = false;
+              let streamWasFirstProviderRequest = false;
               try {
                 const aggregate = createCompletionStreamAggregate();
-                providerCallCount += 1;
-                for await (const rawChunk of this.deps.createChatCompletionStream({
-                  ...completionRequest,
-                  stream: true,
-                })) {
+                streamWasFirstProviderRequest = beginProviderRequest(completionRequest);
+                for await (const rawChunk of this.deps.createChatCompletionStream(
+                  {
+                    ...completionRequest,
+                    stream: true,
+                  },
+                  completionUsageAttribution(`loop:${loop}:stream`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
+                )) {
                   const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
                   if (streamed.delta && !streamed.sawToolCall) {
                     streamYieldedVisibleChunk = true;
@@ -2396,7 +3078,14 @@ export class ChatTurnAgentRunner {
                   }
                 }
                 completion = buildCompletionFromAggregate(aggregate);
+                completedFirstProviderRequest = streamWasFirstProviderRequest;
               } catch (error) {
+                if (isAuthoritativeModelUsageAccountingError(error)) {
+                  throw error;
+                }
+                if (streamWasFirstProviderRequest) {
+                  markFirstProviderRequestFailed();
+                }
                 log.warn("completion stream failed", {
                   providerId: input.providerId,
                   model: input.model,
@@ -2417,19 +3106,38 @@ export class ChatTurnAgentRunner {
                     },
                   );
                 }
-                providerCallCount += 1;
-                completion = await this.deps.createChatCompletion(completionRequest);
+                beginProviderRequest(completionRequest);
+                completion = await this.deps.createChatCompletion(
+                  completionRequest,
+                  completionUsageAttribution(
+                    `loop:${loop}:stream-recovery`,
+                    loop === 0 ? "chat_initial" : "chat_tool_loop",
+                  ),
+                );
               }
             } else {
-              providerCallCount += 1;
-              completion = await this.deps.createChatCompletion(completionRequest);
+              completedFirstProviderRequest = beginProviderRequest(completionRequest);
+              completion = await this.deps.createChatCompletion(
+                completionRequest,
+                completionUsageAttribution(`loop:${loop}`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
+              );
             }
+          } catch (error) {
+            if (completedFirstProviderRequest) {
+              markFirstProviderRequestFailed();
+            }
+            throw error;
           } finally {
             completionLatencyObserved = true;
             completionLatencyMs += Date.now() - completionStartedAt;
           }
           assistantModel = typeof completion.model === "string" ? completion.model : assistantModel;
-          accrueCompletionUsage(parseUsageFromCompletion(completion));
+          collectCanonicalUsageEventIds(canonicalUsageEventIds, completion.modelUsageEventIds);
+          const completionUsage = parseUsageFromCompletion(completion);
+          if (completedFirstProviderRequest) {
+            observeFirstProviderRequest(completion, completionUsage);
+          }
+          accrueCompletionUsage(completionUsage);
           const completionRouting = completion.routing as ChatTurnTraceRecord["routing"] | undefined;
           if (completionRouting) {
             routingState = {
@@ -2734,6 +3442,7 @@ export class ChatTurnAgentRunner {
             return {
               id: entry.toolCallId,
               type: "function",
+              [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]: "unknown",
               function: {
                 name: issue?.rawName ?? "unknown_tool",
                 arguments: "{}",
@@ -2748,6 +3457,9 @@ export class ChatTurnAgentRunner {
                 ...toolCalls.map((toolCall) => ({
                   id: toolCall.id,
                   type: "function",
+                  [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]: this.deps.invokeToolWithEffectTruth
+                    ? this.resolveToolEffectPotential(input, toolCall.toolName).potential
+                    : "unknown",
                   function: {
                     name: this.resolveModelToolName(toolCall.toolName, toolSchema.canonicalToModel),
                     arguments: toolCall.rawArguments,
@@ -3327,6 +4039,9 @@ export class ChatTurnAgentRunner {
           }
         }
       } catch (error) {
+        if (isAuthoritativeModelUsageAccountingError(error)) {
+          throw error;
+        }
         if (isChatTurnAbortError(error, input.signal)) {
           finalStatus = "cancelled";
           assistantContent = "";
@@ -3419,6 +4134,11 @@ export class ChatTurnAgentRunner {
         buildSyntheticPresentationCreateArgs(input, this.deps.safeWriteFallbackDir),
         input,
         this.deps.generateImage,
+        {
+          ...completionUsageAttribution("artifact-image-0", "image_generation"),
+          dispatchGeneration: `chat-turn:${input.turnId}:artifact-image-0:generation-1`,
+          attemptIndex: 0,
+        },
       );
       providerCallCount += presentationVisual.providerCalls;
       const rawArgs = presentationVisual.args;
@@ -3532,6 +4252,7 @@ export class ChatTurnAgentRunner {
         allowOverBudget: true,
       });
       providerCallCount += repairedFallback.providerCalls;
+      collectCanonicalUsageEventIds(canonicalUsageEventIds, repairedFallback.modelUsageEventIds);
       accrueCompletionUsage(repairedFallback.usage);
       const repairedContent = repairedFallback.content.trim();
       if (
@@ -3582,6 +4303,7 @@ export class ChatTurnAgentRunner {
         turnBudgetDeadline,
       });
       providerCallCount += repairedCompletion.providerCalls;
+      collectCanonicalUsageEventIds(canonicalUsageEventIds, repairedCompletion.modelUsageEventIds);
       accrueCompletionUsage(repairedCompletion.usage);
       if (
         repairedCompletion.content.trim().length > 0 &&
@@ -3607,6 +4329,7 @@ export class ChatTurnAgentRunner {
         turnBudgetDeadline,
       });
       providerCallCount += synthesizedFallback.providerCalls;
+      collectCanonicalUsageEventIds(canonicalUsageEventIds, synthesizedFallback.modelUsageEventIds);
       accrueCompletionUsage(synthesizedFallback.usage);
       const preRepairContent = assistantContent;
       assistantContent = synthesizedFallback.content;
@@ -3722,11 +4445,12 @@ export class ChatTurnAgentRunner {
       ...finalizedCompletion,
       ...(usageObserved
         ? {
-            usage: buildTraceUsageRecord(usageTotals, resolveUsageCostSource(usageCostSources)),
+            usage: buildAccumulatedUsage(),
           }
         : {}),
       ...(completionLatencyObserved ? { latencyMs: completionLatencyMs } : {}),
       ...(providerCallCount > 0 ? { providerCallCount } : {}),
+      ...(firstProviderRequestUsage ? { firstProviderRequestUsage } : {}),
       // P0-B sidecar: honest degraded/recovered marker plus lost file writes.
       ...(degradedOutcome ? { degraded: degradedOutcome } : {}),
       ...(failedFileMutations.length > 0 ? { failedFileMutations } : {}),
@@ -3768,12 +4492,13 @@ export class ChatTurnAgentRunner {
         prompt: pendingUserInput,
       };
     } else if (finalStatus !== "cancelled") {
-      if (usageObserved) {
+      if (usageObserved || canonicalUsageEventIds.size > 0) {
         yield {
           type: "usage",
           sessionId: input.sessionId,
           turnId: input.turnId,
-          usage: buildTraceUsageRecord(usageTotals, resolveUsageCostSource(usageCostSources)),
+          usage: usageObserved ? buildAccumulatedUsage() : {},
+          ...(canonicalUsageEventIds.size > 0 ? { modelUsageEventIds: [...canonicalUsageEventIds] } : {}),
         };
       }
       yield {
@@ -3830,11 +4555,7 @@ export class ChatTurnAgentRunner {
       presentationArtifact: boolean;
       documentArtifact: boolean;
     },
-  ): Promise<{
-    tools: Array<Record<string, unknown>>;
-    modelToCanonical: Map<string, string>;
-    canonicalToModel: Map<string, string>;
-  }> {
+  ): Promise<ResolvedChatTurnToolSchema> {
     const catalog = this.deps.listToolCatalog();
     const promptLabContract = parsePromptLabRunContract(input.content);
     const promptLabHarnessTurn =
@@ -3899,6 +4620,7 @@ export class ChatTurnAgentRunner {
     const suggestedTools = new Set(selectExecutionPlanSuggestedTools(activePlan));
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
     const filteredCatalog: ToolCatalogEntry[] = [];
+    const policyDecisions: ResolvedChatTurnToolSchema["policyDecisions"] = [];
     const restrictedAutonomousProfile =
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
@@ -4006,10 +4728,23 @@ export class ChatTurnAgentRunner {
           surface: input.mode,
           policyContext: buildTurnToolPolicyContext(input),
         });
+        policyDecisions.push({
+          toolName: tool.toolName,
+          allowed: access.allowed,
+          requiresApproval: access.requiresApproval,
+          reasonCodes: [...access.reasonCodes],
+          ...(access.matchedGrantId ? { matchedGrantId: access.matchedGrantId } : {}),
+        });
         if (!access.allowed) {
           continue;
         }
       } catch {
+        policyDecisions.push({
+          toolName: tool.toolName,
+          allowed: false,
+          requiresApproval: false,
+          reasonCodes: ["policy_evaluation_failed"],
+        });
         continue;
       }
       filteredCatalog.push(tool);
@@ -4117,11 +4852,54 @@ export class ChatTurnAgentRunner {
       tools,
       modelToCanonical,
       canonicalToModel,
+      policyDecisions,
     };
   }
 
   private resolveModelToolName(toolName: string, mapping: Map<string, string>): string {
     return mapping.get(toolName) ?? toProviderToolFunctionName(toolName);
+  }
+
+  private resolveCapabilityProfileInvocationBlock(
+    input: ChatTurnAgentRunnerInput,
+    tool: { toolName: string; args: Record<string, unknown> },
+  ): string | undefined {
+    if (!input.capabilityProfile) {
+      return undefined;
+    }
+    const frozen = input.capabilityProfile.governance.policyDecisions.find(
+      (decision) => decision.toolName === tool.toolName,
+    );
+    if (!frozen?.allowed) {
+      return `Capability profile ${input.capabilityProfile.profileId} does not authorize ${tool.toolName}.`;
+    }
+    if (!this.deps.evaluateToolAccess) {
+      return "Current tool policy cannot be evaluated against the frozen capability profile.";
+    }
+    let current: ReturnType<NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>>;
+    try {
+      current = this.deps.evaluateToolAccess({
+        toolName: tool.toolName,
+        sessionId: input.sessionId,
+        agentId: "assistant",
+        taskId: input.policyTaskId,
+        runId: input.policyRunId,
+        args: tool.args,
+        permissionProfileId: input.permissionProfileId,
+        localOperatorOverrideId: input.localOperatorOverrideId,
+        surface: input.mode,
+        policyContext: buildTurnToolPolicyContext(input),
+      });
+    } catch {
+      return "Current tool policy evaluation failed after capability admission.";
+    }
+    if (!current.allowed) {
+      return `Current deny-wins policy narrowed ${tool.toolName} after capability admission.`;
+    }
+    if (frozen.requiresApproval && !current.requiresApproval) {
+      return `Current policy would broaden ${tool.toolName} beyond the profile's frozen approval posture.`;
+    }
+    return undefined;
   }
 
   private async executeToolCall(input: {
@@ -4146,6 +4924,21 @@ export class ChatTurnAgentRunner {
       } catch (error) {
         const updated = this.patchToolRun(input.input, res.record.toolRunId, {
           status: "failed",
+          // Post-processing rejected a result only after the executor had
+          // completed. Keep trusted-safe and concrete receipts intact, but do
+          // not leave an unknown effect carrying the executed-only completed
+          // reason after changing the UI settlement to failed.
+          ...(res.record.effectPotential === "unknown" && res.record.effectOutcomeKind === "uncertain"
+            ? this.buildToolEffectPatch({
+                potential: {
+                  version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+                  potential: "unknown",
+                  sourceKind: "unknown",
+                  reason: "descriptor_incomplete_or_untrusted",
+                },
+                phase: "dispatch_failed",
+              })
+            : {}),
           error: (error as Error).message,
           failureGuidance: buildToolFailureGuidance({
             toolName: res.record.toolName,
@@ -4161,7 +4954,93 @@ export class ChatTurnAgentRunner {
         }
       }
     }
+    this.recordOrdinaryChatToolDecision(input.input, res.record);
     return res;
+  }
+
+  private recordOrdinaryChatToolDecision(input: ChatTurnAgentRunnerInput, toolRun: ChatToolRunRecord): void {
+    if (!this.deps.recordRuntimeDecision) return;
+    const kind: RuntimeDecisionTraceAppendInput["kind"] = toolRun.reused
+      ? "tool_reused"
+      : toolRun.status === "approval_required"
+        ? "tool_approval_required"
+        : toolRun.status === "blocked"
+          ? "tool_blocked"
+          : toolRun.status === "failed"
+            ? "tool_failed"
+            : "tool_selected";
+    const selected =
+      kind === "tool_reused"
+        ? `Reuse ${toolRun.toolName}`
+        : kind === "tool_approval_required"
+          ? `Request approval for ${toolRun.toolName}`
+          : kind === "tool_blocked"
+            ? `Block ${toolRun.toolName}`
+            : kind === "tool_failed"
+              ? `Mark ${toolRun.toolName} failed`
+              : `Select ${toolRun.toolName}`;
+    const rationale =
+      toolRun.effectDisposition === "unknown" || toolRun.effectOutcomeKind === "uncertain"
+        ? "Tool effect is uncertain. Inspect external or runtime state before retry; automatic replay is suppressed."
+        : (toolRun.failureGuidance ??
+          toolRun.error ??
+          (toolRun.reused
+            ? (toolRun.reuseReason ?? "A prior compatible tool result was reused.")
+            : "Chat selected and settled this tool through the Gateway runtime."));
+    try {
+      this.runCanonicalWrite(input, () =>
+        this.deps.recordRuntimeDecision?.({
+          kind,
+          scope: {
+            workspaceId: input.capabilityProfile?.identity.workspaceId,
+            sessionId: toolRun.sessionId,
+            turnId: toolRun.turnId,
+            runId: input.policyRunId,
+            toolRunId: toolRun.toolRunId,
+            approvalId: toolRun.approvalId,
+          },
+          selected,
+          rationale,
+          signals: [
+            { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
+            { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
+            { source: "capability", key: "effect_potential", value: toolRun.effectPotential ?? null, weight: "strong" },
+            {
+              source: "tool_result",
+              key: "effect_disposition",
+              value: toolRun.effectDisposition ?? null,
+              weight: toolRun.effectDisposition === "unknown" ? "blocking" : "strong",
+            },
+            {
+              source: "tool_result",
+              key: "effect_outcome_kind",
+              value: toolRun.effectOutcomeKind ?? null,
+              weight: toolRun.effectOutcomeKind === "uncertain" ? "blocking" : "strong",
+            },
+            {
+              source: "tool_result",
+              key: "effect_evidence_reason",
+              value: toolRun.effectEvidence?.reason ?? null,
+              weight: "informational",
+            },
+            { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
+          ],
+          evidenceRefs: [
+            { refType: "tool_run", refId: toolRun.toolRunId },
+            ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
+            ...(toolRun.effectEvidence?.refs.map((ref) => ({
+              refType: "event" as const,
+              refId: ref.refId,
+              label: `tool_effect:${ref.owner}`,
+            })) ?? []),
+          ],
+        }),
+      );
+    } catch (error) {
+      if (isDurableControlError(error)) throw error;
+      // Decision traces are an operator projection; the tool row remains the
+      // canonical settlement if the advisory trace store is unavailable.
+    }
   }
 
   private async executeToolCallInternal(input: {
@@ -4193,6 +5072,8 @@ export class ChatTurnAgentRunner {
     });
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
+    let effectPotential = this.resolveToolEffectPotential(input.input, preflight.toolName);
+    const effectScope = this.resolveToolEffectScope(input.input, input.turnId);
     const created = this.createToolRun(input.input, {
       toolRunId,
       turnId: input.turnId,
@@ -4200,12 +5081,14 @@ export class ChatTurnAgentRunner {
       toolName: preflight.toolName,
       status: "started",
       args: preflight.args,
+      ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
       startedAt,
     });
 
     if (preflight.blockedReason) {
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "blocked",
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.blockedReason,
         failureGuidance: buildToolFailureGuidance({
           toolName: preflight.toolName,
@@ -4230,12 +5113,42 @@ export class ChatTurnAgentRunner {
     if (preflight.failureReason) {
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "failed",
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
         error: preflight.failureReason,
         failureGuidance: buildToolFailureGuidance({
           toolName: preflight.toolName,
           status: "failed",
           args: preflight.args,
           error: preflight.failureReason,
+        }),
+        finishedAt: new Date().toISOString(),
+      });
+      return {
+        record: updated,
+        chunk: {
+          type: "tool_result",
+          sessionId: input.input.sessionId,
+          turnId: input.turnId,
+          toolRun: updated,
+        },
+      };
+    }
+
+    const capabilityProfileBlock = this.resolveCapabilityProfileInvocationBlock(input.input, {
+      toolName: preflight.toolName,
+      args: preflight.args,
+    });
+    if (capabilityProfileBlock) {
+      const updated = this.patchToolRun(input.input, created.toolRunId, {
+        status: "blocked",
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
+        error: capabilityProfileBlock,
+        failureGuidance: buildToolFailureGuidance({
+          toolName: preflight.toolName,
+          status: "blocked",
+          args: preflight.args,
+          error: capabilityProfileBlock,
+          blockerStrictness: this.readBlockerStrictness(),
         }),
         finishedAt: new Date().toISOString(),
       });
@@ -4259,6 +5172,7 @@ export class ChatTurnAgentRunner {
     if (reusableResult) {
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "reused" }),
         reused: true,
         reusedFromToolRunId: reusableResult.toolRunId,
         reuseReason: "matching_recent_browser_result",
@@ -4307,6 +5221,7 @@ export class ChatTurnAgentRunner {
       };
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "completed" }),
         result: result as Record<string, unknown>,
         finishedAt: new Date().toISOString(),
       });
@@ -4322,27 +5237,126 @@ export class ChatTurnAgentRunner {
     }
 
     const sourceAttribution = collectSourceAttributionFromToolRuns(input.priorToolRuns);
+    const effectInvocationContext: ToolEffectInvocationContext = {
+      toolRunId: created.toolRunId,
+      toolName: preflight.toolName,
+      sessionId: input.input.sessionId,
+      turnId: input.turnId,
+      ...(effectScope.workspaceId ? { workspaceId: effectScope.workspaceId } : {}),
+      ...(effectScope.runId ? { runId: effectScope.runId } : {}),
+      idempotencyKey: `chat-tool-effect:${created.toolRunId}`,
+    };
+    const toolCallBeforeHookInterposition =
+      input.input.capabilityProfile?.catalog.runtimeInterpositionHash !== undefined &&
+      input.input.capabilityProfile.catalog.toolCallBeforeHookCount !== undefined
+        ? {
+            hash: input.input.capabilityProfile.catalog.runtimeInterpositionHash,
+            count: input.input.capabilityProfile.catalog.toolCallBeforeHookCount,
+          }
+        : undefined;
+    const toolRuntimeOwner = input.input.capabilityProfile?.selection.tools.find(
+      (tool) => tool.canonicalName === preflight.toolName,
+    )?.runtimeOwner;
+    const effectReceipts: ToolEffectReceiptEnvelope[] = [];
+    let executorDispatchStarted = false;
+    let mainExecutorDispatchStarted = false;
+    const captureEffectReceipt = (receipt: ToolEffectReceiptEnvelope): void => {
+      if (effectReceipts.length < 8) effectReceipts.push(receipt);
+    };
+    const markExecutorDispatchStarted = (): void => {
+      if (executorDispatchStarted) return;
+      // The durable effect transition is the execution fence. Persist it
+      // before the in-memory flag changes and before control returns to the
+      // runtime owner, so a write failure cannot admit an unrecorded effect.
+      this.patchToolRun(input.input, created.toolRunId, {
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_started" }),
+      });
+      executorDispatchStarted = true;
+    };
+    const markMainExecutorDispatchStarted = (): void => {
+      markExecutorDispatchStarted();
+      mainExecutorDispatchStarted = true;
+    };
+    const escalateEffectPotential = (candidate: ToolEffectPotentialRecord): void => {
+      const escalated =
+        isToolEffectPotentialRecord(candidate) && candidate.potential === "unknown"
+          ? candidate
+          : ({
+              version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+              potential: "unknown",
+              sourceKind: "unknown",
+              reason: "descriptor_incomplete_or_untrusted",
+            } satisfies ToolEffectPotentialRecord);
+      if (
+        effectPotential.potential === "unknown" &&
+        canonicalJsonString(effectPotential) === canonicalJsonString(escalated)
+      ) {
+        return;
+      }
+      effectPotential = escalated;
+      // Owner classification can change before execution. Persist the stronger
+      // upper bound while retaining pre-dispatch evidence; the subsequent
+      // execution fence is the only transition to dispatch_started.
+      this.patchToolRun(input.input, created.toolRunId, {
+        ...this.buildToolEffectPatch({ potential: effectPotential, phase: "planned" }),
+      });
+    };
+    const invokeEffectAwareBrowserFallbackTool = (request: ToolInvokeRequest): Promise<ToolInvokeResult> =>
+      this.invokeTurnTool(input.input, request, {
+        effectContext: effectInvocationContext,
+        effectPotential,
+        toolCallBeforeHookInterposition,
+        toolRuntimeOwner,
+        onEffectPotentialEscalated: escalateEffectPotential,
+        onEffectReceipt: captureEffectReceipt,
+        onExecutorDispatch: markMainExecutorDispatchStarted,
+        onAuxiliaryEffectDispatch: markExecutorDispatchStarted,
+      });
+    const invokeEffectAwareBrowserFallbackMcp = (request: McpInvokeRequest): Promise<McpInvokeResponse> => {
+      if (!this.deps.invokeMcpTool) {
+        return Promise.resolve({ ok: false, error: "MCP browser fallback is unavailable." });
+      }
+      return this.deps.invokeMcpTool(request, { executionFence: markMainExecutorDispatchStarted });
+    };
 
     try {
-      const result = await this.invokeTurnTool(input.input, {
-        toolName: preflight.toolName,
-        args: preflight.args,
-        agentId: "assistant",
-        sessionId: input.input.sessionId,
-        taskId: input.input.policyTaskId,
-        runId: input.input.policyRunId,
-        surface: input.input.mode,
-        signal: input.input.signal,
-        ...(sourceAttribution ? { sourceAttribution } : {}),
-        permissionProfileId: input.input.permissionProfileId,
-        localOperatorOverrideId: input.input.localOperatorOverrideId,
-        consentContext: {
-          operatorId: input.input.operatorId,
-          source: "agent",
-          reason: `chat mode ${input.input.mode}`,
+      const result = await this.invokeTurnTool(
+        input.input,
+        {
+          toolName: preflight.toolName,
+          args: preflight.args,
+          agentId: "assistant",
+          sessionId: input.input.sessionId,
+          taskId: input.input.policyTaskId,
+          runId: input.input.policyRunId,
+          surface: input.input.mode,
+          signal: input.input.signal,
+          ...(sourceAttribution ? { sourceAttribution } : {}),
+          permissionProfileId: input.input.permissionProfileId,
+          localOperatorOverrideId: input.input.localOperatorOverrideId,
+          consentContext: {
+            operatorId: input.input.operatorId,
+            source: "agent",
+            reason: `chat mode ${input.input.mode}`,
+          },
+          policyContext: buildTurnToolPolicyContext(input.input),
         },
-        policyContext: buildTurnToolPolicyContext(input.input),
-      });
+        {
+          effectContext: effectInvocationContext,
+          effectPotential,
+          toolCallBeforeHookInterposition,
+          toolRuntimeOwner,
+          onEffectPotentialEscalated: escalateEffectPotential,
+          onEffectReceipt: captureEffectReceipt,
+          onExecutorDispatch: markMainExecutorDispatchStarted,
+          onAuxiliaryEffectDispatch: markExecutorDispatchStarted,
+        },
+      );
+      const concreteEffectRefs = collectConcreteToolEffectRefs(
+        this.deps.storage,
+        effectReceipts,
+        effectInvocationContext,
+      );
       const persistedToolResult = await this.persistToolArtifactsIfNeeded({
         turnInput: input.input,
         sessionId: input.input.sessionId,
@@ -4355,11 +5369,35 @@ export class ChatTurnAgentRunner {
       });
 
       if (result.outcome === "approval_required") {
+        if (mainExecutorDispatchStarted) {
+          const updated = this.patchToolRun(input.input, created.toolRunId, {
+            status: "failed",
+            ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_failed" }),
+            result: persistedToolResult,
+            error: "executor returned approval_required after the execution boundary",
+            failureGuidance:
+              "Execution may already have changed state. Inspect state before retry; this late approval was not exposed for replay.",
+            finishedAt: new Date().toISOString(),
+          });
+          return {
+            record: updated,
+            chunk: {
+              type: "tool_result",
+              sessionId: input.input.sessionId,
+              turnId: input.turnId,
+              toolRun: updated,
+            },
+          };
+        }
         const approvalExpiresAt = result.approvalId
           ? this.resolveApprovalExpiresAt(result.approvalId, result.expiresAt)
           : undefined;
         const updated = this.patchToolRun(input.input, created.toolRunId, {
           status: "approval_required",
+          ...this.buildToolEffectPatch({
+            potential: effectPotential,
+            phase: executorDispatchStarted ? "approval_wait_after_auxiliary_dispatch" : "approval_wait",
+          }),
           approvalId: result.approvalId,
           result: persistedToolResult,
           finishedAt: new Date().toISOString(),
@@ -4377,13 +5415,23 @@ export class ChatTurnAgentRunner {
       }
 
       if (result.outcome === "blocked") {
-        const writeFallback = await this.tryWriteJailFallback({
-          input: input.input,
-          toolName: preflight.toolName,
-          args: preflight.args,
-          policyReason: result.policyReason,
-          sourceAttribution,
-        });
+        const writeFallback = executorDispatchStarted
+          ? undefined
+          : await this.tryWriteJailFallback({
+              input: input.input,
+              toolName: preflight.toolName,
+              args: preflight.args,
+              policyReason: result.policyReason,
+              sourceAttribution,
+              effectInvocationContext,
+              effectPotential,
+              toolCallBeforeHookInterposition,
+              toolRuntimeOwner,
+              onEffectPotentialEscalated: escalateEffectPotential,
+              captureEffectReceipt,
+              markExecutorDispatchStarted: markMainExecutorDispatchStarted,
+              markAuxiliaryEffectDispatchStarted: markExecutorDispatchStarted,
+            });
         if (writeFallback) {
           if (writeFallback.result.outcome === "executed") {
             const fallbackPayload = {
@@ -4395,6 +5443,11 @@ export class ChatTurnAgentRunner {
             };
             const updated = this.patchToolRun(input.input, created.toolRunId, {
               status: "executed",
+              ...this.buildToolEffectPatch({
+                potential: effectPotential,
+                phase: "completed",
+                concreteRefs: collectConcreteToolEffectRefs(this.deps.storage, effectReceipts, effectInvocationContext),
+              }),
               result: fallbackPayload,
               finishedAt: new Date().toISOString(),
             });
@@ -4410,11 +5463,35 @@ export class ChatTurnAgentRunner {
           }
 
           if (writeFallback.result.outcome === "approval_required") {
+            if (mainExecutorDispatchStarted) {
+              const updated = this.patchToolRun(input.input, created.toolRunId, {
+                status: "failed",
+                ...this.buildToolEffectPatch({ potential: effectPotential, phase: "dispatch_failed" }),
+                result: writeFallback.result.result,
+                error: "fallback executor returned approval_required after the execution boundary",
+                failureGuidance:
+                  "The fallback may already have changed state. Inspect state before retry; this late approval was not exposed for replay.",
+                finishedAt: new Date().toISOString(),
+              });
+              return {
+                record: updated,
+                chunk: {
+                  type: "tool_result",
+                  sessionId: input.input.sessionId,
+                  turnId: input.turnId,
+                  toolRun: updated,
+                },
+              };
+            }
             const approvalExpiresAt = writeFallback.result.approvalId
               ? this.resolveApprovalExpiresAt(writeFallback.result.approvalId, writeFallback.result.expiresAt)
               : undefined;
             const updated = this.patchToolRun(input.input, created.toolRunId, {
               status: "approval_required",
+              ...this.buildToolEffectPatch({
+                potential: effectPotential,
+                phase: executorDispatchStarted ? "approval_wait_after_auxiliary_dispatch" : "approval_wait",
+              }),
               approvalId: writeFallback.result.approvalId,
               result: {
                 ...(writeFallback.result.result ?? {}),
@@ -4443,17 +5520,24 @@ export class ChatTurnAgentRunner {
             .filter(Boolean)
             .join("; ");
           const updated = this.patchToolRun(input.input, created.toolRunId, {
-            status: "blocked",
+            status: executorDispatchStarted ? "failed" : "blocked",
+            ...this.buildToolEffectPatch({
+              potential: effectPotential,
+              phase: executorDispatchStarted ? "dispatch_failed" : "pre_dispatch_blocked",
+            }),
             error: fallbackError,
             result: writeFallback.result.result,
-            failureGuidance: buildToolFailureGuidance({
-              toolName: preflight.toolName,
-              status: "blocked",
-              args: preflight.args,
-              error: fallbackError,
-              result: writeFallback.result.result,
-              blockerStrictness: this.readBlockerStrictness(),
-            }),
+            failureGuidance:
+              executorDispatchStarted && effectPotential.potential === "unknown"
+                ? "The fallback may already have changed state. Inspect state before retry; automatic replay was suppressed."
+                : buildToolFailureGuidance({
+                    toolName: preflight.toolName,
+                    status: "blocked",
+                    args: preflight.args,
+                    error: fallbackError,
+                    result: writeFallback.result.result,
+                    blockerStrictness: this.readBlockerStrictness(),
+                  }),
             finishedAt: new Date().toISOString(),
           });
           return {
@@ -4464,30 +5548,39 @@ export class ChatTurnAgentRunner {
               turnId: input.turnId,
               toolRun: updated,
             },
-            userInputPrompt: buildWriteDestinationUserInputPrompt({
-              sessionId: input.input.sessionId,
-              turnId: input.turnId,
-              toolName: preflight.toolName,
-              requestedPath: preflight.args.path,
-              fallbackPath: writeFallback.fallbackPath,
-              policyReason: fallbackError,
-              safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
-            }),
+            userInputPrompt: executorDispatchStarted
+              ? undefined
+              : buildWriteDestinationUserInputPrompt({
+                  sessionId: input.input.sessionId,
+                  turnId: input.turnId,
+                  toolName: preflight.toolName,
+                  requestedPath: preflight.args.path,
+                  fallbackPath: writeFallback.fallbackPath,
+                  policyReason: fallbackError,
+                  safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
+                }),
           };
         }
 
         const updated = this.patchToolRun(input.input, created.toolRunId, {
-          status: "blocked",
+          status: executorDispatchStarted ? "failed" : "blocked",
+          ...this.buildToolEffectPatch({
+            potential: effectPotential,
+            phase: executorDispatchStarted ? "dispatch_failed" : "pre_dispatch_blocked",
+          }),
           error: result.policyReason,
           result: persistedToolResult,
-          failureGuidance: buildToolFailureGuidance({
-            toolName: preflight.toolName,
-            status: "blocked",
-            args: preflight.args,
-            error: result.policyReason,
-            result: persistedToolResult,
-            blockerStrictness: this.readBlockerStrictness(),
-          }),
+          failureGuidance:
+            executorDispatchStarted && effectPotential.potential === "unknown"
+              ? "Execution may already have changed state. Inspect state before retry; automatic replay was suppressed."
+              : buildToolFailureGuidance({
+                  toolName: preflight.toolName,
+                  status: "blocked",
+                  args: preflight.args,
+                  error: result.policyReason,
+                  result: persistedToolResult,
+                  blockerStrictness: this.readBlockerStrictness(),
+                }),
           finishedAt: new Date().toISOString(),
         });
         return {
@@ -4498,14 +5591,16 @@ export class ChatTurnAgentRunner {
             turnId: input.turnId,
             toolRun: updated,
           },
-          userInputPrompt: buildWriteDestinationUserInputPrompt({
-            sessionId: input.input.sessionId,
-            turnId: input.turnId,
-            toolName: preflight.toolName,
-            requestedPath: preflight.args.path,
-            policyReason: result.policyReason,
-            safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
-          }),
+          userInputPrompt: executorDispatchStarted
+            ? undefined
+            : buildWriteDestinationUserInputPrompt({
+                sessionId: input.input.sessionId,
+                turnId: input.turnId,
+                toolName: preflight.toolName,
+                requestedPath: preflight.args.path,
+                policyReason: result.policyReason,
+                safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
+              }),
         };
       }
 
@@ -4518,6 +5613,10 @@ export class ChatTurnAgentRunner {
           args: preflight.args,
           result: result.result,
           turnBudgetDeadline: input.turnBudgetDeadline,
+          getEffectPotential: () => effectPotential,
+          hasExecutorDispatchStarted: () => executorDispatchStarted,
+          invokeFallbackTool: invokeEffectAwareBrowserFallbackTool,
+          invokeFallbackMcpTool: invokeEffectAwareBrowserFallbackMcp,
         });
         if (finalized) {
           return finalized;
@@ -4526,6 +5625,11 @@ export class ChatTurnAgentRunner {
 
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "executed",
+        ...this.buildToolEffectPatch({
+          potential: effectPotential,
+          phase: "completed",
+          concreteRefs: concreteEffectRefs,
+        }),
         result: persistedToolResult,
         finishedAt: new Date().toISOString(),
       });
@@ -4551,6 +5655,10 @@ export class ChatTurnAgentRunner {
           args: preflight.args,
           error: (error as Error).message,
           turnBudgetDeadline: input.turnBudgetDeadline,
+          getEffectPotential: () => effectPotential,
+          hasExecutorDispatchStarted: () => executorDispatchStarted,
+          invokeFallbackTool: invokeEffectAwareBrowserFallbackTool,
+          invokeFallbackMcpTool: invokeEffectAwareBrowserFallbackMcp,
         });
         if (recovered) {
           return recovered;
@@ -4558,6 +5666,10 @@ export class ChatTurnAgentRunner {
       }
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "failed",
+        ...this.buildToolEffectPatch({
+          potential: effectPotential,
+          phase: executorDispatchStarted ? "dispatch_failed" : "pre_dispatch_blocked",
+        }),
         error: (error as Error).message,
         failureGuidance: buildToolFailureGuidance({
           toolName: preflight.toolName,
@@ -4656,6 +5768,10 @@ export class ChatTurnAgentRunner {
     result?: Record<string, unknown>;
     error?: string;
     turnBudgetDeadline?: number;
+    getEffectPotential: () => ToolEffectPotentialRecord;
+    hasExecutorDispatchStarted: () => boolean;
+    invokeFallbackTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+    invokeFallbackMcpTool: (request: McpInvokeRequest) => Promise<McpInvokeResponse>;
   }): Promise<
     | {
         record: ChatToolRunRecord;
@@ -4718,6 +5834,7 @@ export class ChatTurnAgentRunner {
         normalizedResult,
         error: input.error,
         turnBudgetDeadline: input.turnBudgetDeadline,
+        invokeTool: input.invokeFallbackTool,
       },
       this.browserFallbackDeps,
     );
@@ -4740,6 +5857,7 @@ export class ChatTurnAgentRunner {
       });
       const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
+        ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persistedAlternateBuiltinResult,
         finishedAt: new Date().toISOString(),
       });
@@ -4766,6 +5884,7 @@ export class ChatTurnAgentRunner {
           args: input.args,
           fallbackChain,
           turnBudgetDeadline: input.turnBudgetDeadline,
+          invokeMcpTool: input.invokeFallbackMcpTool,
         },
         this.browserFallbackDeps,
       );
@@ -4788,6 +5907,7 @@ export class ChatTurnAgentRunner {
         });
         const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
           status: "executed",
+          ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
           result: persistedFallbackResult,
           finishedAt: new Date().toISOString(),
         });
@@ -4823,6 +5943,7 @@ export class ChatTurnAgentRunner {
       });
       const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
+        ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persistedNormalizedResult,
         finishedAt: new Date().toISOString(),
       });
@@ -4863,6 +5984,7 @@ export class ChatTurnAgentRunner {
       });
       const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
         status: "executed",
+        ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
         result: persistedNoResultsPayload,
         failureGuidance: buildToolFailureGuidance({
           toolName: input.toolName,
@@ -4914,6 +6036,10 @@ export class ChatTurnAgentRunner {
     });
     const updated = this.patchToolRun(input.turnInput, input.created.toolRunId, {
       status: "failed",
+      ...this.buildToolEffectPatch({
+        potential: input.getEffectPotential(),
+        phase: input.hasExecutorDispatchStarted() ? "dispatch_failed" : "pre_dispatch_blocked",
+      }),
       error: classification.error ?? input.error ?? "browser execution failed",
       result: persistedFailureResult,
       failureGuidance: buildToolFailureGuidance({
@@ -5176,6 +6302,14 @@ export class ChatTurnAgentRunner {
     args: Record<string, unknown>;
     policyReason?: string;
     sourceAttribution?: ToolInvokeRequest["sourceAttribution"];
+    effectInvocationContext: ToolEffectInvocationContext;
+    effectPotential: ToolEffectPotentialRecord;
+    toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
+    toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
+    onEffectPotentialEscalated: (potential: ToolEffectPotentialRecord) => void;
+    captureEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
+    markExecutorDispatchStarted: () => void;
+    markAuxiliaryEffectDispatchStarted: () => void;
   }): Promise<
     | {
         result: ToolInvokeResult;
@@ -5214,25 +6348,38 @@ export class ChatTurnAgentRunner {
       path: fallbackPath,
     };
 
-    const result = await this.invokeTurnTool(input.input, {
-      toolName: input.toolName,
-      args: fallbackArgs,
-      agentId: "assistant",
-      sessionId: input.input.sessionId,
-      taskId: input.input.policyTaskId,
-      runId: input.input.policyRunId,
-      surface: input.input.mode,
-      signal: input.input.signal,
-      ...(input.sourceAttribution ? { sourceAttribution: input.sourceAttribution } : {}),
-      permissionProfileId: input.input.permissionProfileId,
-      localOperatorOverrideId: input.input.localOperatorOverrideId,
-      consentContext: {
-        operatorId: input.input.operatorId,
-        source: "agent",
-        reason: `chat mode ${input.input.mode}; safe write fallback`,
+    const result = await this.invokeTurnTool(
+      input.input,
+      {
+        toolName: input.toolName,
+        args: fallbackArgs,
+        agentId: "assistant",
+        sessionId: input.input.sessionId,
+        taskId: input.input.policyTaskId,
+        runId: input.input.policyRunId,
+        surface: input.input.mode,
+        signal: input.input.signal,
+        ...(input.sourceAttribution ? { sourceAttribution: input.sourceAttribution } : {}),
+        permissionProfileId: input.input.permissionProfileId,
+        localOperatorOverrideId: input.input.localOperatorOverrideId,
+        consentContext: {
+          operatorId: input.input.operatorId,
+          source: "agent",
+          reason: `chat mode ${input.input.mode}; safe write fallback`,
+        },
+        policyContext: buildTurnToolPolicyContext(input.input),
       },
-      policyContext: buildTurnToolPolicyContext(input.input),
-    });
+      {
+        effectContext: input.effectInvocationContext,
+        effectPotential: input.effectPotential,
+        toolCallBeforeHookInterposition: input.toolCallBeforeHookInterposition,
+        toolRuntimeOwner: input.toolRuntimeOwner,
+        onEffectPotentialEscalated: input.onEffectPotentialEscalated,
+        onEffectReceipt: input.captureEffectReceipt,
+        onExecutorDispatch: input.markExecutorDispatchStarted,
+        onAuxiliaryEffectDispatch: input.markAuxiliaryEffectDispatchStarted,
+      },
+    );
 
     return {
       result,
@@ -5251,6 +6398,7 @@ export class ChatTurnAgentRunner {
     deterministic: boolean;
     usage: ChatStreamUsageRecord | null;
     providerCalls: number;
+    modelUsageEventIds?: string[];
   }> {
     // Eval-integrity turns must never receive controller-fabricated answer text.
     // A genuine re-ask of the model below is allowed (it is still model output);
@@ -5270,46 +6418,49 @@ export class ChatTurnAgentRunner {
     let usage: ChatStreamUsageRecord | null = null;
     try {
       providerCalls += 1;
-      const completion = await this.deps.createChatCompletion({
-        providerId: input.input.providerId,
-        model: input.input.model,
-        stream: false,
-        timeoutMs: synthesisTimeoutMs,
-        signal: input.input.signal,
-        memory: {
-          enabled: false,
-          mode: "off",
-          turnId: input.input.turnId,
-          sessionId: input.input.sessionId,
+      const completion = await this.deps.createChatCompletion(
+        {
+          providerId: input.input.providerId,
+          model: input.input.model,
+          stream: false,
+          timeoutMs: synthesisTimeoutMs,
+          signal: input.input.signal,
+          memory: {
+            enabled: false,
+            mode: "off",
+            turnId: input.input.turnId,
+            sessionId: input.input.sessionId,
+          },
+          messages: [
+            {
+              role: "system",
+              content: [
+                "You are the final response synthesizer for an agent runtime.",
+                "Tools are unavailable for this final pass. Do not claim new tool execution.",
+                "Write like a normal helpful chat response, not an incident report.",
+                "Start with the direct answer or the single most important limitation.",
+                "If key information is missing, ask at most two crisp follow-up questions.",
+                "Mention tool limitations briefly in plain language.",
+                "Do not use headings like Summary, Constraints, What I did instead, or What I need from you next unless the user explicitly asked for a structured report.",
+                "If partial tool evidence exists, include only the most decision-useful parts.",
+              ].join("\n"),
+            },
+            {
+              role: "user",
+              content: [
+                `Original user request: ${input.input.content}`,
+                "",
+                "Tool run summary:",
+                toolSummary.length > 0 ? toolSummary : "- No tool output captured.",
+                "",
+                "Circuit-breaker reason (if any):",
+                input.circuitBreakerReason ?? "none",
+              ].join("\n"),
+            },
+          ],
         },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You are the final response synthesizer for an agent runtime.",
-              "Tools are unavailable for this final pass. Do not claim new tool execution.",
-              "Write like a normal helpful chat response, not an incident report.",
-              "Start with the direct answer or the single most important limitation.",
-              "If key information is missing, ask at most two crisp follow-up questions.",
-              "Mention tool limitations briefly in plain language.",
-              "Do not use headings like Summary, Constraints, What I did instead, or What I need from you next unless the user explicitly asked for a structured report.",
-              "If partial tool evidence exists, include only the most decision-useful parts.",
-            ].join("\n"),
-          },
-          {
-            role: "user",
-            content: [
-              `Original user request: ${input.input.content}`,
-              "",
-              "Tool run summary:",
-              toolSummary.length > 0 ? toolSummary : "- No tool output captured.",
-              "",
-              "Circuit-breaker reason (if any):",
-              input.circuitBreakerReason ?? "none",
-            ].join("\n"),
-          },
-        ],
-      });
+        this.buildTurnModelUsageAttribution(input.input, "final-synthesis", "chat_repair"),
+      );
       usage = parseUsageFromCompletion(completion);
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
       const synthesized = extractMessageContent(message ?? {}).trim();
@@ -5319,9 +6470,11 @@ export class ChatTurnAgentRunner {
           deterministic: false,
           usage,
           providerCalls,
+          modelUsageEventIds: completion.modelUsageEventIds,
         };
       }
-    } catch {
+    } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) throw error;
       // Deterministic fallback below.
     }
     return {
@@ -5338,7 +6491,12 @@ export class ChatTurnAgentRunner {
     conversationMessages: ChatCompletionRequest["messages"];
     toolRuns: ChatToolRunRecord[];
     turnBudgetDeadline?: number;
-  }): Promise<{ content: string; usage: ChatStreamUsageRecord | null; providerCalls: number }> {
+  }): Promise<{
+    content: string;
+    usage: ChatStreamUsageRecord | null;
+    providerCalls: number;
+    modelUsageEventIds?: string[];
+  }> {
     // Constrained local models get tighter repair instructions; the previous
     // controller-authored "recovered repo answer" shortcut was removed because
     // it fabricated response text instead of re-asking the model.
@@ -5355,67 +6513,134 @@ export class ChatTurnAgentRunner {
     let usage: ChatStreamUsageRecord | null = null;
     try {
       providerCalls += 1;
-      const completion = await this.deps.createChatCompletion({
-        providerId: input.input.providerId,
-        model: input.input.model,
-        stream: false,
-        timeoutMs,
-        signal: input.input.signal,
-        memory: {
-          enabled: false,
-          mode: "off",
-          turnId: input.input.turnId,
-          sessionId: input.input.sessionId,
+      const completion = await this.deps.createChatCompletion(
+        {
+          providerId: input.input.providerId,
+          model: input.input.model,
+          stream: false,
+          timeoutMs,
+          signal: input.input.signal,
+          memory: {
+            enabled: false,
+            mode: "off",
+            turnId: input.input.turnId,
+            sessionId: input.input.sessionId,
+          },
+          max_tokens: constrainedLocalRepair ? 520 : undefined,
+          temperature: constrainedLocalRepair ? 0 : undefined,
+          messages: [
+            {
+              role: "system",
+              content: [
+                "You are repairing a partially completed assistant answer.",
+                "Tools are unavailable for this repair pass.",
+                "Use only the existing conversation and tool evidence already gathered.",
+                ignoreDraft
+                  ? "The prior draft is only a runtime failure placeholder. Ignore it and answer the original request from scratch."
+                  : "Finish cleanly. Do not restart from scratch unless the draft is unusable.",
+                "Do not mention finish reasons, token limits, truncation, or internal runtime state.",
+                constrainedLocalRepair
+                  ? "Keep the repaired answer compact, evidence-first, and under roughly 180 words unless the user explicitly asked for a long report."
+                  : undefined,
+                constrainedLocalRepair && repoGroundedRepair
+                  ? "Name exact file paths only when they already appear in the captured tool evidence, and separate observed facts from anything still unverified."
+                  : undefined,
+              ].join("\n"),
+            },
+            {
+              role: "user",
+              content: [
+                `Original request: ${input.input.content}`,
+                "",
+                "Partial assistant draft:",
+                ignoreDraft
+                  ? "(runtime failure placeholder omitted)"
+                  : input.partialAssistantContent.trim() || "(empty)",
+                "",
+                "Captured tool evidence:",
+                toolSummary || "- No tool evidence captured.",
+              ].join("\n"),
+            },
+          ],
         },
-        max_tokens: constrainedLocalRepair ? 520 : undefined,
-        temperature: constrainedLocalRepair ? 0 : undefined,
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You are repairing a partially completed assistant answer.",
-              "Tools are unavailable for this repair pass.",
-              "Use only the existing conversation and tool evidence already gathered.",
-              ignoreDraft
-                ? "The prior draft is only a runtime failure placeholder. Ignore it and answer the original request from scratch."
-                : "Finish cleanly. Do not restart from scratch unless the draft is unusable.",
-              "Do not mention finish reasons, token limits, truncation, or internal runtime state.",
-              constrainedLocalRepair
-                ? "Keep the repaired answer compact, evidence-first, and under roughly 180 words unless the user explicitly asked for a long report."
-                : undefined,
-              constrainedLocalRepair && repoGroundedRepair
-                ? "Name exact file paths only when they already appear in the captured tool evidence, and separate observed facts from anything still unverified."
-                : undefined,
-            ].join("\n"),
-          },
-          {
-            role: "user",
-            content: [
-              `Original request: ${input.input.content}`,
-              "",
-              "Partial assistant draft:",
-              ignoreDraft ? "(runtime failure placeholder omitted)" : input.partialAssistantContent.trim() || "(empty)",
-              "",
-              "Captured tool evidence:",
-              toolSummary || "- No tool evidence captured.",
-            ].join("\n"),
-          },
-        ],
-      });
+        this.buildTurnModelUsageAttribution(input.input, "incomplete-repair", "chat_repair"),
+      );
       usage = parseUsageFromCompletion(completion);
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
       return {
         content: extractMessageContent(message ?? {}).trim(),
         usage,
         providerCalls,
+        modelUsageEventIds: completion.modelUsageEventIds,
       };
-    } catch {
+    } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) throw error;
       return {
         content: "",
         usage,
         providerCalls,
       };
     }
+  }
+
+  private buildTurnModelUsageAttribution(
+    input: ChatTurnAgentRunnerInput,
+    logicalCall: string,
+    callKind: NonNullable<ModelUsageAttributionContext["callKind"]>,
+  ): ModelUsageAttributionContext {
+    const workerUsageAttribution = resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+    return {
+      operationId: `chat-turn:${input.turnId}:${logicalCall}`,
+      callKind:
+        workerUsageAttribution && (callKind === "chat_initial" || callKind === "chat_tool_loop")
+          ? "delegation_worker"
+          : callKind,
+      ...buildChatTurnContextUsageAttribution(input),
+      workspaceId: this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      durableRunId: input.policyRunId ?? workerUsageAttribution?.delegationRunId,
+      taskId: input.policyTaskId,
+      agentId: workerUsageAttribution?.agentId ?? "goatherder",
+      workerId: workerUsageAttribution?.workerId,
+      parentOperationId: workerUsageAttribution?.parentOperationId,
+    };
+  }
+}
+
+function resolveDelegatedWorkerUsageAttribution(
+  storage: Pick<Storage, "chatDelegationSteps">,
+  input: Pick<ChatTurnAgentRunnerInput, "parentDelegationStepId" | "sessionId">,
+):
+  | {
+      agentId: string;
+      workerId: string;
+      delegationRunId: string;
+      parentOperationId: string;
+    }
+  | undefined {
+  const stepId = input.parentDelegationStepId?.trim();
+  if (!stepId) return undefined;
+  const step = storage.chatDelegationSteps.get(stepId);
+  if (step.childSessionId !== input.sessionId) {
+    throw new Error(`Delegation step ${stepId} is not bound to child session ${input.sessionId}.`);
+  }
+  const agentId = step.role.trim();
+  if (!agentId) {
+    throw new Error(`Delegation step ${stepId} is missing its worker role.`);
+  }
+  return {
+    agentId,
+    workerId: step.stepId,
+    delegationRunId: step.runId,
+    parentOperationId: `delegation-run:${step.runId}:step:${step.stepId}`,
+  };
+}
+
+function collectCanonicalUsageEventIds(target: Set<string>, eventIds: string[] | undefined): void {
+  for (const eventId of eventIds ?? []) {
+    const normalized = eventId.trim();
+    if (normalized && normalized.length <= 256 && target.size < 1_000) target.add(normalized);
   }
 }
 
@@ -11370,7 +12595,7 @@ function resolveModelControlOptions(
       service_tier: input.speedMode === "fast" ? "auto" : undefined,
     };
   }
-  const reasoning = resolveReasoningEffort(input.thinkingLevel);
+  const reasoning = resolveChatReasoningEffort(input.thinkingLevel);
   return {
     reasoning: reasoning ? { effort: reasoning } : undefined,
     verbosity: input.speedMode === "fast" ? "low" : input.mode === "code" ? "medium" : undefined,
@@ -11408,37 +12633,6 @@ function isOpenAiReasoningEligible(providerId?: string, model?: string): boolean
   const normalizedProvider = (providerId ?? "").trim().toLowerCase();
   const normalizedModel = (model ?? "").trim().toLowerCase();
   return normalizedProvider === "openai" || normalizedModel.startsWith("gpt-5");
-}
-
-function resolvePromptLabReasoningEffort(
-  mode: ChatMode,
-  thinkingLevel: ChatThinkingLevel,
-): NonNullable<ChatCompletionRequest["reasoning"]>["effort"] {
-  if (thinkingLevel === "minimal") {
-    return "low";
-  }
-  if (thinkingLevel === "standard") {
-    return mode === "cowork" ? "medium" : "low";
-  }
-  return mode === "cowork" ? "high" : "medium";
-}
-
-function resolveReasoningEffort(
-  thinkingLevel: ChatThinkingLevel,
-): NonNullable<ChatCompletionRequest["reasoning"]>["effort"] | undefined {
-  if (thinkingLevel === "off") {
-    return "none";
-  }
-  if (thinkingLevel === "minimal") {
-    return "low";
-  }
-  if (thinkingLevel === "standard") {
-    return "medium";
-  }
-  if (thinkingLevel === "extended") {
-    return "high";
-  }
-  return "xhigh";
 }
 
 function inferLocalToolPathFromPrompt(toolName: string, userContent: string): string | undefined {
@@ -12408,6 +13602,101 @@ function createOrRefreshAgentStreamTrace(
   }
 }
 
+/** Resolve the immutable planning bound without consulting live state on replay. */
+export function resolveToolEffectPotentialForInvocation(input: {
+  toolName: string;
+  capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  listToolCatalog: () => ToolCatalogEntry[];
+}): ToolEffectPotentialRecord {
+  if (input.capabilityProfile) {
+    const frozen = input.capabilityProfile.selection.tools.find(
+      (tool) => tool.canonicalName === input.toolName,
+    )?.effectPotential;
+    if (isToolEffectPotentialRecord(frozen)) return frozen;
+    // A sealed/durable profile is the replay authority. Missing, malformed,
+    // or absent metadata must never consult a newer live catalog because
+    // catalog drift could downgrade unknown to none.
+    return classifyToolEffectPotential({ toolName: input.toolName, trustedBuiltin: false });
+  }
+  const catalog = input.listToolCatalog().find((tool) => tool.toolName === input.toolName);
+  if (isToolEffectPotentialRecord(catalog?.effectPotential)) return catalog.effectPotential;
+  return classifyToolEffectPotential({
+    toolName: input.toolName,
+    // The Gateway catalog is the built-in registry. Open-ended MCP/plugin
+    // wrapper names are still forced unknown by the classifier before this
+    // trust bit can qualify a safe read.
+    trustedBuiltin: Boolean(catalog),
+    category: catalog?.category,
+    riskLevel: catalog?.riskLevel,
+    requiresApproval: catalog?.requiresApproval,
+    readOnly: catalog?.readOnly,
+  });
+}
+
+/**
+ * Resolve only out-of-band receipts whose canonical owner confirms a completed,
+ * idempotency-correlated effect. Result payload fields are never inputs here.
+ */
+export function collectConcreteToolEffectRefs(
+  storage: Pick<Storage, "approvalEffects" | "externalSideEffectRuns" | "codeModeRuns" | "dryRunCommits">,
+  receipts: readonly ToolEffectReceiptEnvelope[],
+  context: ToolEffectInvocationContext,
+): ToolEffectEvidenceRef[] {
+  const refs: ToolEffectEvidenceRef[] = [];
+  for (const receipt of receipts.slice(0, 8)) {
+    if (!isToolEffectReceiptCorrelated(receipt, context)) continue;
+    const normalizedRef = normalizeToolEffectEvidenceRefs([receipt.ref])[0];
+    if (!normalizedRef || normalizedRef.owner !== receipt.ref.owner || normalizedRef.refId !== receipt.ref.refId) {
+      continue;
+    }
+    try {
+      if (normalizedRef.owner === "approval_effect") {
+        const effect = storage.approvalEffects.get(normalizedRef.refId);
+        const scopeMatches =
+          (effect.targetKind === "chat_turn" && effect.targetId === context.turnId) ||
+          (effect.targetKind === "durable_run" && Boolean(context.runId) && effect.targetId === context.runId);
+        if (effect.status === "completed" && effect.idempotencyKey === context.idempotencyKey && scopeMatches) {
+          refs.push(normalizedRef);
+        }
+      } else if (normalizedRef.owner === "external_side_effect") {
+        const run = storage.externalSideEffectRuns.get(normalizedRef.refId);
+        if (
+          run.status === "completed" &&
+          Boolean(context.workspaceId) &&
+          run.workspaceId === context.workspaceId &&
+          run.idempotencyKey === context.idempotencyKey
+        ) {
+          refs.push(normalizedRef);
+        }
+      }
+      // Code Mode and dry-run owner rows do not currently persist the Chat
+      // invocation idempotency key. Scope similarity is not proof, so those
+      // receipt kinds intentionally remain uncertain until their owner schema
+      // carries an exact correlation.
+    } catch {
+      // An envelope is only a candidate until its canonical owner verifies it.
+      continue;
+    }
+  }
+  return normalizeToolEffectEvidenceRefs(refs);
+}
+
+function isToolEffectReceiptCorrelated(
+  receipt: ToolEffectReceiptEnvelope,
+  context: ToolEffectInvocationContext,
+): boolean {
+  return (
+    receipt.version === TOOL_EFFECT_RECEIPT_VERSION &&
+    receipt.toolRunId === context.toolRunId &&
+    receipt.toolName === context.toolName &&
+    receipt.sessionId === context.sessionId &&
+    receipt.turnId === context.turnId &&
+    receipt.workspaceId === context.workspaceId &&
+    receipt.runId === context.runId &&
+    receipt.idempotencyKey === context.idempotencyKey
+  );
+}
+
 function projectToolResultForModel<T>(value: T): T {
   return redactStructuredSecrets(value).value;
 }
@@ -12430,6 +13719,95 @@ function createAbortError(message: string): Error {
   const error = new Error(message);
   error.name = "AbortError";
   return error;
+}
+
+type ChatStreamStepOrToolActivityTick = { kind: "step"; step: IteratorResult<ChatStreamChunkDraft> } | { kind: "tick" };
+
+interface ChatStreamPendingStep {
+  wait(delayMs: number, signal?: AbortSignal): Promise<ChatStreamStepOrToolActivityTick>;
+  observe(): Promise<PromptSettlement<IteratorResult<ChatStreamChunkDraft>>>;
+}
+
+type ChatStreamPendingStepSettlement =
+  | { kind: "step"; step: IteratorResult<ChatStreamChunkDraft> }
+  | { kind: "error"; error: Error };
+
+function normalizeToolActivityHeartbeatMs(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(10, Math.floor(value)) : 5_000;
+}
+
+function createChatStreamPendingStep(nextStep: Promise<IteratorResult<ChatStreamChunkDraft>>): ChatStreamPendingStep {
+  let settlement: ChatStreamPendingStepSettlement | undefined;
+  const waiters = new Set<(value: ChatStreamPendingStepSettlement) => void>();
+  const settle = (value: ChatStreamPendingStepSettlement): void => {
+    if (settlement) {
+      return;
+    }
+    settlement = value;
+    for (const waiter of waiters) {
+      waiter(value);
+    }
+    waiters.clear();
+  };
+
+  // Attach exactly one settlement pair to the inner next() promise. Repeated
+  // heartbeat ticks therefore do not accumulate handlers on a long-running
+  // tool promise.
+  void nextStep.then(
+    (step) => settle({ kind: "step", step }),
+    (error: unknown) => settle({ kind: "error", error: error instanceof Error ? error : new Error(String(error)) }),
+  );
+
+  return {
+    observe: () => observePromptSettlement(nextStep),
+    wait: (delayMs, signal) => {
+      if (settlement) {
+        return settlement.kind === "error" ? Promise.reject(settlement.error) : Promise.resolve(settlement);
+      }
+      return new Promise((resolve, reject) => {
+        let finished = false;
+        let abortTimeoutId: NodeJS.Timeout | undefined;
+        const cleanup = (): void => {
+          if (abortTimeoutId) {
+            clearTimeout(abortTimeoutId);
+          }
+          clearTimeout(timeoutId);
+          signal?.removeEventListener("abort", onAbort);
+          waiters.delete(onSettlement);
+        };
+        const finish = (action: () => void): void => {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          cleanup();
+          action();
+        };
+        const onAbort = (): void => {
+          // Give the inner runner one microtask/macrotask turn to emit its
+          // canonical cancelled trace. An abort-ignorant tool still cannot
+          // hold the wrapper: the zero-delay fallback rejects promptly.
+          abortTimeoutId ??= setTimeout(() => finish(() => reject(createAbortError("Chat turn cancelled"))), 0);
+        };
+        const onSettlement = (value: ChatStreamPendingStepSettlement): void =>
+          finish(() => {
+            if (value.kind === "error") {
+              reject(value.error);
+              return;
+            }
+            resolve(value);
+          });
+
+        waiters.add(onSettlement);
+        if (signal?.aborted) {
+          onAbort();
+        } else {
+          signal?.addEventListener("abort", onAbort, { once: true });
+        }
+        const timeoutId = setTimeout(() => finish(() => resolve({ kind: "tick" })), delayMs);
+      });
+    },
+  };
 }
 
 function throwIfChatTurnCancelled(input: Pick<ChatTurnAgentRunnerInput, "signal">): void {

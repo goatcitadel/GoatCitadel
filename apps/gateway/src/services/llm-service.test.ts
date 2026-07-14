@@ -3138,20 +3138,17 @@ describe("LlmService", () => {
     globalThis.fetch = vi.fn(async (_input, init) => {
       payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
-        JSON.stringify({
-          id: "resp_codex_chat",
-          model: "gpt-5.5",
-          output: [
-            {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "ok" }],
-            },
-          ],
-        }),
+        [
+          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_chat"}',
+          "",
+          'data: {"type":"response.completed","response":{"id":"resp_codex_chat","model":"gpt-5.5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
         {
           status: 200,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "text/plain; charset=utf-8" },
         },
       );
     }) as unknown as typeof fetch;
@@ -3427,6 +3424,7 @@ describe("LlmService", () => {
       return new Response(
         [
           'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2UtYnl0ZXM=","revised_prompt":"Rendered prompt"}}',
+          'data: {"type":"response.completed","response":{"model":"gpt-image-2","output":[],"usage":{"input_tokens":0,"output_tokens":0,"cost_usd":0}}}',
           "data: [DONE]",
           "",
         ].join("\n\n"),
@@ -3551,7 +3549,7 @@ describe("LlmService", () => {
           prompt: "Generate malformed response proof",
           responseFormat: "b64_json",
         }),
-      ).rejects.toThrow("OpenAI Codex image generation returned no images");
+      ).rejects.toThrow("OpenAI Codex image generation for gpt-image-2 ended before response.completed");
     } finally {
       globalThis.fetch = originalFetch;
     }

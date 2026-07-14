@@ -8,8 +8,13 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
-import { createExecuteToolCallForTest, createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
+import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
+import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
+  createEffectAwareInvokeToolForTest,
+  createExecuteToolCallForTest,
+  createMockStorage,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner loop 28 coverage", () => {
   it("scores essential, suggested, project, memory, and access-filtered tools for code turns", async () => {
@@ -67,12 +72,16 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
     ];
     const evaluateToolAccess = vi.fn((input: { toolName: string }) => {
       if (input.toolName === "http.get") {
-        return { allowed: false, reason: "http disabled" };
+        return {
+          allowed: false,
+          requiresApproval: false,
+          reasonCodes: ["http_disabled"],
+        };
       }
       if (input.toolName === "browser.navigate") {
         throw new Error("navigation grant unavailable");
       }
-      return { allowed: true };
+      return { allowed: true, requiresApproval: false, reasonCodes: [] };
     });
     const orchestrator = new ChatTurnAgentRunner({
       storage: storage as never,
@@ -371,6 +380,7 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
 function createExecuteToolCall(input: { invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult> }) {
   return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
+    invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(input.invokeTool),
     toolNames: ["browser.search", "file.read_range", "time.now"],
   });
 }

@@ -3,10 +3,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { PACKAGING_TARGETS } from "../packaging/lib/packaging-targets.mjs";
+import {
+  RELEASE_DETACHED_METADATA_FILES,
+  RELEASE_DETACHED_METADATA_TREES,
+  RELEASE_PAYLOAD_LIMITS,
+  RELEASE_PAYLOAD_ROOTS,
+  validateReleaseManifest,
+} from "../packaging/lib/package-renderers.mjs";
 import { resolveLaneProof } from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
+const EXPECTED_REPOSITORY = "goatcitadel/GoatCitadel";
+const EXPECTED_RELEASE_WORKFLOW_NAME = "Release Installers and Bundles";
+const EXPECTED_RELEASE_WORKFLOW_FILE = ".github/workflows/release-installers.yml";
+const REQUIRED_RUNTIME_PAYLOAD_TARGETS = Object.freeze(["windows-x64", "windows-arm64"]);
+const MAX_RELEASE_ASSETS = 256;
+const MAX_RELEASE_ARTIFACT_DIRECTORIES = 1_024;
+const MAX_RELEASE_ASSET_PATH_BYTES = 240;
+const MAX_CERTIFICATE_BYTES = 2 * 1024 * 1024;
+const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 
 const RELEASE_PROOF_WORKFLOW_FILE = "verification-1-0-release-proof.yml";
 const RELEASE_PROOF_COVERED_LANES = [
@@ -194,10 +211,23 @@ if (!fs.existsSync(proofZipPath)) {
   throw new Error(`Release proof ZIP does not exist: ${proofZipPath}`);
 }
 
-const commit = process.env.GITHUB_SHA ?? args.commit ?? null;
-const repository = process.env.GITHUB_REPOSITORY ?? args.repository ?? null;
+const commit = normalizeCommit(process.env.GITHUB_SHA ?? args.commit);
+const repository = validateRepository(process.env.GITHUB_REPOSITORY ?? args.repository);
+const releaseWorkflow = validateReleaseWorkflowTruth({
+  repository,
+  tag: tagName,
+  commit,
+});
 const requiredLanes = await resolveRequiredLanes({ commit, repository });
 const releaseAssets = await Promise.all(listFiles(artifactsDir).map((filePath) => fileRecord(filePath, artifactsDir)));
+validateFixedReleaseAssetInventory(releaseAssets, version);
+const runtimePayloads = await resolveRuntimePayloads({
+  mappings: args.runtimeManifests,
+  artifactsDir,
+  releaseAssets,
+  version,
+  commit,
+});
 const proofBundle = await fileRecord(proofZipPath, path.dirname(proofZipPath));
 const hostileSandboxProof = hostileSandboxProofPath ? readOptionalJson(hostileSandboxProofPath) : null;
 const exactShaStatus = summarizeRequiredLaneExactSha(requiredLanes, commit);
@@ -209,7 +239,7 @@ const hostileSandboxWindowsClaim = buildHostileSandboxWindowsClaim({
 });
 
 const certificate = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   product: "GoatCitadel",
   version,
   tag: tagName,
@@ -217,15 +247,7 @@ const certificate = {
   targetCommit: commit,
   repository,
   generatedAt: new Date().toISOString(),
-  releaseWorkflow: {
-    name: process.env.GITHUB_WORKFLOW ?? "Release Installers and Bundles",
-    runId: process.env.GITHUB_RUN_ID ?? null,
-    runNumber: process.env.GITHUB_RUN_NUMBER ?? null,
-    runUrl:
-      repository && process.env.GITHUB_RUN_ID
-        ? `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`
-        : null,
-  },
+  releaseWorkflow,
   requiredLanes,
   exactShaStatus,
   releaseProofCoverage: {
@@ -250,12 +272,17 @@ const certificate = {
   }),
   trivyStatus: requiredLanes.find((lane) => lane.name === "security:trivy")?.status ?? "missing",
   acceptedFailures: [],
+  runtimePayloads,
   releaseAssets,
   proofBundle,
 };
 
+const certificateBytes = Buffer.from(`${JSON.stringify(certificate, null, 2)}\n`, "utf8");
+if (certificateBytes.length > MAX_CERTIFICATE_BYTES) {
+  throw new Error(`Release certificate exceeds ${MAX_CERTIFICATE_BYTES} bytes.`);
+}
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
-fs.writeFileSync(outFile, `${JSON.stringify(certificate, null, 2)}\n`, "utf8");
+fs.writeFileSync(outFile, certificateBytes);
 console.log(`Release certificate ready: ${outFile}`);
 
 if (args.requireSuccess) {
@@ -278,6 +305,7 @@ if (args.requireSuccess) {
 function parseArgs(argv) {
   const parsed = {
     requireSuccess: false,
+    runtimeManifests: [],
   };
   let index = 0;
   const takeOptionValue = (flag) => {
@@ -329,6 +357,19 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (value === "--runtime-manifest") {
+      const mapping = takeOptionValue("--runtime-manifest");
+      const separator = mapping.indexOf("=");
+      if (separator <= 0 || separator === mapping.length - 1) {
+        throw new Error("--runtime-manifest requires <target>=<path>.");
+      }
+      parsed.runtimeManifests.push({
+        target: mapping.slice(0, separator),
+        filePath: mapping.slice(separator + 1),
+      });
+      index += 1;
+      continue;
+    }
     if (value === "--require-success") {
       parsed.requireSuccess = true;
       index += 1;
@@ -339,11 +380,176 @@ function parseArgs(argv) {
   if (!parsed.version) {
     throw new Error("Missing required argument: --version");
   }
+  if (parsed.runtimeManifests.length === 0) {
+    throw new Error("At least one --runtime-manifest <target>=<path> argument is required.");
+  }
   return parsed;
 }
 
 function normalizeVersion(value) {
-  return value.startsWith("v") ? value.slice(1) : value;
+  const normalized = value.startsWith("v") ? value.slice(1) : value;
+  if (!/^[0-9][0-9a-z.+-]{0,79}$/iu.test(normalized) || normalized.includes("..")) {
+    throw new Error(`Invalid release version: ${value}`);
+  }
+  return normalized;
+}
+
+function normalizeCommit(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!/^[a-f0-9]{40}$/u.test(normalized)) {
+    throw new Error("Release certificate requires a full 40-character commit SHA.");
+  }
+  return normalized;
+}
+
+function validateRepository(value) {
+  if (value !== EXPECTED_REPOSITORY) {
+    throw new Error(`Release certificate repository must be ${EXPECTED_REPOSITORY}.`);
+  }
+  return value;
+}
+
+function validateFixedReleaseAssetInventory(releaseAssets, version) {
+  const actual = releaseAssets.map((record) => record.relativePath).sort(compareStrings);
+  const expected = fixedReleaseAssetPaths(version);
+  if (
+    actual.length !== expected.length ||
+    new Set(actual.map((item) => item.toLowerCase())).size !== actual.length ||
+    actual.some((item, index) => item !== expected[index])
+  ) {
+    throw new Error(
+      `Release assets must match the fixed closed-world inventory. Expected: ${expected.join(", ")}; received: ${actual.join(", ")}.`,
+    );
+  }
+}
+
+function fixedReleaseAssetPaths(version) {
+  const signedArtifacts = [
+    "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe",
+    "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix",
+    "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe",
+    "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix",
+    `linux-x64-experimental-release-assets/GoatCitadel-${version}-linux-x64.tar.gz`,
+    `macos-arm64-experimental-release-assets/GoatCitadel-${version}-macos-arm64.dmg`,
+  ];
+  return [
+    ...signedArtifacts,
+    ...signedArtifacts.flatMap((artifactPath) => [`${artifactPath}.sig`, `${artifactPath}.pem`]),
+    "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256",
+    "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256",
+    "windows-x64-release-assets/identity-manifest.json",
+    "windows-x64-release-assets/app/release-manifest.json",
+    "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256",
+    "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256",
+    "windows-arm64-release-assets/identity-manifest.json",
+    "windows-arm64-release-assets/app/release-manifest.json",
+    `linux-x64-experimental-release-assets/GoatCitadel-${version}-linux-x64.tar.gz.sha256`,
+    `macos-arm64-experimental-release-assets/GoatCitadel-${version}-macos-arm64.dmg.sha256`,
+  ].sort(compareStrings);
+}
+
+function validateReleaseWorkflowTruth({ repository, tag, commit }) {
+  if (tag !== `v${version}`) {
+    throw new Error(`Release tag ${tag} must exactly match version v${version}.`);
+  }
+  const expectedRef = `refs/tags/${tag}`;
+  const expectedWorkflowRef = `${repository}/${EXPECTED_RELEASE_WORKFLOW_FILE}@${expectedRef}`;
+  const checks = [
+    ["GITHUB_ACTIONS", process.env.GITHUB_ACTIONS, "true"],
+    ["GITHUB_EVENT_NAME", process.env.GITHUB_EVENT_NAME, "push"],
+    ["GITHUB_REF", process.env.GITHUB_REF, expectedRef],
+    ["GITHUB_REF_NAME", process.env.GITHUB_REF_NAME, tag],
+    ["GITHUB_SHA", process.env.GITHUB_SHA?.toLowerCase(), commit],
+    ["GITHUB_WORKFLOW", process.env.GITHUB_WORKFLOW, EXPECTED_RELEASE_WORKFLOW_NAME],
+    ["GITHUB_WORKFLOW_REF", process.env.GITHUB_WORKFLOW_REF, expectedWorkflowRef],
+  ];
+  for (const [name, actual, expected] of checks) {
+    if (actual !== expected) {
+      throw new Error(`Release certificate requires ${name}=${expected}; received ${String(actual)}.`);
+    }
+  }
+  return {
+    name: EXPECTED_RELEASE_WORKFLOW_NAME,
+    workflowFile: EXPECTED_RELEASE_WORKFLOW_FILE,
+    eventName: "push",
+    ref: expectedRef,
+    sha: commit,
+    workflowRef: expectedWorkflowRef,
+    trustEligible: true,
+  };
+}
+
+async function resolveRuntimePayloads({ mappings, artifactsDir, releaseAssets, version, commit }) {
+  const artifactsRoot = path.resolve(artifactsDir);
+  const seenTargets = new Set();
+  const seenManifestPaths = new Set();
+  const records = [];
+  for (const mapping of mappings) {
+    const targetInfo = PACKAGING_TARGETS[mapping.target];
+    if (!targetInfo) {
+      throw new Error(`Unsupported runtime manifest target: ${mapping.target}`);
+    }
+    if (seenTargets.has(mapping.target)) {
+      throw new Error(`Duplicate runtime manifest target: ${mapping.target}`);
+    }
+    seenTargets.add(mapping.target);
+    const manifestPath = path.resolve(mapping.filePath);
+    assertChildPath(artifactsRoot, manifestPath, `runtime manifest ${mapping.target}`);
+    const manifestRelativePath = path.relative(artifactsRoot, manifestPath).replaceAll("\\", "/");
+    if (seenManifestPaths.has(manifestRelativePath)) {
+      throw new Error(`Runtime manifest path is assigned to multiple targets: ${manifestRelativePath}`);
+    }
+    seenManifestPaths.add(manifestRelativePath);
+    const rawManifest = readBoundedRegularFile(manifestPath, {
+      rootDir: artifactsRoot,
+      maxBytes: RELEASE_PAYLOAD_LIMITS.maxManifestBytes,
+      label: `runtime manifest ${mapping.target}`,
+    });
+    let manifest;
+    try {
+      manifest = JSON.parse(rawManifest.toString("utf8"));
+    } catch (error) {
+      throw new Error(`Runtime manifest ${mapping.target} is not valid JSON.`, { cause: error });
+    }
+    validateReleaseManifest(manifest, {
+      targetInfo,
+      expectedVersion: version,
+      expectedCommit: commit,
+      requireCleanSource: true,
+    });
+    const assetRecord = releaseAssets.find((asset) => asset.relativePath === manifestRelativePath);
+    if (!assetRecord) {
+      throw new Error(`Runtime manifest is not included in releaseAssets: ${manifestRelativePath}`);
+    }
+    const manifestSha256 = createHash("sha256").update(rawManifest).digest("hex");
+    if (assetRecord.sha256 !== manifestSha256 || assetRecord.sizeBytes !== rawManifest.length) {
+      throw new Error(
+        `Runtime manifest releaseAssets record changed during certificate assembly: ${manifestRelativePath}`,
+      );
+    }
+    records.push({
+      target: targetInfo.target,
+      platform: targetInfo.platform,
+      arch: targetInfo.arch,
+      installLayout: "goatcitadel-bundle-v1",
+      immutableRoots: [...RELEASE_PAYLOAD_ROOTS],
+      detachedMetadataFiles: [...RELEASE_DETACHED_METADATA_FILES],
+      detachedMetadataTrees: [...RELEASE_DETACHED_METADATA_TREES],
+      manifest: {
+        relativePath: manifestRelativePath,
+        installedPath: "app/release-manifest.json",
+        sha256: manifestSha256,
+        sizeBytes: rawManifest.length,
+      },
+    });
+  }
+  const missingTargets = REQUIRED_RUNTIME_PAYLOAD_TARGETS.filter((target) => !seenTargets.has(target));
+  if (missingTargets.length > 0) {
+    throw new Error(
+      `Release certificate is missing required runtime manifest target(s): ${missingTargets.join(", ")}.`,
+    );
+  }
+  return records.sort((left, right) => compareStrings(left.target, right.target));
 }
 
 async function resolveRequiredLanes({ commit, repository }) {
@@ -631,37 +837,209 @@ function readOptionalJson(filePath) {
 }
 
 function listFiles(rootDir) {
+  const root = path.resolve(rootDir);
+  const rootStats = fs.lstatSync(root);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error(`Release artifacts root must be a regular non-link directory: ${root}`);
+  }
+  const canonicalRoot = fs.realpathSync.native(root);
   const files = [];
-  const queue = [rootDir];
+  const caseFoldedPaths = new Set();
+  const queue = [root];
+  let directoryCount = 0;
   while (queue.length > 0) {
     const current = queue.pop();
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    directoryCount += 1;
+    if (directoryCount > MAX_RELEASE_ARTIFACT_DIRECTORIES) {
+      throw new Error(`Release artifacts exceed ${MAX_RELEASE_ARTIFACT_DIRECTORIES} directories.`);
+    }
+    assertChildOrSamePath(canonicalRoot, fs.realpathSync.native(current), "release artifacts directory");
+    for (const entry of fs
+      .readdirSync(current, { withFileTypes: true })
+      .sort((left, right) => compareStrings(left.name, right.name))) {
       const absolutePath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
+      const stats = fs.lstatSync(absolutePath);
+      const relativePath = validateReleaseAssetRelativePath(path.relative(root, absolutePath).replaceAll("\\", "/"));
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Release artifacts cannot contain a symlink or junction: ${relativePath}`);
+      }
+      assertChildPath(canonicalRoot, fs.realpathSync.native(absolutePath), `release artifact ${relativePath}`);
+      if (stats.isDirectory()) {
         queue.push(absolutePath);
         continue;
       }
-      if (entry.isFile()) {
+      if (stats.isFile()) {
+        if (stats.nlink !== 1) {
+          throw new Error(`Release artifacts cannot contain a hard-linked file: ${relativePath}`);
+        }
+        const caseFoldedPath = relativePath.toLowerCase();
+        if (caseFoldedPaths.has(caseFoldedPath)) {
+          throw new Error(`Release artifacts contain a Windows case-fold collision: ${relativePath}`);
+        }
+        if (files.length >= MAX_RELEASE_ASSETS) {
+          throw new Error(`Release artifacts exceed ${MAX_RELEASE_ASSETS} files.`);
+        }
+        caseFoldedPaths.add(caseFoldedPath);
         files.push(absolutePath);
+        continue;
       }
+      throw new Error(`Release artifacts cannot contain a special filesystem entry: ${relativePath}`);
     }
   }
-  return files.sort((left, right) => left.localeCompare(right));
+  return files.sort((left, right) =>
+    compareStrings(path.relative(root, left).replaceAll("\\", "/"), path.relative(root, right).replaceAll("\\", "/")),
+  );
+}
+
+function validateReleaseAssetRelativePath(relativePath) {
+  if (
+    typeof relativePath !== "string" ||
+    relativePath.length === 0 ||
+    Buffer.byteLength(relativePath, "utf8") > MAX_RELEASE_ASSET_PATH_BYTES ||
+    relativePath.includes("\0") ||
+    relativePath.includes("\\") ||
+    path.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath)
+  ) {
+    throw new Error(`Release artifact path is unsafe: ${String(relativePath)}`);
+  }
+  const segments = relativePath.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        !segment ||
+        segment === "." ||
+        segment === ".." ||
+        /[<>:"|?*\u0000-\u001f]/u.test(segment) ||
+        /[. ]$/u.test(segment) ||
+        WINDOWS_RESERVED_BASENAME.test(segment),
+    )
+  ) {
+    throw new Error(`Release artifact path is not portable to Windows: ${relativePath}`);
+  }
+  return segments.join("/");
 }
 
 async function fileRecord(filePath, rootDir) {
+  const stable = await hashStableRegularFile(filePath, rootDir, `release file ${path.basename(filePath)}`);
   return {
     fileName: path.basename(filePath),
     relativePath: path.relative(rootDir, filePath).replaceAll("\\", "/"),
-    sha256: await sha256File(filePath),
-    sizeBytes: fs.statSync(filePath).size,
+    sha256: stable.sha256,
+    sizeBytes: stable.sizeBytes,
   };
 }
 
-async function sha256File(filePath) {
-  const hash = createHash("sha256");
-  for await (const chunk of fs.createReadStream(filePath)) {
-    hash.update(chunk);
+async function hashStableRegularFile(filePath, rootDir, label) {
+  const root = path.resolve(rootDir);
+  const candidate = path.resolve(filePath);
+  assertAnchoredRegularFile(root, candidate, label);
+  const beforePathStats = fs.lstatSync(candidate);
+  const handle = fs.openSync(candidate, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const openedStats = fs.fstatSync(handle);
+    const currentPathStats = fs.lstatSync(candidate);
+    assertAnchoredRegularFile(root, candidate, label);
+    if (!sameFileIdentity(beforePathStats, openedStats) || !sameFileIdentity(openedStats, currentPathStats)) {
+      throw new Error(`${label} changed while it was opened.`);
+    }
+    const hash = createHash("sha256");
+    for await (const chunk of fs.createReadStream(candidate, { fd: handle, autoClose: false, start: 0 })) {
+      hash.update(chunk);
+    }
+    const finalOpenedStats = fs.fstatSync(handle);
+    const finalPathStats = fs.lstatSync(candidate);
+    assertAnchoredRegularFile(root, candidate, label);
+    if (!sameFileIdentity(openedStats, finalOpenedStats) || !sameFileIdentity(finalOpenedStats, finalPathStats)) {
+      throw new Error(`${label} changed while it was hashed.`);
+    }
+    return { sha256: hash.digest("hex"), sizeBytes: openedStats.size };
+  } finally {
+    fs.closeSync(handle);
   }
-  return hash.digest("hex");
+}
+
+function readBoundedRegularFile(filePath, { rootDir, maxBytes, label }) {
+  const root = path.resolve(rootDir);
+  const candidate = path.resolve(filePath);
+  assertAnchoredRegularFile(root, candidate, label);
+  const beforePathStats = fs.lstatSync(candidate);
+  if (beforePathStats.size <= 0 || beforePathStats.size > maxBytes) {
+    throw new Error(`${label} must be between 1 and ${maxBytes} bytes.`);
+  }
+  const handle = fs.openSync(candidate, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const openedStats = fs.fstatSync(handle);
+    const currentPathStats = fs.lstatSync(candidate);
+    assertAnchoredRegularFile(root, candidate, label);
+    if (!sameFileIdentity(beforePathStats, openedStats) || !sameFileIdentity(openedStats, currentPathStats)) {
+      throw new Error(`${label} changed while it was opened.`);
+    }
+    const raw = fs.readFileSync(handle);
+    const finalOpenedStats = fs.fstatSync(handle);
+    const finalPathStats = fs.lstatSync(candidate);
+    assertAnchoredRegularFile(root, candidate, label);
+    if (!sameFileIdentity(openedStats, finalOpenedStats) || !sameFileIdentity(finalOpenedStats, finalPathStats)) {
+      throw new Error(`${label} changed while it was read.`);
+    }
+    return raw;
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function assertAnchoredRegularFile(rootDir, filePath, label) {
+  const root = path.resolve(rootDir);
+  const candidate = path.resolve(filePath);
+  const rootStats = fs.lstatSync(root);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error(`${label} root must be a regular non-link directory.`);
+  }
+  assertChildPath(root, candidate, label);
+  let cursor = root;
+  for (const segment of path.relative(root, candidate).split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    const stats = fs.lstatSync(cursor);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`${label} traverses a symlink or junction.`);
+    }
+    if (cursor !== candidate && !stats.isDirectory()) {
+      throw new Error(`${label} traverses a non-directory path component.`);
+    }
+  }
+  const candidateStats = fs.lstatSync(candidate);
+  if (!candidateStats.isFile() || candidateStats.isSymbolicLink() || candidateStats.nlink !== 1) {
+    throw new Error(`${label} must be a regular single-link file.`);
+  }
+  assertChildPath(fs.realpathSync.native(root), fs.realpathSync.native(candidate), label);
+}
+
+function assertChildPath(rootDir, candidate, label) {
+  const relative = path.relative(path.resolve(rootDir), path.resolve(candidate));
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes its supported root.`);
+  }
+}
+
+function assertChildOrSamePath(rootDir, candidate, label) {
+  const relative = path.relative(path.resolve(rootDir), path.resolve(candidate));
+  if (relative === "") return;
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes its supported root.`);
+  }
+}
+
+function sameFileIdentity(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function compareStrings(left, right) {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }

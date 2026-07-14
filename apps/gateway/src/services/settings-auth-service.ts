@@ -20,6 +20,7 @@ import {
   APPROVAL_EXPIRY_ACTOR_ID,
   clampInt,
   ConflictError,
+  isGoatError,
   NotFoundError,
   SECRET_REDACTION_MARKER,
   ValidationError,
@@ -45,6 +46,7 @@ import {
   type DeviceAccessRequestStatus,
   type DeviceAccessRequestStatusResponse,
   type FilesystemReadAccessMode,
+  type LlmProviderConfig,
   type LlmProviderRequestConfig,
   type RealtimeEvent,
   type ToolApprovalMode,
@@ -52,7 +54,6 @@ import {
 import type { MeshService } from "@goatcitadel/mesh-core";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
-import { persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import {
   preserveSettingsSecretsForPublicUpdate,
   requiresSettingsPublicProjectionReconciliation,
@@ -94,7 +95,7 @@ import {
   readAssistantAuthConfigSnapshotSync,
 } from "./gateway/auth-credential-planner.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
-import type { LlmRuntimeUpdateInput, LlmService } from "./llm-service.js";
+import { LlmService, type LlmRuntimeUpdateInput } from "./llm-service.js";
 import type { NpuSidecarService } from "./npu-sidecar-service.js";
 import {
   buildCompanionSigningPayload,
@@ -127,6 +128,7 @@ export interface SettingsRuntimeDependencies {
     LlmService,
     | "deleteProviderApiKey"
     | "getRuntimeConfig"
+    | "exportConfigFile"
     | "getProviderSecretStatus"
     | "setProviderApiKey"
     | "updateNetworkAllowlist"
@@ -136,13 +138,10 @@ export interface SettingsRuntimeDependencies {
   readonly npuSidecar: Pick<NpuSidecarService, "getStatus" | "updateConfig" | "stop" | "start">;
   readonly llamaCppRuntime: Pick<LlamaCppRuntimeService, "getStatus" | "updateConfig" | "stop" | "start">;
   readFeatureFlags(): RuntimeSettings["features"];
+  readSettingsRevision?(): number;
   updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"];
   assertDeploymentProfileUpdate(input: UpdateSettingsInput): void;
   assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
-  persistLlmConfig(): void;
-  persistToolPolicyConfig(): void;
-  persistBudgetsConfig(): void;
-  persistAssistantConfig(): void;
 }
 
 export interface SettingsAuthRuntimeDependencies {
@@ -181,6 +180,7 @@ export interface SettingsAuthRuntimeDependencies {
 export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings {
   const features = deps.readFeatureFlags();
   return {
+    revision: deps.readSettingsRevision?.() ?? 1,
     environment: deps.config.assistant.environment,
     deploymentProfile: deps.config.assistant.deploymentProfile,
     toolApprovalMode:
@@ -259,6 +259,7 @@ export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings 
 }
 
 export interface UpdateSettingsInput {
+  expectedRevision?: number;
   deploymentProfile?: DeploymentProfile;
   toolApprovalMode?: ToolApprovalMode;
   defaultToolProfile?: string;
@@ -269,6 +270,8 @@ export interface UpdateSettingsInput {
   llm?: {
     activeProviderId?: string;
     activeModel?: string;
+    utilityProviderId?: string;
+    utilityModel?: string;
     upsertProvider?: {
       providerId: string;
       label?: string;
@@ -279,10 +282,12 @@ export interface UpdateSettingsInput {
         | "openai-codex-responses"
         | "anthropic-messages"
         | "bedrock-messages";
-      authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
+      authMode?: LlmProviderConfig["authMode"];
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
+      googleCloud?: LlmProviderConfig["googleCloud"];
+      capabilities?: LlmProviderConfig["capabilities"];
       persistSecretToSecureStore?: boolean;
       request?: LlmProviderRequestConfig;
       headers?: Record<string, string>;
@@ -343,9 +348,115 @@ export interface UpdateSettingsInput {
   features?: Partial<RuntimeSettings["features"]>;
 }
 
+export interface SettingsConfigCandidate {
+  config: GatewayRuntimeConfig;
+  features: RuntimeSettings["features"];
+  llm: ReturnType<LlmService["exportConfigFile"]>;
+  settings: RuntimeSettings;
+  input: UpdateSettingsInput;
+}
+
 const UNSAFE_CONFIG_MUTATION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
+function assertProviderConfigMutationIsSecretFree(input: UpdateSettingsInput): void {
+  const provider = input.llm?.upsertProvider;
+  if (!provider) {
+    return;
+  }
+  const inlineValues = [
+    provider.apiKey,
+    provider.request?.auth && "token" in provider.request.auth ? provider.request.auth.token : undefined,
+    provider.request?.auth && "value" in provider.request.auth ? provider.request.auth.value : undefined,
+    provider.request?.proxy?.auth && "token" in provider.request.proxy.auth
+      ? provider.request.proxy.auth.token
+      : undefined,
+    provider.request?.proxy?.auth && "value" in provider.request.proxy.auth
+      ? provider.request.proxy.auth.value
+      : undefined,
+  ];
+  if (inlineValues.some((value) => value?.trim() && value.trim() !== SECRET_REDACTION_MARKER)) {
+    throw new ValidationError({
+      message:
+        "Inline provider credentials are not accepted in provider config. Save API keys through the provider secret endpoint and use env references for request/proxy auth.",
+    });
+  }
+}
+
+/**
+ * Builds and validates the settings mutation against isolated runtime owners.
+ * No live config, owner, persistence, or secure-secret state is mutated.
+ */
+export function buildSettingsCandidate(
+  deps: SettingsRuntimeDependencies,
+  rawInput: UpdateSettingsInput,
+): SettingsConfigCandidate {
+  assertProviderConfigMutationIsSecretFree(rawInput);
+
+  const candidateConfig = structuredClone(deps.config);
+  const currentLlm = deps.llmService.exportConfigFile();
+  const candidateLlmService = new LlmService(currentLlm, process.env, {
+    networkAllowlist: candidateConfig.toolPolicy.sandbox.networkAllowlist,
+    enforceNetworkAllowlist: true,
+  });
+  let candidateFeatures = structuredClone(deps.readFeatureFlags());
+  const noopNpuStatus = () => deps.npuSidecar.getStatus();
+  const noopLlamaStatus = () => deps.llamaCppRuntime.getStatus();
+  const candidateDeps: SettingsRuntimeDependencies = {
+    config: candidateConfig,
+    llmService: candidateLlmService,
+    meshService: { updateOptions: () => undefined },
+    npuSidecar: {
+      getStatus: noopNpuStatus,
+      updateConfig: () => undefined,
+      stop: async () => noopNpuStatus(),
+      start: async () => noopNpuStatus(),
+    },
+    llamaCppRuntime: {
+      getStatus: noopLlamaStatus,
+      updateConfig: () => undefined,
+      stop: async () => noopLlamaStatus(),
+      start: async () => noopLlamaStatus(),
+    },
+    readFeatureFlags: () => structuredClone(candidateFeatures),
+    readSettingsRevision: () => deps.readSettingsRevision?.() ?? 1,
+    updateFeatureFlags: (patch) => {
+      if (patch.durableKernelV1Enabled === false) {
+        throw new ValidationError({
+          message: "features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.",
+        });
+      }
+      candidateFeatures = { ...candidateFeatures, ...patch };
+      return structuredClone(candidateFeatures);
+    },
+    assertDeploymentProfileUpdate: (input) => deps.assertDeploymentProfileUpdate(input),
+    assertFirecrawlRuntimeUpdate: (input) => deps.assertFirecrawlRuntimeUpdate(input),
+  };
+
+  let settings: RuntimeSettings;
+  try {
+    settings = updateSettings(candidateDeps, rawInput);
+  } catch (error) {
+    if (isGoatError(error)) {
+      throw error;
+    }
+    throw new ValidationError({
+      message: error instanceof Error ? error.message : "Invalid settings update.",
+    });
+  }
+  const llm = candidateLlmService.exportConfigFile();
+  candidateConfig.llm = structuredClone(llm);
+  candidateConfig.assistant.features = structuredClone(candidateFeatures);
+  return {
+    config: candidateConfig,
+    features: candidateFeatures,
+    llm,
+    settings,
+    input: structuredClone(rawInput),
+  };
+}
+
 export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: UpdateSettingsInput): RuntimeSettings {
+  assertProviderConfigMutationIsSecretFree(rawInput);
   const reconciledInput = requiresSettingsPublicProjectionReconciliation(rawInput)
     ? preserveSettingsSecretsForPublicUpdate(getSettings(deps), rawInput)
     : rawInput;
@@ -353,14 +464,8 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
   deps.assertDeploymentProfileUpdate(input);
   deps.assertFirecrawlRuntimeUpdate(input);
 
-  let persistAssistant = false;
-  let persistToolPolicy = false;
-  let persistBudgets = false;
-  let persistLlm = false;
-
   if (input.deploymentProfile) {
     deps.config.assistant.deploymentProfile = input.deploymentProfile;
-    persistAssistant = true;
   }
 
   if (input.defaultToolProfile) {
@@ -377,8 +482,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
-    persistAssistant = true;
-    persistToolPolicy = true;
   }
 
   if (input.toolApprovalMode) {
@@ -387,18 +490,14 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
-    persistAssistant = true;
-    persistToolPolicy = true;
   }
 
   if (input.budgetMode) {
     deps.config.budgets.mode = input.budgetMode;
-    persistBudgets = true;
   }
 
   if (input.readAccessMode) {
     deps.config.toolPolicy.sandbox.readAccessMode = input.readAccessMode;
-    persistToolPolicy = true;
   }
 
   if (input.networkAllowlist) {
@@ -408,12 +507,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
-    persistToolPolicy = true;
   }
 
   if (input.auth) {
     updateAuthSettings(deps, input.auth);
-    persistAssistant = true;
   }
 
   if (input.memory) {
@@ -444,7 +541,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     if (input.memory.qmdDistillerModel !== undefined) {
       deps.config.assistant.memory.qmd.distiller.model = input.memory.qmdDistillerModel.trim() || undefined;
     }
-    persistAssistant = true;
   }
 
   if (input.web?.firecrawl) {
@@ -477,7 +573,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     if (firecrawl.fallbackToNative !== undefined) {
       deps.config.assistant.web.firecrawl.fallbackToNative = firecrawl.fallbackToNative;
     }
-    persistAssistant = true;
   }
 
   if (input.mesh) {
@@ -520,7 +615,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
       joinToken: process.env[deps.config.assistant.mesh.security.joinTokenEnv],
       defaultLeaseTtlSeconds: deps.config.assistant.mesh.leases.ttlSeconds,
     });
-    persistAssistant = true;
   }
 
   if (input.npu) {
@@ -540,7 +634,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
         error: error instanceof Error ? error.message : String(error),
       });
     });
-    persistAssistant = true;
   }
 
   if (input.llamaCpp) {
@@ -624,7 +717,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
         defaultModel: deps.config.assistant.llamaCpp.launch.alias,
       },
     } satisfies LlmRuntimeUpdateInput);
-    persistLlm = true;
     if (!deps.config.assistant.llamaCpp.enabled) {
       void deps.llamaCppRuntime.stop("disabled").catch((error) => {
         settingsLog.warn("llama.cpp runtime stop failed after settings update", {
@@ -636,12 +728,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
         settingsLog.error("llama.cpp autostart failed after settings update", error);
       });
     }
-    persistAssistant = true;
   }
 
   if (input.features) {
     deps.updateFeatureFlags(input.features);
-    persistAssistant = true;
   }
 
   if (input.llm) {
@@ -650,36 +740,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
       upsertProvider: input.llm.upsertProvider ? { ...input.llm.upsertProvider } : undefined,
     };
     const submittedApiKeyValue = llmInput.upsertProvider?.apiKey?.trim();
-    const submittedApiKey = submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
     if (llmInput.upsertProvider && submittedApiKeyValue === SECRET_REDACTION_MARKER) {
       llmInput.upsertProvider.apiKey = undefined;
     }
-    if (llmInput.upsertProvider && submittedApiKey) {
-      persistProviderApiKeyWithFallback({
-        providerId: llmInput.upsertProvider.providerId,
-        apiKey: submittedApiKey,
-        preferredEnvVar: llmInput.upsertProvider.apiKeyEnv,
-        persistToEnv: llmInput.upsertProvider.persistSecretToSecureStore === false,
-        rootDir: deps.config.rootDir,
-        llmService: deps.llmService,
-      });
-      llmInput.upsertProvider.apiKey = undefined;
-    }
     deps.llmService.updateRuntimeConfig(llmInput satisfies LlmRuntimeUpdateInput);
-    persistLlm = true;
-  }
-
-  if (persistToolPolicy) {
-    deps.persistToolPolicyConfig();
-  }
-  if (persistBudgets) {
-    deps.persistBudgetsConfig();
-  }
-  if (persistAssistant) {
-    deps.persistAssistantConfig();
-  }
-  if (persistLlm) {
-    deps.persistLlmConfig();
   }
 
   return getSettings(deps);

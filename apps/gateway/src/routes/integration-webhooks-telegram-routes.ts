@@ -1,26 +1,24 @@
 import type { FastifyInstance } from "fastify";
 import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
-import {
-  buildChannelPersonalitySystemOverlay,
-  handleTelegramChannelCommand,
-} from "../services/telegram-channel-commands.js";
+import { normalizeChannelCommandInput } from "../services/channel-command-contract.js";
+import { buildChannelPersonalitySystemOverlay } from "../services/telegram-channel-commands.js";
 import { authorizeTelegramChannelActor } from "../services/telegram-channel-pairing.js";
-import {
-  applyTelegramChannelSessionRotation,
-  resolveTelegramChannelSessionId,
-} from "../services/telegram-channel-sessions.js";
+import { applyTelegramChannelSessionRotation } from "../services/telegram-channel-sessions.js";
 import {
   deriveTelegramWebhookIdempotencyKey,
   normalizeTelegramWebhookPayload,
   verifyTelegramWebhookSecretToken,
 } from "../services/telegram-webhook.js";
-import { resolveTelegramWebhookSecret } from "./integration-webhooks-shared.js";
 import {
-  CHANNEL_INBOUND_MAX_BYTES,
+  TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
+  TELEGRAM_CHANNEL_COMMAND_EVENT_TYPE,
+} from "../services/telegram-inbound-command-service.js";
+import { createWebhookRouteOptions, resolveTelegramWebhookSecret } from "./integration-webhooks-shared.js";
+import {
   createIgnoredWebhookReply,
-  createWebhookPreParsing,
   createWebhookHandler,
+  dispatchInboundWebhookCommand,
   dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -29,14 +27,16 @@ import {
 type TelegramDispatchPayload = Exclude<ReturnType<typeof normalizeTelegramWebhookPayload>, { kind: "ignore" }>;
 
 export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
+  const routeOptions = createWebhookRouteOptions("telegramRawBody");
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/telegram/webhook",
     {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("telegramRawBody"),
+      ...routeOptions,
       config: {
+        ...routeOptions.config,
         rateLimit: {
-          max: 500,
+          ...routeOptions.config.rateLimit,
+          max: routeOptions.config.rateLimit.max,
         },
       },
     },
@@ -111,19 +111,41 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               show_alert: true,
             };
           }
-          const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
-            token: approval.token,
-            connectorId: `integration:${connectionId}`,
-            decision: approval.decision,
-            resolvedBy: `telegram:${parsed.actorId}`,
+          const approvalActionId = fastify.services.integrationWebhooks.findRemoteActionTokenId?.(approval.token);
+          const callbackIdempotencyKey = deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody);
+          const command = await dispatchInboundWebhookCommand(fastify.services.integrationWebhooks, {
+            channel: "telegram",
+            connectionId,
+            idempotencyKey: callbackIdempotencyKey,
+            eventType: TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
+            bindingTarget: target,
+            inboundAccessConfig: connection.config,
+            message: {
+              // The callback query id is an ephemeral provider reply handle.
+              // Use the secret-free durable admission identity for settlement.
+              eventId: callbackIdempotencyKey,
+              account: parsed.account,
+              peer: parsed.peer,
+              room: parsed.room,
+              threadId: parsed.threadId,
+              actorId: parsed.actorId,
+              actorType: parsed.actorType,
+              content: `/${approval.decision}`,
+              displayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              metadata: {
+                ...withoutTelegramEphemeralCallbackMetadata(parsed.metadata),
+                approvalActionId,
+                approvalActionLookupFailed: !approvalActionId,
+                approvalDecision: approval.decision,
+              },
+            },
           });
+          const resultText = renderDurableCommandResult(command.result);
           return {
             method: "answerCallbackQuery",
             callback_query_id: parsed.callbackQueryId,
-            text:
-              approval.decision === "approve"
-                ? `Approved ${result.approval.approvalId}.`
-                : `Rejected ${result.approval.approvalId}.`,
+            text: resultText.slice(0, 200),
+            show_alert: command.result.status !== "completed",
           };
         }
 
@@ -154,121 +176,53 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         // text, and commands require typed text. The voice branch below routes
         // straight to the trust-gated voice dispatch.
         const commandEligible = target && !parsed.voiceMedia ? target : undefined;
-        const command = commandEligible
-          ? await handleTelegramChannelCommand({
-              connection: {
-                connectionId,
-                label: connection.label ?? "Telegram",
-                enabled: connection.enabled !== false,
-                status: connection.status ?? "connected",
-                config: connection.config,
-              },
-              chatId: commandEligible,
+        const normalizedCommand = commandEligible
+          ? normalizeChannelCommandInput(parsed.content, { platform: "telegram" })
+          : undefined;
+        if (commandEligible && normalizedCommand?.handled && normalizedCommand.command && normalizedCommand.name) {
+          const approvalActionId = normalizedCommand.approvalToken
+            ? fastify.services.integrationWebhooks.findRemoteActionTokenId?.(normalizedCommand.approvalToken)
+            : undefined;
+          const approvalCommand =
+            normalizedCommand.name === "approve" || normalizedCommand.name === "deny"
+              ? normalizedCommand.approvalDecision
+              : undefined;
+          const command = await dispatchInboundWebhookCommand(fastify.services.integrationWebhooks, {
+            channel: "telegram",
+            connectionId,
+            idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
+            eventType: TELEGRAM_CHANNEL_COMMAND_EVENT_TYPE,
+            bindingTarget: commandEligible,
+            inboundAccessConfig: connection.config,
+            message: {
+              eventId: parsed.eventId,
+              account: parsed.account,
+              peer: parsed.peer,
+              room: parsed.room,
               threadId: parsed.threadId,
               actorId: parsed.actorId,
-              actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
-              content: parsed.content,
-              personalityCatalog: resolveRoutePersonalityCatalog(fastify),
-              isActiveRun: () => {
-                const sessionId = resolveTelegramChannelSessionId(connection.config, {
-                  account: parsed.account,
-                  peer: parsed.peer,
-                  room: parsed.room,
-                  threadId: parsed.threadId,
-                });
-                return sessionId ? fastify.services.integrationWebhooks.hasRunningTurn(sessionId) : false;
+              actorType: parsed.actorType,
+              content: approvalCommand ? `/${normalizedCommand.name}` : parsed.content,
+              displayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              metadata: {
+                ...withoutTelegramEphemeralCallbackMetadata(parsed.metadata),
+                approvalActionId,
+                approvalActionLookupFailed: Boolean(normalizedCommand.approvalToken && !approvalActionId),
+                approvalDecision: approvalCommand,
               },
-              runChatCommand: async (commandText) => {
-                const sessionId = resolveTelegramChannelSessionId(connection.config, {
-                  account: parsed.account,
-                  peer: parsed.peer,
-                  room: parsed.room,
-                  threadId: parsed.threadId,
-                });
-                if (!sessionId) {
-                  return {
-                    message:
-                      "Channel lookup needs an active Telegram channel session. Send a normal message first or use /new to start one.",
-                  };
-                }
-                const result = await fastify.services.integrationWebhooks.parseChatCommand(sessionId, commandText, {
-                  resolvedBy: `telegram:${parsed.actorId}`,
-                  source: "channel",
-                  channelContext: {
-                    platform: "telegram",
-                    account: parsed.account,
-                    actorId: parsed.actorId,
-                  },
-                });
-                return { message: result.message };
-              },
-              cancelActiveSession: async () => {
-                const sessionId = resolveTelegramChannelSessionId(connection.config, {
-                  account: parsed.account,
-                  peer: parsed.peer,
-                  room: parsed.room,
-                  threadId: parsed.threadId,
-                });
-                if (!sessionId) {
-                  return { status: "no_active_run" as const };
-                }
-                return fastify.services.integrationWebhooks.cancelLatestActiveChatTurnForSession(
-                  sessionId,
-                  `telegram:${parsed.actorId}`,
-                );
-              },
-              resolveApprovalToken: async (token, decision) => {
-                const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
-                  token,
-                  connectorId: `integration:${connectionId}`,
-                  decision,
-                  resolvedBy: `telegram:${parsed.actorId}`,
-                });
-                return {
-                  approvalId: result.approval.approvalId,
-                  status: result.approval.status,
-                };
-              },
-            })
-          : { handled: false };
-        if (command.handled) {
-          if (command.configPatch) {
-            fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
-              config: {
-                ...connection.config,
-                ...command.configPatch,
-              },
-              lastSyncAt: new Date().toISOString(),
-              lastError: null,
-            });
-          }
-          return (
-            command.response ?? {
-              accepted: true,
-              replied: false,
-              eventType: parsed.eventType,
-              command: command.command,
-            }
-          );
+            },
+          });
+          return {
+            method: "sendMessage",
+            chat_id: commandEligible,
+            text: renderDurableCommandResult(command.result),
+          };
         }
         const routedTelegramMessage = applyTelegramChannelSessionRotation(connection.config, {
           peer: parsed.peer,
           room: parsed.room,
           threadId: parsed.threadId,
         });
-        const activeSessionId = resolveTelegramChannelSessionId(connection.config, {
-          account: parsed.account,
-          peer: parsed.peer,
-          room: parsed.room,
-          threadId: parsed.threadId,
-        });
-        if (activeSessionId && fastify.services.integrationWebhooks.hasRunningTurn(activeSessionId)) {
-          return {
-            method: "sendMessage",
-            chat_id: target ?? parsed.peer,
-            text: "A GoatCitadel run is already active for this chat. Use /status to inspect it or /stop to cancel it before starting another request.",
-          };
-        }
         const dispatchOptions = {
           channel: "telegram",
           connectionId,
@@ -296,25 +250,17 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         };
         const voiceMedia = parsed.voiceMedia;
         if (voiceMedia) {
-          const transcribeChannelVoice = fastify.services.integrationWebhooks.transcribeChannelVoice;
-          if (typeof transcribeChannelVoice !== "function") {
-            return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
-          }
-          // channelVoiceInboundV1Enabled path (voiceMedia only exists when the
-          // flag is on): the trust gate runs first inside the voice dispatch,
-          // the webhook is acked fast, and download/transcription/ingest run
-          // asynchronously. Transcription failure falls back to ingesting the
-          // parser placeholder so the message is never silently dropped.
+          // Voice media is accepted as a bounded secret-free reference before
+          // ACK. Download/transcription/ingest are owned by the durable worker.
           return dispatchInboundVoiceWebhookMessage(fastify.services.integrationWebhooks, {
             ...dispatchOptions,
             voice: {
-              transcribe: () =>
-                transcribeChannelVoice({
-                  channel: "telegram",
-                  connectionConfig: connection.config,
-                  fileId: voiceMedia.fileId,
-                  mimeType: voiceMedia.mimeType,
-                }),
+              request: {
+                channel: "telegram",
+                connectionConfig: {},
+                fileId: voiceMedia.fileId,
+                mimeType: voiceMedia.mimeType,
+              },
               fallbackContent: parsed.content,
             },
           });
@@ -339,6 +285,13 @@ function readTelegramMetadataString(metadata: Record<string, unknown>, key: stri
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function withoutTelegramEphemeralCallbackMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const safeMetadata = { ...metadata };
+  delete safeMetadata.callbackData;
+  delete safeMetadata.callbackQueryId;
+  return safeMetadata;
+}
+
 function parseTelegramApprovalCallback(data: string): { token: string; decision: "approve" | "reject" } | undefined {
   const match = /^gca:([^:]+):(a|r)$/i.exec(data.trim());
   if (!match) {
@@ -348,4 +301,21 @@ function parseTelegramApprovalCallback(data: string): { token: string; decision:
     token: match[1] ?? "",
     decision: (match[2]?.toLowerCase() === "a" ? "approve" : "reject") as "approve" | "reject",
   };
+}
+
+function renderDurableCommandResult(
+  result:
+    | { status: "completed"; resultText: string }
+    | { status: "manual_reconciliation_required" | "failed"; message: string },
+): string {
+  if (result.status === "completed") {
+    return result.resultText;
+  }
+  if (result.status === "manual_reconciliation_required") {
+    return [
+      "GoatCitadel retained this command for manual reconciliation because execution may have started.",
+      "It was not replayed automatically.",
+    ].join(" ");
+  }
+  return result.message;
 }

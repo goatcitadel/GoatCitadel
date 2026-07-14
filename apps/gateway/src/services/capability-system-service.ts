@@ -24,6 +24,10 @@ import type {
   CapabilityProposalDetailRecord,
   CapabilityProposalKind,
   CapabilityProposalRecord,
+  ChatMessageRecord,
+  ChatSessionWorkbenchCommandRunRequest,
+  ChatSessionWorkbenchCommandRunResponse,
+  ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
@@ -34,6 +38,9 @@ import type {
   CodeModeRunRecord,
   CodeModeRunRequest,
   CodeModeRunListOptions,
+  CodeModeRunVerificationRequest,
+  CodeModeRunVerificationResponse,
+  CodeModeVerificationEvidenceRecord,
   CodeModeRunExecutionBackendRef,
   CodeModeTrustedCodeWriteVerification,
   LoadedSkill,
@@ -50,8 +57,15 @@ import type {
   ToolPolicyActorContext,
   ToolInvokeRequest,
   ToolInvokeResult,
+  TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
+import {
+  classifyToolEffectPotential,
+  ConflictError,
+  NotFoundError,
+  redactStructuredSecrets,
+  ValidationError,
+} from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { CapabilityRuntimeConfig, CodeModeDockerBackendConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
@@ -69,11 +83,22 @@ import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { validateSkillContent } from "./skill-content-validation.js";
+import {
+  captureSkillContentIntegritySync,
+  parseSkillContentIntegrityManifest,
+  readBoundedSkillSourceManifestSync,
+  verifySkillContentIntegritySync,
+} from "./skill-content-integrity.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
+import { CodeModeVerificationService } from "./code-mode-verification-service.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
+const CODE_MODE_FINAL_TRANSCRIPT_LIMIT_BYTES = 24 * 1024;
+const CODE_MODE_RECOVERY_ERROR_LIMIT_BYTES = 2 * 1024;
+const CODE_MODE_RECOVERY_ERRORS_MAX_ENTRIES = 32;
+const CODE_MODE_RECOVERY_ERRORS_TOTAL_LIMIT_BYTES = 24 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
 const CODE_MODE_ENV_PASSTHROUGH_KEYS = [
@@ -128,6 +153,13 @@ export interface CapabilitySystemServiceOptions {
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
   }) => ToolPolicyActorContext;
+  getChatSessionWorkbench?: (sessionId: string) => Promise<ChatSessionWorkbenchRecord>;
+  runChatSessionWorkbenchCommand?: (
+    sessionId: string,
+    input: ChatSessionWorkbenchCommandRunRequest,
+  ) => Promise<ChatSessionWorkbenchCommandRunResponse>;
+  flushTranscriptOutbox?: () => Promise<number>;
+  spawnCodeModeChild?: typeof spawn;
 }
 
 interface CodeModeWrapperManifest {
@@ -193,6 +225,13 @@ class CodeModeSandboxLaunchFailure extends Error {
   }
 }
 
+class CodeModeExecutionPreDispatchFailure extends Error {
+  public constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "CodeModeExecutionPreDispatchFailure";
+  }
+}
+
 export class CapabilitySystemService {
   private readonly candidateRoot: string;
   private readonly artifactRoot: string;
@@ -201,6 +240,7 @@ export class CapabilitySystemService {
     config: CapabilityRuntimeConfig["codeModeSandbox"],
   ) => CodeModeSandboxMetadata;
   private readonly autonomousActivationGrants: AutonomousActivationGrantService;
+  private readonly codeModeVerification?: CodeModeVerificationService;
 
   public constructor(private readonly options: CapabilitySystemServiceOptions) {
     this.candidateRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.candidateRoot);
@@ -212,6 +252,16 @@ export class CapabilitySystemService {
       options.storage.systemSettings,
       (eventType, source, payload) => options.publishRealtime(eventType, source, payload),
     );
+    if (options.getChatSessionWorkbench && options.runChatSessionWorkbenchCommand) {
+      this.codeModeVerification = new CodeModeVerificationService({
+        rootDir: options.rootDir,
+        artifactRoot: this.artifactRoot,
+        storage: options.storage,
+        getWorkbench: options.getChatSessionWorkbench,
+        runWorkbenchCommand: options.runChatSessionWorkbenchCommand,
+        publishRealtime: options.publishRealtime,
+      });
+    }
   }
 
   private resolveCurrentSandboxMetadata(): CodeModeSandboxMetadata {
@@ -233,9 +283,12 @@ export class CapabilitySystemService {
     const stateMap = this.options.readSkillStates();
     const all = this.options.listLoadedSkills().map((skill) => {
       const state = stateMap.get(skill.skillId);
-      const lifecycle = this.options.storage.skillLifecycle.find(skill.skillId) ?? buildSkillLifecycleRecord(skill);
+      const lifecycle = this.resolveSkillLifecycle(skill);
       return {
         ...skill,
+        revision:
+          state?.revision ??
+          this.options.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId).revision,
         state: state?.state ?? "enabled",
         note: state?.note,
         stateUpdatedAt: state?.updatedAt,
@@ -251,6 +304,54 @@ export class CapabilitySystemService {
       };
     });
     return filterSkillItemsByEffectiveSet(all, effectiveSkills);
+  }
+
+  private resolveSkillLifecycle(skill: LoadedSkill): SkillLifecycleRecord {
+    const existing = this.options.storage.skillLifecycle.find(skill.skillId);
+    const projected = buildSkillLifecycleRecord(skill, existing?.createdAt);
+    if (skill.source !== "extra") {
+      if (!existing) {
+        return this.options.storage.skillLifecycle.upsert(projected);
+      }
+      if (!skillLifecycleExactIntegrityMatches(existing, projected)) {
+        projected.lifecycleState = "candidate";
+        projected.trustLabel = "Exact-byte review required";
+        projected.reviewWarning = existing.provenance?.contentIntegrity
+          ? "Skill content changed after its trusted exact-byte lifecycle binding; review and reactivate this version before use."
+          : "Legacy skill lifecycle is missing exact-byte provenance; review and reactivate this version before use.";
+      } else {
+        projected.lifecycleState = existing.lifecycleState;
+        projected.trustLabel = existing.trustLabel;
+        projected.reviewWarning = existing.reviewWarning;
+      }
+      if (skillLifecycleProjectionMatches(existing, projected)) {
+        return existing;
+      }
+      return this.options.storage.skillLifecycle.upsert(projected);
+    }
+    // Revocation is durable deny-wins truth. Filesystem discovery or editable
+    // source metadata must never hydrate a revoked imported skill back into a
+    // candidate (or any other callable lifecycle posture).
+    if (existing?.lifecycleState === "revoked") {
+      return existing;
+    }
+    if (durableImportedActivationMatches(existing, projected)) {
+      projected.lifecycleState = existing.lifecycleState;
+      projected.trustLabel = existing.trustLabel;
+      projected.reviewWarning = existing.reviewWarning;
+      // Keep the operator-approved source identity immutable. source.json is
+      // editable metadata; only its freshly verified content digest may be
+      // projected into an already-governed lifecycle row.
+      projected.provenance = {
+        ...existing.provenance,
+        source: existing.provenance?.source ?? "extra",
+        contentIntegrity: projected.provenance?.contentIntegrity,
+      };
+    }
+    if (existing && skillLifecycleProjectionMatches(existing, projected)) {
+      return existing;
+    }
+    return this.options.storage.skillLifecycle.upsert(projected);
   }
 
   public listCatalog(
@@ -440,93 +541,191 @@ export class CapabilitySystemService {
     return stored;
   }
 
-  public promoteCandidate(candidateId: string, versionId?: string): CandidateLifecycleActionResult {
+  public promoteCandidate(
+    candidateId: string,
+    expectedRevision: number,
+    versionId?: string,
+  ): CandidateLifecycleActionResult {
     const versions = this.requireCandidateVersions(candidateId);
     const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
     this.verifyCandidateVersionArtifacts(selected);
-    const changedVersionIds = new Set<string>();
     const occurredAt = new Date().toISOString();
-    this.options.storage.runImmediateTransaction(() => {
-      for (const version of versions) {
-        if (version.versionId === selected.versionId) {
-          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "approved", occurredAt);
-          changedVersionIds.add(version.versionId);
-          continue;
-        }
-        if (version.lifecycleState === "approved" || version.lifecycleState === "trusted") {
-          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "deprecated", occurredAt);
-          changedVersionIds.add(version.versionId);
-        }
-      }
-    });
-    const detail = this.buildCandidateDetail(candidateId);
-    this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
+    const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+      "candidate_skill",
       candidateId,
-      versionId: selected.versionId,
-    });
+      expectedRevision,
+      () => {
+        const currentVersions = this.requireCandidateVersions(candidateId);
+        this.requireCandidateVersion(candidateId, selected.versionId);
+        const changedVersionIds: string[] = [];
+        for (const version of currentVersions) {
+          if (version.versionId === selected.versionId) {
+            if (version.lifecycleState !== "approved" && version.lifecycleState !== "trusted") {
+              this.options.storage.candidateSkillVersions.updateLifecycleState(
+                version.versionId,
+                "approved",
+                occurredAt,
+              );
+              changedVersionIds.push(version.versionId);
+            }
+            continue;
+          }
+          if (version.lifecycleState === "approved" || version.lifecycleState === "trusted") {
+            this.options.storage.candidateSkillVersions.updateLifecycleState(
+              version.versionId,
+              "deprecated",
+              occurredAt,
+            );
+            changedVersionIds.push(version.versionId);
+          }
+        }
+        return {
+          value: {
+            changedVersionIds: changedVersionIds.sort(compareCodeUnits),
+            detail: this.buildCandidateDetail(candidateId, expectedRevision),
+          },
+          changed: changedVersionIds.length > 0,
+        };
+      },
+      occurredAt,
+    );
+    const detail = { ...mutation.value.detail, revision: mutation.revision };
+    if (mutation.changed) {
+      this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
+        candidateId,
+        versionId: selected.versionId,
+        revision: mutation.revision,
+      });
+    }
     return {
       action: "promote",
       candidateId,
+      revision: mutation.revision,
       selectedVersionId: selected.versionId,
-      changedVersionIds: [...changedVersionIds],
+      changedVersionIds: mutation.value.changedVersionIds,
       occurredAt,
       detail,
     };
   }
 
-  public revokeCandidate(candidateId: string, versionId?: string): CandidateLifecycleActionResult {
+  public revokeCandidate(
+    candidateId: string,
+    expectedRevision: number,
+    versionId?: string,
+  ): CandidateLifecycleActionResult {
     const versions = this.requireCandidateVersions(candidateId);
     const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
-    const targets = versionId ? [selected] : versions;
     const occurredAt = new Date().toISOString();
-    for (const version of targets) {
-      this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
-    }
-    const detail = this.buildCandidateDetail(candidateId);
-    this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+    const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+      "candidate_skill",
       candidateId,
-      versionId: selected.versionId,
-      revokedVersionIds: targets.map((version) => version.versionId),
-    });
+      expectedRevision,
+      () => {
+        const currentVersions = this.requireCandidateVersions(candidateId);
+        this.requireCandidateVersion(candidateId, selected.versionId);
+        const targets = versionId
+          ? currentVersions.filter((version) => version.versionId === selected.versionId)
+          : currentVersions;
+        const changedVersionIds: string[] = [];
+        for (const version of targets) {
+          if (version.lifecycleState === "revoked") {
+            continue;
+          }
+          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
+          changedVersionIds.push(version.versionId);
+        }
+        return {
+          value: {
+            changedVersionIds: changedVersionIds.sort(compareCodeUnits),
+            detail: this.buildCandidateDetail(candidateId, expectedRevision),
+          },
+          changed: changedVersionIds.length > 0,
+        };
+      },
+      occurredAt,
+    );
+    const detail = { ...mutation.value.detail, revision: mutation.revision };
+    if (mutation.changed) {
+      this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+        candidateId,
+        versionId: selected.versionId,
+        revokedVersionIds: mutation.value.changedVersionIds,
+        revision: mutation.revision,
+      });
+    }
     return {
       action: "revoke",
       candidateId,
+      revision: mutation.revision,
       selectedVersionId: selected.versionId,
-      changedVersionIds: targets.map((version) => version.versionId),
+      changedVersionIds: mutation.value.changedVersionIds,
       occurredAt,
       detail,
     };
   }
 
-  public rollbackCandidate(candidateId: string, targetVersionId: string): CandidateLifecycleActionResult {
-    const versions = this.requireCandidateVersions(candidateId);
+  public rollbackCandidate(
+    candidateId: string,
+    targetVersionId: string,
+    expectedRevision: number,
+  ): CandidateLifecycleActionResult {
+    this.requireCandidateVersions(candidateId);
     const target = this.requireCandidateVersion(candidateId, targetVersionId);
     this.verifyCandidateVersionArtifacts(target);
     const occurredAt = new Date().toISOString();
-    const changedVersionIds = new Set<string>();
-    this.options.storage.runImmediateTransaction(() => {
-      for (const version of versions) {
-        if (version.versionId === target.versionId) {
-          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "approved", occurredAt);
-          changedVersionIds.add(version.versionId);
-          continue;
-        }
-        if (version.lifecycleState !== "revoked") {
-          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "deprecated", occurredAt);
-          changedVersionIds.add(version.versionId);
-        }
-      }
-    });
-    const detail = this.buildCandidateDetail(candidateId);
-    this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
+    const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+      "candidate_skill",
       candidateId,
-      targetVersionId,
-    });
+      expectedRevision,
+      () => {
+        const currentVersions = this.requireCandidateVersions(candidateId);
+        this.requireCandidateVersion(candidateId, targetVersionId);
+        const changedVersionIds: string[] = [];
+        for (const version of currentVersions) {
+          if (version.versionId === target.versionId) {
+            if (version.lifecycleState !== "approved" && version.lifecycleState !== "trusted") {
+              this.options.storage.candidateSkillVersions.updateLifecycleState(
+                version.versionId,
+                "approved",
+                occurredAt,
+              );
+              changedVersionIds.push(version.versionId);
+            }
+            continue;
+          }
+          if (version.lifecycleState !== "revoked" && version.lifecycleState !== "deprecated") {
+            this.options.storage.candidateSkillVersions.updateLifecycleState(
+              version.versionId,
+              "deprecated",
+              occurredAt,
+            );
+            changedVersionIds.push(version.versionId);
+          }
+        }
+        return {
+          value: {
+            changedVersionIds: changedVersionIds.sort(compareCodeUnits),
+            detail: this.buildCandidateDetail(candidateId, expectedRevision),
+          },
+          changed: changedVersionIds.length > 0,
+        };
+      },
+      occurredAt,
+    );
+    const detail = { ...mutation.value.detail, revision: mutation.revision };
+    if (mutation.changed) {
+      this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
+        candidateId,
+        targetVersionId,
+        revision: mutation.revision,
+      });
+    }
     return {
       action: "rollback",
       candidateId,
+      revision: mutation.revision,
       selectedVersionId: target.versionId,
-      changedVersionIds: [...changedVersionIds],
+      changedVersionIds: mutation.value.changedVersionIds,
       occurredAt,
       detail,
     };
@@ -625,6 +824,32 @@ export class CapabilitySystemService {
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
     return this.hydrateCodeModeRunForRead(run);
+  }
+
+  public async verifyCodeModeRun(
+    runId: string,
+    request: CodeModeRunVerificationRequest,
+    scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+    operatorId?: string,
+  ): Promise<CodeModeRunVerificationResponse> {
+    if (!this.codeModeVerification) {
+      throw new ConflictError({ message: "Code Mode workbench verification is unavailable." });
+    }
+    const run = this.getCodeModeRunInScope(runId, scope);
+    const recorded = await this.codeModeVerification.verifyRun(run, request.commandName, operatorId);
+    return {
+      ...recorded,
+      run: this.hydrateCodeModeRunForRead(recorded.run),
+    };
+  }
+
+  public listCodeModeRunVerificationEvidence(
+    runId: string,
+    scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+    limit = 50,
+  ): CodeModeVerificationEvidenceRecord[] {
+    this.getCodeModeRunInScope(runId, scope);
+    return this.options.storage.codeModeRuns.listVerificationEvidence(runId, limit);
   }
 
   private listStoredCodeModeRuns(filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions) {
@@ -970,6 +1195,12 @@ export class CapabilitySystemService {
         turnId,
         sandbox,
         executionBackend,
+        executionRecovery: {
+          generation: 0,
+          phase: "terminal",
+          disposition: "terminal",
+          finalTranscriptEventId: sessionId ? `code-mode-final:${runId}` : undefined,
+        },
         autonomousActivation,
         codeArtifact,
         wrapperManifestArtifact,
@@ -1048,12 +1279,22 @@ export class CapabilitySystemService {
       turnId,
       sandbox,
       executionBackend,
+      executionRecovery: {
+        generation: 0,
+        phase: "not_started",
+        disposition: "none",
+        finalTranscriptEventId: sessionId ? `code-mode-final:${runId}` : undefined,
+      },
       autonomousActivation,
       codeArtifact,
       wrapperManifestArtifact,
       policySnapshotArtifact,
       stdoutTruncated: false,
       stderrTruncated: false,
+      verification: {
+        status: "not_applicable",
+        updatedAt: createdAt,
+      },
       createdAt,
     };
 
@@ -1425,15 +1666,27 @@ export class CapabilitySystemService {
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
     if (existing.status === "running") {
-      const recovered = recoverStaleCodeModeExecutionClaim(this.options.storage.codeModeRuns, existing, approvalId);
+      const recovered = recoverStaleCodeModeExecutionClaim(
+        this.options.storage.codeModeRuns,
+        existing,
+        approvalId,
+        new Date().toISOString(),
+      );
       if (recovered) {
         existing = recovered;
-        this.options.publishRealtime("code_mode_run_claim_recovered", "capabilities", {
-          runId: existing.runId,
-          approvalId,
-          status: existing.status,
-          sandbox: existing.sandbox,
-        });
+        this.options.publishRealtime(
+          existing.status === "approval_pending"
+            ? "code_mode_run_claim_recovered"
+            : "code_mode_run_manual_reconciliation_required",
+          "capabilities",
+          {
+            runId: existing.runId,
+            approvalId,
+            status: existing.status,
+            sandbox: existing.sandbox,
+            executionRecovery: existing.executionRecovery,
+          },
+        );
       } else {
         this.options.publishRealtime("code_mode_run_refused", "capabilities", {
           runId: existing.runId,
@@ -1445,6 +1698,27 @@ export class CapabilitySystemService {
         });
         return undefined;
       }
+    }
+    if (existing.status === "completed" || existing.status === "failed") {
+      this.options.storage.pendingApprovalActions.markResolved(
+        approvalId,
+        existing.status === "completed" ? "executed" : "failed",
+        {
+          outcome: existing.status,
+          runId: existing.runId,
+          recoveredTerminalOutcome: true,
+          executionRecovery: existing.executionRecovery,
+          ...(existing.executionRecovery.disposition === "manual_reconciliation"
+            ? { manualReconciliationRequired: true }
+            : {}),
+          ...(existing.error ? { error: existing.error } : {}),
+          ...(existing.errorCode ? { errorCode: existing.errorCode } : {}),
+          ...(existing.errorDetails ? { errorDetails: existing.errorDetails } : {}),
+        },
+      );
+      this.enqueueCodeModeFinalTranscriptSafely(existing);
+      await this.flushCodeModeFinalTranscriptOutbox();
+      return buildCodeModeToolInvokeResult(existing);
     }
     if (existing.status !== "approval_pending") {
       const reason = `Code Mode run ${runId} is ${existing.status}; only approval_pending runs can execute.`;
@@ -1540,6 +1814,7 @@ export class CapabilitySystemService {
     let sandbox = this.resolveCurrentSandboxMetadata();
     let finalRun = existing;
     let claimStartedAt: string | undefined;
+    let claimGeneration: number | undefined;
 
     try {
       assertApprovedSandboxPostureStillCurrent(existing.sandbox, sandbox);
@@ -1577,10 +1852,14 @@ export class CapabilitySystemService {
         return undefined;
       }
       finalRun = claimedRun;
+      claimGeneration = claimedRun.executionRecovery.generation;
+      const activeClaimStartedAt = claimStartedAt;
+      const activeClaimGeneration = claimGeneration;
       this.options.publishRealtime("code_mode_run_started", "capabilities", {
         runId,
         approvalId,
         startedAt: claimStartedAt,
+        executionGeneration: claimGeneration,
         sandbox,
       });
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution claim.`);
@@ -1618,6 +1897,39 @@ export class CapabilitySystemService {
       const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
       const compiledSource = transpileGuestSource(finalRun.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
+      const beforeExecutionDispatch = async () => {
+        throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
+        const boundaryCrossedAt = new Date().toISOString();
+        const boundaryRun = this.options.storage.codeModeRuns.markExecutionBoundaryCrossed({
+          runId,
+          approvalId,
+          startedAt: activeClaimStartedAt,
+          executionGeneration: activeClaimGeneration,
+          boundaryCrossedAt,
+        });
+        if (!boundaryRun) {
+          throw new ConflictError({ message: `Code Mode run ${runId} execution claim moved before dispatch.` });
+        }
+        finalRun = boundaryRun;
+        this.options.publishRealtime("code_mode_execution_boundary_crossed", "capabilities", {
+          runId,
+          approvalId,
+          startedAt: claimStartedAt,
+          executionGeneration: claimGeneration,
+          boundaryCrossedAt,
+        });
+      };
+      const onExecutionDispatchFailed = async () => {
+        const resetRun = this.options.storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
+          runId,
+          approvalId,
+          startedAt: activeClaimStartedAt,
+          executionGeneration: activeClaimGeneration,
+        });
+        if (resetRun) {
+          finalRun = resetRun;
+        }
+      };
       const execution =
         finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID
           ? await this.executeAiderAdapterRun({
@@ -1627,6 +1939,8 @@ export class CapabilitySystemService {
               language: finalRun.language,
               source,
               pendingAiderRequest: pending.request.aider,
+              beforeExecutionDispatch,
+              onExecutionDispatchFailed,
               signal,
             })
           : await this.executeGovernedChildHarness({
@@ -1640,9 +1954,10 @@ export class CapabilitySystemService {
               policyContext: wrapperPolicyContext,
               workspaceId: finalRun.workspaceId,
               parentSessionId: finalRun.sessionId,
+              beforeExecutionDispatch,
+              onExecutionDispatchFailed,
               signal,
             });
-      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution started.`);
 
       let stdoutArtifact: CapabilityArtifactRecord | undefined;
       let stderrArtifact: CapabilityArtifactRecord | undefined;
@@ -1681,9 +1996,8 @@ export class CapabilitySystemService {
         stderr: stderrArtifact ? { artifact: stderrArtifact, content: execution.stderr.text } : undefined,
       });
       const executionResult = attachTrustedCodeWriteVerification(execution.result, trustedCodeWriteVerification);
-      const terminalRun = this.options.storage.codeModeRuns.finishExecutionClaim({
+      const outputRun = this.options.storage.codeModeRuns.recordExecutionOutput({
         ...finalRun,
-        status: execution.failed ? "failed" : "completed",
         sandbox,
         stdoutArtifact,
         stderrArtifact,
@@ -1692,25 +2006,94 @@ export class CapabilitySystemService {
         stdoutTruncated: execution.stdout.truncated,
         stderrTruncated: execution.stderr.truncated,
         trustedCodeWriteVerification,
+        verification: execution.failed
+          ? { status: "not_applicable", updatedAt: finishedAt }
+          : {
+              status: "completed_unverified",
+              reason: "Execution completed; no fresh named semantic proof has been recorded.",
+              updatedAt: finishedAt,
+            },
         result: executionResult,
         error: execution.error,
         errorCode: execution.errorCode,
         errorDetails: execution.errorDetails,
         approvalId,
         startedAt: claimStartedAt,
-        finishedAt,
+        executionGeneration: claimGeneration,
+        executionPhase: execution.failed ? "output_captured_failed" : "output_captured_completed",
       });
+      if (!outputRun) {
+        return this.handleLostCodeModeExecutionClaim({
+          runId,
+          approvalId,
+          claimStartedAt,
+          claimGeneration,
+          sandbox,
+        });
+      }
+      finalRun = outputRun;
+      const interruptionReason = signal?.aborted
+        ? signal.reason instanceof Error
+          ? signal.reason.message
+          : typeof signal.reason === "string"
+            ? signal.reason
+            : `Code mode run ${runId} was interrupted after execution started.`
+        : execution.manualReconciliationReason;
+      const terminalRun = interruptionReason
+        ? this.options.storage.codeModeRuns.markExecutionInterrupted({
+            runId,
+            approvalId,
+            startedAt: claimStartedAt,
+            executionGeneration: claimGeneration,
+            interruptedAt: finishedAt,
+            interruptionReason,
+            errorDetails: {
+              phase: "after_execution_boundary",
+              completedOutputPrefixPersisted: true,
+              ...(execution.errorCode ? { childErrorCode: execution.errorCode } : {}),
+              ...(execution.errorDetails ? { childErrorDetails: execution.errorDetails } : {}),
+            },
+          })
+        : this.options.storage.codeModeRuns.finishExecutionClaim({
+            ...finalRun,
+            status: execution.failed ? "failed" : "completed",
+            verification: execution.failed
+              ? { status: "not_applicable", updatedAt: finishedAt }
+              : {
+                  status: "completed_unverified",
+                  reason: "Execution completed; no fresh named semantic proof has been recorded.",
+                  updatedAt: finishedAt,
+                },
+            approvalId,
+            startedAt: claimStartedAt,
+            finishedAt,
+          });
       if (!terminalRun) {
         return this.handleLostCodeModeExecutionClaim({
           runId,
           approvalId,
           claimStartedAt,
+          claimGeneration,
           sandbox,
         });
       }
       finalRun = terminalRun;
+      if (finalRun.executionRecovery.disposition === "manual_reconciliation") {
+        this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
+          runId: finalRun.runId,
+          approvalId,
+          status: finalRun.status,
+          error: finalRun.error,
+          errorCode: finalRun.errorCode,
+          executionRecovery: finalRun.executionRecovery,
+          sandbox,
+        });
+      }
 
       if (
+        finalRun.status === "completed" &&
+        finalRun.executionRecovery.phase === "terminal" &&
+        finalRun.executionRecovery.disposition !== "manual_reconciliation" &&
         !execution.failed &&
         finalRun.saveCandidateOnSuccess &&
         finalRun.executionBackend?.backendId !== CODE_MODE_AIDER_ADAPTER_ID
@@ -1744,6 +2127,13 @@ export class CapabilitySystemService {
         {
           outcome: finalRun.status,
           runId: finalRun.runId,
+          executionRecovery: finalRun.executionRecovery,
+          ...(finalRun.executionRecovery.disposition === "manual_reconciliation"
+            ? { manualReconciliationRequired: true }
+            : {}),
+          ...(finalRun.error ? { error: finalRun.error } : {}),
+          ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
+          ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
         },
       );
       this.options.storage.approvalEvents.append({
@@ -1767,9 +2157,12 @@ export class CapabilitySystemService {
           errorCode: finalRun.errorCode,
           errorDetails: finalRun.errorDetails,
           trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
+          verification: finalRun.verification,
           sandbox,
         },
       );
+      this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+      await this.flushCodeModeFinalTranscriptOutbox();
 
       return {
         outcome: "executed",
@@ -1780,6 +2173,7 @@ export class CapabilitySystemService {
           status: finalRun.status,
           codeHash: finalRun.codeHash,
           trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
+          verification: finalRun.verification,
           ...(finalRun.error ? { error: finalRun.error } : {}),
           ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
           ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
@@ -1787,46 +2181,107 @@ export class CapabilitySystemService {
         },
       };
     } catch (error) {
-      if (isCodeModeExecutionInterrupted(error, signal)) {
-        if (claimStartedAt) {
-          finalRun =
-            this.options.storage.codeModeRuns.releaseExecutionClaim({
-              runId,
-              approvalId,
-              startedAt: claimStartedAt,
-            }) ?? finalRun;
-        }
-        this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
-          runId,
-          approvalId,
-          status: finalRun.status,
-          error: error instanceof Error ? error.message : String(error),
-          sandbox,
-        });
-        return undefined;
-      }
       if (error instanceof CodeModeSandboxLaunchFailure) {
         sandbox = error.sandbox;
       }
+      const interrupted = isCodeModeExecutionInterrupted(error, signal);
+      const retryablePreDispatchFailure =
+        error instanceof CodeModeSandboxLaunchFailure ||
+        error instanceof CodeModeExecutionPreDispatchFailure ||
+        error instanceof CodeModeExecutionBackendUnavailableError;
+      if (interrupted || retryablePreDispatchFailure) {
+        const interruptedAt = new Date().toISOString();
+        const interruptionReason = error instanceof Error ? error.message : String(error);
+        if (claimStartedAt && claimGeneration !== undefined) {
+          if (finalRun.executionRecovery.phase === "claimed") {
+            finalRun =
+              this.options.storage.codeModeRuns.releaseExecutionClaim({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                interruptedAt,
+                interruptionReason,
+                sandbox,
+              }) ?? finalRun;
+          } else {
+            finalRun =
+              this.options.storage.codeModeRuns.markExecutionInterrupted({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                interruptedAt,
+                interruptionReason,
+                errorDetails: {
+                  phase: "after_execution_boundary",
+                  completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
+                },
+              }) ?? finalRun;
+          }
+        }
+        this.options.publishRealtime(
+          retryablePreDispatchFailure && finalRun.status === "approval_pending"
+            ? "code_mode_run_dispatch_deferred"
+            : "code_mode_run_interrupted",
+          "capabilities",
+          {
+            runId,
+            approvalId,
+            status: finalRun.status,
+            error: interruptionReason,
+            executionRecovery: finalRun.executionRecovery,
+            sandbox,
+          },
+        );
+        if (finalRun.status === "failed") {
+          this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
+            runId,
+            error: finalRun.error,
+            errorCode: finalRun.errorCode,
+            manualReconciliationRequired: true,
+          });
+          this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+          await this.flushCodeModeFinalTranscriptOutbox();
+          return buildCodeModeToolInvokeResult(finalRun);
+        }
+        return undefined;
+      }
       const normalizedError = normalizeCodeModeIpcError(error);
       const failedAt = new Date().toISOString();
-      if (claimStartedAt) {
-        const terminalRun = this.options.storage.codeModeRuns.finishExecutionClaim({
-          ...finalRun,
-          status: "failed",
-          approvalId,
-          sandbox,
-          error: normalizedError.message,
-          errorCode: normalizedError.code,
-          errorDetails: normalizedError.details,
-          startedAt: claimStartedAt,
-          finishedAt: failedAt,
-        });
+      if (claimStartedAt && claimGeneration !== undefined) {
+        const terminalRun =
+          finalRun.executionRecovery.phase === "claimed"
+            ? this.options.storage.codeModeRuns.failExecutionClaimBeforeDispatch({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                finishedAt: failedAt,
+                error: normalizedError.message,
+                errorCode: normalizedError.code,
+                errorDetails: normalizedError.details,
+              })
+            : this.options.storage.codeModeRuns.markExecutionInterrupted({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                interruptedAt: failedAt,
+                interruptionReason: normalizedError.message,
+                errorDetails: {
+                  phase: "after_execution_boundary",
+                  completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
+                  childErrorCode: normalizedError.code,
+                  childErrorDetails: normalizedError.details,
+                },
+              });
         if (!terminalRun) {
           return this.handleLostCodeModeExecutionClaim({
             runId,
             approvalId,
             claimStartedAt,
+            claimGeneration,
             sandbox,
           });
         }
@@ -1870,6 +2325,8 @@ export class CapabilitySystemService {
         errorDetails: finalRun.errorDetails,
         sandbox,
       });
+      this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+      await this.flushCodeModeFinalTranscriptOutbox();
       return {
         outcome: "executed",
         policyReason: "code_mode_run:failed",
@@ -1886,10 +2343,167 @@ export class CapabilitySystemService {
     }
   }
 
+  /**
+   * Re-enqueue terminal Code Mode summaries that were committed before a
+   * previous process could publish their deterministic transcript event.
+   * The outbox event id is stable, so repeated boots remain idempotent.
+   */
+  public reconcileCodeModeFinalTranscriptDeliveries(limit = 500): {
+    checked: number;
+    enqueued: number;
+    errors: string[];
+    omittedErrors: number;
+  } {
+    const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 500;
+    const pageSize = Math.max(1, Math.min(normalizedLimit, 500));
+    const errors: string[] = [];
+    let retainedErrorBytes = 0;
+    let omittedErrors = 0;
+    let enqueued = 0;
+    let checked = 0;
+    let cursor: { finishedAt: string; runId: string } | undefined;
+    while (true) {
+      const pending = this.options.storage.codeModeRuns.listPendingFinalTranscriptDeliveryPage({
+        afterFinishedAt: cursor?.finishedAt,
+        afterRunId: cursor?.runId,
+        limit: pageSize,
+      });
+      if (pending.length === 0) {
+        break;
+      }
+      checked += pending.length;
+      for (const run of pending) {
+        try {
+          if (this.enqueueCodeModeFinalTranscript(run)) {
+            enqueued += 1;
+          }
+        } catch (error) {
+          const boundedError = boundRedactedError(`${run.runId}: ${errorMessage(error)}`);
+          const boundedErrorBytes = Buffer.byteLength(boundedError, "utf8");
+          if (
+            errors.length >= CODE_MODE_RECOVERY_ERRORS_MAX_ENTRIES ||
+            retainedErrorBytes + boundedErrorBytes > CODE_MODE_RECOVERY_ERRORS_TOTAL_LIMIT_BYTES
+          ) {
+            omittedErrors += 1;
+          } else {
+            errors.push(boundedError);
+            retainedErrorBytes += boundedErrorBytes;
+          }
+        }
+      }
+      const last = pending.at(-1)!;
+      cursor = { finishedAt: last.finishedAt ?? last.createdAt, runId: last.runId };
+      if (pending.length < pageSize) {
+        break;
+      }
+    }
+    return { checked, enqueued, errors, omittedErrors };
+  }
+
+  private enqueueCodeModeFinalTranscriptSafely(run: CodeModeRunRecord): boolean {
+    try {
+      return this.enqueueCodeModeFinalTranscript(run);
+    } catch (error) {
+      try {
+        this.options.publishRealtime("code_mode_transcript_delivery_deferred", "capabilities", {
+          runId: run.runId,
+          error: boundRedactedError(errorMessage(error)),
+        });
+      } catch (diagnosticError) {
+        void diagnosticError;
+        // The durable run/outbox remain authoritative when diagnostics fail.
+      }
+      return false;
+    }
+  }
+
+  private enqueueCodeModeFinalTranscript(run: CodeModeRunRecord): boolean {
+    const eventId = run.executionRecovery.finalTranscriptEventId;
+    if (
+      !run.sessionId ||
+      !eventId ||
+      run.executionRecovery.finalTranscriptEnqueuedAt ||
+      (run.status !== "completed" && run.status !== "failed")
+    ) {
+      return false;
+    }
+    if (
+      !this.options.storage.sessions ||
+      !this.options.storage.chatMessages ||
+      !this.options.storage.transcriptOutbox ||
+      !this.options.storage.runImmediateTransaction
+    ) {
+      return false;
+    }
+    const session = this.options.storage.sessions.getBySessionId(run.sessionId);
+    const timestamp = run.finishedAt ?? new Date().toISOString();
+    const message: ChatMessageRecord = {
+      messageId: eventId,
+      sessionId: run.sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "code-mode",
+      content: buildCodeModeFinalTranscriptContent(run),
+      timestamp,
+    };
+    const event: TranscriptEvent = {
+      eventId,
+      actionId: `code-mode:${run.runId}`,
+      idempotencyKey: `code-mode-final:${run.runId}:${run.executionRecovery.generation}`,
+      sessionId: run.sessionId,
+      sessionKey: session.sessionKey,
+      timestamp,
+      type: "message.assistant",
+      actorType: "agent",
+      actorId: "code-mode",
+      payload: { message },
+    };
+    const wasQueued = Boolean(this.options.storage.transcriptOutbox.get(eventId));
+    this.options.storage.runImmediateTransaction(() => {
+      const latest = this.options.storage.codeModeRuns.get(run.runId);
+      if (
+        latest.executionRecovery.finalTranscriptEnqueuedAt ||
+        latest.executionRecovery.generation !== run.executionRecovery.generation ||
+        latest.executionRecovery.finalTranscriptEventId !== eventId ||
+        (latest.status !== "completed" && latest.status !== "failed")
+      ) {
+        return;
+      }
+      this.options.storage.chatMessages.upsert(message, timestamp);
+      this.options.storage.transcriptOutbox.enqueue(event, timestamp);
+      this.options.storage.codeModeRuns.markFinalTranscriptEnqueued({
+        runId: latest.runId,
+        executionGeneration: latest.executionRecovery.generation,
+        eventId,
+        enqueuedAt: timestamp,
+      });
+    });
+    return !wasQueued && Boolean(this.options.storage.transcriptOutbox.get(eventId));
+  }
+
+  private async flushCodeModeFinalTranscriptOutbox(): Promise<void> {
+    if (!this.options.flushTranscriptOutbox) {
+      return;
+    }
+    try {
+      await this.options.flushTranscriptOutbox();
+    } catch (error) {
+      try {
+        this.options.publishRealtime("code_mode_transcript_delivery_deferred", "capabilities", {
+          error: boundRedactedError(errorMessage(error)),
+        });
+      } catch (diagnosticError) {
+        void diagnosticError;
+        // Delivery is still durable and will be retried on the next drain.
+      }
+    }
+  }
+
   private handleLostCodeModeExecutionClaim(input: {
     runId: string;
     approvalId: string;
     claimStartedAt: string;
+    claimGeneration: number;
     sandbox: CodeModeSandboxMetadata;
   }): undefined {
     const currentRun = this.options.storage.codeModeRuns.find(input.runId);
@@ -1903,7 +2517,9 @@ export class CapabilitySystemService {
         runId: input.runId,
         status: currentRun?.status ?? "missing",
         startedAt: input.claimStartedAt,
+        executionGeneration: input.claimGeneration,
         currentStartedAt: currentRun?.startedAt,
+        currentExecutionGeneration: currentRun?.executionRecovery.generation,
         error: reason,
       },
     });
@@ -1912,7 +2528,9 @@ export class CapabilitySystemService {
       approvalId: input.approvalId,
       status: currentRun?.status ?? "missing",
       startedAt: input.claimStartedAt,
+      executionGeneration: input.claimGeneration,
       currentStartedAt: currentRun?.startedAt,
+      currentExecutionGeneration: currentRun?.executionRecovery.generation,
       error: reason,
       sandbox: currentRun?.sandbox ?? input.sandbox,
     });
@@ -1962,9 +2580,10 @@ export class CapabilitySystemService {
   }
 
   private hydrateCodeModeRunForRead(run: CodeModeRunRecord): CodeModeRunRecord {
-    return this.hydrateCodeModeRunLinkage(
+    const hydrated = this.hydrateCodeModeRunLinkage(
       this.terminalizeExpiredCodeModeRun(this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run)),
     );
+    return this.codeModeVerification?.refreshRun(hydrated) ?? hydrated;
   }
 
   private terminalizeCodeModeRunForMissingPendingAction(approvalId: string): ToolInvokeResult | undefined {
@@ -2262,8 +2881,10 @@ export class CapabilitySystemService {
     }
   }
 
-  private buildCandidateDetail(candidateId: string): CandidateSkillDetailRecord {
+  private buildCandidateDetail(candidateId: string, revision?: number): CandidateSkillDetailRecord {
     const versions = this.requireCandidateVersions(candidateId);
+    const aggregateRevision =
+      revision ?? this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId).revision;
     const activeVersion = versions.find(
       (version) => version.lifecycleState === "approved" || version.lifecycleState === "trusted",
     );
@@ -2278,6 +2899,7 @@ export class CapabilitySystemService {
       : ["No candidate version has been promoted into an approved or trusted lifecycle state."];
     return {
       candidateId,
+      revision: aggregateRevision,
       versions,
       latestVersion,
       activeVersion,
@@ -2346,6 +2968,16 @@ export class CapabilitySystemService {
           deterministic: Boolean(tool.deterministic),
           codeModeAllowed: Boolean(tool.codeModeAllowed),
         },
+        effectPotential:
+          tool.effectPotential ??
+          classifyToolEffectPotential({
+            toolName: tool.toolName,
+            trustedBuiltin: true,
+            category: tool.category,
+            riskLevel: tool.riskLevel,
+            requiresApproval: tool.requiresApproval,
+            readOnly: tool.readOnly,
+          }),
       });
     }
 
@@ -2434,6 +3066,8 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
+    beforeExecutionDispatch: () => Promise<void>;
+    onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
   }) {
     return this.executeChildHarness(input);
@@ -2446,12 +3080,15 @@ export class CapabilitySystemService {
     language: CodeModeLanguage;
     source: string;
     pendingAiderRequest: unknown;
+    beforeExecutionDispatch: () => Promise<void>;
+    onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
   }): Promise<{
     result?: Record<string, unknown>;
     error?: string;
     errorCode?: string;
     errorDetails?: Record<string, unknown>;
+    manualReconciliationReason?: string;
     failed: boolean;
     stdout: BoundedCaptureState;
     stderr: BoundedCaptureState;
@@ -2469,6 +3106,7 @@ export class CapabilitySystemService {
     if (backendRunner.mode !== "aider_audit" || !backendRunner.executeAiderAdapter) {
       throw new Error("Selected Code Mode backend does not support Aider adapter execution.");
     }
+    let dispatchBoundaryCrossed = false;
     try {
       const execution = await backendRunner.executeAiderAdapter({
         runId: input.runId,
@@ -2479,6 +3117,14 @@ export class CapabilitySystemService {
         repositoryRootRelPath: aider.repositoryRootRelPath,
         model: aider.model,
         persister: this.buildAiderArtifactPersister(),
+        beforeDispatch: async () => {
+          await input.beforeExecutionDispatch();
+          dispatchBoundaryCrossed = true;
+        },
+        onDispatchFailed: async () => {
+          await input.onExecutionDispatchFailed();
+          dispatchBoundaryCrossed = false;
+        },
         signal: input.signal,
       });
       return {
@@ -2490,6 +3136,14 @@ export class CapabilitySystemService {
         stdout: toCaptureState(execution.stdout),
         stderr: toCaptureState(execution.stderr),
       };
+    } catch (error) {
+      if (!dispatchBoundaryCrossed) {
+        throw new CodeModeExecutionPreDispatchFailure(
+          `Aider Code Mode execution failed before dispatch: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+      throw error;
     } finally {
       await this.cleanupCodeModeRunTempRoot(input.runId, runTempRoot);
     }
@@ -2506,12 +3160,15 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
+    beforeExecutionDispatch: () => Promise<void>;
+    onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
   }): Promise<{
     result?: Record<string, unknown>;
     error?: string;
     errorCode?: string;
     errorDetails?: Record<string, unknown>;
+    manualReconciliationReason?: string;
     failed: boolean;
     stdout: BoundedCaptureState;
     stderr: BoundedCaptureState;
@@ -2550,12 +3207,25 @@ export class CapabilitySystemService {
     }
 
     const launchTransport = preparedSandbox.launch.transport;
-    const child = spawn(preparedSandbox.launch.executable, preparedSandbox.launch.args, {
-      shell: preparedSandbox.launch.shell,
-      cwd: preparedSandbox.launch.cwd,
-      env: preparedSandbox.launch.env,
-      stdio: launchTransport === "node_ipc" ? ["ignore", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = (this.options.spawnCodeModeChild ?? spawn)(
+        preparedSandbox.launch.executable,
+        preparedSandbox.launch.args,
+        {
+          shell: preparedSandbox.launch.shell,
+          cwd: preparedSandbox.launch.cwd,
+          env: preparedSandbox.launch.env,
+          stdio: launchTransport === "node_ipc" ? ["ignore", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
+        },
+      );
+    } catch (error) {
+      await this.cleanupCodeModeRunTempRoot(input.runId, runTempRoot);
+      throw new CodeModeSandboxLaunchFailure(
+        error instanceof Error ? error.message : String(error),
+        buildCodeModeSandboxLaunchFailureMetadata(input.sandbox, error),
+      );
+    }
 
     const stdout = createBoundedCapture();
     const stderr = createBoundedCapture();
@@ -2588,6 +3258,10 @@ export class CapabilitySystemService {
       }
     >();
     const activeWrapperTasks = new Set<Promise<void>>();
+    let executionDispatched = false;
+    let executionRequestId: string | undefined;
+    let executionEvidenceReceived = false;
+    let manualReconciliationReason: string | undefined;
 
     const sendMessageToChild = (message: Record<string, unknown>): boolean => {
       if (launchTransport === "stdio_jsonrpc") {
@@ -2597,7 +3271,7 @@ export class CapabilitySystemService {
         try {
           child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
             if (error) {
-              failChildStream("stdin", error);
+              failChildDispatch("stdio", error);
             }
           });
           return true;
@@ -2609,10 +3283,10 @@ export class CapabilitySystemService {
         return false;
       }
       try {
-        child.send(message, () => {
-          // The child may exit while an async wrapper call is finishing. A closed
-          // IPC channel is already represented by the run result, so do not leak
-          // EPIPE/ERR_IPC_CHANNEL_CLOSED as an unhandled process rejection.
+        child.send(message, (error) => {
+          if (error) {
+            failChildDispatch("ipc", error);
+          }
         });
         return true;
       } catch {
@@ -2662,6 +3336,19 @@ export class CapabilitySystemService {
       }
     };
 
+    const failChildDispatch = (transport: "ipc" | "stdio", error: Error): void => {
+      if (executionEvidenceReceived) {
+        // A correlated run.execute response or child wrapper request is
+        // stronger evidence than a late transport acknowledgement failure.
+        // Fast terminal child failures can close IPC before Node invokes an
+        // earlier send callback; treating that callback as outcome uncertainty
+        // would erase the exact child error even though execution is proven.
+        return;
+      }
+      manualReconciliationReason = `Code Mode ${transport} dispatch acknowledgement failed after the durable execution boundary: ${error.message}`;
+      failChildStream(transport === "stdio" ? "stdin" : "stdout", error);
+    };
+
     const handleChildMessage = (message: unknown) => {
       if (!isRecord(message)) {
         return;
@@ -2685,6 +3372,9 @@ export class CapabilitySystemService {
         const pending = pendingRequests.get(message.id);
         if (!pending) {
           return;
+        }
+        if (message.id === executionRequestId) {
+          executionEvidenceReceived = true;
         }
         pendingRequests.delete(message.id);
         if (Object.hasOwn(message, "error")) {
@@ -2710,6 +3400,7 @@ export class CapabilitySystemService {
           if (!wrapper) {
             throw new ValidationError({ message: `Wrapper ${wrapperName} is not available in this run.` });
           }
+          executionEvidenceReceived = true;
           const deadlineAt = typeof params.deadlineAt === "number" ? params.deadlineAt : undefined;
           if (deadlineAt && Date.now() > deadlineAt) {
             throw new ConflictError({ message: `Wrapper ${wrapperName} missed its execution deadline.` });
@@ -2815,7 +3506,7 @@ export class CapabilitySystemService {
       });
     });
 
-    const sendRequest = <TResult>(method: string, params: Record<string, unknown>): Promise<TResult> => {
+    const sendRequest = async <TResult>(method: string, params: Record<string, unknown>): Promise<TResult> => {
       if (childStreamFailure) {
         return Promise.reject(childStreamFailure);
       }
@@ -2826,9 +3517,12 @@ export class CapabilitySystemService {
         method,
         params,
       };
+      if (method === "run.execute") {
+        executionRequestId = id;
+      }
       const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
       if (bytes > CODE_MODE_IPC_MAX_BYTES) {
-        return Promise.reject({
+        throw {
           code: "MESSAGE_TOO_LARGE",
           message: "Code Mode IPC message exceeded the maximum allowed size.",
           details: {
@@ -2837,18 +3531,37 @@ export class CapabilitySystemService {
             direction: "parent_to_child",
             method,
           },
-        });
+        };
       }
-      return new Promise<TResult>((resolve, reject) => {
-        pendingRequests.set(id, {
-          resolve: (value) => resolve(value as TResult),
-          reject,
-        });
-        if (!sendMessageToChild(message)) {
-          pendingRequests.delete(id);
-          reject(new Error("Code Mode child IPC channel closed before request could be sent."));
-        }
+      try {
+        await input.beforeExecutionDispatch();
+      } catch (error) {
+        // The request has not reached either transport yet. Reset a tentative
+        // boundary even when the durable hook failed after its write (for
+        // example while publishing an operational diagnostic).
+        await input.onExecutionDispatchFailed();
+        throw new CodeModeExecutionPreDispatchFailure(
+          `Code Mode execution failed before child request dispatch: ${errorMessage(error)}`,
+          { cause: error },
+        );
+      }
+      let resolveResponse!: (value: TResult) => void;
+      let rejectResponse!: (error: unknown) => void;
+      const response = new Promise<TResult>((resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
       });
+      pendingRequests.set(id, {
+        resolve: (value) => resolveResponse(value as TResult),
+        reject: rejectResponse,
+      });
+      if (!sendMessageToChild(message)) {
+        pendingRequests.delete(id);
+        await input.onExecutionDispatchFailed();
+        throw new CodeModeExecutionPreDispatchFailure("Code Mode child IPC channel closed before request dispatch.");
+      }
+      executionDispatched = true;
+      return response;
     };
 
     const timeoutHandle = setTimeout(() => {
@@ -2898,12 +3611,16 @@ export class CapabilitySystemService {
       }
       await waitForWrapperTasksToSettle(activeWrapperTasks);
       await exitPromise.catch(() => undefined);
+      if (!executionDispatched) {
+        throw error;
+      }
       const normalizedError = normalizeCodeModeIpcError(error);
       return {
         failed: true,
         error: normalizedError.message,
         errorCode: normalizedError.code,
         errorDetails: normalizedError.details,
+        manualReconciliationReason,
         stdout: stdout.finish(),
         stderr: stderr.finish(),
       };
@@ -2958,8 +3675,8 @@ export class CapabilitySystemService {
   ): Promise<void> {
     const proposalInput = readRecord(sampleInput.capabilityProposal);
     const candidateId = normalizeCandidateId(readOptionalString(proposalInput, "candidateId"), run.codeHash);
-    const versionId = `version-${randomUUID()}`;
-    const now = new Date().toISOString();
+    const versionId = `version-${sha256Text(`code-mode-candidate\u0000${run.runId}`).slice(0, 32)}`;
+    const now = run.startedAt ?? run.createdAt;
     const bundleSegments = [candidateId, versionId];
     const skillTitle =
       readOptionalString(proposalInput, "title") ??
@@ -2994,6 +3711,12 @@ export class CapabilitySystemService {
         message: `Generated candidate skill failed validation: ${validation.errors.join("; ")}`,
       });
     }
+    const workspaceId =
+      run.workspaceId?.trim() ||
+      (run.sessionId ? this.options.storage.chatSessionMeta.get(run.sessionId)?.workspaceId : undefined) ||
+      "default";
+    const sourceFingerprint = run.codeHash;
+    const createdByActorId = run.operatorId?.trim() || "system:code-mode";
     const skillManifest = {
       manifestVersion: 1,
       candidateId,
@@ -3001,6 +3724,10 @@ export class CapabilitySystemService {
       title: skillTitle,
       summary,
       sourceKind: "code_mode_generated",
+      lineageStatus: "governed",
+      workspaceId,
+      sourceFingerprint,
+      createdByActorId,
       originatingRunId: run.runId,
       proposalId: readOptionalString(proposalInput, "proposalId"),
       candidateType: "self_generated_skill",
@@ -3021,6 +3748,10 @@ export class CapabilitySystemService {
       sourceSessionId,
       sourceTurnId,
       candidateType: "self_generated_skill",
+      lineageStatus: "governed",
+      workspaceId,
+      sourceFingerprint,
+      createdByActorId,
       wrapperManifestVersion: wrapperManifest.manifestVersion,
       wrapperManifestHash: run.wrapperManifestHash,
       requiredPermissions,
@@ -3031,7 +3762,7 @@ export class CapabilitySystemService {
       sampleOutput: run.result ?? {},
       generatedSmokeCase: {
         description: "Run completed under the Code Mode v1 harness.",
-        status: run.status,
+        status: "completed",
       },
       lastSuccessfulExecutionTimestamp: now,
     };
@@ -3039,44 +3770,62 @@ export class CapabilitySystemService {
       inputSchema: null,
       outputSchema: null,
     };
-
-    const manifestArtifact = await this.persistManagedJsonArtifact(
+    const manifestContent = JSON.stringify(skillManifest, null, 2);
+    const proofContent = JSON.stringify(proof, null, 2);
+    const schemaContent = JSON.stringify(schemaBundle, null, 2);
+    const programFilename = `program.${run.language === "typescript" ? "ts" : "js"}`;
+    const deterministicArtifactMetadata = (filename: string) => ({
+      artifactId: `artifact-${sha256Text(`${versionId}\u0000${filename}`).slice(0, 32)}`,
+      createdAt: now,
+    });
+    const manifestArtifact = this.buildManagedArtifactRecord(
       this.candidateRoot,
       bundleSegments,
       "skill.json",
-      skillManifest,
+      manifestContent,
+      "application/json",
+      deterministicArtifactMetadata("skill.json"),
     );
-    const instructionArtifact = await this.persistManagedTextArtifact(
+    const instructionArtifact = this.buildManagedArtifactRecord(
       this.candidateRoot,
       bundleSegments,
       "SKILL.md",
       candidateSkillMarkdown,
       "text/markdown",
+      deterministicArtifactMetadata("SKILL.md"),
     );
-    const proofArtifact = await this.persistManagedJsonArtifact(
+    const proofArtifact = this.buildManagedArtifactRecord(
       this.candidateRoot,
       bundleSegments,
       "proof.json",
-      proof,
+      proofContent,
+      "application/json",
+      deterministicArtifactMetadata("proof.json"),
     );
-    const programArtifact = await this.persistManagedTextArtifact(
+    const programArtifact = this.buildManagedArtifactRecord(
       this.candidateRoot,
       bundleSegments,
-      `program.${run.language === "typescript" ? "ts" : "js"}`,
+      programFilename,
       source,
       run.language === "typescript" ? "text/typescript" : "text/javascript",
+      deterministicArtifactMetadata(programFilename),
     );
-    const schemaArtifact = await this.persistManagedJsonArtifact(
+    const schemaArtifact = this.buildManagedArtifactRecord(
       this.candidateRoot,
       bundleSegments,
       "schemas.json",
-      schemaBundle,
+      schemaContent,
+      "application/json",
+      deterministicArtifactMetadata("schemas.json"),
     );
-
-    this.options.storage.candidateSkillVersions.upsert({
+    const candidateRecord: CandidateSkillVersionRecord = {
       candidateId,
       versionId,
       sourceKind: "code_mode_generated",
+      lineageStatus: "governed",
+      workspaceId,
+      sourceFingerprint,
+      createdByActorId,
       title: skillTitle,
       summary,
       bundleRoot: normalizeRelPath(
@@ -3093,12 +3842,65 @@ export class CapabilitySystemService {
       createdAt: now,
       updatedAt: now,
       lastSuccessfulExecutionAt: now,
-    });
+    };
+
+    const replay = this.options.storage.candidateSkillVersions.find(versionId);
+    if (replay) {
+      assertCodeModeCandidateReplay(replay, candidateRecord);
+      this.verifyCandidateVersionArtifacts(replay);
+      if (!this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId)) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: `Candidate skill ${candidateId} has a version but no canonical aggregate revision.`,
+        });
+      }
+      return;
+    }
+
+    const existingVersions = this.options.storage.candidateSkillVersions.listByCandidateId(candidateId, 1);
+    const existingRevision = this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId);
+    if ((existingVersions.length === 0) !== (existingRevision === undefined)) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message:
+          existingVersions.length === 0
+            ? `Candidate skill ${candidateId} has an orphan aggregate revision.`
+            : `Candidate skill ${candidateId} has versions but no canonical aggregate revision.`,
+      });
+    }
+
+    await this.persistManagedArtifactRecord(this.candidateRoot, manifestArtifact, manifestContent);
+    await this.persistManagedArtifactRecord(this.candidateRoot, instructionArtifact, candidateSkillMarkdown);
+    await this.persistManagedArtifactRecord(this.candidateRoot, proofArtifact, proofContent);
+    await this.persistManagedArtifactRecord(this.candidateRoot, programArtifact, source);
+    await this.persistManagedArtifactRecord(this.candidateRoot, schemaArtifact, schemaContent);
+
+    const staged = existingRevision
+      ? this.options.storage.skillAggregateRevisions.runWithRevision(
+          "candidate_skill",
+          candidateId,
+          existingRevision.revision,
+          () => ({
+            value: this.options.storage.candidateSkillVersions.upsert(candidateRecord),
+            changed: true,
+          }),
+          now,
+        )
+      : this.options.storage.skillAggregateRevisions.createWithInitialRevision(
+          "candidate_skill",
+          candidateId,
+          () => ({
+            value: this.options.storage.candidateSkillVersions.upsert(candidateRecord),
+            changed: true,
+          }),
+          now,
+        );
 
     this.options.publishRealtime("candidate_skill_staged", "capabilities", {
       candidateId,
       versionId,
       originatingRunId: run.runId,
+      revision: staged.revision,
     });
   }
 
@@ -3147,19 +3949,55 @@ export class CapabilitySystemService {
     content: string,
     mimeType: string,
   ): Promise<CapabilityArtifactRecord> {
-    const targetDir = path.join(root, ...segments.map(sanitizePathSegment));
-    await fs.mkdir(targetDir, { recursive: true });
-    const targetPath = path.join(targetDir, sanitizePathSegment(filename));
-    await fs.writeFile(targetPath, content, "utf8");
-    const bytes = Buffer.byteLength(content, "utf8");
+    const artifact = this.buildManagedArtifactRecord(root, segments, filename, content, mimeType);
+    await this.persistManagedArtifactRecord(root, artifact, content);
+    return artifact;
+  }
+
+  private buildManagedArtifactRecord(
+    root: string,
+    segments: string[],
+    filename: string,
+    content: string,
+    mimeType: string,
+    metadata?: Pick<CapabilityArtifactRecord, "artifactId" | "createdAt">,
+  ): CapabilityArtifactRecord {
+    const targetPath = path.join(root, ...segments.map(sanitizePathSegment), sanitizePathSegment(filename));
     return {
-      artifactId: `artifact-${randomUUID()}`,
+      artifactId: metadata?.artifactId ?? `artifact-${randomUUID()}`,
       relPath: normalizeRelPath(path.relative(this.options.rootDir, targetPath)),
       sha256: sha256Text(content),
-      bytes,
+      bytes: Buffer.byteLength(content, "utf8"),
       mimeType,
-      createdAt: new Date().toISOString(),
+      createdAt: metadata?.createdAt ?? new Date().toISOString(),
     };
+  }
+
+  private async persistManagedArtifactRecord(
+    root: string,
+    artifact: CapabilityArtifactRecord,
+    content: string,
+  ): Promise<void> {
+    const targetPath = path.resolve(this.options.rootDir, artifact.relPath);
+    assertPathInsideRoot(targetPath, root, "Managed artifact");
+    if (sha256Text(content) !== artifact.sha256 || Buffer.byteLength(content, "utf8") !== artifact.bytes) {
+      throw new ConflictError({ message: "Managed artifact metadata does not match the bytes being persisted." });
+    }
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    if (fsSync.existsSync(targetPath)) {
+      const existingContent = await fs.readFile(targetPath, "utf8");
+      if (
+        sha256Text(existingContent) !== artifact.sha256 ||
+        Buffer.byteLength(existingContent, "utf8") !== artifact.bytes
+      ) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: `Pre-existing managed artifact ${artifact.relPath} does not match the deterministic candidate bytes.`,
+        });
+      }
+      return;
+    }
+    await fs.writeFile(targetPath, content, "utf8");
   }
 
   private async readVerifiedManagedArtifactText(
@@ -3333,7 +4171,7 @@ function summarizeCodeModeRunForComparison(run: CodeModeRunRecord): CodeModeRunC
   };
 }
 
-function buildSkillLifecycleRecord(skill: LoadedSkill): SkillLifecycleRecord {
+function buildSkillLifecycleRecord(skill: LoadedSkill, existingCreatedAt?: string): SkillLifecycleRecord {
   const now = new Date().toISOString();
   const sourceManifest = readSkillSourceManifest(skill);
   const mapped = mapSkillSource(skill.source, sourceManifest);
@@ -3344,23 +4182,88 @@ function buildSkillLifecycleRecord(skill: LoadedSkill): SkillLifecycleRecord {
     trustLabel: mapped.trustLabel,
     reviewWarning: mapped.reviewWarning,
     provenance: sourceManifest.provenance,
-    createdAt: now,
+    createdAt: existingCreatedAt ?? now,
     updatedAt: now,
   };
 }
 
+function skillLifecycleProjectionMatches(left: SkillLifecycleRecord, right: SkillLifecycleRecord): boolean {
+  return (
+    left.skillId === right.skillId &&
+    left.category === right.category &&
+    left.lifecycleState === right.lifecycleState &&
+    left.trustLabel === right.trustLabel &&
+    left.reviewWarning === right.reviewWarning &&
+    JSON.stringify(left.provenance) === JSON.stringify(right.provenance)
+  );
+}
+
+function durableImportedActivationMatches(
+  existing: SkillLifecycleRecord | undefined,
+  projected: SkillLifecycleRecord,
+): existing is SkillLifecycleRecord & {
+  lifecycleState: Extract<SkillLifecycleRecord["lifecycleState"], "approved" | "trusted">;
+} {
+  if (!existing || (existing.lifecycleState !== "approved" && existing.lifecycleState !== "trusted")) {
+    return false;
+  }
+  if (existing.category !== "community_imported" || projected.category !== "community_imported") {
+    return false;
+  }
+  const governedIntegrity = existing.provenance?.contentIntegrity;
+  const verifiedIntegrity = projected.provenance?.contentIntegrity;
+  return Boolean(
+    governedIntegrity &&
+    governedIntegrity.verified &&
+    verifiedIntegrity?.verified &&
+    governedIntegrity.manifestVersion === verifiedIntegrity.manifestVersion &&
+    governedIntegrity.treeSha256 === verifiedIntegrity.treeSha256 &&
+    governedIntegrity.fileCount === verifiedIntegrity.fileCount &&
+    governedIntegrity.totalBytes === verifiedIntegrity.totalBytes,
+  );
+}
+
+function skillLifecycleExactIntegrityMatches(existing: SkillLifecycleRecord, projected: SkillLifecycleRecord): boolean {
+  const governed = existing.provenance?.contentIntegrity;
+  const current = projected.provenance?.contentIntegrity;
+  return Boolean(
+    governed?.verified &&
+    current?.verified &&
+    governed.manifestVersion === current.manifestVersion &&
+    governed.treeSha256 === current.treeSha256 &&
+    governed.fileCount === current.fileCount &&
+    governed.totalBytes === current.totalBytes,
+  );
+}
+
 interface SkillSourceManifestRead {
   provenance?: SkillLifecycleRecord["provenance"];
-  activationLifecycleState?: Extract<SkillLifecycleRecord["lifecycleState"], "approved" | "trusted">;
+  integrityStatus?: "verified" | "missing" | "mismatch";
 }
 
 function readSkillSourceManifest(skill: LoadedSkill): SkillSourceManifestRead {
   if (skill.source !== "extra") {
-    return {
-      provenance: {
-        source: skill.source,
-      },
-    };
+    try {
+      const integrity = captureSkillContentIntegritySync(skill.dir);
+      return {
+        provenance: {
+          source: skill.source,
+          contentIntegrity: {
+            manifestVersion: integrity.manifestVersion,
+            treeSha256: integrity.treeSha256,
+            fileCount: integrity.fileCount,
+            totalBytes: integrity.totalBytes,
+            verified: true,
+          },
+        },
+        integrityStatus: "verified",
+      };
+    } catch {
+      return {
+        provenance: { source: skill.source },
+        integrityStatus: "mismatch",
+      };
+    }
   }
   const manifestPath = path.join(skill.dir, "source.json");
   if (!fsSync.existsSync(manifestPath)) {
@@ -3368,85 +4271,115 @@ function readSkillSourceManifest(skill: LoadedSkill): SkillSourceManifestRead {
       provenance: {
         source: skill.source,
       },
+      integrityStatus: "missing",
     };
   }
   try {
-    const parsed = JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+    const parsed = readBoundedSkillSourceManifestSync(manifestPath);
+    // source.json is editable provenance metadata. Activation-like fields in it
+    // are never authority; only an already-durable lifecycle record for this
+    // exact verified tree may restore approved/trusted callability.
     const candidate = isRecord(parsed.candidate) ? parsed.candidate : undefined;
-    const activationEvidence = parsed.activationEvidence ?? parsed.activation ?? parsed.governedActivation;
+    const rawProvenance = isRecord(parsed.provenance)
+      ? parsed.provenance
+      : isRecord(candidate?.provenance)
+        ? candidate.provenance
+        : undefined;
+    const rawContentIntegrity = rawProvenance?.contentIntegrity;
+    const contentIntegrity = parseSkillContentIntegrityManifest(rawContentIntegrity);
+    const integrityVerified = contentIntegrity ? verifySkillContentIntegritySync(skill.dir, contentIntegrity) : false;
+    const commitSha = parseOptionalSkillCommitSha(rawProvenance?.commitSha);
     return {
       provenance: {
         source: skill.source,
         sourceRef: typeof candidate?.sourceRef === "string" ? candidate.sourceRef : undefined,
         sourceProvider: typeof candidate?.sourceProvider === "string" ? candidate.sourceProvider : undefined,
+        commitSha,
+        contentIntegrity: contentIntegrity
+          ? {
+              manifestVersion: contentIntegrity.manifestVersion,
+              treeSha256: contentIntegrity.treeSha256,
+              fileCount: contentIntegrity.fileCount,
+              totalBytes: contentIntegrity.totalBytes,
+              verified: integrityVerified,
+            }
+          : undefined,
       },
-      activationLifecycleState: readSkillActivationLifecycleState(activationEvidence),
+      integrityStatus: contentIntegrity
+        ? integrityVerified
+          ? "verified"
+          : "mismatch"
+        : rawContentIntegrity === undefined
+          ? "missing"
+          : "mismatch",
     };
   } catch {
     return {
       provenance: {
         source: skill.source,
       },
+      integrityStatus: "mismatch",
     };
   }
 }
 
-function readSkillActivationLifecycleState(
-  value: unknown,
-): Extract<SkillLifecycleRecord["lifecycleState"], "approved" | "trusted"> | undefined {
-  if (!isRecord(value)) {
+function parseOptionalSkillCommitSha(value: unknown): string | undefined {
+  if (value === undefined) {
     return undefined;
   }
-  const rawState = typeof value.lifecycleState === "string" ? value.lifecycleState : value.status;
-  if (rawState !== "approved" && rawState !== "active" && rawState !== "trusted") {
-    return undefined;
+  if (typeof value !== "string" || !/^[a-f0-9]{7,64}$/i.test(value)) {
+    throw new Error("Skill provenance commitSha must be a 7-64 character hexadecimal Git object id.");
   }
-  const hasActivationTime = ["activatedAt", "approvedAt", "createdAt"].some(
-    (key) => typeof value[key] === "string" && value[key],
-  );
-  const hasOperatorProof = ["activatedBy", "approvedBy", "operatorId", "approvalId"].some(
-    (key) => typeof value[key] === "string" && value[key],
-  );
-  if (!hasActivationTime || !hasOperatorProof) {
-    return undefined;
-  }
-  return rawState === "trusted" ? "trusted" : "approved";
+  return value;
 }
 
 function mapSkillSource(
   source: LoadedSkill["source"],
   manifest: SkillSourceManifestRead,
 ): Pick<SkillLifecycleRecord, "category" | "lifecycleState" | "trustLabel" | "reviewWarning"> {
+  const exactBytesUnavailable = manifest.integrityStatus !== "verified";
   switch (source) {
     case "bundled":
       return {
         category: "built_in",
-        lifecycleState: "trusted",
-        trustLabel: "Built-in",
+        lifecycleState: exactBytesUnavailable ? "candidate" : "trusted",
+        trustLabel: exactBytesUnavailable ? "Exact-byte review required" : "Built-in",
+        reviewWarning: exactBytesUnavailable
+          ? "Built-in skill content could not be bound to a bounded exact-byte manifest and is not callable."
+          : undefined,
       };
     case "managed":
       return {
         category: "optional",
-        lifecycleState: "trusted",
-        trustLabel: "Managed optional",
+        lifecycleState: exactBytesUnavailable ? "candidate" : "trusted",
+        trustLabel: exactBytesUnavailable ? "Exact-byte review required" : "Managed optional",
+        reviewWarning: exactBytesUnavailable
+          ? "Managed skill content could not be bound to a bounded exact-byte manifest and is not callable."
+          : undefined,
       };
     case "workspace":
       return {
         category: "project_local",
-        lifecycleState: "approved",
-        trustLabel: "Project-local",
+        lifecycleState: exactBytesUnavailable ? "candidate" : "approved",
+        trustLabel: exactBytesUnavailable ? "Exact-byte review required" : "Project-local",
+        reviewWarning: exactBytesUnavailable
+          ? "Workspace skill content could not be bound to a bounded exact-byte manifest and is not callable."
+          : undefined,
       };
     case "extra":
     default:
       return {
         category: "community_imported",
-        lifecycleState: manifest.activationLifecycleState ?? "candidate",
+        lifecycleState: "candidate",
         trustLabel: "Imported/community",
-        reviewWarning: manifest.activationLifecycleState
-          ? undefined
-          : manifest.provenance?.sourceRef
-            ? "Imported skill remains inspectable only until governed activation evidence is recorded."
-            : "Missing provenance manifest; imported skill remains non-callable until governed activation.",
+        reviewWarning:
+          manifest.integrityStatus === "mismatch"
+            ? "Imported skill content does not match its validated exact-byte provenance; re-import or re-review before activation."
+            : manifest.integrityStatus === "missing"
+              ? manifest.provenance?.sourceRef
+                ? "Imported skill is missing exact-byte provenance and remains non-callable until re-imported and governed activation is recorded."
+                : "Missing provenance manifest; imported skill remains non-callable until governed activation."
+              : "Imported skill remains inspectable only until governed durable activation is recorded.",
       };
   }
 }
@@ -3480,6 +4413,40 @@ function sha256Text(value: string): string {
 
 function canonicalJson(value: unknown): string {
   return JSON.stringify(sortJsonValue(value));
+}
+
+function assertCodeModeCandidateReplay(
+  stored: CandidateSkillVersionRecord,
+  attempted: CandidateSkillVersionRecord,
+): void {
+  const immutableProjection = (record: CandidateSkillVersionRecord) => ({
+    candidateId: record.candidateId,
+    versionId: record.versionId,
+    sourceKind: record.sourceKind,
+    lineageStatus: record.lineageStatus,
+    workspaceId: record.workspaceId,
+    sourceFingerprint: record.sourceFingerprint,
+    upstreamSnapshotId: record.upstreamSnapshotId,
+    supersedesVersionId: record.supersedesVersionId,
+    createdByActorId: record.createdByActorId,
+    title: record.title,
+    summary: record.summary,
+    bundleRoot: record.bundleRoot,
+    originatingRunId: record.originatingRunId,
+    wrapperManifestHash: record.wrapperManifestHash,
+    manifestArtifact: record.manifestArtifact,
+    instructionArtifact: record.instructionArtifact,
+    proofArtifact: record.proofArtifact,
+    programArtifact: record.programArtifact,
+    schemaArtifact: record.schemaArtifact,
+    createdAt: record.createdAt,
+  });
+  if (canonicalJson(immutableProjection(stored)) !== canonicalJson(immutableProjection(attempted))) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: `Code Mode candidate replay ${attempted.versionId} conflicts with the canonical immutable record.`,
+    });
+  }
 }
 
 function sortJsonValue(value: unknown): unknown {
@@ -4554,6 +5521,92 @@ function toPreview(value: string): string | undefined {
   return `${normalized.slice(0, 3997)}...`;
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function buildCodeModeToolInvokeResult(run: CodeModeRunRecord): ToolInvokeResult {
+  return {
+    outcome: "executed",
+    policyReason: `code_mode_run:${run.status}`,
+    auditEventId: `code-mode-${run.runId}`,
+    result: {
+      runId: run.runId,
+      status: run.status,
+      codeHash: run.codeHash,
+      executionRecovery: run.executionRecovery,
+      trustedCodeWriteVerification: run.trustedCodeWriteVerification,
+      verification: run.verification,
+      ...(run.executionRecovery.disposition === "manual_reconciliation" ? { manualReconciliationRequired: true } : {}),
+      ...(run.error ? { error: run.error } : {}),
+      ...(run.errorCode ? { errorCode: run.errorCode } : {}),
+      ...(run.errorDetails ? { errorDetails: run.errorDetails } : {}),
+      ...(run.sandbox ? { sandbox: run.sandbox } : {}),
+    },
+  };
+}
+
+function buildCodeModeFinalTranscriptContent(run: CodeModeRunRecord): string {
+  const artifactLine = (label: string, artifact: CapabilityArtifactRecord | undefined) =>
+    artifact ? `- ${label}: ${artifact.relPath} (sha256 ${artifact.sha256})` : `- ${label}: none`;
+  const recovery = run.executionRecovery;
+  const lines = [
+    `Code Mode run ${run.runId} ${run.status}.`,
+    "",
+    `Recovery truth: ${recovery.disposition}; generation ${recovery.generation}; phase ${recovery.phase}.`,
+    ...(recovery.interruptionReason ? [`Interruption reason: ${recovery.interruptionReason}`] : []),
+    ...(recovery.disposition === "manual_reconciliation"
+      ? ["Manual reconciliation is required. This run was not automatically replayed after its execution boundary."]
+      : []),
+    "",
+    "Durable artifact references:",
+    artifactLine("source", run.codeArtifact),
+    artifactLine("wrapper manifest", run.wrapperManifestArtifact),
+    artifactLine("policy snapshot", run.policySnapshotArtifact),
+    artifactLine("stdout", run.stdoutArtifact),
+    artifactLine("stderr", run.stderrArtifact),
+    "",
+    `Semantic verification: ${run.verification?.status ?? "not_applicable"}.`,
+    "Artifact hash verification establishes trusted-code artifact integrity only; it does not establish hostile-code sandboxing.",
+    ...(run.stdoutPreview ? ["", "Captured stdout prefix:", run.stdoutPreview] : []),
+    ...(run.stderrPreview ? ["", "Captured stderr prefix:", run.stderrPreview] : []),
+  ];
+  const redacted = redactStructuredSecrets(lines.join("\n")).value;
+  return boundUtf8Text(
+    typeof redacted === "string" ? redacted : JSON.stringify(redacted),
+    CODE_MODE_FINAL_TRANSCRIPT_LIMIT_BYTES,
+    "\n...[Code Mode transcript summary truncated]",
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function boundRedactedError(value: string): string {
+  const redacted = redactStructuredSecrets(value).value;
+  return boundUtf8Text(String(redacted), CODE_MODE_RECOVERY_ERROR_LIMIT_BYTES, "...[truncated]");
+}
+
+function boundUtf8Text(value: string, maxBytes: number, marker: string): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  const budget = Math.max(0, maxBytes - markerBytes);
+  let retainedBytes = 0;
+  let retainedCodeUnits = 0;
+  for (const character of value) {
+    const bytes = Buffer.byteLength(character, "utf8");
+    if (retainedBytes + bytes > budget) {
+      break;
+    }
+    retainedBytes += bytes;
+    retainedCodeUnits += character.length;
+  }
+  return `${value.slice(0, retainedCodeUnits)}${marker}`;
+}
+
 function throwIfCapabilitySystemAborted(signal: AbortSignal | undefined, fallbackMessage: string): void {
   if (!signal?.aborted) {
     return;
@@ -4578,19 +5631,51 @@ function recoverStaleCodeModeExecutionClaim(
     releaseExecutionClaim(input: {
       runId: string;
       approvalId: string;
+      startedAt: string;
+      executionGeneration: number;
+      interruptedAt: string;
+      interruptionReason: string;
+    }): CodeModeRunRecord | undefined;
+    markExecutionInterrupted(input: {
+      runId: string;
+      approvalId: string;
       startedAt?: string;
+      executionGeneration: number;
+      interruptedAt: string;
+      interruptionReason: string;
+      errorDetails?: Record<string, unknown>;
     }): CodeModeRunRecord | undefined;
   },
   run: CodeModeRunRecord,
   approvalId: string,
+  recoveredAt: string,
 ): CodeModeRunRecord | undefined {
   if (!isStaleCodeModeExecutionClaim(run.startedAt)) {
     return undefined;
   }
-  return repository.releaseExecutionClaim({
+  const interruptionReason = `Gateway restarted or lost the Code Mode execution owner while phase was ${run.executionRecovery.phase}.`;
+  if (run.executionRecovery.phase === "claimed" && run.startedAt) {
+    return repository.releaseExecutionClaim({
+      runId: run.runId,
+      approvalId,
+      startedAt: run.startedAt,
+      executionGeneration: run.executionRecovery.generation,
+      interruptedAt: recoveredAt,
+      interruptionReason,
+    });
+  }
+  return repository.markExecutionInterrupted({
     runId: run.runId,
     approvalId,
     startedAt: run.startedAt,
+    executionGeneration: run.executionRecovery.generation,
+    interruptedAt: recoveredAt,
+    interruptionReason,
+    errorDetails: {
+      phase: run.executionRecovery.phase,
+      staleOwnerRecovered: true,
+      completedOutputPrefixPersisted: Boolean(run.stdoutArtifact || run.stderrArtifact),
+    },
   });
 }
 
@@ -4636,6 +5721,7 @@ export const __internal = {
   createMinimalSyntheticEnv,
   createCodeModeChildStreamError,
   normalizeCodeModeIpcError,
+  buildCodeModeFinalTranscriptContent,
   // Exposed for tests asserting the single execution chokepoint: a self-authored
   // skill must be non-callable while `candidate` and callable only once a
   // governed activation flips it to `approved`/`trusted`.

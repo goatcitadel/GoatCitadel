@@ -1,4 +1,10 @@
 import type {
+  DurableChildWatcherCatchUpResult,
+  DurableChildWatcherCreateRequest,
+  DurableChildWatcherRecord,
+  DurableBackgroundTaskControlRequest,
+  DurableBackgroundTaskControlResponse,
+  DurableBackgroundTaskRailResponse,
   DurableCheckpointRecord,
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
@@ -21,6 +27,13 @@ export interface DurableOperatorServiceDeps {
     | "createDurableRun"
     | "getDurableRun"
     | "listDurableRunTimeline"
+    | "watchDurableChildRun"
+    | "listDurableChildWatchers"
+    | "detachDurableChildWatcher"
+    | "reattachDurableChildWatcher"
+    | "closeDurableChildWatcher"
+    | "getDurableBackgroundTaskRail"
+    | "controlDurableBackgroundTask"
     | "pauseDurableRun"
     | "resumeDurableRun"
     | "cancelDurableRun"
@@ -86,6 +99,42 @@ export class DurableOperatorService {
 
   public listRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
     return this.deps.durableRunService.listDurableRunTimeline(runId, limit);
+  }
+
+  public watchChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
+    return this.deps.durableRunService.watchDurableChildRun(input);
+  }
+
+  public listChildWatchers(parentRunId: string, limit = 200): DurableChildWatcherRecord[] {
+    return this.deps.durableRunService.listDurableChildWatchers(parentRunId, limit);
+  }
+
+  public detachChildWatcher(watcherId: string): DurableChildWatcherRecord {
+    return this.deps.durableRunService.detachDurableChildWatcher(watcherId);
+  }
+
+  public reattachChildWatcher(watcherId: string): DurableChildWatcherCatchUpResult {
+    return this.deps.durableRunService.reattachDurableChildWatcher(watcherId);
+  }
+
+  public closeChildWatcher(watcherId: string): DurableChildWatcherRecord {
+    return this.deps.durableRunService.closeDurableChildWatcher(watcherId);
+  }
+
+  public getBackgroundTaskRail(
+    parentRunId: string,
+    input: { workspaceId: string; sessionId: string },
+  ): DurableBackgroundTaskRailResponse {
+    return this.deps.durableRunService.getDurableBackgroundTaskRail(parentRunId, input);
+  }
+
+  public controlBackgroundTask(
+    parentRunId: string,
+    watcherId: string,
+    input: DurableBackgroundTaskControlRequest,
+    actorId: string,
+  ): DurableBackgroundTaskControlResponse {
+    return this.deps.durableRunService.controlDurableBackgroundTask(parentRunId, watcherId, input, actorId);
   }
 
   public pauseRun(runId: string, actorId = "operator"): DurableRunRecord {

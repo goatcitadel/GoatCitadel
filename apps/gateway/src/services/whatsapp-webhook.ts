@@ -73,6 +73,14 @@ export function deriveWhatsAppWebhookIdempotencyKey(connectionId: string, payloa
   return `whatsapp:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
+/** Derive the durable identity for one message in a WhatsApp webhook batch. */
+export function deriveWhatsAppWebhookEventIdempotencyKey(
+  connectionId: string,
+  event: Extract<WhatsAppWebhookNormalization, { kind: "message" }>,
+): string {
+  return `whatsapp:${connectionId}:${event.eventId}`;
+}
+
 export function normalizeWhatsAppWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
@@ -82,32 +90,66 @@ export function normalizeWhatsAppWebhookPayload(input: {
    */
   voiceInboundEnabled?: boolean;
 }): WhatsAppWebhookNormalization {
-  const root = asRecord(input.payload);
-  if (asString(root.object) !== "whatsapp_business_account") {
-    return {
-      kind: "ignore",
-      reason: "Unsupported WhatsApp webhook object",
-    };
-  }
-
-  const value = firstChangeValue(root);
-  const statuses = asArray(value.statuses);
-  if (statuses.length > 0) {
-    return {
-      kind: "ignore",
-      eventType: "status",
-      reason: "Ignoring WhatsApp delivery status event",
-    };
-  }
-
-  const message = firstRecord(asArray(value.messages));
-  if (!message) {
-    return {
+  return (
+    normalizeWhatsAppWebhookPayloads(input)[0] ?? {
       kind: "ignore",
       reason: "No WhatsApp message payload was present",
-    };
+    }
+  );
+}
+
+/**
+ * Normalize every entry/change/message in a WhatsApp Cloud API callback. Meta
+ * may coalesce several messages (and delivery statuses) into one signed body.
+ */
+export function normalizeWhatsAppWebhookPayloads(input: {
+  connectionId: string;
+  payload: unknown;
+  voiceInboundEnabled?: boolean;
+}): WhatsAppWebhookNormalization[] {
+  const root = asRecord(input.payload);
+  if (asString(root.object) !== "whatsapp_business_account") {
+    return [
+      {
+        kind: "ignore",
+        reason: "Unsupported WhatsApp webhook object",
+      },
+    ];
   }
 
+  const normalized: WhatsAppWebhookNormalization[] = [];
+  for (const entry of records(asArray(root.entry))) {
+    for (const change of records(asArray(entry.changes))) {
+      const value = asRecord(change.value);
+      if (asArray(value.statuses).length > 0) {
+        normalized.push({
+          kind: "ignore",
+          eventType: "status",
+          reason: "Ignoring WhatsApp delivery status event",
+        });
+      }
+      for (const message of records(asArray(value.messages))) {
+        normalized.push(normalizeWhatsAppMessage(input, value, message));
+      }
+    }
+  }
+
+  if (normalized.length === 0) {
+    return [
+      {
+        kind: "ignore",
+        reason: "No WhatsApp message payload was present",
+      },
+    ];
+  }
+  return normalized;
+}
+
+function normalizeWhatsAppMessage(
+  input: { connectionId: string; voiceInboundEnabled?: boolean },
+  value: JsonRecord,
+  message: JsonRecord,
+): WhatsAppWebhookNormalization {
   const actorId = asString(message.from);
   const eventId = asString(message.id);
   const eventType = asString(message.type) ?? "message";
@@ -120,8 +162,8 @@ export function normalizeWhatsAppWebhookPayload(input: {
     };
   }
 
-  const contacts = asArray(value.contacts);
-  const contact = firstRecord(contacts);
+  const contacts = records(asArray(value.contacts));
+  const contact = contacts.find((candidate) => asString(candidate.wa_id) === actorId) ?? contacts[0];
   const profile = asRecord(contact?.profile);
   const metadata = asRecord(value.metadata);
   const context = asRecord(message.context);
@@ -216,4 +258,8 @@ function asArray(value: unknown): unknown[] {
 function firstRecord(value: unknown[]): JsonRecord | undefined {
   const first = value.find((item) => item && typeof item === "object" && !Array.isArray(item));
   return first ? (first as JsonRecord) : undefined;
+}
+
+function records(value: unknown[]): JsonRecord[] {
+  return value.filter((item): item is JsonRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item));
 }

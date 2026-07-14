@@ -152,6 +152,12 @@ describe("onboarding tui entrypoint coverage", () => {
         new Response(JSON.stringify(bootstrap), { status: 200, headers: { "content-type": "application/json" } }),
       )
       .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: bootstrap.state }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
         new Response(JSON.stringify(llmConfig), { status: 200, headers: { "content-type": "application/json" } }),
       );
 
@@ -161,7 +167,7 @@ describe("onboarding tui entrypoint coverage", () => {
     await import("./onboarding-tui.js");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     const bootstrapBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
     expect(bootstrapBody.auth).toMatchObject({ mode: "none", allowLoopbackBypass: false });
     expect(selectMock).toHaveBeenCalled();
@@ -232,6 +238,12 @@ describe("onboarding tui entrypoint coverage", () => {
         ),
       )
       .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: { completed: true, checklist: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
         new Response(JSON.stringify({ activeProviderId: "glm", activeModel: "glm-5", providers: [] }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -243,7 +255,7 @@ describe("onboarding tui entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   it("logs failures when onboarding bootstrap fails", async () => {

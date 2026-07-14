@@ -1363,6 +1363,7 @@ function startPackagedGateway(nodeExecutable, gatewayUrl) {
       cwd: packagedGatewayDir,
       env: {
         ...runtimeProcessEnv,
+        GOATCITADEL_APP_DIR: appDir,
         GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
         GOATCITADEL_DATABASE_DRIVER: "sqlite",
         GATEWAY_HOST: "127.0.0.1",

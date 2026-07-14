@@ -101,6 +101,7 @@ export class ChatPostCommitEffectService {
     const classifications = await this.deps.commitmentClassifier.classifyTurnForCommitments({
       sessionId: input.sessionId,
       workspaceId: input.workspaceId,
+      sourceTurnId: input.turnId,
       userText: input.userText,
       assistantText: input.assistantText,
       ...(context.signal ? { signal: context.signal } : {}),
@@ -151,6 +152,12 @@ export class ChatPostCommitEffectService {
         input.userText,
         input.assistantText,
         context.signal,
+        {
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          sourceTurnId: input.turnId,
+          effectExecutionId: context.effectRunId,
+        },
       );
       context.signal?.throwIfAborted();
       memory = commitGeneralChatPostCommitStage(this.deps.storage, memoryIdentity, () => {
@@ -176,6 +183,12 @@ export class ChatPostCommitEffectService {
           input.userText,
           input.assistantText,
           context.signal,
+          {
+            workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            sourceTurnId: input.turnId,
+            effectExecutionId: context.effectRunId,
+          },
         );
         context.signal?.throwIfAborted();
         const plan = this.deps.backgroundReview.prepareSuggestedSkillMutation(

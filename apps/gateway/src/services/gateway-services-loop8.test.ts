@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("Loop 8 gateway service coverage", () => {
-  it("persists settings updates across auth, policy, mesh, runtimes, and LLM routing", () => {
+  it("applies settings owners without bypassing the canonical config generation", () => {
     const deps = buildSettingsHost();
 
     const updated = updateSettings(deps, {
@@ -161,10 +161,10 @@ describe("Loop 8 gateway service coverage", () => {
       flashAttention: undefined,
     });
 
-    expect(deps.persistAssistantConfig).toHaveBeenCalled();
-    expect(deps.persistToolPolicyConfig).toHaveBeenCalled();
-    expect(deps.persistBudgetsConfig).toHaveBeenCalled();
-    expect(deps.persistLlmConfig).toHaveBeenCalled();
+    expect(deps.persistAssistantConfig).not.toHaveBeenCalled();
+    expect(deps.persistToolPolicyConfig).not.toHaveBeenCalled();
+    expect(deps.persistBudgetsConfig).not.toHaveBeenCalled();
+    expect(deps.persistLlmConfig).not.toHaveBeenCalled();
     expect(deps.llmService.updateNetworkAllowlist).toHaveBeenCalledWith(["api.openai.com", "localhost"], {
       enforce: true,
     });
@@ -322,7 +322,8 @@ describe("Loop 8 gateway service coverage", () => {
           lifecycleState: "candidate",
           callable: false,
           trustLabel: "Imported/community",
-          reviewWarning: "Imported skill remains inspectable only until governed activation evidence is recorded.",
+          reviewWarning:
+            "Imported skill is missing exact-byte provenance and remains non-callable until re-imported and governed activation is recorded.",
           lifecycle: expect.objectContaining({
             lifecycleState: "candidate",
             provenance: {
@@ -345,7 +346,8 @@ describe("Loop 8 gateway service coverage", () => {
     expect(storage.skillLifecycle.find("skill-extra")).toMatchObject({
       category: "community_imported",
       lifecycleState: "candidate",
-      reviewWarning: "Imported skill remains inspectable only until governed activation evidence is recorded.",
+      reviewWarning:
+        "Imported skill is missing exact-byte provenance and remains non-callable until re-imported and governed activation is recorded.",
       provenance: expect.objectContaining({
         sourceRef: "https://github.com/example/loop8-skill",
       }),
@@ -411,7 +413,7 @@ describe("Loop 8 gateway service coverage", () => {
     };
 
     expect(manifest).toMatchObject({
-      manifestVersion: 2,
+      manifestVersion: 3,
       duplicateFamily: "cloudflare_dns",
       reviewDisposition: "allow",
       candidate: expect.objectContaining({

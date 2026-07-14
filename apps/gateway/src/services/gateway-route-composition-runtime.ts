@@ -9,6 +9,7 @@ import { createFilesRoutePort } from "./files-route-service.js";
 import { createHooksRoutePort } from "./hooks-route-service.js";
 import { createLocalAiRouteService as createLocalAiRoutePort } from "./local-ai-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
+import { acquireBoundLlamaCppEmbeddingLease } from "./llama-cpp-provider-lease.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
@@ -28,6 +29,7 @@ import {
   getLlmConfigForGateway,
   getProviderSecretStatusForGateway,
 } from "./gateway-route-composition-shared.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 export function composeRuntimeAdminRouteDependencies(
   gateway: GatewayRouteCompositionPort,
@@ -127,20 +129,25 @@ export function composeRuntimeAdminRouteDependencies(
         // mcp_server
         return gateway.listMcpServers().map((s) => ({ ref: s.serverId, label: s.label }));
       },
-      resolveCitadelId: (workspaceId) =>
-        gateway.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID,
+      resolveCitadelId: (workspaceId) => gateway.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID,
     },
     citadels: gateway.storage.citadels,
-    masonInterpret: async (prompt: string): Promise<string> => {
+    masonInterpret: async (prompt, attribution): Promise<string> => {
       // Best-effort extraction. If no model/provider is configured, chatCompletions
       // throws — we swallow it so the Mason degrades to the structured answers path.
       try {
-        const response = await gateway.llmService.chatCompletions({
-          messages: [{ role: "user", content: prompt }],
-        });
+        const response = await gateway.llmService.chatCompletions(
+          {
+            messages: [{ role: "user", content: prompt }],
+          },
+          attribution,
+        );
         const content = response.choices?.[0]?.message?.content;
         return typeof content === "string" ? content : "";
-      } catch {
+      } catch (error) {
+        if (isAuthoritativeModelUsageAccountingError(error)) {
+          throw error;
+        }
         return "";
       }
     },
@@ -183,9 +190,17 @@ export function composeRuntimeAdminRouteDependencies(
     },
     devVerification: {
       storage: gateway.storage,
+      acquireLocalEmbeddingLease: (request) => {
+        gateway.readSettingsRevision();
+        return acquireBoundLlamaCppEmbeddingLease({
+          request,
+          configuredBaseUrl: gateway.config.assistant.llamaCpp.server.baseUrl,
+          runtime: gateway.llamaCppRuntime,
+        });
+      },
       createApproval: (input) => gateway.createApproval(input),
-      createChatCompletion: (input) => gateway.createChatCompletion(input),
-      createChatCompletionStream: (input) => gateway.createChatCompletionStream(input),
+      createChatCompletion: (input, attribution) => gateway.createChatCompletion(input, attribution),
+      createChatCompletionStream: (input, attribution) => gateway.createChatCompletionStream(input, attribution),
       createChatSession: (input) => gateway.createChatSession(input),
       createWorkspace: (input) => workspaces.createWorkspace(input),
       getLlmConfig: () => getLlmConfigForGateway(gateway),
@@ -222,6 +237,7 @@ export function composeRuntimeAdminRouteDependencies(
     },
     health: {
       getDatabaseHealthSnapshot: () => gateway.databaseCutoverService.getHealthSnapshot(),
+      getConfigGenerationHealthSnapshot: () => gateway.getConfigGenerationHealthSnapshot(),
     },
     hooks: createHooksRoutePort({
       hooksService: gateway.hooksService,

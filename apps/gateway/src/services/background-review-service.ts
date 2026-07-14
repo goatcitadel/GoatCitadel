@@ -3,6 +3,7 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   LlmApiStyle,
+  ModelUsageAttributionContext,
   OperatorProfileFact,
   OperatorProfileFactKind,
 } from "@goatcitadel/contracts";
@@ -12,6 +13,9 @@ import type {
   PreparedSkillMutationPlan,
   SkillMutationResult,
 } from "./skill-mutation-service.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { runBoundedUtilityModelCall } from "./utility-model-call.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 /**
  * P2-S1 — Background-review (the self-improvement learning loop).
@@ -113,6 +117,13 @@ export interface BackgroundReviewTurnInput {
   effectExecutionId?: string;
 }
 
+export interface BackgroundReviewUsageLineage {
+  workspaceId?: string;
+  sessionId?: string;
+  sourceTurnId?: string;
+  effectExecutionId?: string;
+}
+
 /** Outcome of a single background review, returned for observability/testing. */
 export interface BackgroundReviewResult {
   /** Whether the review actually ran (guards passed + transcript present). */
@@ -139,7 +150,10 @@ export interface BackgroundReviewModelDefaults {
 
 export interface BackgroundReviewServiceDeps {
   /** Cheap, read-only model call (the judge/explainer chokepoint). */
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   /** Cheap-model defaults (mirrors the explainer judge-model resolution). */
   resolveModelDefaults(): BackgroundReviewModelDefaults;
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
@@ -196,14 +210,20 @@ export class BackgroundReviewService {
     }
 
     // (b) Memory extraction → durable facts → governed profile write.
-    const memoryFacts = await this.extractMemoryFacts(transcript, input.signal);
+    const usageLineage: BackgroundReviewUsageLineage = {
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      sourceTurnId: input.sourceTurnId,
+      effectExecutionId: input.effectExecutionId,
+    };
+    const memoryFacts = await this.extractMemoryFacts(transcript, input.signal, usageLineage);
     let memoryWrite: RecordOperatorProfileFactsResult | undefined;
     if (memoryFacts.length > 0) {
       memoryWrite = this.safeRecordFacts(input.workspaceId, memoryFacts, Boolean(input.effectExecutionId));
     }
 
     // (c) Skill suggestion → optionally author/patch ONE skill (candidate).
-    const suggestion = await this.suggestSkill(transcript, input.signal);
+    const suggestion = await this.suggestSkill(transcript, input.signal, usageLineage);
     let skillMutation: SkillMutationResult | undefined;
     if (suggestion.shouldAuthor && suggestion.skillMarkdown) {
       skillMutation = await this.safeDraftSkill(suggestion, input.sourceTurnId, input.effectExecutionId);
@@ -224,8 +244,19 @@ export class BackgroundReviewService {
    * Memory-extraction model call. Read-only, strict JSON, no tool calls. Applies
    * the anti-self-poisoning filter + confidence gate. Returns `[]` on any error.
    */
-  public async extractMemoryFacts(transcript: string, signal?: AbortSignal): Promise<OperatorProfileFact[]> {
-    const content = await this.callStrictJson(buildMemorySystemPrompt(), buildMemoryUserPrompt(transcript), signal);
+  public async extractMemoryFacts(
+    transcript: string,
+    signal?: AbortSignal,
+    usageLineage?: BackgroundReviewUsageLineage,
+  ): Promise<OperatorProfileFact[]> {
+    const content = await this.callStrictJson(
+      buildMemorySystemPrompt(),
+      buildMemoryUserPrompt(transcript),
+      "background_memory_extraction",
+      transcript,
+      signal,
+      usageLineage,
+    );
     if (!content) {
       return [];
     }
@@ -236,16 +267,28 @@ export class BackgroundReviewService {
     userText: string,
     assistantText: string,
     signal?: AbortSignal,
+    usageLineage?: BackgroundReviewUsageLineage,
   ): Promise<OperatorProfileFact[]> {
-    return this.extractMemoryFacts(buildTranscript(userText, assistantText), signal);
+    return this.extractMemoryFacts(buildTranscript(userText, assistantText), signal, usageLineage);
   }
 
   /**
    * Skill-suggestion model call. Read-only, strict JSON, no tool calls. Returns a
    * `shouldAuthor:false` suggestion on any error (nothing authored).
    */
-  public async suggestSkill(transcript: string, signal?: AbortSignal): Promise<BackgroundReviewSkillSuggestion> {
-    const content = await this.callStrictJson(buildSkillSystemPrompt(), buildSkillUserPrompt(transcript), signal);
+  public async suggestSkill(
+    transcript: string,
+    signal?: AbortSignal,
+    usageLineage?: BackgroundReviewUsageLineage,
+  ): Promise<BackgroundReviewSkillSuggestion> {
+    const content = await this.callStrictJson(
+      buildSkillSystemPrompt(),
+      buildSkillUserPrompt(transcript),
+      "background_skill_suggestion",
+      transcript,
+      signal,
+      usageLineage,
+    );
     if (!content) {
       return { shouldAuthor: false };
     }
@@ -256,8 +299,9 @@ export class BackgroundReviewService {
     userText: string,
     assistantText: string,
     signal?: AbortSignal,
+    usageLineage?: BackgroundReviewUsageLineage,
   ): Promise<BackgroundReviewSkillSuggestion> {
-    return this.suggestSkill(buildTranscript(userText, assistantText), signal);
+    return this.suggestSkill(buildTranscript(userText, assistantText), signal, usageLineage);
   }
 
   /** Commit precomputed facts through the existing governed profile boundary. */
@@ -293,7 +337,14 @@ export class BackgroundReviewService {
 
   // ── internals ────────────────────────────────────────────────────────
 
-  private async callStrictJson(system: string, user: string, signal?: AbortSignal): Promise<string> {
+  private async callStrictJson(
+    system: string,
+    user: string,
+    utilityKind: "background_memory_extraction" | "background_skill_suggestion",
+    transcript: string,
+    signal?: AbortSignal,
+    usageLineage?: BackgroundReviewUsageLineage,
+  ): Promise<string> {
     const defaults = this.deps.resolveModelDefaults();
     const apiStyle = this.deps.resolveApiStyle(defaults.providerId, defaults.model);
     const request: ChatCompletionRequest = {
@@ -313,12 +364,32 @@ export class BackgroundReviewService {
 
     let response: ChatCompletionResponse;
     try {
-      response = await withTimeout(
-        this.deps.createChatCompletion(request),
-        this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        "background review model call timed out",
-      );
-    } catch {
+      const attribution = createUtilityModelUsageAttribution({
+        operationId: buildBackgroundReviewOperationId(utilityKind, transcript, usageLineage),
+        utilityKind,
+        requestedProviderId: defaults.providerId,
+        requestedModelId: defaults.model,
+        lineage: {
+          workspaceId: usageLineage?.workspaceId,
+          sessionId: usageLineage?.sessionId,
+          turnId: usageLineage?.sourceTurnId,
+          durableRunId: usageLineage?.effectExecutionId,
+          agentId: "background-reviewer",
+          parentOperationId: usageLineage?.sourceTurnId
+            ? `chat-turn:${encodeURIComponent(usageLineage.sourceTurnId)}`
+            : undefined,
+        },
+      });
+      response = await runBoundedUtilityModelCall({
+        timeoutMs: this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMessage: "background review model call timed out",
+        parentSignal: signal,
+        start: (boundedSignal) => this.deps.createChatCompletion({ ...request, signal: boundedSignal }, attribution),
+      });
+    } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       // Hidden best-effort pass: never surface a review failure to the turn.
       return "";
     }
@@ -453,6 +524,18 @@ function buildSkillUserPrompt(transcript: string): string {
     "- summary: a one-line description of what the skill captures\n\n" +
     `TRANSCRIPT:\n${transcript}`
   );
+}
+
+function buildBackgroundReviewOperationId(
+  utilityKind: "background_memory_extraction" | "background_skill_suggestion",
+  transcript: string,
+  lineage?: BackgroundReviewUsageLineage,
+): string {
+  const logicalTurn = lineage?.effectExecutionId ?? lineage?.sourceTurnId;
+  const stableRef = logicalTurn
+    ? encodeURIComponent(logicalTurn)
+    : createHash("sha256").update(transcript).digest("hex").slice(0, 32);
+  return `background-review:${stableRef}:${utilityKind}`;
 }
 
 function buildTranscript(userText: string, assistantText: string): string {
@@ -657,20 +740,6 @@ function extractMessageContent(response: ChatCompletionResponse): string {
       .join("\n");
   }
   return "";
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
 }
 
 function truncate(value: string, maxLength: number): string {

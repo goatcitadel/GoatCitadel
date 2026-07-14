@@ -233,6 +233,15 @@ describe("gateway app config helpers", () => {
     expect(__internal.classifyRateLimitBucket("/api/v1/chat/sessions/session-1/messages/stream", "POST")).toBe(
       "mutation",
     );
+    expect(
+      __internal.classifyRateLimitBucket("/api/v1/integrations/connections/:connectionId/:channel/inbound", "POST"),
+    ).toBe("webhook_ingress");
+    expect(
+      __internal.classifyRateLimitBucket("/api/v1/integrations/connections/:connectionId/telegram/webhook", "POST"),
+    ).toBe("webhook_ingress");
+    expect(
+      __internal.classifyRateLimitBucket("/api/v1/integrations/connections/:connectionId/whatsapp/webhook", "GET"),
+    ).toBe("general");
   });
 
   it("does not allowlist loopback-looking rate-limit keys with proxy provenance", () => {
@@ -432,6 +441,30 @@ describe("gateway request diagnostics", { timeout: 120_000 }, () => {
       expect(bodyText).not.toContain("secret-token");
       expect(bodyText).not.toContain("access_token");
       expect(bodyText).not.toContain("state=ok");
+    } finally {
+      await app.close();
+    }
+  }, 45_000);
+
+  it("rejects a disallowed browser origin before auth-none can authorize the control plane", async () => {
+    configureDiagnosticsGateway(tempRoots);
+    const app = await buildApp();
+    try {
+      const allowed = await app.inject({
+        method: "GET",
+        url: "/api/v1/settings",
+        headers: { origin: "http://localhost:5173" },
+      });
+      const disallowed = await app.inject({
+        method: "GET",
+        url: "/api/v1/settings",
+        headers: { origin: "https://attacker.example" },
+      });
+
+      expect(allowed.statusCode).toBe(200);
+      expect(disallowed.statusCode).toBeGreaterThanOrEqual(400);
+      expect(disallowed.body).toContain("Origin not allowed by CORS policy");
+      expect(disallowed.headers["access-control-allow-origin"]).toBeUndefined();
     } finally {
       await app.close();
     }

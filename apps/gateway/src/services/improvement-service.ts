@@ -11,6 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { Storage } from "@goatcitadel/storage";
+import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
 import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 
@@ -24,6 +25,7 @@ import type {
   ChatSendMessageResponse,
   ChatMemoryMode,
   ChatMode,
+  ModelUsageAttributionContext,
   ChatThinkingLevel,
   ChatTurnTraceRecord,
   ChatWebMode,
@@ -104,8 +106,9 @@ import {
   redactSensitivePayload,
   safeJsonParse,
   truncateForModelJudge,
-  withTimeout,
 } from "./improvement-common.js";
+import { runBoundedUtilityModelCall } from "./utility-model-call.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import {
   buildDecisionReplayItemSummary,
   compareDecisionCauseCounts,
@@ -129,6 +132,7 @@ import {
 } from "./improvement-replay.js";
 import { resolveActiveUpdateTarget } from "./improvement-service-active-update.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
@@ -172,6 +176,7 @@ const IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT = 8;
 
 export interface ImprovementServiceContext {
   readonly storage: Pick<Storage, "approvals" | "chatTurnTraces" | "cronJobs" | "systemSettings">;
+  readonly cronSpecOwner?: Pick<CronSpecMutationOwner, "reconcileSpec">;
   readonly gatewaySql: Storage["gatewaySql"];
   isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
@@ -380,7 +385,10 @@ export interface ImprovementServiceCallbacks {
   captureSkillRevisionSnapshot(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
   applySkillRevisionCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
   restoreSkillRevisionSnapshot(snapshotRef: ImprovementRef): void;
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
   // P2-W3 — close the improvement loop. These getters report the *effective*
   // value the runtime decision points will read for each tuned setting, using
@@ -484,7 +492,9 @@ export class ImprovementService {
 
   // ── public API ───────────────────────────────────────────────────
 
-  async runWeeklyImprovementSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+  async runWeeklyImprovementSchedulerIfDue(
+    options: { force?: boolean; recordCronState?: boolean } = {},
+  ): Promise<void> {
     const job = this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     if (!job?.enabled) {
       return;
@@ -508,43 +518,42 @@ export class ImprovementService {
     });
     this.ctx.storage.systemSettings.set(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = new Date().toISOString();
-    this.ctx.storage.cronJobs.upsert(
-      {
-        ...job,
-        lastRunAt: finishedAt,
-        nextRunAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      finishedAt,
-    );
+    if (options.recordCronState !== false) {
+      this.ctx.storage.cronJobs.mergeRuntimeTelemetry(
+        job.jobId,
+        {
+          lastRunAt: finishedAt,
+          nextRunAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+        finishedAt,
+      );
+    }
   }
 
-  ensureWeeklyImprovementCronJob(): void {
+  async ensureWeeklyImprovementCronJob(): Promise<void> {
+    if (!this.ctx.cronSpecOwner) {
+      throw new Error("Cron spec owner is required to reconcile the weekly improvement job.");
+    }
     const existing = this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
-    const now = new Date().toISOString();
-    this.ctx.storage.cronJobs.upsertIfChanged(
-      {
-        jobId: IMPROVEMENT_WEEKLY_JOB_ID,
-        name: "Self-Improvement Weekly Replay",
-        action: "improvement",
-        // SECURITY (codex finding #27): The weekly improvement run samples
-        // recent chat turn traces and tool runs (args_json/result_json)
-        // and ships them to the configured LLM provider for a judge pass.
-        // Until the redaction layer below has been verified against every
-        // tool category, the first-run default must be DISABLED so a fresh
-        // install does not start emitting chat-turn telemetry without an
-        // explicit operator opt-in. Operators who want the audit run
-        // toggle it on from Mission Control settings.
-        description:
-          existing?.description ??
-          "Run the weekly self-improvement replay cycle. Disabled by default (codex #27) — enable from Mission Control settings after reviewing what is sent to the LLM provider.",
-        schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? false,
-        endAt: existing?.endAt,
-        lastRunAt: existing?.lastRunAt,
-        nextRunAt: existing?.nextRunAt,
-      },
-      now,
-    );
+    await this.ctx.cronSpecOwner.reconcileSpec({
+      jobId: IMPROVEMENT_WEEKLY_JOB_ID,
+      name: "Self-Improvement Weekly Replay",
+      action: "improvement",
+      // SECURITY (codex finding #27): The weekly improvement run samples
+      // recent chat turn traces and tool runs (args_json/result_json)
+      // and ships them to the configured LLM provider for a judge pass.
+      // Until the redaction layer below has been verified against every
+      // tool category, the first-run default must be DISABLED so a fresh
+      // install does not start emitting chat-turn telemetry without an
+      // explicit operator opt-in. Operators who want the audit run
+      // toggle it on from Mission Control settings.
+      description:
+        existing?.description ??
+        "Run the weekly self-improvement replay cycle. Disabled by default (codex #27) — enable from Mission Control settings after reviewing what is sent to the LLM provider.",
+      schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
+      enabled: existing?.enabled ?? false,
+      endAt: existing?.endAt,
+    });
   }
 
   markInterruptedDecisionReplayRuns(): void {
@@ -5149,7 +5158,7 @@ export class ImprovementService {
         modelJudgeCount < IMPROVEMENT_JUDGE_SAMPLE_LIMIT &&
         (candidate.decisionType === "chat_turn" || candidate.status === "failed")
       ) {
-        modelScores = await this.judgeDecisionReplayCandidate(candidate, excerpts, ruleEval.scores);
+        modelScores = await this.judgeDecisionReplayCandidate(runId, candidate, excerpts, ruleEval.scores);
         if (modelScores) {
           judgeUsed = true;
           modelJudgeCount += 1;
@@ -5241,6 +5250,7 @@ export class ImprovementService {
   }
 
   private async judgeDecisionReplayCandidate(
+    runId: string,
     candidate: DecisionReplayCandidate,
     excerpts: { inputExcerpt?: string; outputExcerpt?: string },
     ruleScores: DecisionReplayItemRuleScores,
@@ -5264,20 +5274,40 @@ export class ImprovementService {
     ].join("\n");
     try {
       assertNoAssembledPromptInjection(`Grade strictly. JSON only.\n${prompt}`);
-      const completion = await withTimeout(
-        this.callbacks.createChatCompletion({
-          providerId: defaults.providerId,
-          model: defaults.model,
-          messages: [
-            { role: "system", content: "Grade strictly. JSON only." },
-            { role: "user", content: prompt },
-          ],
-          temperature: 0,
-          max_tokens: 220,
-        }),
-        IMPROVEMENT_JUDGE_TIMEOUT_MS,
-        `Decision replay judge timed out after ${IMPROVEMENT_JUDGE_TIMEOUT_MS}ms`,
-      );
+      const attribution = createUtilityModelUsageAttribution({
+        operationId: `improvement:${encodeURIComponent(runId)}:decision-judge:${encodeURIComponent(
+          candidate.turnId ?? candidate.toolRunId ?? candidate.occurredAt,
+        )}`,
+        utilityKind: "improvement_decision_replay_judge",
+        requestedProviderId: defaults.providerId,
+        requestedModelId: defaults.model,
+        lineage: {
+          sessionId: candidate.sessionId,
+          turnId: candidate.turnId,
+          taskId: runId,
+          agentId: "improvement-reviewer",
+          parentOperationId: `improvement:${encodeURIComponent(runId)}`,
+        },
+      });
+      const completion = await runBoundedUtilityModelCall({
+        timeoutMs: IMPROVEMENT_JUDGE_TIMEOUT_MS,
+        timeoutMessage: `Decision replay judge timed out after ${IMPROVEMENT_JUDGE_TIMEOUT_MS}ms`,
+        start: (boundedSignal) =>
+          this.callbacks.createChatCompletion(
+            {
+              providerId: defaults.providerId,
+              model: defaults.model,
+              messages: [
+                { role: "system", content: "Grade strictly. JSON only." },
+                { role: "user", content: prompt },
+              ],
+              temperature: 0,
+              max_tokens: 220,
+              signal: boundedSignal,
+            },
+            attribution,
+          ),
+      });
       const payload = parseLooseJsonRecord(extractCompletionText(completion));
       if (!payload) return undefined;
       return {
@@ -5286,7 +5316,10 @@ export class ImprovementService {
         betterResponsePotential: clampProbability(payload.betterResponsePotential),
         rationale: typeof payload.rationale === "string" ? payload.rationale.slice(0, 500) : undefined,
       };
-    } catch {
+    } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       return undefined;
     }
   }

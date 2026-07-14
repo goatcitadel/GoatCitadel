@@ -101,18 +101,22 @@ describe("chat message route-decision tails", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(routePreflight).toHaveBeenCalledWith("sess-1", {
-      action: "edit",
-      turnId: "turn-2",
-      providerId: "openai",
-      model: "gpt-5.4",
-      mode: "chat",
-      webMode: "off",
-      thinkingLevel: "minimal",
-      speedMode: "fast",
-      subagentPolicy: "off",
-      prefsOverride: undefined,
-    });
+    expect(routePreflight).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        action: "edit",
+        turnId: "turn-2",
+        content: "edited",
+        providerId: "openai",
+        model: "gpt-5.4",
+        mode: "chat",
+        webMode: "off",
+        thinkingLevel: "minimal",
+        speedMode: "fast",
+        subagentPolicy: "off",
+        prefsOverride: undefined,
+      }),
+    );
     expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining({ content: "edited" }));
   });
 

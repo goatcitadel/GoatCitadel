@@ -55,17 +55,25 @@ describe("SkillsRouteService", () => {
         () => service.resolveSkillActivation({ skillId: "skill-4" } as never),
         [{ skillId: "skill-4" }],
       ],
-      ["setSkillState", () => service.setSkillState("skill-5", "enabled", "ready"), ["skill-5", "enabled", "ready"]],
+      [
+        "setSkillState",
+        () => service.setSkillState("skill-5", "enabled", "ready", 4),
+        ["skill-5", "enabled", "ready", 4],
+      ],
       [
         "bulkSetSkillState",
-        () => service.bulkSetSkillState(["skill-6", "skill-7"], "sleep", "quiet"),
-        [["skill-6", "skill-7"], "sleep", "quiet"],
+        () =>
+          service.bulkSetSkillState(["skill-6", "skill-7"], "sleep", "quiet", {
+            "skill-6": 5,
+            "skill-7": 8,
+          }),
+        [["skill-6", "skill-7"], "sleep", "quiet", { "skill-6": 5, "skill-7": 8 }],
       ],
       ["getSkillActivationPolicy", () => service.getSkillActivationPolicy(), []],
       [
         "updateSkillActivationPolicy",
-        () => service.updateSkillActivationPolicy({ guardedAutoThreshold: 0.8 } as never),
-        [{ guardedAutoThreshold: 0.8 }],
+        () => service.updateSkillActivationPolicy({ guardedAutoThreshold: 0.8 }, 6),
+        [{ guardedAutoThreshold: 0.8 }, 6],
       ],
     ];
 

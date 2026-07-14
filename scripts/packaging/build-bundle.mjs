@@ -12,7 +12,13 @@ import {
   PACKAGING_TARGETS,
   requirePackagingTarget,
 } from "./lib/packaging-targets.mjs";
-import { buildReleaseManifest, renderPosixLauncher, renderWindowsLaunchers } from "./lib/package-renderers.mjs";
+import {
+  buildReleaseManifest,
+  isDetachedReleaseMetadataPath,
+  RELEASE_PAYLOAD_LIMITS,
+  renderPosixLauncher,
+  renderWindowsLaunchers,
+} from "./lib/package-renderers.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -45,6 +51,8 @@ const uiTarget = resolveUiTarget(repoRoot, process.env);
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 const WINDOWS_TAR_PATH = "C:\\Windows\\System32\\tar.exe";
 const includeDesktopHost = targetInfo.bundleDesktopHost && !args.skipDesktop;
+const sourceCommit = resolveSourceCommit();
+const sourceModified = resolveSourceModified();
 
 await main();
 process.exit(0);
@@ -113,7 +121,7 @@ async function main() {
     destinationDir: runtimeNodeDir,
   });
   writeLaunchers(bundleRoot);
-  writeReleaseManifest({
+  await writeReleaseManifest({
     bundleRoot,
     appRoot,
     version,
@@ -307,29 +315,38 @@ function writeLaunchers(bundleRootPath) {
   }
 }
 
-function writeReleaseManifest({
+async function writeReleaseManifest({
   bundleRoot: bundleRootPath,
   appRoot: packagedAppRoot,
   version: bundleVersion,
   nodeVersion: bundledNodeVersion,
   windowsIdentityPackage,
 }) {
-  const checksums = {};
-  for (const filePath of listFiles(bundleRootPath)) {
+  const initialPayloadSnapshot = snapshotReleasePayloadTree(bundleRootPath);
+  const payloadFiles = [];
+  for (const filePath of initialPayloadSnapshot.filePaths) {
     const relativePath = path.relative(bundleRootPath, filePath).replaceAll("\\", "/");
-    checksums[relativePath] = sha256(filePath);
+    payloadFiles.push(await buildPayloadFileRecord(bundleRootPath, filePath, relativePath));
   }
+  const finalPayloadSnapshot = snapshotReleasePayloadTree(bundleRootPath);
+  assertSamePayloadSnapshot(initialPayloadSnapshot, finalPayloadSnapshot);
   const manifest = buildReleaseManifest({
     targetInfo,
     version: bundleVersion,
     nodeVersion: bundledNodeVersion,
-    checksums,
+    payloadFiles,
     uiTarget,
     includeDesktopHost,
     desktopArtifactName: desktopExecutableName,
     windowsIdentityPackage,
+    sourceCommit,
+    sourceModified,
   });
-  fs.writeFileSync(path.join(packagedAppRoot, "release-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
+  if (Buffer.byteLength(manifestBytes) > RELEASE_PAYLOAD_LIMITS.maxManifestBytes) {
+    throw new Error(`Release manifest exceeds ${RELEASE_PAYLOAD_LIMITS.maxManifestBytes} bytes.`);
+  }
+  fs.writeFileSync(path.join(packagedAppRoot, "release-manifest.json"), manifestBytes, "utf8");
 }
 
 function copyDesktopExecutable() {
@@ -403,50 +420,249 @@ function writeUiTargetManifest(packagedAppRoot) {
   );
 }
 
-function listFiles(rootDir) {
-  const results = [];
-  const queue = [rootDir];
-  // Track resolved real paths so a circular symlink (a → b → a) cannot trap
-  // the traversal in an infinite loop.
-  const visitedDirectories = new Set();
-  visitedDirectories.add(fs.realpathSync(rootDir));
+function snapshotReleasePayloadTree(rootDir) {
+  const resolvedRoot = path.resolve(rootDir);
+  const rootStats = fs.lstatSync(rootDir);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error(`Release payload root must be a regular non-link directory: ${rootDir}`);
+  }
+  const canonicalRoot = fs.realpathSync.native(resolvedRoot);
+  const filePaths = [];
+  const identities = [];
+  let totalBytes = 0;
+  const queue = [resolvedRoot];
   // Iterate via an index pointer rather than `queue.pop()` so the order in
   // which we descend is stable (FIFO) and so the array doesn't get resized
   // on every step.
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const current = queue[cursor];
-    for (const entryName of fs.readdirSync(current)) {
+    const beforeDirectoryStats = fs.lstatSync(current);
+    if (!beforeDirectoryStats.isDirectory() || beforeDirectoryStats.isSymbolicLink()) {
+      throw new Error(`Release payload directory changed into a link or non-directory: ${current}`);
+    }
+    const canonicalDirectory = fs.realpathSync.native(current);
+    assertCanonicalPayloadContainment(canonicalRoot, canonicalDirectory, current === resolvedRoot);
+    const entryNames = fs.readdirSync(current).sort(compareStrings);
+    const afterReadDirectoryStats = fs.lstatSync(current);
+    if (!sameFileIdentity(beforeDirectoryStats, afterReadDirectoryStats)) {
+      throw new Error(`Release payload directory changed while it was enumerated: ${current}`);
+    }
+    identities.push(
+      payloadIdentityRecord({
+        rootDir: resolvedRoot,
+        canonicalRoot,
+        absolutePath: current,
+        canonicalPath: canonicalDirectory,
+        kind: "directory",
+        stats: afterReadDirectoryStats,
+      }),
+    );
+    for (const entryName of entryNames) {
       const absolutePath = path.join(current, entryName);
       const stats = fs.lstatSync(absolutePath);
-      if (stats.isDirectory()) {
-        const directoryRealPath = fs.realpathSync(absolutePath);
-        if (!visitedDirectories.has(directoryRealPath)) {
-          visitedDirectories.add(directoryRealPath);
-          queue.push(absolutePath);
-        }
+      const relativePath = path.relative(rootDir, absolutePath).replaceAll("\\", "/");
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Release payload cannot contain a symlink or junction: ${relativePath}`);
+      }
+      if (isDetachedReleaseMetadataPath(relativePath)) {
         continue;
       }
-      if (stats.isSymbolicLink()) {
-        const targetStats = fs.statSync(absolutePath);
-        if (targetStats.isDirectory()) {
-          const directoryRealPath = fs.realpathSync(absolutePath);
-          if (!visitedDirectories.has(directoryRealPath)) {
-            visitedDirectories.add(directoryRealPath);
-            queue.push(absolutePath);
-          }
-          continue;
+      const canonicalPath = fs.realpathSync.native(absolutePath);
+      assertCanonicalPayloadContainment(canonicalRoot, canonicalPath, false);
+      if (stats.isDirectory()) {
+        identities.push(
+          payloadIdentityRecord({
+            rootDir: resolvedRoot,
+            canonicalRoot,
+            absolutePath,
+            canonicalPath,
+            kind: "directory-entry",
+            stats,
+          }),
+        );
+        queue.push(absolutePath);
+        continue;
+      }
+      if (stats.isFile()) {
+        if (stats.nlink !== 1) {
+          throw new Error(`Release payload cannot contain a hard-linked file: ${relativePath}`);
         }
+        if (stats.size > RELEASE_PAYLOAD_LIMITS.maxFileBytes) {
+          throw new Error(`Release payload file is oversized: ${relativePath}`);
+        }
+        if (filePaths.length >= RELEASE_PAYLOAD_LIMITS.maxFiles) {
+          throw new Error(`Release payload exceeds ${RELEASE_PAYLOAD_LIMITS.maxFiles} files.`);
+        }
+        totalBytes += stats.size;
+        if (!Number.isSafeInteger(totalBytes) || totalBytes > RELEASE_PAYLOAD_LIMITS.maxTotalBytes) {
+          throw new Error(`Release payload exceeds ${RELEASE_PAYLOAD_LIMITS.maxTotalBytes} bytes.`);
+        }
+        identities.push(
+          payloadIdentityRecord({
+            rootDir: resolvedRoot,
+            canonicalRoot,
+            absolutePath,
+            canonicalPath,
+            kind: "file",
+            stats,
+          }),
+        );
+        filePaths.push(absolutePath);
+        continue;
       }
-      if (stats.isFile() || stats.isSymbolicLink()) {
-        results.push(absolutePath);
-      }
+      throw new Error(`Release payload cannot contain a special filesystem entry: ${relativePath}`);
     }
   }
-  return results.sort((left, right) => left.localeCompare(right));
+  filePaths.sort((left, right) =>
+    compareStrings(
+      path.relative(resolvedRoot, left).replaceAll("\\", "/"),
+      path.relative(resolvedRoot, right).replaceAll("\\", "/"),
+    ),
+  );
+  identities.sort((left, right) => compareStrings(`${left.path}:${left.kind}`, `${right.path}:${right.kind}`));
+  return { filePaths, identities, totalBytes };
 }
 
-function sha256(filePath) {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+function payloadIdentityRecord({ rootDir, canonicalRoot, absolutePath, canonicalPath, kind, stats }) {
+  return {
+    path: path.relative(rootDir, absolutePath).replaceAll("\\", "/") || ".",
+    canonicalPath: path.relative(canonicalRoot, canonicalPath).replaceAll("\\", "/") || ".",
+    kind,
+    dev: stats.dev,
+    ino: stats.ino,
+    nlink: stats.nlink,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+  };
+}
+
+function assertCanonicalPayloadContainment(canonicalRoot, canonicalPath, allowSame) {
+  const relative = path.relative(canonicalRoot, canonicalPath);
+  if (allowSame && relative === "") return;
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Release payload path escapes the canonical bundle root: ${canonicalPath}`);
+  }
+}
+
+function assertSamePayloadSnapshot(initial, final) {
+  if (
+    initial.identities.length !== final.identities.length ||
+    initial.filePaths.length !== final.filePaths.length ||
+    initial.totalBytes !== final.totalBytes
+  ) {
+    throw new Error("Release payload file set changed while its manifest was being created.");
+  }
+  for (let index = 0; index < initial.identities.length; index += 1) {
+    const before = initial.identities[index];
+    const after = final.identities[index];
+    if (
+      before.path !== after.path ||
+      before.canonicalPath !== after.canonicalPath ||
+      before.kind !== after.kind ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.nlink !== after.nlink ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error(`Release payload identity changed while its manifest was being created: ${before.path}`);
+    }
+  }
+}
+
+async function buildPayloadFileRecord(bundleRootPath, filePath, relativePath) {
+  assertAnchoredPayloadFile(bundleRootPath, filePath, relativePath);
+  const beforePathStats = fs.lstatSync(filePath);
+  if (
+    !beforePathStats.isFile() ||
+    beforePathStats.isSymbolicLink() ||
+    beforePathStats.nlink !== 1 ||
+    beforePathStats.size > RELEASE_PAYLOAD_LIMITS.maxFileBytes
+  ) {
+    throw new Error(`Release payload file is invalid or oversized: ${relativePath}`);
+  }
+  const handle = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const openedStats = fs.fstatSync(handle);
+    const currentPathStats = fs.lstatSync(filePath);
+    assertAnchoredPayloadFile(bundleRootPath, filePath, relativePath);
+    if (
+      openedStats.nlink !== 1 ||
+      currentPathStats.nlink !== 1 ||
+      !sameFileIdentity(beforePathStats, openedStats) ||
+      !sameFileIdentity(openedStats, currentPathStats)
+    ) {
+      throw new Error(`Release payload file changed while it was opened: ${relativePath}`);
+    }
+    const hash = createHash("sha256");
+    for await (const chunk of fs.createReadStream(filePath, { fd: handle, autoClose: false, start: 0 })) {
+      hash.update(chunk);
+    }
+    const finalOpenedStats = fs.fstatSync(handle);
+    const finalPathStats = fs.lstatSync(filePath);
+    assertAnchoredPayloadFile(bundleRootPath, filePath, relativePath);
+    if (
+      finalOpenedStats.nlink !== 1 ||
+      finalPathStats.nlink !== 1 ||
+      !sameFileIdentity(openedStats, finalOpenedStats) ||
+      !sameFileIdentity(finalOpenedStats, finalPathStats)
+    ) {
+      throw new Error(`Release payload file changed while it was hashed: ${relativePath}`);
+    }
+    return {
+      path: relativePath,
+      sha256: hash.digest("hex"),
+      sizeBytes: openedStats.size,
+    };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function assertAnchoredPayloadFile(bundleRootPath, filePath, relativePath) {
+  const root = path.resolve(bundleRootPath);
+  const candidate = path.resolve(filePath);
+  const relative = path.relative(root, candidate);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Release payload file escapes the bundle root: ${relativePath}`);
+  }
+  const rootStats = fs.lstatSync(root);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error(`Release payload root changed into a link or non-directory: ${root}`);
+  }
+  let cursor = root;
+  for (const segment of relative.split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    const stats = fs.lstatSync(cursor);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Release payload file traverses a symlink or junction: ${relativePath}`);
+    }
+    if (cursor !== candidate && !stats.isDirectory()) {
+      throw new Error(`Release payload file traverses a non-directory component: ${relativePath}`);
+    }
+  }
+  const candidateStats = fs.lstatSync(candidate);
+  if (!candidateStats.isFile() || candidateStats.isSymbolicLink() || candidateStats.nlink !== 1) {
+    throw new Error(`Release payload file is not a regular single-link file: ${relativePath}`);
+  }
+  assertCanonicalPayloadContainment(fs.realpathSync.native(root), fs.realpathSync.native(candidate), false);
+}
+
+function sameFileIdentity(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function compareStrings(left, right) {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 function pruneGatewayDeploy(targetDir) {
@@ -508,6 +724,34 @@ function removeDirectory(targetPath) {
 function copyDirectory(sourceDir, destinationDir) {
   fs.mkdirSync(path.dirname(destinationDir), { recursive: true });
   fs.cpSync(sourceDir, destinationDir, { recursive: true });
+}
+
+function resolveSourceCommit() {
+  const fromCi = process.env.GITHUB_SHA?.trim();
+  const result = spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const candidate = String(result.stdout ?? "").trim();
+  if (result.status !== 0 || !/^[a-f0-9]{40}$/i.test(candidate)) {
+    throw new Error("Release bundle source commit could not be resolved to a full Git SHA.");
+  }
+  const normalizedHead = candidate.toLowerCase();
+  if (fromCi !== undefined && (!/^[a-f0-9]{40}$/i.test(fromCi) || fromCi.toLowerCase() !== normalizedHead)) {
+    throw new Error("Release bundle checkout HEAD does not match GITHUB_SHA.");
+  }
+  return normalizedHead;
+}
+
+function resolveSourceModified() {
+  const result = spawnSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    throw new Error("Release bundle source modification state could not be resolved.");
+  }
+  return String(result.stdout ?? "").trim().length > 0;
 }
 
 function copyFile(sourcePath, destinationPath) {

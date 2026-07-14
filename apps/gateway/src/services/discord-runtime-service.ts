@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- Discord runtime behavior stays consolidated so gateway event handling remains debuggable in one place. */
+import { randomUUID } from "node:crypto";
 import {
   type AutocompleteInteraction,
   Client,
@@ -11,6 +12,10 @@ import {
   type RESTPostAPIApplicationCommandsJSONBody,
 } from "discord.js";
 import { logger } from "@goatcitadel/gateway-core";
+import {
+  SharedHostAdmissionClosedError,
+  type SharedHostLifecycleAdmissionPort,
+} from "./shared-host-lifecycle-service.js";
 import type {
   ChannelTypingResult,
   DiscordGuildAccessRule,
@@ -41,18 +46,21 @@ type DiscordInboundEnvelope = {
   metadata?: Record<string, unknown>;
 };
 
+type DiscordSlashCommandEnvelope = Omit<DiscordInboundEnvelope, "content" | "sourceMessageId"> & {
+  commandText: string;
+  sourceCommandId: string;
+};
+
 interface DiscordRuntimeCallbacks {
   listConnections: () => IntegrationConnection[];
   findApprovedPairing: (connectionId: string, userId: string) => DiscordPairingRecord | undefined;
   ensurePendingPairing: (connectionId: string, userId: string, displayName?: string) => DiscordPairingRecord;
   touchPairing: (pairingId: string) => void;
   onInboundMessage: (input: DiscordInboundEnvelope) => Promise<void>;
-  onSlashCommand: (
-    input: Omit<DiscordInboundEnvelope, "content" | "sourceMessageId"> & {
-      commandText: string;
-      sourceCommandId: string;
-    },
-  ) => Promise<string>;
+  /** Commits the command envelope before the interaction is acknowledged. */
+  acceptSlashCommand: (input: DiscordSlashCommandEnvelope) => Promise<{ inboundEventId: string }>;
+  /** Waits for the durable command owner, including replay of a prior terminal result. */
+  awaitSlashCommandResult: (inboundEventId: string) => Promise<string>;
   listModelSuggestions: (
     query: string,
     limit?: number,
@@ -64,12 +72,23 @@ interface DiscordRuntimeCallbacks {
     }>
   >;
   publishDiagnostic: (event: string, message: string, context: Record<string, unknown>) => void;
+  sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
 }
 
 type ManagedClientRecord = {
   token: string;
   client: Client;
   connectionIds: Set<string>;
+  active: boolean;
+  loginInFlight: boolean;
+  loginEpoch: number;
+  successfulLoginEpoch?: number;
+  reconnectLoginEpoch?: number;
+  callbackReadyFenceEpoch?: number;
+  loginTask?: Promise<void>;
+  commandSyncTask?: Promise<void>;
+  reconnectPhase?: "serializing" | "logging-in";
+  reconnectTask?: Promise<void>;
   connectedBotId?: string;
   connectedBotTag?: string;
   guildIds: string[];
@@ -83,10 +102,14 @@ type ManagedClientRecord = {
 export class DiscordRuntimeService {
   private readonly runtimesByToken = new Map<string, ManagedClientRecord>();
   private readonly statusByConnectionId = new Map<string, DiscordRuntimeStatus>();
+  private readonly lifecycleTasks = new Set<Promise<void>>();
+  private closeState: "open" | "closing" | "closed" = "open";
+  private closePromise?: Promise<void>;
 
   public constructor(private readonly callbacks: DiscordRuntimeCallbacks) {}
 
   public async sync(): Promise<void> {
+    if (this.closeState !== "open") return;
     const gatewayConnections = this.callbacks
       .listConnections()
       .filter((connection) => connection.kind === "channel" && connection.key === "discord" && connection.enabled)
@@ -116,31 +139,27 @@ export class DiscordRuntimeService {
       if (nextGroups.has(token)) {
         continue;
       }
-      await this.destroyRuntime(runtime);
+      runtime.active = false;
       this.runtimesByToken.delete(token);
+      await this.destroyRuntime(runtime);
+      if (this.closeState !== "open") return;
     }
 
     for (const [token, connections] of nextGroups.entries()) {
+      if (this.closeState !== "open") return;
       const existing = this.runtimesByToken.get(token);
       if (existing) {
         existing.connectionIds = new Set(connections.map((connection) => connection.connectionId));
         this.updateStatusSnapshot(existing);
-        if (existing.ready) {
-          void this.syncApplicationCommands(existing).catch((error) => {
-            existing.lastError = (error as Error).message;
-            this.updateStatusSnapshot(existing);
-          });
+        if (existing.ready && existing.reconnectLoginEpoch === undefined) {
+          void this.scheduleApplicationCommandSync(existing, "existing-runtime");
         }
         continue;
       }
       const runtime = this.createManagedRuntime(token, connections);
       this.runtimesByToken.set(token, runtime);
       this.updateStatusSnapshot(runtime);
-      void this.loginRuntime(runtime).catch((error) => {
-        runtime.lastError = (error as Error).message;
-        runtime.ready = false;
-        this.updateStatusSnapshot(runtime);
-      });
+      void this.scheduleLogin(runtime);
     }
 
     for (const connection of gatewayConnections) {
@@ -162,16 +181,20 @@ export class DiscordRuntimeService {
   }
 
   public async reconnectConnection(connectionId: string): Promise<DiscordRuntimeStatus | undefined> {
+    if (this.closeState !== "open") return this.getConnectionStatus(connectionId);
     const runtime = [...this.runtimesByToken.values()].find((entry) => entry.connectionIds.has(connectionId));
     if (!runtime) {
       return this.getConnectionStatus(connectionId);
     }
-    runtime.lastReconnectAt = new Date().toISOString();
-    runtime.ready = false;
-    runtime.lastError = undefined;
-    this.updateStatusSnapshot(runtime);
-    await runtime.client.destroy();
-    await this.loginRuntime(runtime);
+    if (runtime.reconnectTask) {
+      await runtime.reconnectTask;
+      return this.getConnectionStatus(connectionId);
+    }
+    const reconnectTask = this.reconnectRuntime(runtime).finally(() => {
+      if (runtime.reconnectTask === reconnectTask) runtime.reconnectTask = undefined;
+    });
+    runtime.reconnectTask = reconnectTask;
+    await reconnectTask;
     return this.getConnectionStatus(connectionId);
   }
 
@@ -235,9 +258,36 @@ export class DiscordRuntimeService {
   }
 
   public async close(): Promise<void> {
-    await Promise.allSettled([...this.runtimesByToken.values()].map((runtime) => this.destroyRuntime(runtime)));
-    this.runtimesByToken.clear();
-    this.statusByConnectionId.clear();
+    if (this.closeState === "closed") return;
+    if (this.closePromise) return this.closePromise;
+    this.closeState = "closing";
+    const runtimes = [...this.runtimesByToken.values()];
+    const runtimesWithPendingLogin = runtimes.filter((runtime) => runtime.loginInFlight === true);
+    const reconnectTasks = runtimes
+      .map((runtime) => runtime.reconnectTask)
+      .filter((task): task is Promise<void> => Boolean(task));
+    runtimes.forEach((runtime) => {
+      runtime.active = false;
+      runtime.callbackReadyFenceEpoch = Math.max(
+        runtime.callbackReadyFenceEpoch ?? 0,
+        runtime.reconnectLoginEpoch ?? (runtime.loginEpoch ?? 0) + 1,
+      );
+    });
+    this.closePromise = (async () => {
+      // Destroy first so Discord can settle an in-flight login, then wait for
+      // every lifecycle-counted network task before the owner is cleared.
+      await Promise.allSettled(runtimes.map((runtime) => this.destroyRuntime(runtime)));
+      await Promise.allSettled([...this.lifecycleTasks]);
+      await Promise.allSettled(reconnectTasks);
+      // A login promise may settle after the first destroy call. Destroy once
+      // more after task settlement so no client can become live after close.
+      await Promise.allSettled(runtimesWithPendingLogin.map((runtime) => runtime.client.destroy()));
+      this.runtimesByToken.clear();
+      this.statusByConnectionId.clear();
+      this.lifecycleTasks.clear();
+      this.closeState = "closed";
+    })();
+    return this.closePromise;
   }
 
   private createManagedRuntime(token: string, connections: IntegrationConnection[]): ManagedClientRecord {
@@ -254,36 +304,25 @@ export class DiscordRuntimeService {
       token,
       client,
       connectionIds: new Set(connections.map((connection) => connection.connectionId)),
+      active: true,
+      loginInFlight: false,
+      loginEpoch: 0,
       guildIds: [],
       ready: false,
     };
 
     client.on("clientReady", () => {
-      runtime.ready = true;
-      runtime.connectedBotId = client.user?.id;
-      runtime.connectedBotTag = client.user?.tag ?? client.user?.username;
-      runtime.guildIds = [...client.guilds.cache.keys()];
-      runtime.lastReadyAt = new Date().toISOString();
-      runtime.lastError = undefined;
-      this.updateStatusSnapshot(runtime);
-      this.callbacks.publishDiagnostic("discord.gateway.ready", "Discord gateway runtime is ready.", {
-        connectionIds: [...runtime.connectionIds],
-        botId: runtime.connectedBotId,
-        botTag: runtime.connectedBotTag,
-        guildIds: runtime.guildIds,
-      });
-      void this.syncApplicationCommands(runtime).catch((error) => {
-        runtime.lastError = (error as Error).message;
-        this.updateStatusSnapshot(runtime);
-        this.callbacks.publishDiagnostic("discord.gateway.commands_error", "Discord slash command sync failed.", {
-          connectionIds: [...runtime.connectionIds],
-          error: (error as Error).message,
-        });
-      });
+      if (!this.isRuntimeActive(runtime)) return;
+      // Provider callbacks carry no login epoch. Once explicit reconnect has
+      // claimed this client, its persistent fence makes tracked authenticated
+      // login settlement the sole readiness authority for every later epoch.
+      if (runtime.callbackReadyFenceEpoch !== undefined) return;
+      void this.scheduleApplicationCommandSync(runtime, "client-ready", true);
     });
 
     client.on("messageCreate", (message: Message) => {
-      void this.handleMessage(runtime, message).catch((error) => {
+      if (!this.isRuntimeActive(runtime)) return;
+      void this.runInboundWork("discord-message", () => this.handleMessage(runtime, message)).catch((error) => {
         runtime.lastError = (error as Error).message;
         this.updateStatusSnapshot(runtime);
         this.callbacks.publishDiagnostic("discord.gateway.message_error", "Discord inbound handling failed.", {
@@ -297,8 +336,11 @@ export class DiscordRuntimeService {
     });
 
     client.on("interactionCreate", (interaction) => {
+      if (!this.isRuntimeActive(runtime)) return;
       if (interaction.isAutocomplete()) {
-        void this.handleAutocompleteInteraction(runtime, interaction).catch((error) => {
+        void this.runInboundWork("discord-autocomplete", () =>
+          this.handleAutocompleteInteraction(runtime, interaction),
+        ).catch((error) => {
           runtime.lastError = (error as Error).message;
           this.updateStatusSnapshot(runtime);
           this.callbacks.publishDiagnostic(
@@ -319,7 +361,7 @@ export class DiscordRuntimeService {
       if (!interaction.isChatInputCommand()) {
         return;
       }
-      void this.handleInteraction(runtime, interaction).catch((error) => {
+      void this.runInboundWork("discord-command", () => this.handleInteraction(runtime, interaction)).catch((error) => {
         runtime.lastError = (error as Error).message;
         this.updateStatusSnapshot(runtime);
         this.callbacks.publishDiagnostic(
@@ -338,6 +380,7 @@ export class DiscordRuntimeService {
     });
 
     client.on("error", (error: Error) => {
+      if (!this.isRuntimeActive(runtime)) return;
       runtime.ready = false;
       runtime.lastError = error.message;
       this.updateStatusSnapshot(runtime);
@@ -348,6 +391,7 @@ export class DiscordRuntimeService {
     });
 
     client.on("shardDisconnect", () => {
+      if (!this.isRuntimeActive(runtime)) return;
       runtime.ready = false;
       runtime.lastReconnectAt = new Date().toISOString();
       this.updateStatusSnapshot(runtime);
@@ -356,8 +400,176 @@ export class DiscordRuntimeService {
     return runtime;
   }
 
-  private async loginRuntime(runtime: ManagedClientRecord): Promise<void> {
-    await runtime.client.login(runtime.token);
+  private async reconnectRuntime(runtime: ManagedClientRecord): Promise<void> {
+    const reconnectLoginEpoch = (runtime.loginEpoch ?? 0) + 1;
+    runtime.reconnectLoginEpoch = reconnectLoginEpoch;
+    runtime.callbackReadyFenceEpoch = Math.max(runtime.callbackReadyFenceEpoch ?? 0, reconnectLoginEpoch);
+    runtime.reconnectPhase = "serializing";
+    try {
+      const priorCommandSync = runtime.commandSyncTask;
+      if (priorCommandSync) await priorCommandSync;
+      if (!this.isRuntimeActive(runtime)) return;
+
+      runtime.lastReconnectAt = new Date().toISOString();
+      runtime.ready = false;
+      runtime.lastError = undefined;
+      this.updateStatusSnapshot(runtime);
+      await runtime.client.destroy();
+      if (runtime.loginTask) await runtime.loginTask;
+      if (!this.isRuntimeActive(runtime)) return;
+
+      runtime.reconnectPhase = "logging-in";
+      await this.scheduleLogin(runtime, reconnectLoginEpoch);
+      if (!this.isRuntimeActive(runtime) || runtime.successfulLoginEpoch !== reconnectLoginEpoch) return;
+
+      // The current tracked login settlement is the only epoch-bearing ready
+      // signal available from discord.js. It owns one fresh admitted sync.
+      await this.scheduleApplicationCommandSync(runtime, "reconnect", true);
+    } finally {
+      if (runtime.reconnectLoginEpoch === reconnectLoginEpoch) runtime.reconnectLoginEpoch = undefined;
+      runtime.reconnectPhase = undefined;
+    }
+  }
+
+  private runInboundWork<T>(label: string, work: () => Promise<T>): Promise<T | undefined> {
+    const admission = this.callbacks.sharedHostLifecycle?.tryReserve("agent", `${label}:${randomUUID()}`);
+    if (admission && !admission.admitted) {
+      return Promise.reject(new SharedHostAdmissionClosedError(admission.state, admission.reason));
+    }
+    return Promise.resolve()
+      .then(work)
+      .finally(() => {
+        if (admission?.admitted) admission.reservation.release();
+      });
+  }
+
+  private scheduleLogin(runtime: ManagedClientRecord, requestedEpoch?: number): Promise<void> {
+    const existing = runtime.loginTask;
+    if (existing) return existing;
+    const loginEpoch = requestedEpoch ?? (runtime.loginEpoch ?? 0) + 1;
+    runtime.loginEpoch = loginEpoch;
+    return this.scheduleLifecycleTask(
+      runtime,
+      "loginTask",
+      "discord-login",
+      async (signal) => {
+        this.assertRuntimeTaskActive(runtime, signal);
+        const authenticated = await this.loginRuntime(runtime);
+        this.assertRuntimeTaskActive(runtime, signal);
+        if (authenticated) runtime.successfulLoginEpoch = loginEpoch;
+      },
+      (error) => {
+        runtime.lastError = getErrorMessage(error);
+        runtime.ready = false;
+        this.updateStatusSnapshot(runtime);
+      },
+    );
+  }
+
+  private scheduleApplicationCommandSync(
+    runtime: ManagedClientRecord,
+    source: "existing-runtime" | "client-ready" | "reconnect",
+    markReady = false,
+  ): Promise<void> {
+    return this.scheduleLifecycleTask(
+      runtime,
+      "commandSyncTask",
+      `discord-command-sync:${source}`,
+      async (signal) => {
+        this.assertRuntimeTaskActive(runtime, signal);
+        if (markReady) {
+          runtime.ready = true;
+          runtime.connectedBotId = runtime.client.user?.id;
+          runtime.connectedBotTag = runtime.client.user?.tag ?? runtime.client.user?.username;
+          runtime.guildIds = [...runtime.client.guilds.cache.keys()];
+          runtime.lastReadyAt = new Date().toISOString();
+          runtime.lastError = undefined;
+          this.updateStatusSnapshot(runtime);
+          this.callbacks.publishDiagnostic("discord.gateway.ready", "Discord gateway runtime is ready.", {
+            connectionIds: [...runtime.connectionIds],
+            botId: runtime.connectedBotId,
+            botTag: runtime.connectedBotTag,
+            guildIds: runtime.guildIds,
+          });
+        }
+        await this.syncApplicationCommands(runtime, signal);
+      },
+      (error) => {
+        runtime.lastError = getErrorMessage(error);
+        this.updateStatusSnapshot(runtime);
+        if (source !== "existing-runtime") {
+          this.callbacks.publishDiagnostic("discord.gateway.commands_error", "Discord slash command sync failed.", {
+            connectionIds: [...runtime.connectionIds],
+            error: getErrorMessage(error),
+          });
+        }
+      },
+    );
+  }
+
+  private scheduleLifecycleTask(
+    runtime: ManagedClientRecord,
+    taskKey: "loginTask" | "commandSyncTask",
+    label: string,
+    work: (signal?: AbortSignal) => Promise<void>,
+    onError: (error: unknown) => void,
+  ): Promise<void> {
+    const existing = runtime[taskKey];
+    if (existing) return existing;
+    if (!this.isRuntimeActive(runtime)) return Promise.resolve();
+    const admission = this.callbacks.sharedHostLifecycle?.tryReserve("worker", `${label}:${randomUUID()}`);
+    if (admission && !admission.admitted) return Promise.resolve();
+    const signal = admission?.admitted ? admission.reservation.signal : undefined;
+    let workPromise: Promise<void>;
+    try {
+      this.assertRuntimeTaskActive(runtime, signal);
+      workPromise = work(signal);
+    } catch (error) {
+      workPromise = Promise.reject(error);
+    }
+    const task = workPromise
+      .catch((error: unknown) => {
+        if (!this.isRuntimeActive(runtime) || signal?.aborted) return;
+        try {
+          onError(error);
+        } catch (handlerError) {
+          log.warn("Discord lifecycle task error handler failed.", {
+            label,
+            error: getErrorMessage(handlerError),
+          });
+        }
+      })
+      .finally(() => {
+        if (admission?.admitted) admission.reservation.release();
+        this.lifecycleTasks.delete(task);
+        if (runtime[taskKey] === task) runtime[taskKey] = undefined;
+      });
+    runtime[taskKey] = task;
+    this.lifecycleTasks.add(task);
+    return task;
+  }
+
+  private isRuntimeActive(runtime: ManagedClientRecord): boolean {
+    return (
+      this.closeState === "open" && runtime.active !== false && this.runtimesByToken.get(runtime.token) === runtime
+    );
+  }
+
+  private assertRuntimeTaskActive(runtime: ManagedClientRecord, signal?: AbortSignal): void {
+    throwIfDiscordRuntimeAborted(signal);
+    if (!this.isRuntimeActive(runtime)) {
+      throw new Error("Discord runtime work was cancelled because its lifecycle owner is closing.");
+    }
+  }
+
+  private async loginRuntime(runtime: ManagedClientRecord): Promise<boolean> {
+    runtime.loginInFlight = true;
+    try {
+      const authenticatedToken = await runtime.client.login(runtime.token);
+      return typeof authenticatedToken === "string" && authenticatedToken.trim().length > 0;
+    } finally {
+      runtime.loginInFlight = false;
+    }
   }
 
   private async destroyRuntime(runtime: ManagedClientRecord): Promise<void> {
@@ -510,13 +722,15 @@ export class DiscordRuntimeService {
     });
   }
 
-  private async syncApplicationCommands(runtime: ManagedClientRecord): Promise<void> {
+  private async syncApplicationCommands(runtime: ManagedClientRecord, signal?: AbortSignal): Promise<void> {
+    this.assertRuntimeTaskActive(runtime, signal);
     const commands = buildDiscordSlashCommandDefinitions();
     const application = runtime.client.application;
     if (!application) {
       return;
     }
     await application.commands.set(commands);
+    this.assertRuntimeTaskActive(runtime, signal);
 
     const configuredGuildIds = new Set<string>();
     const connections = this.callbacks
@@ -534,12 +748,15 @@ export class DiscordRuntimeService {
     }
 
     for (const guildId of configuredGuildIds) {
+      this.assertRuntimeTaskActive(runtime, signal);
       const guild =
         runtime.client.guilds.cache.get(guildId) ?? (await runtime.client.guilds.fetch(guildId).catch(() => null));
+      this.assertRuntimeTaskActive(runtime, signal);
       if (!guild) {
         continue;
       }
       await guild.commands.set(commands);
+      this.assertRuntimeTaskActive(runtime, signal);
     }
   }
 
@@ -622,25 +839,23 @@ export class DiscordRuntimeService {
       return false;
     }
     const commandText = buildCommandTextFromInteraction(interaction);
-    await this.handleAcceptedCommand(interaction, async () =>
-      this.callbacks.onSlashCommand({
-        connectionId: connection.connectionId,
-        target: interaction.channelId,
-        actorId: interaction.user.id,
-        displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
-        commandText,
-        sourceCommandId: interaction.id,
-        peer: interaction.user.id,
-        room: interaction.channelId,
-        threadId: interaction.channel?.isThread() ? interaction.channel.id : undefined,
-        metadata: {
-          guildId: interaction.guildId,
-          channelId: interaction.channelId,
-          runtimeMode: "gateway",
-          interaction: true,
-        },
-      }),
-    );
+    await this.handleAcceptedCommand(interaction, {
+      connectionId: connection.connectionId,
+      target: interaction.channelId,
+      actorId: interaction.user.id,
+      displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+      commandText,
+      sourceCommandId: interaction.id,
+      peer: interaction.user.id,
+      room: interaction.channelId,
+      threadId: interaction.channel?.isThread() ? interaction.channel.id : undefined,
+      metadata: {
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        runtimeMode: "gateway",
+        interaction: true,
+      },
+    });
     return true;
   }
 
@@ -746,43 +961,39 @@ export class DiscordRuntimeService {
     const commandText = buildCommandTextFromInteraction(interaction);
     if (approved) {
       this.callbacks.touchPairing(approved.pairingId);
-      await this.handleAcceptedCommand(interaction, async () =>
-        this.callbacks.onSlashCommand({
-          connectionId: connection.connectionId,
-          target: interaction.channelId,
-          actorId: interaction.user.id,
-          displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
-          commandText,
-          sourceCommandId: interaction.id,
-          peer: interaction.user.id,
-          room: interaction.channelId,
-          metadata: {
-            dm: true,
-            runtimeMode: "gateway",
-            interaction: true,
-          },
-        }),
-      );
+      await this.handleAcceptedCommand(interaction, {
+        connectionId: connection.connectionId,
+        target: interaction.channelId,
+        actorId: interaction.user.id,
+        displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+        commandText,
+        sourceCommandId: interaction.id,
+        peer: interaction.user.id,
+        room: interaction.channelId,
+        metadata: {
+          dm: true,
+          runtimeMode: "gateway",
+          interaction: true,
+        },
+      });
       return true;
     }
     if (dmPolicy === "open") {
-      await this.handleAcceptedCommand(interaction, async () =>
-        this.callbacks.onSlashCommand({
-          connectionId: connection.connectionId,
-          target: interaction.channelId,
-          actorId: interaction.user.id,
-          displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
-          commandText,
-          sourceCommandId: interaction.id,
-          peer: interaction.user.id,
-          room: interaction.channelId,
-          metadata: {
-            dm: true,
-            runtimeMode: "gateway",
-            interaction: true,
-          },
-        }),
-      );
+      await this.handleAcceptedCommand(interaction, {
+        connectionId: connection.connectionId,
+        target: interaction.channelId,
+        actorId: interaction.user.id,
+        displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+        commandText,
+        sourceCommandId: interaction.id,
+        peer: interaction.user.id,
+        room: interaction.channelId,
+        metadata: {
+          dm: true,
+          runtimeMode: "gateway",
+          interaction: true,
+        },
+      });
       return true;
     }
     const pending = this.callbacks.ensurePendingPairing(
@@ -800,17 +1011,23 @@ export class DiscordRuntimeService {
   }
 
   private async handleAcceptedMessage(message: Message, task: () => Promise<void>): Promise<void> {
+    // The callback is the durable acceptance boundary in production. Do not
+    // emit a reaction or typing side effect until that local commit succeeds.
+    await task();
     await this.markMessageSeen(message);
-    await this.runWithTypingIndicator(message, task);
   }
 
   private async handleAcceptedCommand(
     interaction: ChatInputCommandInteraction,
-    task: () => Promise<string>,
+    input: DiscordSlashCommandEnvelope,
   ): Promise<void> {
+    // Discord interactions have a short acknowledgement deadline. Commit the
+    // bounded envelope first, defer immediately, then wait for the durable
+    // command owner. The provider callback never executes the mutation itself.
+    const accepted = await this.callbacks.acceptSlashCommand(input);
     const ephemeral = !interaction.channel?.isDMBased();
     await interaction.deferReply({ ephemeral });
-    const result = await task();
+    const result = await this.callbacks.awaitSlashCommandResult(accepted.inboundEventId);
     await interaction.editReply({ content: truncateDiscordResponse(result) });
   }
 
@@ -822,31 +1039,6 @@ export class DiscordRuntimeService {
       await message.react("👀");
     } catch {
       // Reactions are best-effort; do not block inbound handling if the bot lacks permission.
-    }
-  }
-
-  private async runWithTypingIndicator(message: Message, task: () => Promise<void>): Promise<void> {
-    const channel = message.channel as { sendTyping?: () => Promise<unknown> };
-    const sendTyping =
-      typeof channel.sendTyping === "function" ? () => channel.sendTyping?.() ?? Promise.resolve() : undefined;
-    if (!sendTyping) {
-      await task();
-      return;
-    }
-
-    let interval: NodeJS.Timeout | undefined;
-    try {
-      await sendTyping();
-      interval = setInterval(() => {
-        void sendTyping().catch((error) => {
-          log.warn("Discord typing indicator failed.", { error: getErrorMessage(error) });
-        });
-      }, 8_000);
-      await task();
-    } finally {
-      if (interval) {
-        clearInterval(interval);
-      }
     }
   }
 }

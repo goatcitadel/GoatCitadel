@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillImportService } from "./skill-import-service.js";
+import { SKILL_CONTENT_INTEGRITY_LIMITS } from "./skill-content-integrity.js";
 
 function createSystemSettingsRepo() {
   const store = new Map<string, unknown>();
@@ -67,7 +68,7 @@ describe("SkillImportService loop41 zip install behavior", () => {
     expect(fs.existsSync(staleFile)).toBe(false);
     expect(fs.existsSync(path.join(forcedInstall.installedPath, "SKILL.md"))).toBe(true);
     expect(manifest).toMatchObject({
-      manifestVersion: 2,
+      manifestVersion: 3,
       riskLevel: "low",
       candidate: expect.objectContaining({
         sourceProvider: "local",
@@ -107,6 +108,41 @@ describe("SkillImportService loop41 zip install behavior", () => {
     // under v8 coverage instrumentation in a loaded parallel run it can exceed the
     // default 15s budget, so give this I/O-heavy case explicit headroom.
   }, 30_000);
+
+  it("rejects a zip entry whose declared uncompressed size exceeds the shared per-file limit", async () => {
+    const zipPath = path.join(rootDir, "oversized-zip-skill.zip");
+    const zip = new AdmZip();
+    zip.addFile(
+      "bundle/oversized-zip-skill/SKILL.md",
+      Buffer.from(
+        [
+          "---",
+          "name: Oversized Zip Skill",
+          "description: Valid metadata paired with an oversized archive entry.",
+          "---",
+          "",
+          "This archive must be rejected before extraction.",
+          "",
+        ].join("\n"),
+      ),
+    );
+    zip.addFile(
+      "bundle/oversized-zip-skill/oversized.bin",
+      Buffer.alloc(SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1),
+    );
+    zip.writeZip(zipPath);
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    await expect(
+      service.installImport({
+        sourceRef: zipPath,
+        sourceType: "local_zip",
+        sourceProvider: "local",
+      }),
+    ).rejects.toThrow(`exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes} bytes`);
+
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra", "oversized-zip-skill"))).toBe(false);
+  });
 });
 
 function createSkillZip(rootDir: string, fileName: string): string {

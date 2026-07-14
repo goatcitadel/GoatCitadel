@@ -11,8 +11,8 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { CHAT_COMPLETION_TIMEOUT_MS_BY_MODE } from "./chat-agent-budget.js";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
 import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
   createExecuteToolCallForTest,
   createMockStorage,
   createToolCatalog,
@@ -2436,18 +2436,27 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
         textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
       },
     });
-    const invokeMcpTool = vi.fn<() => Promise<McpInvokeResponse>>().mockResolvedValueOnce({
-      ok: true,
-      output: {
-        structuredContent: {
-          url: "https://www.imdb.com/calendar/",
-          finalUrl: "https://www.imdb.com/calendar/",
-          status: 200,
-          title: "IMDb Release Calendar",
-          textSnippet: "Upcoming movies this week.",
-        },
-      },
-    });
+    const mcpFenceEvents: string[] = [];
+    const invokeMcpTool = vi
+      .fn<(request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>>()
+      .mockImplementationOnce(async (_request, options) => {
+        expect(options?.executionFence).toBeTypeOf("function");
+        mcpFenceEvents.push("before_fence");
+        options?.executionFence?.();
+        mcpFenceEvents.push("after_fence");
+        return {
+          ok: true,
+          output: {
+            structuredContent: {
+              url: "https://www.imdb.com/calendar/",
+              finalUrl: "https://www.imdb.com/calendar/",
+              status: 200,
+              title: "IMDb Release Calendar",
+              textSnippet: "Upcoming movies this week.",
+            },
+          },
+        };
+      });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate"]),
@@ -2512,7 +2521,11 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
           url: "https://movieinsider.com/movies",
         }),
       }),
+      expect.objectContaining({
+        executionFence: expect.any(Function),
+      }),
     );
+    expect(mcpFenceEvents).toEqual(["before_fence", "after_fence"]);
     expect(executed.record.status).toBe("executed");
     expect(executed.record.result).toMatchObject({
       engineTier: "playwright_mcp",
@@ -7152,7 +7165,9 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     // The completion was called with the signal present.
     expect(createChatCompletion.mock.calls.length).toBeGreaterThanOrEqual(1);
     const firstCall = createChatCompletion.mock.calls[0]?.[0] as ChatCompletionRequest | undefined;
-    expect(firstCall?.signal).toBe(controller.signal);
+    expect(firstCall?.signal).toBeDefined();
+    expect(firstCall?.signal?.aborted).toBe(true);
+    expect(firstCall?.signal?.reason).toBe(controller.signal.reason);
     // Turn should be cancelled since the signal was aborted.
     expect(result.turnTrace.status).toBe("cancelled");
   });

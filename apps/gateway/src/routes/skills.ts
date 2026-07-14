@@ -2,13 +2,61 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { projectImportProvenanceReferencesForPublic } from "../services/import-provenance-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const skillsListQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
 });
 
+const skillHubListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+const skillHubOperationSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1),
+    snapshotId: z.string().trim().min(1),
+    operationKind: z.enum([
+      "install_inactive",
+      "stage_update_candidate",
+      "stage_rollback_candidate",
+      "activate",
+      "revoke",
+    ]),
+    sessionId: z.string().trim().min(1).optional(),
+    turnId: z.string().trim().min(1).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.turnId && !value.sessionId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["turnId"],
+        message: "Skill Hub turn lineage requires a session ID.",
+      });
+    }
+  });
+
+const skillHubSourceReviewSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(256),
+    sourceRef: z.string().min(1).max(2_048),
+    sourceType: z.enum(["git_url", "remote_bundle"]).optional(),
+    idempotencyKey: z.string().min(1).max(256),
+  })
+  .strict();
+
+const skillHubRollbackReviewSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(256),
+    snapshotId: z.string().min(1).max(256),
+    idempotencyKey: z.string().min(1).max(256),
+  })
+  .strict();
+
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const skills = fastify.services.skills;
+  const operatorOnly = withRouteAccess(fastify, "operator");
 
   const skillParamsSchema = z.object({
     skillId: z.string().min(1),
@@ -17,17 +65,20 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const stateSchema = z.enum(["enabled", "sleep", "disabled"]);
 
   const updateStateSchema = z.object({
+    expectedRevision: z.number().int().positive(),
     state: stateSchema,
     note: z.string().trim().max(300).optional(),
   });
 
   const bulkStateSchema = z.object({
     skillIds: z.array(z.string().min(1)).min(1),
+    expectedRevisionsBySkillId: z.record(z.string(), z.number().int().positive()),
     state: stateSchema,
     note: z.string().trim().max(300).optional(),
   });
 
   const activationPolicyPatchSchema = z.object({
+    expectedRevision: z.number().int().positive(),
     guardedAutoThreshold: z.number().min(0).max(1).optional(),
     requireFirstUseConfirmation: z.boolean().optional(),
   });
@@ -118,6 +169,71 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ items: skills.listSkills(effective) });
     }
     return reply.send({ items: skills.listSkills() });
+  });
+
+  fastify.get("/api/v1/skills/hub", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(skills.listSkillHub(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/hub/operations", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubOperationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(
+        await skills.createSkillHubApproval({
+          ...parsed.data,
+          actorId: request.authActorId,
+        }),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/hub/reviews", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubSourceReviewSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const reviewed = await skills.reviewSkillHubSource({
+        ...parsed.data,
+        actorId: request.authActorId,
+      });
+      return reply.code(reviewed.replayed ? 200 : 201).send(reviewed);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/hub/rollback-reviews", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubRollbackReviewSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const reviewed = await skills.prepareSkillHubRollbackReview({
+        ...parsed.data,
+        actorId: request.authActorId,
+      });
+      return reply.code(reviewed.replayed ? 200 : 201).send(reviewed);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/skills/reload", async (_request, reply) => {
@@ -283,10 +399,15 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const updated = skills.setSkillState(body.data.skillId, body.data.state, body.data.note);
+      const updated = skills.setSkillState(
+        body.data.skillId,
+        body.data.state,
+        body.data.note,
+        body.data.expectedRevision,
+      );
       return reply.send(updated);
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -365,10 +486,15 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const updated = skills.setSkillState(params.data.skillId, body.data.state, body.data.note);
+      const updated = skills.setSkillState(
+        params.data.skillId,
+        body.data.state,
+        body.data.note,
+        body.data.expectedRevision,
+      );
       return reply.send(updated);
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -378,10 +504,15 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const items = skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note);
+      const items = skills.bulkSetSkillState(
+        parsed.data.skillIds,
+        parsed.data.state,
+        parsed.data.note,
+        parsed.data.expectedRevisionsBySkillId,
+      );
       return reply.send({ items });
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -394,6 +525,11 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(skills.updateSkillActivationPolicy(parsed.data));
+    const { expectedRevision, ...input } = parsed.data;
+    try {
+      return reply.send(skills.updateSkillActivationPolicy(input, expectedRevision));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 };

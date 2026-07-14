@@ -29,6 +29,17 @@ const host: LlmProviderAdapterHost = {
       "x-purpose": purpose,
     },
   }),
+  postJsonRequest: async ({ target, payload, timeoutMs, signal }) => {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const response = await fetch(target.url, {
+      method: "POST",
+      headers: target.headers,
+      body: JSON.stringify(payload),
+      signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
+      redirect: "manual",
+    });
+    return { response };
+  },
 };
 
 describe("anthropicProviderAdapter", () => {
@@ -172,7 +183,14 @@ describe("anthropicProviderAdapter", () => {
         controller.enqueue(
           encoder.encode(
             [
-              `data: ${JSON.stringify({ type: "message_start", message: { id: "msg_stream", model: "claude-test" } })}`,
+              `data: ${JSON.stringify({
+                type: "message_start",
+                message: {
+                  id: "msg_stream",
+                  model: "claude-test",
+                  usage: { input_tokens: 7, cache_read_input_tokens: 2 },
+                },
+              })}`,
               "",
               `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "hello " } })}`,
               "",
@@ -195,7 +213,7 @@ describe("anthropicProviderAdapter", () => {
               `data: ${JSON.stringify({
                 type: "message_delta",
                 stop_reason: "max_tokens",
-                usage: { input_tokens: 7, output_tokens: 3 },
+                usage: { output_tokens: 3 },
               })}`,
               "",
               `data: ${JSON.stringify({ type: "message_stop" })}`,
@@ -262,7 +280,12 @@ describe("anthropicProviderAdapter", () => {
         id: "msg_stream",
         model: "claude-test",
         choices: [{ index: 0, delta: {}, finish_reason: "length" }],
-        usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+        usage: {
+          prompt_tokens: 7,
+          completion_tokens: 3,
+          total_tokens: 10,
+          cache_read_input_tokens: 2,
+        },
       }),
     ]);
   });

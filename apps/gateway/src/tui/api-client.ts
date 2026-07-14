@@ -38,7 +38,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { validateMemoryForgetRequest } from "@goatcitadel/contracts";
 
-type TuiThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
+type TuiThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep" | "max" | "ultra";
 type TuiSpeedMode = "standard" | "fast";
 type TuiSubagentPolicy = "off" | "ask_when_useful" | "auto_when_useful";
 import type { TuiResolvedAuth } from "./profile.js";
@@ -49,10 +49,43 @@ export interface TuiApiClientOptions {
   readOnly: boolean;
 }
 
+export class TuiApiRequestError extends Error {
+  public readonly status: number;
+  public readonly body: unknown;
+  public readonly bodyText: string;
+  public readonly method: string;
+  public readonly routePath: string;
+
+  public constructor(input: { status: number; body: unknown; bodyText: string; method: string; routePath: string }) {
+    super(`${input.method} ${input.routePath} failed (${input.status}): ${input.bodyText}`);
+    this.name = "TuiApiRequestError";
+    this.status = input.status;
+    this.body = input.body;
+    this.bodyText = input.bodyText;
+    this.method = input.method;
+    this.routePath = input.routePath;
+  }
+}
+
+export function isTuiApiRequestError(error: unknown): error is TuiApiRequestError {
+  return error instanceof TuiApiRequestError;
+}
+
 export interface TuiCostSummaryResponse {
   scope: string;
   from: string;
   to: string;
+  usageAvailability?: {
+    trackedEvents: number;
+    unknownEvents: number;
+    totalAgentEvents: number;
+    metricAvailability?: {
+      inputTokens: TuiCostMetricCoverage;
+      outputTokens: TuiCostMetricCoverage;
+      cachedInputTokens: TuiCostMetricCoverage;
+      costUsd: TuiCostMetricCoverage;
+    };
+  };
   items: Array<{
     key: string;
     tokenInput: number;
@@ -60,18 +93,34 @@ export interface TuiCostSummaryResponse {
     tokenCachedInput: number;
     tokenTotal: number;
     costUsd: number;
+    metricAvailability?: TuiCostMetricCompleteness;
   }>;
   dailySeries?: Array<{
     isoDate: string;
     shortLabel?: string;
     costUsd?: number;
+    metricAvailability?: TuiCostMetricCompleteness;
     segments: Array<{
       providerKey: string;
       label: string;
       costUsd: number;
       models?: string[];
+      metricAvailability?: TuiCostMetricCompleteness;
     }>;
   }>;
+}
+
+interface TuiCostMetricCompleteness {
+  inputTokensComplete: boolean;
+  outputTokensComplete: boolean;
+  cachedInputTokensComplete: boolean;
+  costUsdComplete: boolean;
+}
+
+interface TuiCostMetricCoverage {
+  knownAttemptCount: number;
+  unknownAttemptCount: number;
+  complete: boolean;
 }
 
 const MAX_SSE_BUFFER_CHARS = 256_000;
@@ -515,7 +564,7 @@ export class TuiApiClient {
 
   public async updateSkillState(
     skillId: string,
-    input: { state: SkillRuntimeState; note?: string },
+    input: { expectedRevision: number; state: SkillRuntimeState; note?: string },
   ): Promise<SkillStateRecord> {
     return this.request(
       "/api/v1/skills/by-id/state",
@@ -741,11 +790,13 @@ export class TuiApiClient {
     );
   }
 
-  public async runtimeSettings(): Promise<Record<string, unknown>> {
+  public async runtimeSettings(): Promise<Record<string, unknown> & { revision: number }> {
     return this.request("/api/v1/settings", { method: "GET" });
   }
 
-  public async patchRuntimeSettings(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  public async patchRuntimeSettings(
+    input: Record<string, unknown> & { expectedRevision: number },
+  ): Promise<Record<string, unknown>> {
     return this.request(
       "/api/v1/settings",
       {
@@ -900,23 +951,23 @@ export class TuiApiClient {
     return this.request("/api/v1/cron/jobs", { method: "GET" });
   }
 
-  public async startCronJob(jobId: string): Promise<Record<string, unknown>> {
+  public async startCronJob(jobId: string, expectedRevision: number): Promise<Record<string, unknown>> {
     return this.request(
       `/api/v1/cron/jobs/${encodeURIComponent(jobId)}/start`,
       {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ expectedRevision }),
       },
       true,
     );
   }
 
-  public async pauseCronJob(jobId: string): Promise<Record<string, unknown>> {
+  public async pauseCronJob(jobId: string, expectedRevision: number): Promise<Record<string, unknown>> {
     return this.request(
       `/api/v1/cron/jobs/${encodeURIComponent(jobId)}/pause`,
       {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ expectedRevision }),
       },
       true,
     );
@@ -933,12 +984,11 @@ export class TuiApiClient {
     );
   }
 
-  public async deleteCronJob(jobId: string): Promise<Record<string, unknown>> {
+  public async deleteCronJob(jobId: string, expectedRevision: number): Promise<Record<string, unknown>> {
     return this.request(
-      `/api/v1/cron/jobs/${encodeURIComponent(jobId)}`,
+      `/api/v1/cron/jobs/${encodeURIComponent(jobId)}?expectedRevision=${encodeURIComponent(String(expectedRevision))}`,
       {
         method: "DELETE",
-        body: JSON.stringify({}),
       },
       true,
     );
@@ -1289,13 +1339,30 @@ export class TuiApiClient {
       headers,
     });
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`${init.method ?? "GET"} ${routePath} failed (${response.status}): ${body}`);
+      const bodyText = await response.text();
+      throw new TuiApiRequestError({
+        status: response.status,
+        body: parseTuiApiErrorBody(bodyText),
+        bodyText,
+        method: init.method ?? "GET",
+        routePath,
+      });
     }
     if (response.status === 204) {
       return {} as T;
     }
     return (await response.json()) as T;
+  }
+}
+
+function parseTuiApiErrorBody(bodyText: string): unknown {
+  if (!bodyText.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(bodyText) as unknown;
+  } catch {
+    return bodyText;
   }
 }
 

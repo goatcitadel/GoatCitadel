@@ -163,6 +163,14 @@ describe("provider secret persistence fallback", () => {
           },
         ],
       }),
+      snapshotRuntimeConfigForPersistence: () => ({
+        providers: [
+          {
+            providerId: "openai",
+            apiKeyEnv: "OPENAI_API_KEY",
+          },
+        ],
+      }),
     };
 
     const status = persistProviderApiKeyWithFallback({
@@ -242,6 +250,14 @@ function createStubLlmService(options: {
         {
           providerId: options.providerId,
           apiKeyRef: options.apiKeyRef,
+        },
+      ],
+    }),
+    snapshotRuntimeConfigForPersistence: () => ({
+      providers: [
+        {
+          providerId: options.providerId,
+          apiKeyEnv: options.apiKeyRef,
         },
       ],
     }),

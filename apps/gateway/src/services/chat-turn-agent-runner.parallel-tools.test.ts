@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ChatCompletionResponse, ToolInvokeResult } from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
-import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
+  createMockStorage,
+  createToolCatalog,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 interface ToolTiming {
   toolName: string;

@@ -197,6 +197,7 @@ function createGateway() {
       chatSessionMeta: {
         ensure: fn((sessionId: string) => ({
           sessionId,
+          revision: 7,
           pinnedGoal: "ship kanban",
           goalTurnBudget: 10,
           goalTurnsUsed: 3,
@@ -204,6 +205,14 @@ function createGateway() {
         })),
         patch: fn((sessionId: string, input: Record<string, unknown>) => ({
           sessionId,
+          pinnedGoal: input.pinnedGoal === null ? undefined : (input.pinnedGoal as string | undefined),
+          goalTurnBudget: input.goalTurnBudget === null ? undefined : (input.goalTurnBudget as number | undefined),
+          goalTurnsUsed: 0,
+          goalSetAt: input.goalSetAt === null ? undefined : (input.goalSetAt as string | undefined),
+        })),
+        patchWithRevision: fn((sessionId: string, input: Record<string, unknown>, expectedRevision: number) => ({
+          sessionId,
+          revision: expectedRevision + 1,
           pinnedGoal: input.pinnedGoal === null ? undefined : (input.pinnedGoal as string | undefined),
           goalTurnBudget: input.goalTurnBudget === null ? undefined : (input.goalTurnBudget as number | undefined),
           goalTurnsUsed: 0,
@@ -280,13 +289,29 @@ function createGateway() {
       routePreflight: fn((sessionId: string, input: unknown) => ({ sessionId, input, status: "ok" })),
     },
     chatProjectService: {
-      archiveChatProject: fn((projectId: string) => ({ projectId, archived: true })),
+      archiveChatProject: fn((projectId: string, expectedRevision: number) => ({
+        projectId,
+        expectedRevision,
+        archived: true,
+      })),
       createChatProject: fn((input: unknown) => ({ projectId: "project-1", input })),
-      hardDeleteChatProject: fn((projectId: string) => ({ projectId, deleted: true })),
+      hardDeleteChatProject: fn((projectId: string, expectedRevision: number) => ({
+        projectId,
+        expectedRevision,
+        deleted: true,
+      })),
       importChatProject: fn((input: unknown) => ({ projectId: "imported", input })),
       listChatProjects: fn((view: string, limit: number, workspaceId?: string) => ({ view, limit, workspaceId })),
-      restoreChatProject: fn((projectId: string) => ({ projectId, archived: false })),
-      updateChatProject: fn((projectId: string, input: unknown) => ({ projectId, input })),
+      restoreChatProject: fn((projectId: string, expectedRevision: number) => ({
+        projectId,
+        expectedRevision,
+        archived: false,
+      })),
+      updateChatProject: fn((projectId: string, input: unknown, expectedRevision: number) => ({
+        projectId,
+        input,
+        expectedRevision,
+      })),
     },
     memoryLifecycleService: {
       listSessionLearnedMemory: fn((sessionId: string, limit: number) => [{ sessionId, limit }]),
@@ -348,6 +373,140 @@ describe("composeChatRouteDependencies", () => {
   beforeEach(() => {
     mocks.rm.mockClear();
     mocks.assertWritePathInJail.mockClear();
+  });
+
+  it("authorizes capability-profile scope before materializing full provider definitions", () => {
+    const gateway = createGateway() as any;
+    const inspectByTurn = vi.fn(() => ({
+      state: "available",
+      profile: {
+        profileId: "profile-1",
+        identity: {
+          turnId: "turn-1",
+          sessionId: "session-1",
+          workspaceId: "normalized:workspace-1",
+          operatorId: "operator-1",
+          authActorId: "operator-1",
+        },
+        hashes: { profileHash: "a".repeat(64) },
+        selection: { tools: [{ providerDefinition: { secretDefinition: true } }] },
+      },
+    }));
+    const findScopeByTurn = vi.fn(() => ({
+      profileId: "profile-1",
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "normalized:workspace-1",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      profileHash: "a".repeat(64),
+    }));
+    const findRoutedContextByTurn = vi.fn(() => ({
+      snapshotId: "snapshot-1",
+      snapshotHash: "b".repeat(64),
+      sourceRequestHash: "c".repeat(64),
+      contentHash: "d".repeat(64),
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "normalized:workspace-1",
+      capabilityProfileId: "profile-1",
+      capabilityProfileHash: "a".repeat(64),
+    }));
+    const inspectRoutedContextByTurn = vi.fn(() => ({
+      snapshotId: "snapshot-1",
+      snapshotHash: "b".repeat(64),
+      sourceRequestHash: "c".repeat(64),
+      contentHash: "d".repeat(64),
+      includedCount: 1,
+      truncatedCount: 0,
+      omittedCount: 0,
+      alreadyAttachedCount: 0,
+      entries: [{ index: 0, kind: "memory_item", ref: "memory-1", label: "Memory 1" }],
+    }));
+    gateway.storage.chatTurnTraces = {
+      get: vi.fn(() => ({
+        turnId: "turn-1",
+        sessionId: "session-1",
+        capabilityProfileId: "profile-1",
+        capabilityProfileHash: "a".repeat(64),
+        routing: {
+          routedContext: {
+            snapshotId: "snapshot-1",
+            snapshotHash: "b".repeat(64),
+            sourceRequestHash: "c".repeat(64),
+            contentHash: "d".repeat(64),
+          },
+        },
+      })),
+    };
+    gateway.storage.chatSessionMeta.get = vi.fn(() => ({
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    }));
+    gateway.storage.chatTurnCapabilityProfiles = { findScopeByTurn, inspectByTurn };
+    gateway.storage.routedContextSnapshots = {
+      findByTurn: findRoutedContextByTurn,
+      inspectByTurn: inspectRoutedContextByTurn,
+    };
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+
+    expect(() =>
+      deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
+        workspaceId: "wrong-workspace",
+        operatorId: "operator-1",
+      }),
+    ).toThrow(NotFoundError);
+    expect(findScopeByTurn).not.toHaveBeenCalled();
+    expect(inspectByTurn).not.toHaveBeenCalled();
+
+    expect(() =>
+      deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
+        workspaceId: "workspace-1",
+        operatorId: "other-operator",
+      }),
+    ).toThrow(NotFoundError);
+    expect(findScopeByTurn).toHaveBeenCalledWith("turn-1");
+    expect(inspectByTurn).not.toHaveBeenCalled();
+
+    expect(
+      deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
+        workspaceId: "workspace-1",
+        operatorId: "operator-1",
+      }),
+    ).toMatchObject({
+      state: "available",
+      profile: { profileId: "profile-1" },
+      routedContext: {
+        snapshotId: "snapshot-1",
+        includedCount: 1,
+        entries: [{ kind: "memory_item", ref: "memory-1" }],
+      },
+    });
+    expect(inspectByTurn).toHaveBeenCalledOnce();
+    expect(findRoutedContextByTurn).toHaveBeenCalledWith("turn-1");
+    expect(inspectRoutedContextByTurn).toHaveBeenCalledWith("turn-1");
+
+    gateway.storage.chatTurnTraces.get = vi.fn(() => ({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      capabilityProfileId: "profile-1",
+      capabilityProfileHash: "a".repeat(64),
+      routing: {
+        routedContext: {
+          snapshotId: "snapshot-1",
+          snapshotHash: "e".repeat(64),
+          sourceRequestHash: "c".repeat(64),
+          contentHash: "d".repeat(64),
+        },
+      },
+    }));
+    expect(() =>
+      deps.chatMessages.getChatTurnCapabilityProfile("session-1", "turn-1", {
+        workspaceId: "workspace-1",
+        operatorId: "operator-1",
+      }),
+    ).toThrow(NotFoundError);
+    expect(inspectRoutedContextByTurn).toHaveBeenCalledOnce();
   });
 
   it("wires chat route ports to gateway facade methods and extracted helpers", async () => {
@@ -517,17 +676,24 @@ describe("composeChatRouteDependencies", () => {
     expect(deps.chatMessages.routePreflight("session-1", { content: "hi" })).toMatchObject({ status: "ok" });
     expect(deps.chatMessages.selectChatBranchTurn("session-1", "turn-1")).toMatchObject({ turnId: "turn-1" });
 
-    expect(deps.chatProjects.archiveChatProject("project-1")).toMatchObject({ archived: true });
+    expect(deps.chatProjects.archiveChatProject("project-1", 2)).toMatchObject({ archived: true, expectedRevision: 2 });
     expect(deps.chatProjects.createChatProject({ name: "Project" })).toMatchObject({ projectId: "project-1" });
-    expect(deps.chatProjects.hardDeleteChatProject("project-1")).toMatchObject({ deleted: true });
+    expect(deps.chatProjects.hardDeleteChatProject("project-1", 3)).toMatchObject({
+      deleted: true,
+      expectedRevision: 3,
+    });
     expect(deps.chatProjects.importChatProject({ name: "Import" })).toMatchObject({ projectId: "imported" });
     expect(deps.chatProjects.listChatProjects("active", 5, "workspace-1")).toMatchObject({
       view: "active",
       workspaceId: "normalized:workspace-1",
     });
-    expect(deps.chatProjects.restoreChatProject("project-1")).toMatchObject({ archived: false });
-    expect(deps.chatProjects.updateChatProject("project-1", { name: "New" })).toMatchObject({
+    expect(deps.chatProjects.restoreChatProject("project-1", 4)).toMatchObject({
+      archived: false,
+      expectedRevision: 4,
+    });
+    expect(deps.chatProjects.updateChatProject("project-1", { name: "New" }, 5)).toMatchObject({
       input: { name: "New" },
+      expectedRevision: 5,
     });
 
     expect(deps.chatSupport.commands.listChatCommandCatalog()).toEqual([{ command: "/delegate" }]);

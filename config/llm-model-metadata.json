@@ -45,6 +45,21 @@
     "moonshot/kimi-k2.5": { "contextWindow": 256000, "outputTokenLimit": 32000 },
     "google/models/gemini-2.5-pro": { "contextWindow": 2000000, "outputTokenLimit": 8192 },
     "google/models/gemini-2.5-flash": { "contextWindow": 1000000, "outputTokenLimit": 8192 },
+    "vertex/google/gemini-2.5-pro": {
+      "contextWindow": 1048576,
+      "outputTokenLimit": 65535,
+      "reasoning": { "supportedEfforts": ["low", "medium", "high"] }
+    },
+    "vertex/google/gemini-2.5-flash": {
+      "contextWindow": 1048576,
+      "outputTokenLimit": 65535,
+      "reasoning": { "supportedEfforts": ["low", "medium", "high"] }
+    },
+    "fireworks/accounts/fireworks/models/kimi-k2p6": {
+      "contextWindow": 262144,
+      "outputTokenLimit": 32768,
+      "reasoning": { "supportedEfforts": ["none"] }
+    },
     "mistral/*": { "contextWindow": 128000, "outputTokenLimit": 16000 },
     "glm/*": { "contextWindow": 128000, "outputTokenLimit": 16000 },
     "perplexity/*": { "contextWindow": 128000, "outputTokenLimit": 8192 },

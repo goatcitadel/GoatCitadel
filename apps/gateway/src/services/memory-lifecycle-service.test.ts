@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { ConflictError } from "@goatcitadel/contracts";
 import { createUntrustedContentEnvelope } from "@goatcitadel/policy-engine";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 
@@ -668,6 +669,127 @@ describe("MemoryLifecycleService", () => {
     }
   });
 
+  it.each(["sqlite", "postgres"] as const)(
+    "fails closed when routed-context memory metadata or scope is invalid in the %s dialect",
+    (dialect) => {
+      const nowIso = "2026-07-13T12:00:00.000Z";
+      type RoutedRow = {
+        item_id: string;
+        namespace: string;
+        title: string;
+        content: string;
+        metadata_json: string | null;
+        pinned: number;
+        ttl_override_seconds: number | null;
+        expires_at: string | null;
+        status: "active" | "forgotten";
+        created_at: string;
+        updated_at: string;
+        forgotten_at: string | null;
+        workspace_id: string | null;
+      };
+      const row = (itemId: string, patch: Partial<RoutedRow> = {}): RoutedRow => ({
+        item_id: itemId,
+        namespace: "workspace.preferences",
+        title: itemId,
+        content: `${itemId} content`,
+        metadata_json: "{}",
+        pinned: 0,
+        ttl_override_seconds: null,
+        expires_at: null,
+        status: "active",
+        created_at: "2026-07-12T00:00:00.000Z",
+        updated_at: "2026-07-13T00:00:00.000Z",
+        forgotten_at: null,
+        workspace_id: null,
+        ...patch,
+      });
+      const rows: Record<string, RoutedRow> = {
+        canonical: row("canonical", { workspace_id: "workspace-a" }),
+        "canonical-invalid-json": row("canonical-invalid-json", {
+          workspace_id: "workspace-a",
+          metadata_json: "{invalid-json",
+        }),
+        legacy: row("legacy", { metadata_json: JSON.stringify({ workspaceId: " workspace-a " }) }),
+        global: row("global"),
+        "invalid-json": row("invalid-json", { metadata_json: "{invalid-json" }),
+        scalar: row("scalar", { metadata_json: "42" }),
+        array: row("array", { metadata_json: "[]" }),
+        null: row("null", { metadata_json: "null" }),
+        "malformed-legacy": row("malformed-legacy", { metadata_json: JSON.stringify({ workspaceId: 42 }) }),
+        "foreign-canonical": row("foreign-canonical", { workspace_id: "workspace-b" }),
+        "foreign-legacy": row("foreign-legacy", {
+          metadata_json: JSON.stringify({ workspaceId: "workspace-b" }),
+        }),
+        forgotten: row("forgotten", {
+          status: "forgotten",
+          forgotten_at: "2026-07-13T01:00:00.000Z",
+        }),
+        expired: row("expired", { expires_at: "2026-07-13T11:59:59.999Z" }),
+        "malformed-expiry": row("malformed-expiry", { expires_at: "not-a-timestamp" }),
+      };
+      const preparedSql: string[] = [];
+      const tryParseJson = vi.fn((raw: string | null, fallback: unknown) => {
+        try {
+          return raw ? JSON.parse(raw) : fallback;
+        } catch {
+          return fallback;
+        }
+      });
+      const service = new MemoryLifecycleService({
+        context: {} as never,
+        learned: {} as never,
+        maintenance: {} as never,
+        admin: {
+          gatewaySql: {
+            dialect,
+            prepare: vi.fn((sql: string) => {
+              preparedSql.push(sql);
+              return {
+                get: vi.fn((params: { itemId: string }) => rows[params.itemId]),
+              };
+            }),
+          } as never,
+          tryParseJson,
+          requireFeatureEnabled: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+        resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+        readTranscriptOrEmpty: vi.fn(async () => []),
+      });
+      const read = (itemId: string, allowGlobal = false) =>
+        service.getActiveMemoryItemForRoutedContext(itemId, "workspace-a", { allowGlobal, nowIso });
+
+      expect(read("canonical")).toMatchObject({ itemId: "canonical", workspaceId: "workspace-a" });
+      expect(read("legacy")).toMatchObject({ itemId: "legacy", metadata: { workspaceId: " workspace-a " } });
+      expect(read("global")).toBeUndefined();
+      expect(read("global", true)).toMatchObject({ itemId: "global", metadata: {} });
+
+      tryParseJson.mockClear();
+      for (const itemId of ["canonical-invalid-json", "invalid-json", "scalar", "array", "null", "malformed-legacy"]) {
+        expect(read(itemId, true)).toBeUndefined();
+      }
+      expect(tryParseJson).not.toHaveBeenCalled();
+
+      for (const itemId of ["foreign-canonical", "foreign-legacy", "forgotten", "expired", "malformed-expiry"]) {
+        expect(read(itemId, true)).toBeUndefined();
+      }
+      expect(
+        service.getActiveMemoryItemForRoutedContext("global", "workspace-a", {
+          allowGlobal: true,
+          nowIso: "not-a-timestamp",
+        }),
+      ).toBeUndefined();
+      expect(preparedSql).toSatisfy((statements: string[]) =>
+        statements.every((sql) =>
+          dialect === "sqlite"
+            ? sql.includes("json_valid(metadata_json)")
+            : sql.includes("jsonb_typeof(metadata_doc -> 'workspaceId')"),
+        ),
+      );
+    },
+  );
+
   it("applies batch memory item mutations with sanitized reversible ledger evidence", () => {
     const harness = createMemoryItemBatchHarness();
 
@@ -1132,6 +1254,7 @@ describe("MemoryLifecycleService", () => {
     };
     const evaluate = vi.fn(() => gateDecision);
     const createEnvelope = vi.fn();
+    const acquireLocalEmbeddingLease = vi.fn(async () => ({ release: vi.fn() }));
     const service = new MemoryLifecycleService({
       context: {} as never,
       learned: {} as never,
@@ -1151,6 +1274,7 @@ describe("MemoryLifecycleService", () => {
       resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
       writeGate: { evaluate } as never,
       evidence: { createEnvelope } as never,
+      acquireLocalEmbeddingLease,
       readTranscriptOrEmpty: vi.fn(async () => []),
     });
 
@@ -1253,34 +1377,47 @@ describe("MemoryLifecycleService", () => {
       expect.objectContaining({ type: "memory_decision_retrospective_added", decisionId: decision.id }),
     );
 
-    evaluate.mockReturnValueOnce({
-      decision: "blocked",
-      authority: "agent_proposed",
-      reasons: ["secret_like_content"],
-      contradictionHints: [],
-      redactionStatus: "blocked_secret",
-      createdAt: "2026-05-22T01:00:00.000Z",
-    });
-    await expect(
-      service.createMemoryDecision(
-        {
-          title: "Unsafe agent memory",
-          decision: "Remember api_key sk-secret-token-1234567890.",
-          rationale: "Should be blocked.",
-          authority: "agent_proposed",
-        },
-        "agent-1",
-      ),
-    ).rejects.toThrow(/Structured memory write requires review/);
-    expect(createEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventKind: "memory_write",
-        metadata: expect.objectContaining({
-          structuredMemory: true,
-          claimPreview: "[redacted]",
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "http://127.0.0.1:8080/embedding");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    acquireLocalEmbeddingLease.mockClear();
+    try {
+      evaluate.mockReturnValueOnce({
+        decision: "blocked",
+        authority: "agent_proposed",
+        reasons: ["secret_like_content"],
+        contradictionHints: [],
+        redactionStatus: "blocked_secret",
+        createdAt: "2026-05-22T01:00:00.000Z",
+      });
+      await expect(
+        service.createMemoryDecision(
+          {
+            title: "Unsafe agent memory",
+            decision: "Remember api_key sk-secret-token-1234567890.",
+            rationale: "Should be blocked.",
+            authority: "agent_proposed",
+          },
+          "agent-1",
+        ),
+      ).rejects.toThrow(/Structured memory write requires review/);
+      expect(acquireLocalEmbeddingLease).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(createEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventKind: "memory_write",
+          metadata: expect.objectContaining({
+            structuredMemory: true,
+            claimPreview: "[redacted]",
+          }),
         }),
-      }),
-    );
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("persists a content embedding into structured-memory metadata on write (W1)", async () => {
@@ -1326,6 +1463,117 @@ describe("MemoryLifecycleService", () => {
     // And the same shape is round-tripped through the stored row.
     const reread = service.listMemoryEntities({ workspaceId: "workspace-1" })[0];
     expect((reread?.metadata.embedding as number[] | undefined)?.length).toBe((embedding ?? []).length);
+  });
+
+  it("propagates the governed llama.cpp lease hook into structured-memory writes", async () => {
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "http://127.0.0.1:8080/embedding");
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const release = vi.fn();
+    const acquireLocalEmbeddingLease = vi.fn(async () => ({ release }));
+    const succeedUsage = vi.fn(() => ({ eventId: "usage-structured-memory-1" }));
+    const prepareEmbeddingUsageDispatch = vi.fn(() => ({
+      eventId: "usage-structured-memory-1",
+      accept: () => ({
+        eventId: "usage-structured-memory-1",
+        observe: vi.fn(),
+        observeNormalized: vi.fn(),
+        succeed: succeedUsage,
+        fail: vi.fn(() => ({ eventId: "usage-structured-memory-1" })),
+        cancel: vi.fn(() => ({ eventId: "usage-structured-memory-1" })),
+      }),
+      abandon: vi.fn(),
+      markDispatchUnknown: vi.fn(),
+    }));
+    const gatewaySql = createStructuredMemorySqlHarness();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {} as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: gatewaySql as never,
+        tryParseJson: vi.fn((raw, fallback) => {
+          try {
+            return raw ? JSON.parse(String(raw)) : fallback;
+          } catch {
+            return fallback;
+          }
+        }),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      writeGate: { evaluate: vi.fn(() => ({ decision: "allowed" })) } as never,
+      evidence: { createEnvelope: vi.fn() } as never,
+      acquireLocalEmbeddingLease,
+      prepareEmbeddingUsageDispatch,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    try {
+      const entity = await service.createMemoryEntity(
+        {
+          workspaceId: "workspace-1",
+          title: "Local embedding ownership",
+          summary: "Structured memory writes hold a governed runtime lease.",
+          sourceRefs: [
+            { sourceType: "session", sourceRef: "session-1" },
+            { sourceType: "turn", sourceRef: "turn-1" },
+            { sourceType: "run", sourceRef: "run-1" },
+          ],
+        },
+        "operator-1",
+      );
+
+      expect(acquireLocalEmbeddingLease).toHaveBeenCalledWith({
+        providerId: "llamacpp",
+        url: "http://127.0.0.1:8080/embedding",
+        purpose: "memory_write",
+      });
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(succeedUsage).toHaveBeenCalledTimes(1);
+      expect(entity.metadata.embeddingMetadata).toMatchObject({ provider: "llamacpp", dimensions: 8 });
+      expect(entity.metadata.modelUsageEventIds).toEqual(["usage-structured-memory-1"]);
+      expect(prepareEmbeddingUsageDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attribution: {
+            operationId: `memory-entity:${entity.id}:embedding`,
+            dispatchGeneration: "initial-write",
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            durableRunId: "run-1",
+            utilityKind: "memory_entity_write_embedding",
+            agentId: "operator-1",
+            callKind: "embedding",
+          },
+        }),
+      );
+
+      const conflict = new ConflictError({ message: "runtime owners are reconciling" });
+      acquireLocalEmbeddingLease.mockRejectedValueOnce(conflict);
+      await expect(
+        service.createMemoryEntity(
+          {
+            workspaceId: "workspace-1",
+            title: "Mixed generation must fail closed",
+          },
+          "operator-1",
+        ),
+      ).rejects.toBe(conflict);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("records learning provenance, proposals, supersedes, and file-backed staleness", async () => {

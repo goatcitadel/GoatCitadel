@@ -1,5 +1,10 @@
 import type { TurnRuntime, TurnRuntimeRequest, TurnRuntimeResult } from "@goatcitadel/orchestration";
-import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
+import {
+  ChatTurnAgentRunner,
+  type ChatTurnAgentRunnerDeps,
+  type ChatTurnAgentRunnerInput,
+  type ResolvedChatTurnToolSchema,
+} from "./chat-turn-agent-runner.js";
 
 export class GatewayTurnRuntime implements TurnRuntime {
   private readonly orchestrator: ChatTurnAgentRunner;
@@ -14,5 +19,9 @@ export class GatewayTurnRuntime implements TurnRuntime {
 
   public async *runStream(input: TurnRuntimeRequest) {
     yield* this.orchestrator.runStream(input);
+  }
+
+  public resolveCapabilityToolSchema(input: ChatTurnAgentRunnerInput): Promise<ResolvedChatTurnToolSchema> {
+    return this.orchestrator.resolveCapabilityToolSchema(input);
   }
 }

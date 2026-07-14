@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
-import { EventIngestService, logger } from "@goatcitadel/gateway-core";
+import { EventIngestService, logger, ModelUsageAccountingService } from "@goatcitadel/gateway-core";
 import { traceInitStep, toLogContext } from "./gateway/bootstrap-tracing.js";
 
 const log = logger.child("gateway-service");
@@ -17,13 +18,14 @@ const durableRunLogger: DurableRunServiceLogger = {
 };
 
 import { MeshService } from "@goatcitadel/mesh-core";
-import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
+import { OrchestrationEngine } from "@goatcitadel/orchestration";
 import {
   type ApprovalCreateAuthority,
   ToolPolicyEngine,
   assertWritePathInJail,
   describeBrowserSessionState,
   fetchAllowlisted,
+  type LocalEmbeddingLeaseRequest,
 } from "@goatcitadel/policy-engine";
 import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
 import {
@@ -33,6 +35,7 @@ import {
 } from "@goatcitadel/storage";
 import {
   buildChatModePrefsPatch,
+  classifyToolEffectPotential,
   ConflictError,
   DEFAULT_CITADEL_ID,
   inferProviderForModelId,
@@ -51,11 +54,13 @@ import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
+import { hashSensitiveToken } from "./device-access-helpers.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
+import { resolveCallableSkillActivation } from "./callable-skill-activation.js";
 import type {
-  DatabaseCutoverProfile,
+  DatabaseCutoverRequest,
   DatabaseCutoverResponse,
   DatabaseHealthSnapshot,
   DatabaseVerifyResponse,
@@ -171,9 +176,11 @@ import type {
   MemoryWriteInput,
   CronAgentTurnConfig,
   CronJobRecord,
+  CronRunExecutionToken,
   DashboardState,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ModelUsageAttributionContext,
   ImageGenerationRequest,
   ImageGenerationResponse,
   GatewayEventInput,
@@ -325,6 +332,8 @@ import type {
   ReplayRegressionRun,
   ReplayRegressionResult,
   CapabilityTrendSeries,
+  DurableChildWatcherCreateRequest,
+  DurableChildWatcherRecord,
   DurableRunCreateRequest,
   DurableRunTimelineEvent,
   DurableWakeResult,
@@ -335,10 +344,10 @@ import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
 import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
-import { getRequestAttribution } from "@goatcitadel/storage";
+import { getRequestAttribution, runWithIsolatedRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
 import { resolveUtilityModelOverride } from "./utility-model-routing.js";
-import { AssemblyService } from "./assembly-service.js";
+import { AssemblyService, bindAssemblyChatCompletion } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
@@ -360,6 +369,7 @@ import type {
 import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
+import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
@@ -367,6 +377,7 @@ import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
+import { SkillLearningService } from "./skill-learning-service.js";
 import { SkillStateService } from "./skill-state-service.js";
 import { GATEWAY_OWNED_MCP_SERVER_IDS, McpServerStore } from "./mcp-server-store.js";
 import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
@@ -380,6 +391,11 @@ import {
 } from "../dev-diagnostics/service.js";
 import { serializePathWithinRoot } from "./security-utils.js";
 import { MediaVoiceService } from "./media-voice-service.js";
+import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
+import {
+  InboundChannelEventService,
+  type InboundChannelDeterministicIdentity,
+} from "./inbound-channel-event-service.js";
 import { CronAutomationService } from "./gateway/cron-automation-service.js";
 import {
   runCostReportSchedulerIfDue,
@@ -425,12 +441,25 @@ import type { CommitmentClassifierService } from "./gateway/commitment-classifie
 import { createChatPostCommitRuntime } from "./gateway/chat-post-commit-runtime.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
-import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
+import {
+  OrchestrationWorktreeService,
+  type OrchestrationWorktreeLeaseLossEvent,
+} from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
 import { SignalInboundRuntimeService } from "./signal-inbound-runtime-service.js";
 import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
+import {
+  SharedHostAdmissionClosedError,
+  SharedHostLifecycleService,
+  type SharedHostLifecycleAdmissionPort,
+  type SharedHostWorkKind,
+} from "./shared-host-lifecycle-service.js";
+import { createJourneyTimelineRouteService } from "./journey-timeline-route-service.js";
+import { JourneyTimelineService } from "./journey-timeline-service.js";
+import { OpsSavedBoardService } from "./ops-saved-board-service.js";
+import { createExternalSourceRouteService } from "./external-source-route-service.js";
 import {
   buildIntegrationActionHostForGateway,
   composeGatewayRouteServices,
@@ -449,6 +478,17 @@ import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-
 import { RealtimeEventService } from "./realtime-event-service.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
+import { ConfigGenerationService, type CompleteUnifiedConfigPayload } from "./config-generation-service.js";
+import { CronConfigGenerationOwner, projectCanonicalCronSpec } from "./cron-config-generation-owner.js";
+import {
+  assertProviderSecretEffectsRestored,
+  prepareProviderSecretMutation,
+  reconcileProviderSecretEffects,
+  type DeleteProviderSecretInput,
+  type PreparedProviderSecretMutation,
+  type ProviderSecretMutationResponse,
+  type SaveProviderSecretInput,
+} from "./provider-secret-persistence.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
@@ -458,6 +498,7 @@ import { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
+import { executeTelegramInboundCommand } from "./telegram-inbound-command-service.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
 import { GuidanceService } from "./guidance-service.js";
@@ -469,7 +510,18 @@ import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
+import * as chatRoutedContextService from "./chat-routed-context-service.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
+import {
+  buildPreviewPrefs,
+  resolveChatRouteDescriptor,
+  type ResolvedChatRouteDescriptor,
+} from "./chat-route-resolution.js";
+import {
+  resolveChatTurnCapabilityProfile as resolveServerOwnedChatTurnCapabilityProfile,
+  type ChatTurnCapabilityProfileResolution,
+} from "./chat-turn-capability-profile-service.js";
+import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
 import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery-service.js";
@@ -485,10 +537,14 @@ import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
+import { createChatCompactionBreakerActionServiceForGateway } from "./chat-compaction-breaker-runtime-service.js";
+import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
   ToolInvocationCoordinatorService,
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
+import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
+import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -528,6 +584,7 @@ import {
   isApprovedExternalRuntimePendingAction,
   readAuthActorSource,
   readPermissionSurfaceValue,
+  toToolInvokeRequest,
   toolInvokeResultRecord,
 } from "./gateway/external-runtime-approval-adapter.js";
 import {
@@ -588,13 +645,15 @@ import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
+import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
+import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
 import {
   ChannelDeliveryRuntimeService,
   type ChannelDeliveryRuntimeRecord,
   type ChannelDeliveryRuntimeSendInput,
 } from "./channel-delivery-runtime-service.js";
-import { VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
+import { getInboundBotLoopGuard, VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import {
   evaluateDeploymentProfileToolAccess,
@@ -621,6 +680,14 @@ import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { applyMcpRedaction, wildcardMatch } from "./mcp-server-policy.js";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
+import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import { SkillHubLifecycleService } from "./skill-hub-lifecycle-service.js";
+import {
+  SkillHubReviewService,
+  type SkillHubReviewResult,
+  type SkillHubRollbackReviewInput,
+  type SkillHubSourceReviewInput,
+} from "./skill-hub-review-service.js";
 
 export interface MemoryFileEntry {
   relativePath: string;
@@ -651,6 +718,7 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "http.get",
   // P2-S4a: read-only tier-2 recall over this conversation's own message history.
   "session.search",
+  "session.history",
   "local_business.research",
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
@@ -721,10 +789,26 @@ function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): Ga
   };
 }
 
+async function transitionLlamaCppRuntimeConfig(
+  runtime: LlamaCppRuntimeService,
+  nextConfig: GatewayRuntimeConfig["assistant"]["llamaCpp"],
+  lifecycle: ReturnType<LlamaCppRuntimeService["getLifecycleSnapshot"]>,
+  reason: string,
+): Promise<void> {
+  const assessment = runtime.assessConfigTransition(nextConfig);
+  runtime.assertCanApplyConfig(nextConfig);
+  if (assessment.identityChanged) {
+    await runtime.stop(reason);
+  }
+  runtime.updateConfig(nextConfig);
+  await runtime.restoreLifecycleSnapshot(lifecycle);
+}
+
 export class GatewayService {
   public config: GatewayRuntimeConfig;
   public readonly storage: Storage;
   private readonly eventIngestService: EventIngestService;
+  public readonly modelUsageAccounting: ModelUsageAccountingService;
   public readonly policyEngine: ToolPolicyEngine;
   public readonly secretStore: SecretStoreService;
   public readonly approvalRemoteTokenSecrets: ApprovalRemoteTokenSecretService;
@@ -742,7 +826,7 @@ export class GatewayService {
   private readonly approvalExplainer: ApprovalExplainerService;
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
-  public readonly turnRuntime: TurnRuntime;
+  public readonly turnRuntime: GatewayTurnRuntime;
   /**
    * R3-8 `agent.fanout` session registry. The entry/stream turn services
    * register a turn-scoped executor here; the policy engine's `subagentFanout`
@@ -773,10 +857,13 @@ export class GatewayService {
   public readonly approvalWaitRunService: ApprovalWaitRunService;
   public readonly approvalEffectsService: ApprovalEffectsService;
   private readonly approvalRuntime: ApprovalRuntimeService;
+  public readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
   private readonly chatTurnRuntime: ChatTurnRuntimeService;
   private readonly chatDelegationService: ChatDelegationService;
   public readonly steerService: ChatSteerService;
+  public readonly pluginToolOverrideService: PluginToolOverrideService;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
+  private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
@@ -794,6 +881,9 @@ export class GatewayService {
   private readonly operatorProfileService: OperatorProfileService;
   private readonly autonomyControlService: AutonomyControlService;
   private readonly capabilitySystemService: CapabilitySystemService;
+  private readonly skillHubLifecycleService: SkillHubLifecycleService;
+  private readonly skillHubReviewService: SkillHubReviewService;
+  private readonly skillLearningService: SkillLearningService;
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly mcpOAuthTokenService: McpOAuthTokenService;
   public readonly mcpOAuth: GatewayMcpOAuthService;
@@ -805,11 +895,17 @@ export class GatewayService {
   public readonly mcpElicitationService = new McpElicitationService();
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   public readonly reviewReadinessService: ReviewReadinessService;
+  private readonly runtimeReleaseTrustService: RuntimeReleaseTrustService;
+  public readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
   private readonly guidanceService: GuidanceService;
   private readonly channelDeliveryRuntimeService: ChannelDeliveryRuntimeService;
   private readonly backupRetentionService: BackupRetentionService;
   private readonly databaseCutoverService: DatabaseCutoverService;
+  private readonly configGenerationService: ConfigGenerationService;
+  public readonly cronConfigGenerationOwner: CronConfigGenerationOwner;
   private readonly mediaVoiceService: MediaVoiceService;
+  private readonly channelVoiceInboundService: ChannelVoiceInboundService;
+  private readonly inboundChannelEventService: InboundChannelEventService;
   private readonly realtimeEventService: RealtimeEventService;
   private readonly routeCompositionPort?: GatewayRouteCompositionPort;
   public readonly routeServices: GatewayRouteServices;
@@ -821,6 +917,7 @@ export class GatewayService {
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
   private readonly syntheticPermissionProfiles = new Map<string, PermissionProfileRecord>();
+  private readonly opsSavedBoardRealtimeEpoch = randomUUID();
   public readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   public readonly deviceTokenVault = new DeviceTokenVault();
   private chatStreamRuntime?: GatewayChatStreamRuntime;
@@ -832,18 +929,37 @@ export class GatewayService {
   public onboardingMarker: { completedAt?: string; completedBy?: string } = {};
   private criticalInitComplete = false;
   private deferredInitPromise?: Promise<void>;
+  private readonly sharedHostLifecycle: SharedHostLifecycleAdmissionPort;
 
   public get gatewaySql() {
     return this.storage.gatewaySql;
   }
 
-  constructor(inputConfig: GatewayRuntimeConfig) {
+  private acquireLocalEmbeddingLease(request: LocalEmbeddingLeaseRequest) {
+    this.configGenerationService.assertRuntimeReadsReady();
+    return acquireBoundLlamaCppEmbeddingLease({
+      request,
+      configuredBaseUrl: this.config.assistant.llamaCpp.server.baseUrl,
+      runtime: this.llamaCppRuntime,
+    });
+  }
+
+  constructor(
+    inputConfig: GatewayRuntimeConfig,
+    options: { sharedHostLifecycle?: SharedHostLifecycleAdmissionPort } = {},
+  ) {
+    this.sharedHostLifecycle = options.sharedHostLifecycle ?? new SharedHostLifecycleService({ enabled: false });
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
     this.storage = createGatewayStorage(config);
+    this.modelUsageAccounting = new ModelUsageAccountingService(
+      this.storage.modelUsageEvents,
+      `gateway:${config.assistant.mesh.nodeId}:${randomUUID()}`,
+    );
     this.mutationIdempotencyStore = this.storage.mutationIdempotency;
     this.channelDeliveryRuntimeService = new ChannelDeliveryRuntimeService({
       repository: this.storage.commsDeliveries,
+      sharedHostLifecycle: this.sharedHostLifecycle,
       send: (input) => this.sendQueuedChannelDelivery(input),
       onDeliverySent: (record) => this.markLinkedCommitmentDeliverySent(record),
       onDeliveryFailed: (record) => this.markLinkedCommitmentDeliveryFailed(record),
@@ -891,6 +1007,9 @@ export class GatewayService {
       runtimeDecisionTraces: this.storage.runtimeDecisionTraces,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
+    this.pluginToolOverrideService = new PluginToolOverrideService({
+      getOwnerId: () => `gateway:${this.config.assistant.mesh.nodeId}`,
+    });
 
     this.backupRetentionService = new BackupRetentionService({
       storage: this.storage,
@@ -899,12 +1018,14 @@ export class GatewayService {
     this.databaseCutoverService = new DatabaseCutoverService({
       config,
       createBackup: (input) => this.backupRetentionService.createBackup(input),
-      persistAssistantConfig: () => this.persistAssistantConfig(),
+      readSettingsRevision: () => this.readSettingsRevision(),
+      commitDatabaseDriver: (input) => this.commitDatabaseDriver(input),
     });
     this.mediaVoiceService = new MediaVoiceService({
       gatewaySql: this.gatewaySql,
       storage: this.storage,
       backgroundTasks: this.backgroundTasks,
+      runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("worker", label, work),
       isClosing: () => this.closing,
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
@@ -913,13 +1034,49 @@ export class GatewayService {
       readChatAttachmentContent: (id) => this.readChatAttachmentContent(id),
       getChatAttachment: (id) => this.getChatAttachment(id),
     });
+    this.channelVoiceInboundService = new ChannelVoiceInboundService({
+      fetchWithTimeout: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+      transcribeVoice: (input) => this.mediaVoiceService.transcribeVoice(input),
+      isConnectionUrlAllowlisted: (urlValue) => this.isConnectionUrlAllowlisted(urlValue),
+      resolveConnectionSecret: (connectionConfig, directKey, envKey) =>
+        this.resolveConnectionSecret(connectionConfig, directKey, envKey),
+    });
     this.eventIngestService = new EventIngestService(this.storage);
+    this.inboundChannelEventService = new InboundChannelEventService({
+      storage: this.storage,
+      ownerId: `gateway:${config.assistant.mesh.nodeId}`,
+      isClosing: () => this.closing,
+      registerBackgroundTask: (task) => this.registerBackgroundTask(task),
+      sharedHostLifecycle: this.sharedHostLifecycle,
+      getIntegrationConnection: (connectionId) => this.storage.integrationConnections.get(connectionId),
+      ingestChannelMessage: (channel, idempotencyKey, message) =>
+        this.ingestChannelMessage(channel, idempotencyKey, message),
+      setChatSessionBinding: (binding) => this.setChatSessionBinding(binding),
+      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      respondToExistingChatMessage: (sessionId, eventId, options) =>
+        this.respondToExistingChatMessage(sessionId, eventId, options),
+      transcribeChannelVoice: (input) => this.channelVoiceInboundService.transcribe(input),
+      executeInboundCommand: (input) =>
+        input.channel === "telegram"
+          ? executeTelegramInboundCommand(this, input)
+          : discordRuntimeBridgeService.executeDiscordRuntimeInboundCommand(this, input),
+      decideBotLoop: (input) => getInboundBotLoopGuard().decide(input),
+      emitChannelActivity: (input) => this.commsActivity(input),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+    });
     this.browserSessionRuntimeService = new BrowserSessionRuntimeService({
       gatewaySql: this.gatewaySql,
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
       },
       describeState: describeBrowserSessionState,
+    });
+    this.workspacePathBridgeRuntime = new WorkspacePathBridgeRuntime({
+      storage: this.storage,
+      rootDir: config.rootDir,
+      workspaceDir: config.assistant.workspaceDir,
+      dataDir: config.assistant.dataDir,
+      writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A
@@ -931,6 +1088,8 @@ export class GatewayService {
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
         isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
+      acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
+      prepareEmbeddingUsageDispatch: (input) => this.modelUsageAccounting.prepareDispatch(input),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -965,6 +1124,16 @@ export class GatewayService {
       { source: "managed", dir: path.join(config.rootDir, ".assistant", "skills") },
       { source: "workspace", dir: path.join(config.rootDir, "skills", "workspace") },
     ]);
+    this.skillHubLifecycleService = new SkillHubLifecycleService({
+      rootDir: config.rootDir,
+      candidateRoot: config.assistant.capabilities.candidateRoot,
+      skillsExtraRoot: path.join(config.rootDir, "skills", "extra"),
+      artifactStore: new SkillHubArtifactStore(
+        path.resolve(config.rootDir, config.assistant.dataDir, "skill-hub", "artifacts"),
+      ),
+      storage: this.storage,
+      reloadSkills: () => this.skillsService.reload(),
+    });
     this.capabilityScopeResolver = new CapabilityScopeResolver({
       listAssignmentsForScope: (scopeKind, scopeId) => this.storage.capabilityScope.listForScope(scopeKind, scopeId),
       listAllSkillIds: () => this.skillsService.list().map((skill) => skill.skillId),
@@ -991,6 +1160,19 @@ export class GatewayService {
         runtimeExposure: this.buildRuntimeExposureSnapshot(),
       }),
       resolvePolicyContext: (input) => this.resolveToolPolicyContext(input),
+      getChatSessionWorkbench: async (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
+      runChatSessionWorkbenchCommand: (sessionId, input) =>
+        this.routeServices.chatSessions.runChatSessionWorkbenchCommand(sessionId, input),
+      flushTranscriptOutbox: () => this.eventIngestService.flushPendingTranscriptOutbox(),
+    });
+    this.skillLearningService = new SkillLearningService({
+      rootDir: config.rootDir,
+      candidateRoot: config.assistant.capabilities.candidateRoot,
+      storage: this.storage,
+      readEffectiveConfigRevision: () => {
+        this.configGenerationService.assertRuntimeReadsReady();
+        return this.configGenerationService.getRevision();
+      },
     });
     this.taskLifecycleService = new TaskLifecycleService({
       storage: this.storage,
@@ -1002,14 +1184,41 @@ export class GatewayService {
         networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
       }),
     });
+    const runtimeCwd = process.cwd();
+    const runtimeBindingPaths = {
+      gatewayModulePath: fileURLToPath(import.meta.url),
+      entryPath: process.argv[1] ?? "",
+      executablePath: process.execPath,
+    };
+    const packagedRuntimeAppDir = resolvePackagedRuntimeAppDir(
+      [
+        process.env.GOATCITADEL_APP_DIR,
+        runtimeCwd,
+        path.dirname(runtimeCwd),
+        path.dirname(path.dirname(runtimeCwd)),
+        config.rootDir,
+      ],
+      runtimeBindingPaths,
+    );
+    this.runtimeReleaseTrustService = new RuntimeReleaseTrustService({
+      mutableRootDir: config.rootDir,
+      packagedAppDir: packagedRuntimeAppDir,
+      runtimeBindingPaths,
+      registerBackgroundTask: (task) => this.registerBackgroundTask(task),
+    });
     this.reviewReadinessService = new ReviewReadinessService({
       rootDir: config.rootDir,
+      runtimeAppDir: packagedRuntimeAppDir,
+      runtimeCwd,
+      releaseTrust: this.runtimeReleaseTrustService,
       taskLifecycleService: this.taskLifecycleService,
     });
     this.orchestrationEngine = new OrchestrationEngine();
     this.orchestrationWorktreeService = new OrchestrationWorktreeService({
       config,
       orchestrationRuns: this.storage.orchestration,
+      worktreeLeases: this.storage.orchestrationWorktreeLeases,
+      onLeaseLost: (event) => this.handleOrchestrationWorktreeLeaseLoss(event),
     });
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -1021,11 +1230,21 @@ export class GatewayService {
       modelMetadataPath: path.join(config.rootDir, "config", "llm-model-metadata.json"),
       modelCatalogCachePath: path.resolve(config.rootDir, config.assistant.dataDir, "cache", "llm-model-catalog.json"),
       secretStore,
+      modelUsageAccounting: this.modelUsageAccounting,
+      localServiceLeaseAcquirer: (request) => {
+        this.configGenerationService.assertRuntimeReadsReady();
+        return acquireBoundLlamaCppLease({
+          request,
+          configuredBaseUrl: this.config.assistant.llamaCpp.server.baseUrl,
+          runtime: this.llamaCppRuntime,
+        });
+      },
     });
     this.assemblyService = new AssemblyService({
       storage: this.storage,
       rootDir: config.rootDir,
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: bindAssemblyChatCompletion(this),
+      runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("agent", label, work),
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
       },
@@ -1037,6 +1256,8 @@ export class GatewayService {
       (eventType, payload) => {
         this.publishRealtime(eventType, "memory", payload);
       },
+      (request) => this.acquireLocalEmbeddingLease(request),
+      (input) => this.modelUsageAccounting.prepareDispatch(input),
     );
     this.meshService = new MeshService(this.storage, {
       enabled: config.assistant.mesh.enabled,
@@ -1063,6 +1284,12 @@ export class GatewayService {
         this.publishRealtime(eventType, "llamacpp", payload);
       },
     });
+    const canonicalConfigPath = path.join(config.rootDir, "config", "goatcitadel.json");
+    const initialUnifiedPayload = fsSync.existsSync(canonicalConfigPath)
+      ? undefined
+      : this.buildUnifiedConfigPayloadForRuntime(config, config.llm, this.readFeatureFlags());
+    this.configGenerationService = new ConfigGenerationService(config.rootDir, initialUnifiedPayload);
+    this.cronConfigGenerationOwner = new CronConfigGenerationOwner(this.configGenerationService, this.storage);
     this.approvalExplainer = new ApprovalExplainerService(
       this.storage,
       this.llmService,
@@ -1074,14 +1301,17 @@ export class GatewayService {
     this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
-      createChatCompletion: (request) => this.createChatCompletion(request),
-      createChatCompletionStream: (request) => this.createChatCompletionStream(request),
-      generateImage: (request) => this.llmService.generateImage(request),
+      listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
+      createChatCompletionStream: (request, attribution) => this.createChatCompletionStream(request, attribution),
+      generateImage: (request, attribution) => this.llmService.generateImage(request, attribution),
       invokeTool: (request, options) => this.invokeTool(request, options),
+      invokeToolWithEffectTruth: (request, options) => this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: (request) => this.evaluateToolAccess(request),
       invokeMcpTool: (request, options) => this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
+      recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
       chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
@@ -1091,11 +1321,18 @@ export class GatewayService {
     this.researchService = new ResearchService({
       storage: this.storage,
       invokeTool: (request) => this.invokeTool(request),
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
     });
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);
+    this.skillHubReviewService = new SkillHubReviewService({
+      storage: this.storage,
+      artifactStore: new SkillHubArtifactStore(
+        path.resolve(config.rootDir, config.assistant.dataDir, "skill-hub", "artifacts"),
+      ),
+      skillImport: this.skillImportService,
+    });
     this.skillMutationService = new SkillMutationService({
       rootDir: config.rootDir,
       skillLifecycle: this.storage.skillLifecycle,
@@ -1109,7 +1346,9 @@ export class GatewayService {
         this.ensurePendingDiscordPairing(connectionId, userId, displayName),
       touchPairing: (pairingId) => this.touchDiscordPairing(pairingId),
       onInboundMessage: (input) => discordRuntimeBridgeService.handleDiscordRuntimeInbound(this, input),
-      onSlashCommand: (input) => discordRuntimeBridgeService.handleDiscordRuntimeSlashCommand(this, input),
+      acceptSlashCommand: (input) => discordRuntimeBridgeService.acceptDiscordRuntimeSlashCommand(this, input),
+      awaitSlashCommandResult: (inboundEventId) =>
+        discordRuntimeBridgeService.awaitDiscordRuntimeSlashCommandResult(this, inboundEventId),
       listModelSuggestions: (query, limit) =>
         listChatModelSuggestions(
           {
@@ -1128,40 +1367,20 @@ export class GatewayService {
           context,
         });
       },
+      sharedHostLifecycle: this.sharedHostLifecycle,
     });
-    // Signal inbound poller (phase B1b): polls the local signal-cli bridge and
-    // dispatches through the SAME inbound seam webhook channels use, so the
-    // default-deny sender allowlist, bot-loop guard, and ingest idempotency
-    // apply identically. Gated on signalInboundV1Enabled — sync() is a no-op
-    // (and stops any pollers) while the flag is off.
+    // Signal is outbound-only. This compatibility facade never receives from
+    // the bridge; it converts legacy inbound=true settings into operator-visible
+    // blocked/deprecated evidence.
     this.signalInboundRuntimeService = new SignalInboundRuntimeService({
       isEnabled: () => this.isFeatureEnabled("signalInboundV1Enabled"),
       listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
-      // SSRF-guarded fetch: the bridge URL comes from connection config, so it
-      // must ride the same egress allowlist as outbound integration actions.
-      fetchBridge: (url) => this.fetchWithDiagnosticsTimeout(url),
-      integrationWebhooks: {
-        getIntegrationConnection: (connectionId) => this.storage.integrationConnections.get(connectionId),
-        cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
-          this.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
-        hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
-        ingestChannelMessage: (channel, idempotencyKey, input) =>
-          this.ingestChannelMessage(channel, idempotencyKey, input),
-        parseChatCommand: (sessionId, commandText, options) => this.parseChatCommand(sessionId, commandText, options),
-        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-        emitChannelActivity: (input) => this.commsActivity(input),
-        respondToExistingChatMessage: (sessionId, messageId, options) =>
-          this.respondToExistingChatMessage(sessionId, messageId, options),
-        resolveApprovalWithRemoteToken: (input) => this.resolveApprovalWithRemoteToken(input),
-        resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
-        setChatSessionBinding: (input) => this.setChatSessionBinding(input),
-        updateIntegrationConnection: (connectionId, patch) =>
-          this.storage.integrationConnections.update(connectionId, patch),
-      },
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.cronAutomationService = new CronAutomationService({
       storage: this.storage,
-      persistCronJobsConfig: () => this.persistCronJobsConfig(),
+      specOwner: this.cronConfigGenerationOwner,
+      sharedHostLifecycle: this.sharedHostLifecycle,
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload ?? {});
       },
@@ -1192,7 +1411,7 @@ export class GatewayService {
         },
         agentTurn: (input) => this.runCronAgentTurn(input),
         improvement: async () => {
-          await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true });
+          await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
         },
         backup: async () => {
           await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
@@ -1210,7 +1429,7 @@ export class GatewayService {
           await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
         },
         curator: async () => {
-          await this.curatorService.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
+          await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
         },
         watchdog: async (job) => this.runCronWatchdog(job),
         noAgent: (input) => runNoAgentCommand(input),
@@ -1223,6 +1442,7 @@ export class GatewayService {
     const publishRealtime = this.publishRealtime.bind(this);
     const serviceCtx = {
       storage: this.storage,
+      cronSpecOwner: this.cronConfigGenerationOwner,
       config: this.config,
       logger: durableRunLogger,
       llmService: this.llmService,
@@ -1253,6 +1473,7 @@ export class GatewayService {
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
       taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
+      sharedHostLifecycle: this.sharedHostLifecycle,
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
@@ -1267,10 +1488,11 @@ export class GatewayService {
     this.promptPackService = new PromptPackService(serviceCtx, {
       createChatSession: (input) => this.createChatSession(input),
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       getPromptJudgeModelDefaults: () => this.getPromptJudgeModelDefaults(),
       backgroundTasks: this.backgroundTasks,
+      runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("agent", label, work),
       recordImprovementBenchmarkSignal: (input) => {
         this.improvementService.recordPromptLabBenchmarkCompletionSignal(input);
       },
@@ -1290,23 +1512,32 @@ export class GatewayService {
       createDurableRun: (input) => this.createDurableRun(input),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       // P1-F5 de-novo origination: cheap read-only planner + eligibility guard.
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       isProactiveDeNovoEligibleSession: (sessionId) =>
         isHeartbeatEligibleSession(this.chatAutonomousTurnDeps(), sessionId),
       backgroundTasks: this.backgroundTasks,
+      runSchedulerWork: (work) => this.tryRunWithSharedHostWork("agent", "proactive-scheduler-tick", work),
       get closing() {
         return self.closing;
       },
     });
     this.approvalEffectsService = new ApprovalEffectsService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
+      sharedHostLifecycle: this.sharedHostLifecycle,
       wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
       requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
       executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
       executeApprovedPendingAction: (approvalId, signal) => this.executeApprovedPendingAction(approvalId, signal),
+      executeApprovedSkillHubLifecycleOperation: (operationId, approvalId, requestSha256, signal) =>
+        this.skillHubLifecycleService.applyApprovedOperation({
+          operationId,
+          approvalId,
+          requestSha256,
+          signal,
+        }),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       recordDurableTimelineEvent: (runId, eventType, payload) =>
@@ -1373,6 +1604,11 @@ export class GatewayService {
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
     this.steerService = new ChatSteerService();
+    this.chatCompactionBreakerActionService = createChatCompactionBreakerActionServiceForGateway({
+      storage: this.storage,
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      createApproval: (input, authority) => this.createApproval(input, undefined, authority),
+    });
     this.chatTurnRuntime = new ChatTurnRuntimeService(this.buildChatTurnRuntimeHost());
     this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
       rootDir: this.config.rootDir,
@@ -1410,6 +1646,14 @@ export class GatewayService {
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      watchDurableChildRun: (input) => {
+        // Some compatibility callers use policyRunId as a non-durable scope
+        // token. Only bind a watcher when both canonical durable runs exist.
+        if (!this.findDurableRunMaybe(input.parentRunId) || !this.findDurableRunMaybe(input.childRunId)) {
+          return;
+        }
+        this.durableRunService.watchDurableChildRun(input);
+      },
       subagentDefaults: {
         childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
         coworkChildTimeoutSeconds: subagentDefaults.coworkChildTimeoutSeconds,
@@ -1468,6 +1712,9 @@ export class GatewayService {
         }),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       resolveToolHookWorkspaceId: (request) => this.resolveToolHookWorkspaceId(request),
+      resolveWorkspacePathBridgeBeforeExecution: this.workspacePathBridgeRuntime.executionResolver.resolve,
+      resolveToolCallBeforeHookInterposition: (workspaceId) =>
+        this.hooksService.getToolCallBeforeInterposition(workspaceId),
       primeToolApprovalLifecycle: (approvalId, request) =>
         this.primeApprovalLifecycle(
           approvalId,
@@ -1517,6 +1764,7 @@ export class GatewayService {
         }
       },
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      pluginToolOverrideService: this.pluginToolOverrideService,
     });
     this.runtimeLifecycleReadService = new RuntimeLifecycleReadService({
       getApproval: (approvalId) => this.storage.approvals.get(approvalId),
@@ -1559,7 +1807,7 @@ export class GatewayService {
         applySkillRevisionCandidate(this.improvementSnapshotDeps(), targetKey, revisionRef),
       restoreSkillRevisionSnapshot: (snapshotRef) =>
         restoreSkillRevisionSnapshot(this.improvementSnapshotDeps(), snapshotRef),
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       // P2-W3: report the runtime-effective tune values via the shared reader so
       // applied auto-tunes are audited against what the decision points will read.
@@ -1586,14 +1834,16 @@ export class GatewayService {
     this.curatorService = new CuratorService({
       listSkills: () => this.listSkills(),
       archiveSkill: (skillId, reason) => {
-        this.setSkillState(skillId, "disabled", reason);
+        const expectedRevision = this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
+        this.setSkillState(skillId, "disabled", reason, expectedRevision);
         const updated = this.listSkills().find((s) => s.skillId === skillId);
         if (!updated) throw new Error(`Skill ${skillId} not found after archiving`);
         return updated;
       },
       pruneSkill: (skillId) => {
         // v1: mark with prune note. Actual file removal is a follow-up task.
-        this.setSkillState(skillId, "disabled", "curator:pruned");
+        const expectedRevision = this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
+        this.setSkillState(skillId, "disabled", "curator:pruned", expectedRevision);
         return { filesRemoved: [] };
       },
       now: () => new Date(),
@@ -1601,6 +1851,7 @@ export class GatewayService {
       publishRealtime: (topic, payload) => this.publishRealtime("system", topic, payload),
       cycleDays: 7,
       storage: this.storage,
+      cronSpecOwner: this.cronConfigGenerationOwner,
       // S3 — idle janitor: gated on workspace idle + master autonomy. Archive is
       // reversible — we snapshot the prior skill-state row before the disable so
       // the global "revert autonomous changes" can re-apply it. Archive only ever
@@ -1615,13 +1866,17 @@ export class GatewayService {
     // snapshot/restore into one operator-facing "revert autonomous changes since
     // T". Restore callbacks delegate to each subsystem's own (already-landed)
     // restore path; the kill switch toggles `autonomyV1Disabled` via the
-    // feature-flag update path. Constructed after improvement/curator/operator-
+    // revision-fenced config-generation transaction. Constructed after improvement/curator/operator-
     // profile so all collaborators already exist.
     this.autonomyControlService = new AutonomyControlService({
       storage: this.storage,
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
-      setKillSwitch: (disabled) => {
-        this.updateFeatureFlags({ autonomyV1Disabled: disabled });
+      readSettingsRevision: () => this.readSettingsRevision(),
+      setKillSwitch: async ({ disabled, expectedRevision }) => {
+        await this.updateSettings({
+          expectedRevision,
+          features: { autonomyV1Disabled: disabled },
+        });
       },
       restoreHandlers: {
         restoreSkillRevision: (snapshotRef) =>
@@ -1644,7 +1899,7 @@ export class GatewayService {
     });
     const chatPostCommitRuntime = createChatPostCommitRuntime({
       storage: this.storage,
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       operatorProfileService: this.operatorProfileService,
@@ -1682,6 +1937,8 @@ export class GatewayService {
       },
       writeGate: this.memoryWriteGateService,
       evidence: this.evidenceEnvelopeService,
+      acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
+      prepareEmbeddingUsageDispatch: (input) => this.modelUsageAccounting.prepareDispatch(input),
       resolveSessionWorkspaceId: (sessionId) => this.storage.chatSessionMeta.get(sessionId)?.workspaceId,
       resolveLearnedMemoryPolicy: (sessionId) => {
         if (this.isReplayScratchSession(sessionId)) {
@@ -1704,7 +1961,7 @@ export class GatewayService {
       listCompletedTurnTracesSince: (sinceIso, limit) =>
         this.storage.chatTurnTraces.listCompletedSince(sinceIso, limit),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       // Rides the prompt-runner chokepoint, so drafting automatically moves to
       // the cheap utility tier once utilityModelRoutingV1Enabled ships.
       resolveModelDefaults: () => this.getPromptRunnerModelDefaults(),
@@ -1732,7 +1989,11 @@ export class GatewayService {
     // Host callbacks are lazy closures, so fields assigned later in this constructor
     // (skillsService, autonomyControlService) are safe to reference here.
     this.skillStateService = new SkillStateService(
-      { gatewaySql: this.storage.gatewaySql, systemSettings: this.storage.systemSettings },
+      {
+        gatewaySql: this.storage.gatewaySql,
+        systemSettings: this.storage.systemSettings,
+        skillAggregateRevisions: this.storage.skillAggregateRevisions,
+      },
       {
         listSkills: () => this.skillsService.list(),
         recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
@@ -1856,7 +2117,34 @@ export class GatewayService {
       }),
     );
     this.routeCompositionPort = this.buildRouteCompositionPort();
+    this.runtimeAuthorityProjectionService = new RuntimeAuthorityProjectionService({
+      listDurableRuns: (limit) => this.storage.durableRuns.listRuns(limit),
+      countDurableRuns: () => this.storage.durableRuns.countRuns(),
+      listRunningDurableRuns: (limit) => {
+        const total = Number(this.storage.durableRuns.statusCounts().running ?? 0);
+        const runIds = this.storage.durableRuns.listRunIdsByStatus("running", limit);
+        const runsById = this.storage.durableRuns.getRunsByIds(runIds);
+        return {
+          items: runIds.map((runId) => runsById.get(runId)).filter((run): run is DurableRunRecord => Boolean(run)),
+          total,
+        };
+      },
+      resolveDurableRunWorkspaceId: (run) => this.resolveDurableRunAuthorityWorkspaceId(run as DurableRunRecord),
+      listRealtimeEvents: (limit) => this.storage.realtimeEvents.list(limit),
+      listApprovals: (workspaceId, limit) => this.storage.approvals.list(undefined, limit, workspaceId),
+      listApprovalEffects: (approvalIds, limitPerApproval) =>
+        this.storage.approvalEffects.listByApprovalIds(approvalIds, limitPerApproval),
+      listMeshNodes: (limit) => this.storage.mesh.listNodes(limit),
+      listMeshLeases: (limit) => this.storage.mesh.listLeases(limit),
+      inspectLatestBackupTrust: () => this.backupRetentionService.inspectLatestBackupTrust(),
+      getRuntimeIdentity: () => this.reviewReadinessService.getRuntimeIdentity(),
+      getLocalRuntimeStatus: () => this.llamaCppRuntime.getStatus(),
+      getConfigGenerationHealth: () => this.configGenerationService.getHealthSnapshot(),
+      listExternalSideEffects: (workspaceId, limit) =>
+        this.storage.externalSideEffectRuns.listByWorkspace(workspaceId, limit),
+    });
     this.routeServices = this.buildRouteServices();
+    this.inboundChannelEventService.start();
   }
 
   private buildRouteCompositionPort() {
@@ -1869,6 +2157,7 @@ export class GatewayService {
       capabilityPackService: this.capabilityPackService,
       capabilityScopeResolver: this.capabilityScopeResolver,
       capabilitySystemService: this.capabilitySystemService,
+      chatCompactionBreakerActionService: this.chatCompactionBreakerActionService,
       chatMessageRouteRuntimeHost: this.buildChatMessageRouteRuntimeHost(),
       chatProjectService: this.chatProjectService,
       chatTurnRuntime: this.chatTurnRuntime,
@@ -1909,6 +2198,7 @@ export class GatewayService {
       llmService: this.llmService,
       onboardingMarkerPath: this.onboardingMarkerPath,
       getAuthRuntimeSettings: () => this.getAuthRuntimeSettings(),
+      readSettingsRevision: () => this.readSettingsRevision(),
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       updateSettings: (input) => this.updateSettings(input),
@@ -1953,7 +2243,8 @@ export class GatewayService {
       commsSend: (input) => this.commsSend(input),
       completeActiveChatTurnStream: (turnId, registrationId) =>
         this.completeActiveChatTurnStream(turnId, registrationId),
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
+      executeChatModelCouncil: (prepared, signal) => this.executeChatModelCouncil(prepared, signal),
       createChatSession: (input) => this.createChatSession(input),
       createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
@@ -1999,6 +2290,8 @@ export class GatewayService {
       requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
       resolveFallbackTargets: (runtime, primaryProviderId, primaryModel) =>
         this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+      resolveCapabilityPreflight: (sessionId, input, route) => this.resolveCapabilityPreflight(sessionId, input, route),
+      resolveChatRoutedContextSources: (input) => this.resolveChatRoutedContextSources(input),
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
       resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
       resolveRuntimeGuidance: (workspaceId) => this.resolveRuntimeGuidance(workspaceId),
@@ -2025,7 +2318,7 @@ export class GatewayService {
         judge:
           process.env.GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED === "1"
             ? buildSurfaceRouterJudge({
-                createChatCompletion: (request) => this.createChatCompletion(request),
+                createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
                 resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
               })
             : undefined,
@@ -2049,7 +2342,48 @@ export class GatewayService {
   }
 
   private buildRouteServices(): GatewayRouteServices {
-    return composeGatewayRouteServices(this.getRouteCompositionPort());
+    return {
+      ...composeGatewayRouteServices(this.getRouteCompositionPort()),
+      externalSources: createExternalSourceRouteService(this.storage, this.workspacePathBridgeRuntime.service),
+      workspacePathBridge: this.workspacePathBridgeRuntime.service,
+      opsSavedBoards: new OpsSavedBoardService(this.storage, {
+        realtimeEpoch: this.opsSavedBoardRealtimeEpoch,
+        publishChange: (signal) => {
+          runWithIsolatedRequestAttribution({}, () => {
+            this.publishRealtime(
+              "ops_saved_board_changed",
+              "ops_saved_boards",
+              { ...signal },
+              {
+                eventClass: "operational_signal",
+                eventAuthority: "retained_stream",
+                links: { workspaceId: signal.workspaceId },
+              },
+            );
+          });
+        },
+        reportPublicationFailure: (_error, signal) => {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "ops_boards",
+            event: "ops_saved_board.realtime_projection_failed",
+            message: "Saved board mutation committed before retained realtime publication failed.",
+            runtimeKind: "ops_saved_board.realtime",
+            runtimeStatus: "degraded",
+            context: {
+              workspaceId: signal.workspaceId,
+              boardId: signal.boardId,
+              revision: signal.revision,
+              epoch: signal.epoch,
+              operation: signal.operation,
+            },
+          });
+        },
+      }),
+      journeyTimeline: createJourneyTimelineRouteService(
+        new JourneyTimelineService(this.storage.governanceJourneyEvents),
+      ),
+    };
   }
 
   private buildIntegrationDiagnosticsService() {
@@ -2072,7 +2406,7 @@ export class GatewayService {
       turnRuntime: this.turnRuntime,
       steerService: this.steerService,
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
-      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       createChatSession: (input) => this.createChatSession(input),
@@ -2189,7 +2523,7 @@ export class GatewayService {
     }
     await traceInitStep("loadOnboardingMarker", () => this.loadOnboardingMarker());
     await traceInitStep("applyStoredFeatureFlags", () => {
-      this.applyStoredFeatureFlags();
+      this.applyStartupFeatureFlags();
     });
     await traceInitStep("seedBuiltinAgentProfiles", () => {
       this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
@@ -2201,14 +2535,14 @@ export class GatewayService {
     this.criticalInitComplete = true;
   }
 
-  public startDeferredInit(): Promise<void> {
+  public startDeferredInit(signal?: AbortSignal): Promise<void> {
     if (!this.criticalInitComplete) {
       throw new Error("Gateway critical init must complete before deferred init starts.");
     }
     if (this.deferredInitPromise) {
       return this.deferredInitPromise;
     }
-    const task = this.runDeferredInit().catch((error) => {
+    const task = this.runDeferredInit(signal).catch((error) => {
       log.error("deferred startup failed", error);
       throw error;
     });
@@ -2224,10 +2558,45 @@ export class GatewayService {
     return task;
   }
 
-  private async runDeferredInit(): Promise<void> {
-    if (this.closing) {
+  private async runDeferredInit(signal?: AbortSignal): Promise<void> {
+    if (this.closing || signal?.aborted) {
       return;
     }
+    // Release trust is a noncritical background proof. Readiness remains
+    // fail-closed while cryptographic and installed-payload verification runs.
+    this.runtimeReleaseTrustService.start();
+    // A recovered committed config generation is a durable forward decision.
+    // Reconcile every process/durable owner before clearing its marker so a
+    // second crash repeats this exact startup work. This also keeps autonomy
+    // workers asleep until the committed feature posture is durable and all
+    // runtime owners have accepted the canonical generation.
+    const rollbackIntent = this.configGenerationService.getRollbackRuntimeOwnerRecoveryIntent();
+    if (rollbackIntent?.meshArtifact) {
+      this.meshService.restoreRuntimeArtifactsForRecovery(rollbackIntent.meshArtifact);
+    }
+    if (rollbackIntent?.providerSecretEffects?.length) {
+      assertProviderSecretEffectsRestored(rollbackIntent.providerSecretEffects, {
+        rootDir: this.config.rootDir,
+        llmService: this.llmService,
+      });
+    }
+    const forwardIntent = this.configGenerationService.getRuntimeOwnerRecoveryIntent();
+    if (forwardIntent?.providerSecretEffects?.length) {
+      // Set effects can only be verified from their salted receipt; the marker
+      // intentionally contains no credential bytes. A missing/mismatched value
+      // leaves readiness degraded and the marker retained for operator repair.
+      // Delete effects are safe to finish idempotently.
+      reconcileProviderSecretEffects(forwardIntent.providerSecretEffects, {
+        rootDir: this.config.rootDir,
+        llmService: this.llmService,
+      });
+    }
+    if (this.configGenerationService.isRuntimeOwnerReconciliationPending()) {
+      this.cronConfigGenerationOwner.reconcileCommittedGeneration();
+    }
+    this.meshService.init();
+    await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
+    await this.configGenerationService.completeRuntimeOwnerReconciliation();
     const closedLeaseCount = this.storage.realtimeStreamLeases.closeOpenForNode({
       gatewayNodeId: this.config.assistant.mesh.nodeId,
       closeReason: "process_restart",
@@ -2236,6 +2605,15 @@ export class GatewayService {
       log.warn("closed stale realtime stream leases after restart", {
         gatewayNodeId: this.config.assistant.mesh.nodeId,
         closedLeaseCount,
+      });
+    }
+    const codeModeTranscriptRecovery = this.capabilitySystemService.reconcileCodeModeFinalTranscriptDeliveries();
+    if (codeModeTranscriptRecovery.errors.length > 0 || codeModeTranscriptRecovery.omittedErrors > 0) {
+      log.warn("Code Mode final transcript recovery completed with errors", {
+        checked: codeModeTranscriptRecovery.checked,
+        enqueued: codeModeTranscriptRecovery.enqueued,
+        errors: codeModeTranscriptRecovery.errors,
+        omittedErrors: codeModeTranscriptRecovery.omittedErrors,
       });
     }
     const [flushedTranscriptCount, restartedChannelDeliveries] = await Promise.all([
@@ -2267,26 +2645,26 @@ export class GatewayService {
         count: legacyStamp.stampedConnectionIds.length,
       });
     }
-    await Promise.all([this.discordRuntimeService.sync(), this.loadCronJobsFromConfig()]);
-    // Starts pollers only when signalInboundV1Enabled is true (no-op otherwise).
+    await Promise.all([this.discordRuntimeService.sync(), this.cronConfigGenerationOwner.reconcileStartupGeneration()]);
+    // Emits blocked/deprecated evidence for legacy Signal inbound settings.
     this.syncSignalInboundRuntime();
-    this.improvementService.ensureWeeklyImprovementCronJob();
-    this.curatorService.ensureCuratorWeeklyCronJob();
-    this.ensurePrivateBetaBackupCronJob();
-    this.ensureMemoryFlushCronJob();
-    this.ensureMemoryConsolidationCronJob();
-    this.ensureCostReportCronJob();
-    this.ensureUpdateReviewCronJob();
-    this.meshService.init();
-    await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
-    if (this.closing) {
+    await Promise.all([
+      this.improvementService.ensureWeeklyImprovementCronJob(),
+      this.curatorService.ensureCuratorWeeklyCronJob(),
+      this.ensurePrivateBetaBackupCronJob(),
+      this.ensureMemoryFlushCronJob(),
+      this.ensureMemoryConsolidationCronJob(),
+      this.ensureCostReportCronJob(),
+      this.ensureUpdateReviewCronJob(),
+    ]);
+    if (this.closing || signal?.aborted) {
       return;
     }
-    // Enforce env-only secret persistence policy on startup.
-    this.persistLlmConfig();
-    this.persistAssistantConfig();
+    // loadGatewayConfig already repaired every split mirror from the recovered
+    // canonical generation before this runtime was constructed. Startup must
+    // not invent a semantic config mutation or revision merely to rewrite a
+    // compatibility projection.
     this.startProactiveScheduler();
-    this.improvementService.startScheduler();
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
       this.startOrchestrationWorktreeReapScheduler();
@@ -2295,9 +2673,18 @@ export class GatewayService {
     // retryable interrupted_by_restart failure traces before the durable worker
     // starts resuming runs (durable-owned turns are skipped and left to it).
     if (!this.isFeatureEnabled("chatTurnInterruptionRecoveryV1Disabled")) {
-      this.reconcileInterruptedChatTurnsOnBoot();
+      await this.reconcileInterruptedChatTurnsOnBoot();
     }
+    if (signal?.aborted) return;
     this.durableRunService.startWorker();
+    const cronRecovery = await this.cronAutomationService.recoverPendingAgentTurnCronRuns();
+    if (cronRecovery.errors.length > 0) {
+      log.warn("cron settlement recovery completed with errors", {
+        checkedCount: cronRecovery.checkedCount,
+        errorCount: cronRecovery.errors.length,
+        errors: cronRecovery.errors,
+      });
+    }
     if (!this.isFeatureEnabled("autonomyV1Disabled")) {
       // Recover autonomous runs that were parked while the kill switch was engaged
       // in a previous process lifetime and never woken before the restart.
@@ -2309,14 +2696,12 @@ export class GatewayService {
         });
       }
     }
+    if (signal?.aborted) return;
     this.approvalEffectsService.startWorker();
-    this.promptPackService.resumeInterruptedBenchmarkRuns();
+    this.resumeInterruptedMediaJobs();
+    this.resumeInterruptedPromptPackRuns();
     // Pre-warm LLM model catalogs for configured providers in the background.
-    void this.prewarmLlmModelCatalogs().catch((error) => {
-      log.warn("Failed to pre-warm LLM model catalogs on startup", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    this.scheduleProviderCatalogPrewarm();
 
     if (isVerboseLoggingEnabled()) {
       log.info("feature flags", { flags: this.readFeatureFlags() });
@@ -2331,7 +2716,7 @@ export class GatewayService {
    * interrupted_by_restart failure traces. Failure here must never block
    * startup — the reconciler re-runs on the next boot.
    */
-  private reconcileInterruptedChatTurnsOnBoot(): void {
+  private async reconcileInterruptedChatTurnsOnBoot(): Promise<void> {
     try {
       const reconciled = reconcileInterruptedChatTurns({
         storage: this.storage,
@@ -2344,6 +2729,15 @@ export class GatewayService {
           interrupted: reconciled.interruptedTurnIds.length,
           synthesized: reconciled.synthesizedTurnIds.length,
           skippedDurableOwned: reconciled.skippedDurableOwnedTurnIds.length,
+        });
+      }
+      if (reconciled.transcriptEventsEnqueued > 0) {
+        const flushedTranscriptCount = await this.eventIngestService.flushPendingTranscriptOutbox();
+        log.info("flushed transcript entries recovered from interrupted chat turns", {
+          enqueued: reconciled.transcriptEventsEnqueued,
+          flushed: flushedTranscriptCount,
+          restoredFinal: reconciled.restoredFinalTurnIds.length,
+          preservedPartial: reconciled.preservedPartialTurnIds.length,
         });
       }
     } catch (error) {
@@ -2375,6 +2769,31 @@ export class GatewayService {
         }
       }),
     );
+  }
+
+  private scheduleProviderCatalogPrewarm(): void {
+    const task = this.tryRunWithSharedHostWork("worker", "provider-catalog-prewarm", () =>
+      this.prewarmLlmModelCatalogs(),
+    )
+      .then(() => undefined)
+      .catch((error) => {
+        log.warn("Failed to pre-warm LLM model catalogs on startup", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.registerBackgroundTask(task);
+  }
+
+  private resumeInterruptedPromptPackRuns(): void {
+    // Every recovered benchmark acquires its own agent reservation inside
+    // PromptPackService before it claims or invokes a model.
+    this.promptPackService.resumeInterruptedBenchmarkRuns();
+  }
+
+  private resumeInterruptedMediaJobs(): void {
+    // Each recovered media job is admitted independently before it transitions
+    // from its durable queued/running state or invokes a processor.
+    this.mediaVoiceService.resumeInterruptedMediaJobs();
   }
 
   public async ingestEvent(
@@ -2568,6 +2987,7 @@ export class GatewayService {
     input: Partial<ChatSendMessageRequest> & {
       deliveryReplyToMessageId?: string;
       channelSystemInstruction?: string;
+      inboundDurableIdentity?: InboundChannelDeterministicIdentity;
     } = {},
   ): Promise<ChatSendMessageResponse> {
     return this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
@@ -2584,7 +3004,7 @@ export class GatewayService {
         throw new Error("session binding is not writable");
       }
 
-      const { deliveryReplyToMessageId, channelSystemInstruction, ...chatInput } = input;
+      const { deliveryReplyToMessageId, channelSystemInstruction, inboundDurableIdentity, ...chatInput } = input;
       const request: ChatSendMessageRequest = {
         content: userMessage.content,
         ...chatInput,
@@ -2594,12 +3014,27 @@ export class GatewayService {
         existingUserMessage: userMessage,
         ingestUserMessage: false,
         extraSystemInstruction: channelSystemInstruction,
+        ...(inboundDurableIdentity
+          ? {
+              userMessageId: inboundDurableIdentity.userMessageId,
+              turnId: inboundDurableIdentity.turnId,
+              assistantMessageId: inboundDurableIdentity.assistantMessageId,
+            }
+          : {}),
       });
       const response = await this.consumePreparedAgentChatTurn(
         sessionId,
         request,
         prepared,
         "chat_thread_turn_appended",
+        undefined,
+        inboundDurableIdentity
+          ? {
+              durableRunId: inboundDurableIdentity.durableRunId,
+              requireDurableExecution: true,
+              onChildDurableRunLaunched: inboundDurableIdentity.onDurableRunLaunched,
+            }
+          : undefined,
       );
       const assistantContent = response.assistantMessage?.content?.trim();
       if (assistantContent) {
@@ -2617,18 +3052,23 @@ export class GatewayService {
           assistantContent,
           wasVoiceInbound,
         );
-        this.requireExecutedToolResult(
-          "channel.send",
-          await this.commsSend({
-            connectionId: binding.connectionId,
-            target: binding.target,
-            message: assistantContent,
-            attachments: voiceReplyAttachment ? [voiceReplyAttachment] : undefined,
-            replyToMessageId: deliveryReplyToMessageId?.trim() || prepared.userEventId,
-            sessionId,
-            agentId: "assistant",
-          }),
-        );
+        const deliveryInput = {
+          connectionId: binding.connectionId,
+          target: binding.target,
+          message: assistantContent,
+          attachments: voiceReplyAttachment ? [voiceReplyAttachment] : undefined,
+          replyToMessageId: deliveryReplyToMessageId?.trim() || prepared.userEventId,
+          sessionId,
+          agentId: "assistant",
+          ...(inboundDurableIdentity ? { idempotencyKey: inboundDurableIdentity.deliveryIdempotencyKey } : {}),
+        };
+        const deliveryResult = this.requireExecutedToolResult("channel.send", await this.commsSend(deliveryInput));
+        inboundDurableIdentity?.onDeliveryEnqueued?.({
+          deliveryId: typeof deliveryResult.deliveryId === "string" ? deliveryResult.deliveryId : undefined,
+          providerMessageId:
+            typeof deliveryResult.providerMessageId === "string" ? deliveryResult.providerMessageId : undefined,
+          idempotencyKey: inboundDurableIdentity.deliveryIdempotencyKey,
+        });
       }
       return {
         ...response,
@@ -2739,7 +3179,7 @@ export class GatewayService {
     return chatSessionService.updateChatSessionPrefs(this.buildChatSessionDependencies(), sessionId, input);
   }
 
-  public ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
+  public ensureChatSessionModelDefaults(_sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
     if (!prefs.providerId || !prefs.model) {
       return prefs;
     }
@@ -2765,9 +3205,10 @@ export class GatewayService {
       return prefs;
     }
 
-    return this.storage.chatSessionPrefs.patch(sessionId, {
+    return {
+      ...prefs,
       model: provider.defaultModel,
-    });
+    };
   }
 
   public hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
@@ -2809,6 +3250,42 @@ export class GatewayService {
     task.finally(() => this.backgroundTasks.delete(task));
   }
 
+  private async runWithSharedHostWork<T>(
+    kind: SharedHostWorkKind,
+    label: string,
+    work: (signal: AbortSignal) => Promise<T> | T,
+  ): Promise<T> {
+    const admission = this.sharedHostLifecycle.tryReserve(kind, `${label}:${randomUUID()}`);
+    if (!admission.admitted) {
+      throw new SharedHostAdmissionClosedError(admission.state, admission.reason);
+    }
+    try {
+      if (admission.reservation.signal.aborted) {
+        throw admission.reservation.signal.reason instanceof Error
+          ? admission.reservation.signal.reason
+          : new Error(`Shared-host work aborted before start: ${label}`);
+      }
+      return await work(admission.reservation.signal);
+    } finally {
+      admission.reservation.release();
+    }
+  }
+
+  private tryRunWithSharedHostWork<T>(
+    kind: SharedHostWorkKind,
+    label: string,
+    work: (signal: AbortSignal) => Promise<T> | T,
+  ): Promise<T | undefined> {
+    const admission = this.sharedHostLifecycle.tryReserve(kind, `${label}:${randomUUID()}`);
+    if (!admission.admitted) return Promise.resolve(undefined);
+    return Promise.resolve()
+      .then(() => {
+        if (admission.reservation.signal.aborted) return undefined;
+        return work(admission.reservation.signal);
+      })
+      .finally(() => admission.reservation.release());
+  }
+
   private startMaintenanceScheduler(): void {
     if (this.maintenanceScheduler) {
       return;
@@ -2828,28 +3305,49 @@ export class GatewayService {
       return;
     }
     const tasks = [
-      { label: "private beta backups", run: () => this.runPrivateBetaBackupSchedulerIfDue() },
-      { label: "memory flush", run: () => this.runMemoryFlushSchedulerIfDue() },
-      { label: "memory consolidation", run: () => this.runMemoryConsolidationSchedulerIfDue() },
-      { label: "cost report", run: () => this.runCostReportSchedulerIfDue() },
-      { label: "update review", run: () => this.runUpdateReviewSchedulerIfDue() },
-      { label: "skill curator", run: () => this.curatorService.runCuratorWeeklyIfDue() },
       {
         label: "skill curator idle janitor",
         run: () =>
-          this.runBestEffortMaintenance("curator_idle_sweep_failed", () => this.curatorService.maybeRunIdleCurator()),
+          this.tryRunWithSharedHostWork("cron", "curator-idle-janitor", () =>
+            this.runBestEffortMaintenance("curator_idle_sweep_failed", () => this.curatorService.maybeRunIdleCurator()),
+          ),
       },
-      { label: "cron automation", run: () => this.cronAutomationService.runDueTaskCronJobs() },
+      {
+        label: "inbound channel events",
+        run: () => this.inboundChannelEventService.drain(),
+      },
+      {
+        label: "cron automation",
+        run: () =>
+          this.tryRunWithSharedHostWork("cron", "cron-due-sweep", () =>
+            this.cronAutomationService.runDueTaskCronJobs(),
+          ),
+      },
       {
         label: "commitment sweep",
-        run: () => this.runBestEffortMaintenance("commitment_sweep_failed", () => this.runCommitmentSweep()),
+        run: () =>
+          this.tryRunWithSharedHostWork("agent", "commitment-sweep", () =>
+            this.runBestEffortMaintenance("commitment_sweep_failed", () => this.runCommitmentSweep()),
+          ),
       },
       {
         label: "heartbeat",
-        run: () => this.runBestEffortMaintenance("heartbeat_failed", () => this.runHeartbeatSweep()),
+        run: () =>
+          this.tryRunWithSharedHostWork("agent", "heartbeat-sweep", () =>
+            this.runBestEffortMaintenance("heartbeat_failed", () => this.runHeartbeatSweep()),
+          ),
       },
-      { label: "memory evaluation", run: () => this.memoryLifecycleService.runDueEvaluation() },
-      { label: "channel deliveries", run: () => this.drainDueChannelDeliveries() },
+      {
+        label: "memory evaluation",
+        run: () =>
+          this.tryRunWithSharedHostWork("worker", "memory-evaluation", () =>
+            this.memoryLifecycleService.runDueEvaluation(),
+          ),
+      },
+      {
+        label: "channel deliveries",
+        run: () => this.drainDueChannelDeliveries(),
+      },
     ];
     // Wrap each task in an async IIFE so a synchronous throw (e.g. a missing
     // collaborator method) becomes a rejected promise captured by allSettled,
@@ -2872,6 +3370,77 @@ export class GatewayService {
     }
   }
 
+  private handleOrchestrationWorktreeLeaseLoss(event: OrchestrationWorktreeLeaseLossEvent): void {
+    let run: OrchestrationRun;
+    try {
+      run = this.storage.orchestration.getRun(event.token.runId);
+    } catch (error) {
+      log.warn("orchestration worktree lease loss could not load its canonical run", {
+        runId: event.token.runId,
+        ownerId: event.token.ownerId,
+        generation: event.token.generation,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (
+      run.worktreePath !== event.token.worktreePath ||
+      run.worktreeLeaseOwnerId !== event.token.ownerId ||
+      run.worktreeLeaseGeneration !== event.token.generation
+    ) {
+      return;
+    }
+
+    if (!event.fencedRun && ["queued", "running", "paused"].includes(run.status)) {
+      try {
+        run =
+          this.storage.orchestration.fenceWorktreeLease({
+            runId: event.token.runId,
+            worktreePath: event.token.worktreePath,
+            worktreeLeaseOwnerId: event.token.ownerId,
+            worktreeLeaseGeneration: event.token.generation,
+            endedAt: new Date().toISOString(),
+            lastError:
+              `Orchestration worktree lease lost (${event.reason}) for owner ${event.token.ownerId} ` +
+              `generation ${event.token.generation}.`,
+          }) ?? run;
+      } catch (error) {
+        log.error("orchestration worktree lease loss could not persist its canonical fence", {
+          runId: event.token.runId,
+          ownerId: event.token.ownerId,
+          generation: event.token.generation,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (run.durableRunId) {
+      try {
+        this.durableRunService.cancelDurableRun(run.durableRunId, "worktree-lease-fence");
+      } catch (error) {
+        log.warn("orchestration worktree lease fence could not cancel its linked durable run", {
+          runId: event.token.runId,
+          durableRunId: run.durableRunId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    try {
+      this.storage.orchestration.appendRunEvent(event.token.runId, "run.worktree_lease_lost", {
+        ownerId: event.token.ownerId,
+        generation: event.token.generation,
+        worktreePath: event.token.worktreePath,
+        reason: event.reason,
+        ...(event.error ? { error: event.error } : {}),
+      });
+    } catch (error) {
+      log.warn("orchestration worktree lease loss event could not be persisted", {
+        runId: event.token.runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /**
    * Periodically reclaim orphaned orchestration worktrees (no live/active run):
    * a short post-boot pass, then hourly. Timer/unref/failure-isolation plumbing
@@ -2885,7 +3454,11 @@ export class GatewayService {
       label: "orchestration worktree reaper",
       intervalMs: ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS,
       bootDelayMs: ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS,
-      task: () => this.runOrchestrationWorktreeReapTick(),
+      task: async () => {
+        await this.tryRunWithSharedHostWork("worker", "orchestration-worktree-reaper", () =>
+          this.runOrchestrationWorktreeReapTick(),
+        );
+      },
       isClosing: () => this.closing,
       registerInflight: (task) => this.registerBackgroundTask(task),
       onError: (error) =>
@@ -3061,9 +3634,13 @@ export class GatewayService {
     if (this.closing || input.delegatedChild) {
       return;
     }
-    const task = this.memoryLifecycleService.noteSuccessfulRootTurn(input.sessionId).catch((error) => {
-      log.error("memory maintenance post-turn evaluation failed", error);
-    });
+    const task = this.tryRunWithSharedHostWork("worker", "memory-post-turn", () =>
+      this.memoryLifecycleService.noteSuccessfulRootTurn(input.sessionId),
+    )
+      .then(() => undefined)
+      .catch((error) => {
+        log.error("memory maintenance post-turn evaluation failed", error);
+      });
     this.registerBackgroundTask(task);
   }
 
@@ -3112,13 +3689,11 @@ export class GatewayService {
       return;
     }
 
-    // Counter gate: only run once every N eligible successful turns; reset on fire.
-    if (!this.advanceBackgroundReviewCounter()) {
-      return;
-    }
-
-    const task = this.backgroundReviewService
-      .runBackgroundReview({
+    const task = this.tryRunWithSharedHostWork("worker", "background-review", async () => {
+      // Counter mutation is part of the admitted unit: a rejected/deferred
+      // review must not consume its canonical cadence window.
+      if (!this.advanceBackgroundReviewCounter()) return undefined;
+      return this.backgroundReviewService.runBackgroundReview({
         sessionId: input.sessionId,
         sourceTurnId: input.turnId,
         workspaceId: input.workspaceId,
@@ -3128,9 +3703,10 @@ export class GatewayService {
         evalIntegrityTurn,
         humanSession,
         turnSucceeded: true,
-      })
+      });
+    })
       .then((result) => {
-        if (result.ran && result.summaryMarker) {
+        if (result?.ran && result.summaryMarker) {
           this.publishRealtime("self_improvement_review", "system", {
             type: "background_review",
             sessionId: input.sessionId,
@@ -3184,20 +3760,24 @@ export class GatewayService {
     if (this.closing || !input.prompt.trim() || typeof prewarmContext !== "function") {
       return;
     }
-    const task = prewarmContext({
-      scope: "chat",
-      sessionId: input.sessionId,
-      // Finding 1: scope prewarm memory-item collection to the session's workspace.
-      // Optional-chained: some facade/test compositions invoke this method without a
-      // full storage (mirrors the guard in memory-context-service); prod always has it.
-      workspaceId: this.storage?.chatSessionMeta?.get(input.sessionId)?.workspaceId ?? "default",
-      prompt: input.prompt,
-      relationScope: input.relationScope,
-      workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
-      forceRefresh: true,
-    }).catch((error) => {
-      log.error("chat memory prewarm failed", error);
-    });
+    const task = this.tryRunWithSharedHostWork("worker", "memory-context-prewarm", () =>
+      prewarmContext({
+        scope: "chat",
+        sessionId: input.sessionId,
+        // Finding 1: scope prewarm memory-item collection to the session's workspace.
+        // Optional-chained: some facade/test compositions invoke this method without a
+        // full storage (mirrors the guard in memory-context-service); prod always has it.
+        workspaceId: this.storage?.chatSessionMeta?.get(input.sessionId)?.workspaceId ?? "default",
+        prompt: input.prompt,
+        relationScope: input.relationScope,
+        workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
+        forceRefresh: true,
+      }),
+    )
+      .then(() => undefined)
+      .catch((error) => {
+        log.error("chat memory prewarm failed", error);
+      });
     this.registerBackgroundTask(task);
   }
 
@@ -3206,7 +3786,6 @@ export class GatewayService {
       storage: this.storage,
       rootDir: this.config.rootDir,
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      persistCronJobsConfig: () => this.persistCronJobsConfig(),
       publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload ?? {}),
       evidenceEnvelopeService: this.evidenceEnvelopeService,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -3575,8 +4154,8 @@ export class GatewayService {
     if (evalIntegrityTurn || !humanSession) {
       return;
     }
-    const task = this.commitmentClassifier
-      .recordTurnCommitments({
+    const task = this.tryRunWithSharedHostWork("worker", "commitment-classifier", () =>
+      this.commitmentClassifier.recordTurnCommitments({
         sessionId: input.sessionId,
         workspaceId: input.workspaceId,
         userText: input.userText,
@@ -3584,7 +4163,8 @@ export class GatewayService {
         autonomyEnabled,
         evalIntegrityTurn,
         humanSession,
-      })
+      }),
+    )
       .then(() => undefined)
       .catch((error) => {
         log.warn("commitment classifier failed", {
@@ -3779,6 +4359,18 @@ export class GatewayService {
     options?: chatCommandService.ChatCommandOptions,
   ): Promise<chatCommandService.ChatCommandResult> {
     return chatCommandService.parseChatCommand(createChatCommandDependencies(this), sessionId, commandText, options);
+  }
+
+  public learnSkillFromLatestTurn(input: Parameters<SkillLearningService["learnFromLatestTurn"]>[0]) {
+    return this.skillLearningService.learnFromLatestTurn(input);
+  }
+
+  public createSkillLearningHistoryDryRun(input: Parameters<SkillLearningService["createHistoryDryRun"]>[0]) {
+    return this.skillLearningService.createHistoryDryRun(input);
+  }
+
+  public applySkillLearningHistorySelection(input: Parameters<SkillLearningService["applyHistorySelection"]>[0]) {
+    return this.skillLearningService.applyHistorySelection(input);
   }
 
   public async runChatResearch(
@@ -4011,6 +4603,10 @@ export class GatewayService {
     return this.durableOperatorService.listRunTimeline(runId, limit);
   }
 
+  /** @internal */ public watchDurableChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
+    return this.durableRunService.watchDurableChildRun(input);
+  }
+
   public pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
     return this.durableOperatorService.pauseRun(runId, actorId);
   }
@@ -4191,9 +4787,291 @@ export class GatewayService {
       turnId?: string;
       assistantMessageId?: string;
       mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
+      capabilityProfileId?: string;
+      capabilityProfileHash?: string;
+      capabilityProfileContent?: string;
     },
   ): Promise<chatTurnPrepService.PreparedAgentChatTurn> {
     return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
+  }
+
+  public resolvePendingCompactionBreakerForceAction(
+    input: Parameters<ChatCompactionBreakerActionService["resolvePendingForceAction"]>[0],
+  ): ReturnType<ChatCompactionBreakerActionService["resolvePendingForceAction"]> {
+    return this.chatCompactionBreakerActionService.resolvePendingForceAction(input);
+  }
+
+  public async resolveChatTurnCapabilityProfile(
+    input: Parameters<NonNullable<chatTurnPrepService.ChatTurnPrepHost["resolveChatTurnCapabilityProfile"]>>[0],
+  ): Promise<ChatTurnCapabilityProfileResolution> {
+    const serverOwnedPolicyContext = (
+      input.request as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }
+    ).policyContext;
+    const routeResolution = input.routeResolution;
+    const runtime = this.llmService.getRuntimeConfig({
+      includeKeychainForActiveProvider: true,
+      useCache: true,
+    });
+    return resolveServerOwnedChatTurnCapabilityProfile(
+      {
+        storage: this.storage,
+        listCapabilityCatalog: (scope) => this.capabilitySystemService.listCatalog(scope),
+        resolveToolSchema: (runnerInput) => this.turnRuntime.resolveCapabilityToolSchema(runnerInput),
+        resolveToolPolicyContext: (policyInput) => this.resolveToolPolicyContext(policyInput),
+        resolveToolRuntimeOwnerBinding: (toolName) =>
+          this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
+        getProviderReadiness: (providerId) => {
+          const provider = runtime.providers.find((candidate) => candidate.providerId === providerId);
+          if (!provider) {
+            return undefined;
+          }
+          const normalizedUrl = (provider.baseUrl ?? "").trim().toLowerCase();
+          const local =
+            /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(
+              normalizedUrl,
+            );
+          return { configured: Boolean(provider.hasApiKey), local };
+        },
+      },
+      {
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        workspaceId: input.workspaceId,
+        citadelId: input.citadelId,
+        route: input.route,
+        content: input.content,
+        mode: input.effectiveMode,
+        webMode: input.normalized.webMode ?? input.prefs.webMode,
+        memoryMode: input.normalized.memoryMode ?? input.prefs.memoryMode,
+        retrievalMode: input.autonomy.retrievalMode,
+        thinkingLevel: input.normalized.thinkingLevel ?? input.prefs.thinkingLevel,
+        speedMode: input.normalized.speedMode ?? input.prefs.speedMode,
+        subagentPolicy: input.normalized.subagentPolicy ?? input.prefs.subagentPolicy,
+        normalizationProfile: input.normalized.normalizationProfile,
+        toolAutonomy: input.effectiveToolAutonomy,
+        historyMessages: input.historyMessages,
+        routeResolution: {
+          requestedProviderId: routeResolution.requestedProviderId,
+          requestedModel: routeResolution.requestedModel,
+          effectiveProviderId: routeResolution.effectiveProviderId,
+          effectiveModel: routeResolution.effectiveModel,
+          fallbackTarget: routeResolution.fallbackTarget,
+          fallbackPolicy: routeResolution.fallbackPolicy,
+          runtimeClass: routeResolution.runtimeClass,
+          blockedReason: routeResolution.blockedReason,
+        },
+        operatorId: serverOwnedPolicyContext?.operatorId ?? input.request.operatorId,
+        authActorId: serverOwnedPolicyContext?.authActorId ?? input.request.authActorId,
+        authActorSource: serverOwnedPolicyContext?.authActorSource ?? input.request.authActorSource,
+        permissionProfileId: serverOwnedPolicyContext?.permissionProfileId ?? input.request.permissionProfileId,
+        localOperatorOverrideId:
+          serverOwnedPolicyContext?.localOperatorOverrideId ?? input.request.localOperatorOverrideId,
+        policyRunId: serverOwnedPolicyContext?.runId ?? input.request.policyRunId,
+        policyTaskId: serverOwnedPolicyContext?.taskId ?? input.request.policyTaskId,
+        fullWebAccess: input.request.fullWebAccess,
+        ...(serverOwnedPolicyContext ? { policyContext: serverOwnedPolicyContext } : {}),
+      },
+    );
+  }
+
+  public resolveChatRoutedContextSources(
+    input: Parameters<chatTurnPrepService.ChatTurnPrepHost["resolveChatRoutedContextSources"]>[0],
+  ) {
+    return chatRoutedContextService.resolveChatRoutedContextSources(
+      {
+        getAttachment: (attachmentId) =>
+          chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId),
+        readAttachmentContent: async (attachmentId, options) => {
+          const loaded = await chatAttachmentService.readChatAttachmentContent(
+            this.buildChatAttachmentHost(),
+            attachmentId,
+            options,
+          );
+          return { record: loaded.record, bytes: loaded.bytes };
+        },
+        getActiveMemoryItem: (itemId, workspaceId, options) =>
+          this.memoryLifecycleService.getActiveMemoryItemForRoutedContext(itemId, workspaceId, options),
+      },
+      input,
+    );
+  }
+
+  public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {
+    const routeDecision = request.routeDecision;
+    const replayManualSelection = routeDecision?.selectionSource === "manual";
+    const replaySessionSelection = routeDecision?.selectionSource === "session";
+    const routePrefsOverride = replaySessionSelection
+      ? {
+          ...(request.prefsOverride ?? {}),
+          providerId: routeDecision?.requestedProviderId,
+          model: routeDecision?.requestedModel,
+        }
+      : request.prefsOverride;
+    return resolveChatRouteDescriptor(this, sessionId, {
+      action: "send",
+      content: request.content,
+      providerId: routeDecision
+        ? replayManualSelection
+          ? routeDecision.requestedProviderId
+          : undefined
+        : request.providerId,
+      model: routeDecision ? (replayManualSelection ? routeDecision.requestedModel : undefined) : request.model,
+      mode: request.mode,
+      webMode: request.webMode,
+      memoryMode: request.memoryMode,
+      thinkingLevel: request.thinkingLevel,
+      speedMode: request.speedMode,
+      subagentPolicy: request.subagentPolicy,
+      prefsOverride: routePrefsOverride,
+      permissionProfileId: request.permissionProfileId,
+      localOperatorOverrideId: request.localOperatorOverrideId,
+      policyRunId: request.policyRunId,
+      policyTaskId: request.policyTaskId,
+      fullWebAccess: request.fullWebAccess,
+      operatorId: request.operatorId,
+      authActorId: request.authActorId,
+      authActorSource: request.authActorSource,
+    });
+  }
+
+  public loadChatTurnCapabilityProfile(
+    input: Parameters<NonNullable<chatTurnPrepService.ChatTurnPrepHost["loadChatTurnCapabilityProfile"]>>[0],
+  ) {
+    const profile = this.storage.chatTurnCapabilityProfiles.get(input.profileId);
+    if (
+      profile.hashes.profileHash !== input.profileHash ||
+      profile.identity.sessionId !== input.sessionId ||
+      profile.identity.turnId !== input.turnId
+    ) {
+      throw new ConflictError({
+        message: `Capability profile ${input.profileId} does not match the durable Chat turn binding.`,
+      });
+    }
+    return profile;
+  }
+
+  public async resolveCapabilityPreflight(
+    sessionId: string,
+    input: RoutingPreflightRequest,
+    route: ResolvedChatRouteDescriptor,
+  ) {
+    const content = input.content?.trim();
+    if (!content) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "content" });
+    }
+    const session = this.getSession(sessionId);
+    const sessionMeta = this.storage.chatSessionMeta.ensure(sessionId);
+    const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
+    const citadelId = this.storage.workspaces.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
+    const currentPrefs = this.storage.chatSessionPrefs.ensure(sessionId);
+    const prefs = buildPreviewPrefs(currentPrefs, input);
+    const currentAutonomy = this.getSessionAutonomyPrefs(sessionId);
+    const autonomy = {
+      ...currentAutonomy,
+      ...(input.prefsOverride?.retrievalMode ? { retrievalMode: input.prefsOverride.retrievalMode } : {}),
+      ...(input.prefsOverride?.reflectionMode ? { reflectionMode: input.prefsOverride.reflectionMode } : {}),
+    };
+    const request: ChatSendMessageRequest = {
+      content,
+      providerId: input.providerId,
+      model: input.model,
+      mode: "chat",
+      webMode: input.webMode,
+      memoryMode: input.memoryMode,
+      thinkingLevel: input.thinkingLevel,
+      speedMode: input.speedMode,
+      subagentPolicy: input.subagentPolicy,
+      prefsOverride: input.prefsOverride,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+      policyRunId: input.policyRunId,
+      policyTaskId: input.policyTaskId,
+      fullWebAccess: input.fullWebAccess,
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+    };
+    const normalized = normalizeAgentInputFromSend(request);
+    const state = await this.loadChatTurnSessionState(sessionId);
+    const parentTurnId = state.activeLeafTurnId;
+    const pathTurnIds = parentTurnId ? buildSelectedPathTurnIds(state.turnLineageById, parentTurnId) : [];
+    const preflightTurnId = `capability-preflight-${createHash("sha256").update(content).digest("hex").slice(0, 24)}`;
+    const userMessage: ChatMessageRecord = {
+      messageId: `user-${preflightTurnId}`,
+      sessionId,
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content,
+      timestamp: new Date().toISOString(),
+    };
+    const provisionalHistoryMessages = await this.buildLlmMessagesFromBranchPath(
+      sessionId,
+      pathTurnIds,
+      userMessage,
+      {
+        providerId: route.effectiveProviderId,
+        model: route.effectiveModel,
+        compactionDimension: chatTurnPrepService.buildChatCompactionDimension({
+          providerId: route.effectiveProviderId,
+          model: route.effectiveModel,
+          persistState: false,
+        }),
+      },
+      state,
+    );
+    const resolveProfile = (historyMessages: ChatCompletionRequest["messages"]) =>
+      this.resolveChatTurnCapabilityProfile({
+        sessionId,
+        turnId: preflightTurnId,
+        workspaceId,
+        citadelId,
+        route: this.routeFromSession(session),
+        content,
+        prefs,
+        autonomy,
+        normalized,
+        effectiveMode: "chat",
+        effectiveToolAutonomy: prefs.planningMode === "advisory" ? "manual" : prefs.toolAutonomy,
+        routeResolution: route,
+        historyMessages,
+        request,
+      });
+    // The first selection pass cannot summarize or persist. It exists only to
+    // derive the stable available-capability dimension; the authoritative
+    // profile below is resolved from the exact compacted history sent later.
+    const tentativeResolution = await resolveProfile(provisionalHistoryMessages);
+    const compactionDimension = chatTurnPrepService.buildChatCompactionDimension({
+      providerId: route.effectiveProviderId,
+      model: route.effectiveModel,
+      profile: tentativeResolution.profile,
+    });
+    const historyMessages = await this.buildLlmMessagesFromBranchPath(
+      sessionId,
+      pathTurnIds,
+      userMessage,
+      {
+        providerId: route.effectiveProviderId,
+        model: route.effectiveModel,
+        compactionDimension,
+      },
+      state,
+    );
+    const resolution = await resolveProfile(historyMessages);
+    const finalDimension = chatTurnPrepService.buildChatCompactionDimension({
+      providerId: route.effectiveProviderId,
+      model: route.effectiveModel,
+      profile: resolution.profile,
+    });
+    if (finalDimension.dimensionHash !== compactionDimension.dimensionHash) {
+      throw new ConflictError({
+        message: "Capability selection changed while resolving compacted preflight history. Retry route preflight.",
+      });
+    }
+    return {
+      ...resolution.preview,
+      compactionDimensionHash: finalDimension.dimensionHash,
+    };
   }
 
   public isChatTurnWriteConflict(error: unknown): error is ChatTurnWriteConflictError {
@@ -4301,6 +5179,63 @@ export class GatewayService {
       threadEventType,
       resolvedOrchestration,
       options,
+    );
+  }
+
+  public executeChatModelCouncil(
+    prepared: chatTurnPrepService.PreparedAgentChatTurn,
+    signal?: AbortSignal,
+  ): ReturnType<AssemblyService["executeChatModelCouncil"]> {
+    const capabilityProfile = prepared.capabilityProfile;
+    const primaryProviderId = capabilityProfile?.selection.effectiveProviderId;
+    const primaryModel = capabilityProfile?.selection.effectiveModel;
+    if (!capabilityProfile || !primaryProviderId || !primaryModel) {
+      return Promise.reject(new Error("Model council requires a frozen governed Chat capability profile."));
+    }
+    const runtime = this.llmService.getRuntimeConfig({
+      includeKeychainForActiveProvider: true,
+      useCache: true,
+    });
+    const providerCandidates = runtime.providers
+      .map((provider) => {
+        const model = provider.providerId === primaryProviderId ? primaryModel : provider.defaultModel;
+        const excluded = /(?:^|[-_.])(xai|grok)(?:$|[-_.])/i.test(`${provider.providerId} ${model}`);
+        const normalizedUrl = (provider.baseUrl ?? "").trim();
+        let local: boolean;
+        try {
+          const hostname = new URL(normalizedUrl).hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+          local =
+            hostname === "localhost" ||
+            hostname === "127.0.0.1" ||
+            hostname === "0.0.0.0" ||
+            hostname === "::1" ||
+            hostname.startsWith("10.") ||
+            hostname.startsWith("192.168.") ||
+            /^172\.(?:1[6-9]|2\d|3[0-1])\./u.test(hostname);
+        } catch {
+          local = false;
+        }
+        const contextWindowTokens = this.llmService.getModelContextWindow(provider.providerId, model);
+        const routeConfigFingerprint = this.llmService.getProviderRouteConfigFingerprint(provider.providerId, model);
+        if (excluded || (!provider.hasApiKey && !local) || !contextWindowTokens || !routeConfigFingerprint) {
+          return undefined;
+        }
+        return { providerId: provider.providerId, model, contextWindowTokens, routeConfigFingerprint };
+      })
+      .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+      .sort((left, right) => `${left.providerId}:${left.model}`.localeCompare(`${right.providerId}:${right.model}`));
+    return this.runWithSharedHostWork("agent", "assembly-model-council", (lifecycleSignal) =>
+      this.assemblyService.executeChatModelCouncil({
+        turnId: prepared.turnId,
+        sessionId: prepared.session.sessionId,
+        workspaceId: prepared.workspaceId,
+        content: prepared.content,
+        history: prepared.history,
+        capabilityProfile,
+        providerCandidates,
+        routedContextSnapshot: prepared.routedContextSnapshot,
+        signal: signal ? AbortSignal.any([signal, lifecycleSignal]) : lifecycleSignal,
+      }),
     );
   }
 
@@ -4613,6 +5548,7 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     resolvedOrchestration?: PreparedChatExecutionPlanResolution,
+    options?: import("./chat-turn-types.js").PreparedAgentChatTurnDispatchOptions,
   ): Promise<ChatSendMessageResponse> {
     return chatTurnDispatchService.consumePreparedAgentChatTurn(
       this,
@@ -4621,6 +5557,7 @@ export class GatewayService {
       prepared,
       threadEventType,
       resolvedOrchestration,
+      options,
     );
   }
 
@@ -4741,6 +5678,73 @@ export class GatewayService {
     return DEFAULT_WORKSPACE_ID;
   }
 
+  /**
+   * Strict workspace resolver for trust projections. Unlike hook execution,
+   * this path never inherits the legacy default-workspace fallback.
+   */
+  public resolveDurableRunAuthorityWorkspaceId(run: DurableRunRecord): string | undefined {
+    const normalizeExplicitWorkspace = (value: unknown): string | undefined => {
+      if (typeof value !== "string" || !value.trim()) return undefined;
+      try {
+        return this.normalizeWorkspaceId(value);
+      } catch {
+        return undefined;
+      }
+    };
+    const resolveSessionWorkspace = (sessionId: unknown): string | undefined => {
+      if (typeof sessionId !== "string" || !sessionId.trim()) return undefined;
+      return normalizeExplicitWorkspace(this.storage.chatSessionMeta.get(sessionId.trim())?.workspaceId);
+    };
+    const resolveApprovalWorkspace = (approvalId: unknown): string | undefined => {
+      if (typeof approvalId !== "string" || !approvalId.trim()) return undefined;
+      try {
+        const approval = this.storage.approvals.get(approvalId.trim());
+        const linkageWorkspace = normalizeExplicitWorkspace(approval.linkage?.workspaceId);
+        if (linkageWorkspace) return linkageWorkspace;
+        const payloadWorkspace = normalizeExplicitWorkspace(approval.payload?.workspaceId);
+        if (payloadWorkspace) return payloadWorkspace;
+        return resolveSessionWorkspace(approval.linkage?.sessionId ?? approval.payload?.sessionId);
+      } catch {
+        return undefined;
+      }
+    };
+
+    if (run.workflowKey === "memory.maintenance") {
+      const payload = this.parseMemoryMaintenanceWorkflowPayload(run);
+      return normalizeExplicitWorkspace(payload?.workspaceId);
+    }
+    if (run.workflowKey === "hook.delivery") {
+      const payload = this.parseHookDeliveryWorkflowPayload(run);
+      return normalizeExplicitWorkspace(payload?.workspaceId);
+    }
+    if (run.workflowKey === "connector.delivery") {
+      const payload = this.parseConnectorDeliveryWorkflowPayload(run);
+      const explicitWorkspace = payload?.workspaceId ?? payload?.payload?.workspaceId;
+      if (typeof explicitWorkspace === "string" && explicitWorkspace.trim()) {
+        return normalizeExplicitWorkspace(explicitWorkspace);
+      }
+      const approvalId = typeof payload?.payload?.approvalId === "string" ? payload.payload.approvalId.trim() : "";
+      return resolveApprovalWorkspace(approvalId);
+    }
+    if (run.workflowKey === "approval.wait") {
+      const payload = this.parseApprovalWaitWorkflowPayload(run);
+      return resolveApprovalWorkspace(payload?.approvalId);
+    }
+    if (run.workflowKey === "chat.turn.execute") {
+      const payload = this.parseDurableChatTurnPayload(run);
+      return resolveSessionWorkspace(payload?.sessionId);
+    }
+    if (run.workflowKey === "proactive.tick") {
+      const payload = this.parseProactiveTickWorkflowPayload(run);
+      return resolveSessionWorkspace(payload?.sessionId);
+    }
+    if (run.workflowKey === "orchestration.plan.execute") {
+      const payload = this.parseOrchestrationWorkflowPayload(run);
+      return normalizeExplicitWorkspace(payload?.workspaceId);
+    }
+    return undefined;
+  }
+
   private createDurableChatTurnPayload(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
@@ -4752,6 +5756,8 @@ export class GatewayService {
       turnId: prepared.turnId,
       userMessageId: prepared.userEventId,
       assistantMessageId: prepared.assistantMessageId,
+      capabilityProfileId: prepared.capabilityProfile?.profileId,
+      capabilityProfileHash: prepared.capabilityProfile?.hashes.profileHash,
       branchKind: prepared.branchKind,
       parentTurnId: prepared.parentTurnId,
       sourceTurnId: prepared.sourceTurnId,
@@ -4769,19 +5775,34 @@ export class GatewayService {
    * `task` handler and the `agent_turn` autonomy-disabled / inertInboxFallback
    * path so the fallback behavior stays byte-identical to today's `task` cron.
    */
-  private createCronInboxTask(job: CronJobRecord): TaskRecord {
-    return this.taskLifecycleService.createTask({
-      title: job.name,
-      description: [
-        job.description?.trim() || "Scheduled task created by cron job.",
-        "",
-        `Cron job: ${job.jobId}`,
-        `Triggered at: ${new Date().toISOString()}`,
-      ].join("\n"),
-      status: "inbox",
-      priority: "normal",
-      createdBy: "scheduler",
-    });
+  private createCronInboxTask(job: CronJobRecord, options: { taskId?: string } = {}): TaskRecord {
+    const deterministicTaskId = options.taskId?.trim();
+    if (deterministicTaskId) {
+      const existing = this.storage.tasks.find(deterministicTaskId);
+      if (existing) {
+        if (existing.createdBy !== "scheduler" || !existing.description?.includes(`Cron job: ${job.jobId}`)) {
+          throw new ConflictError({
+            message: `Deterministic cron inbox task ${deterministicTaskId} is owned by a different occurrence.`,
+          });
+        }
+        return existing;
+      }
+    }
+    return this.taskLifecycleService.createTask(
+      {
+        title: job.name,
+        description: [
+          job.description?.trim() || "Scheduled task created by cron job.",
+          "",
+          `Cron job: ${job.jobId}`,
+          `Triggered at: ${new Date().toISOString()}`,
+        ].join("\n"),
+        status: "inbox",
+        priority: "normal",
+        createdBy: "scheduler",
+      },
+      deterministicTaskId ? { taskId: deterministicTaskId } : undefined,
+    );
   }
 
   /**
@@ -4798,7 +5819,7 @@ export class GatewayService {
       storage: this.storage,
       cron: this.cronAutomationService,
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
-      createCronInboxTask: (job) => this.createCronInboxTask(job),
+      createCronInboxTask: (job, options) => this.createCronInboxTask(job, options),
       getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
       patchSessionAutonomyPrefs: (sessionId, patch) => {
         this.patchSessionAutonomyPrefs(sessionId, patch);
@@ -4820,8 +5841,15 @@ export class GatewayService {
         durableChatTurnPayloadToRecord(
           this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
         ),
-      createDurableRun: (input) => this.createDurableRun(input),
+      createDurableRun: (input) => this.durableRunService.createDurableRun(input, { publishRealtime: false }),
       persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
+      onDurableRunCommitted: (run) =>
+        this.publishRealtime("system", "durable", {
+          type: "durable_run_created",
+          runId: run.runId,
+          workflowKey: run.workflowKey,
+          status: run.status,
+        }),
       requestDurableRunProcessing: (runId) => this.requestDurableRunProcessing(runId),
     };
   }
@@ -4830,6 +5858,7 @@ export class GatewayService {
     job: CronJobRecord;
     runId: string;
     config: CronAgentTurnConfig;
+    cronRun: CronRunExecutionToken;
   }): Promise<AgentTurnCronRunOutcome> {
     return runCronAgentTurn(this.chatAutonomousTurnDeps(), input);
   }
@@ -4944,11 +5973,23 @@ export class GatewayService {
     return chatDurableRunService.beginDurableChatRun(
       {
         shouldUseDurableExecution: this.shouldUseDurableExecution(prepared, input),
-        createDurableRun: (runInput) => this.createDurableRun(runInput),
+        runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
+        createDurableRun: (runInput) => this.durableRunService.createDurableRun(runInput, { publishRealtime: false }),
         buildDurablePayloadRecord: (preparedTurn, request, eventType) =>
           durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(preparedTurn, request, eventType)),
         persistChatStreamChunk: (chunk, durableRunId) => this.persistChatStreamChunk(chunk, durableRunId),
         chatTurnTraces: this.storage.chatTurnTraces,
+        capabilityCatalogSnapshots: this.storage.capabilityCatalogSnapshots,
+        chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
+        routedContextSnapshots: this.storage.routedContextSnapshots,
+        skillLifecycle: this.storage.skillLifecycle,
+        onDurableRunCommitted: (run) =>
+          this.publishRealtime("system", "durable", {
+            type: "durable_run_created",
+            runId: run.runId,
+            workflowKey: run.workflowKey,
+            status: run.status,
+          }),
         requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       },
       prepared,
@@ -5105,12 +6146,40 @@ export class GatewayService {
     return this.backupRetentionService.pruneRetention(options);
   }
 
-  public async runDatabaseCutover(input: {
-    profile: DatabaseCutoverProfile;
-    execute: boolean;
-    confirm?: boolean;
-  }): Promise<DatabaseCutoverResponse> {
+  public async runDatabaseCutover(input: DatabaseCutoverRequest): Promise<DatabaseCutoverResponse> {
     return this.databaseCutoverService.runCutover(input);
+  }
+
+  /** @internal Revision-fenced next-start database driver commit. */
+  public async commitDatabaseDriver(input: {
+    driver: "postgres";
+    expectedRevision: number;
+  }): Promise<{ revision: number }> {
+    const previousDriver = this.config.assistant.database.driver;
+    await this.configGenerationService.commit({
+      expectedRevision: input.expectedRevision,
+      requireExpectedRevision: true,
+      previousRuntime: previousDriver,
+      buildCandidate: () => {
+        const candidateConfig = structuredClone(this.config);
+        candidateConfig.assistant.database.driver = input.driver;
+        return {
+          runtime: input.driver,
+          payload: this.buildUnifiedConfigPayloadForRuntime(
+            candidateConfig,
+            this.llmService.exportConfigFile(),
+            this.readFeatureFlags(),
+          ),
+        };
+      },
+      apply: async (driver) => {
+        this.config.assistant.database.driver = driver;
+      },
+      restore: async (driver) => {
+        this.config.assistant.database.driver = driver;
+      },
+    });
+    return { revision: this.readSettingsRevision() };
   }
 
   public async verifyDatabaseCutover(input: { source: string; target?: string }): Promise<DatabaseVerifyResponse> {
@@ -5249,16 +6318,24 @@ export class GatewayService {
     pending: PendingApprovalAction,
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
+    const approvedRequest = toToolInvokeRequest(pending.request, signal);
+    const beforeExecute = await this.toolInvocationCoordinator.prepareApprovedBuiltinBeforeExecute(approvedRequest, {
+      invocationId: `approved-builtin:${approvalId}`,
+      ...(signal ? { signal } : {}),
+    });
     return executeApprovedExternalRuntimePendingActionWithPort(
       {
         storage: this.storage,
         executeApprovedAction: (id, abortSignal, options) =>
-          this.policyEngine.executeApprovedAction(id, abortSignal, options),
+          this.policyEngine.executeApprovedAction(id, abortSignal, {
+            ...options,
+            ...(beforeExecute ? { beforeExecute } : {}),
+          }),
         enrichMcpInvokePolicyContext: (input) => this.enrichMcpInvokePolicyContext(input),
         invokeApprovedMcpRuntime: (input, markStarted) =>
           this.toolInvocationCoordinator.invokeApprovedMcpRuntime(input, markStarted),
-        invokeApprovedExternalRuntimeTool: (request, markStarted) =>
-          this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request, markStarted),
+        invokeApprovedExternalRuntimeTool: (request, markStarted, options) =>
+          this.toolInvocationCoordinator.invokeApprovedExternalRuntimeTool(request, markStarted, options),
       },
       approvalId,
       pending,
@@ -5393,7 +6470,19 @@ export class GatewayService {
   }
 
   public listToolCatalog(): ToolCatalogEntry[] {
-    return this.policyEngine.listCatalog();
+    return this.policyEngine.listCatalog().map((tool) => ({
+      ...tool,
+      // The policy registry is the Gateway-owned built-in registry. Recompute
+      // this field instead of trusting any caller-supplied readOnly hint.
+      effectPotential: classifyToolEffectPotential({
+        toolName: tool.toolName,
+        trustedBuiltin: true,
+        category: tool.category,
+        riskLevel: tool.riskLevel,
+        requiresApproval: tool.requiresApproval,
+        readOnly: tool.readOnly,
+      }),
+    }));
   }
 
   public evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
@@ -6284,6 +7373,14 @@ export class GatewayService {
       : approvalRemoteTokenService.consumeRemoteActionToken(this, token, expectedActionType);
   }
 
+  public findRemoteActionTokenId(token: string): string | undefined {
+    const normalized = token.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    return this.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalized))?.tokenId;
+  }
+
   /** @internal */ public consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
@@ -6402,16 +7499,30 @@ export class GatewayService {
     return this.skillStateService.getActivationPolicy();
   }
 
-  public updateSkillActivationPolicy(input: Partial<SkillActivationPolicy>): SkillActivationPolicy {
-    return this.skillStateService.updateActivationPolicy(input);
+  public updateSkillActivationPolicy(
+    input: Partial<Omit<SkillActivationPolicy, "revision">>,
+    expectedRevision: number,
+  ): SkillActivationPolicy {
+    return this.skillStateService.updateActivationPolicy(input, expectedRevision);
   }
 
-  public setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord {
-    return this.skillStateService.setSkillState(skillId, state, note);
+  public setSkillState(
+    skillId: string,
+    state: SkillRuntimeState,
+    note?: string,
+    expectedRevision?: number,
+  ): SkillStateRecord {
+    const revision = expectedRevision ?? this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
+    return this.skillStateService.setSkillState(skillId, state, note, revision);
   }
 
-  public bulkSetSkillState(skillIds: string[], state: SkillRuntimeState, note?: string): SkillStateRecord[] {
-    return this.skillStateService.bulkSetSkillState(skillIds, state, note);
+  public bulkSetSkillState(
+    skillIds: string[],
+    state: SkillRuntimeState,
+    note: string | undefined,
+    expectedRevisionsBySkillId: Record<string, number>,
+  ): SkillStateRecord[] {
+    return this.skillStateService.bulkSetSkillState(skillIds, state, note, expectedRevisionsBySkillId);
   }
 
   /**
@@ -6425,7 +7536,12 @@ export class GatewayService {
 
   public resolveSkillActivation(input: SkillResolveInput) {
     const policy = this.getSkillActivationPolicy();
-    const base = this.skillsService.resolveActivation(input);
+    const base = resolveCallableSkillActivation({
+      request: input,
+      loadedSkills: this.skillsService.list(),
+      inspectableCatalog: this.capabilitySystemService.listCatalog("inspectable"),
+      callableCatalog: this.capabilitySystemService.listCatalog("callable"),
+    });
     const stateMap = this.skillStateService.readSkillStates();
     const selected: Array<
       SkillListItem & {
@@ -6472,6 +7588,8 @@ export class GatewayService {
 
       selected.push({
         ...skill,
+        revision:
+          stateRecord?.revision ?? this.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId).revision,
         state,
         confidence,
         requiresConfirmation,
@@ -6512,7 +7630,133 @@ export class GatewayService {
   }
 
   public getSettings(): RuntimeSettings {
+    this.configGenerationService.assertRuntimeReadsReady();
     return settingsAuthService.getSettings(createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()));
+  }
+
+  public readSettingsRevision(): number {
+    this.configGenerationService.assertRuntimeReadsReady();
+    return this.configGenerationService.getRevision();
+  }
+
+  public getConfigGenerationHealthSnapshot() {
+    return this.configGenerationService.getHealthSnapshot();
+  }
+
+  public async saveProviderSecret(input: SaveProviderSecretInput): Promise<ProviderSecretMutationResponse> {
+    return this.commitProviderSecretMutation({ ...input, operation: "set" });
+  }
+
+  public async deleteProviderSecret(input: DeleteProviderSecretInput): Promise<ProviderSecretMutationResponse> {
+    return this.commitProviderSecretMutation({ ...input, operation: "delete" });
+  }
+
+  private async commitProviderSecretMutation(
+    input: (SaveProviderSecretInput & { operation: "set" }) | (DeleteProviderSecretInput & { operation: "delete" }),
+  ): Promise<ProviderSecretMutationResponse> {
+    type ProviderSecretRuntimeState = {
+      config: GatewayRuntimeConfig;
+      llm: LlmConfigFile;
+      runtimeLlm: LlmConfigFile;
+      prepared?: PreparedProviderSecretMutation;
+    };
+    const previousConfig = structuredClone(this.config);
+    const previousRuntimeLlm = this.llmService.snapshotRuntimeConfigForPersistence();
+    let appliedStatus: Omit<ProviderSecretMutationResponse, "revision"> | undefined;
+    let preparedMutation: PreparedProviderSecretMutation | undefined;
+
+    const commit = await this.configGenerationService.commit<ProviderSecretRuntimeState>({
+      expectedRevision: input.expectedRevision,
+      requireExpectedRevision: true,
+      previousRuntime: {
+        config: previousConfig,
+        llm: this.llmService.exportConfigFile(),
+        runtimeLlm: previousRuntimeLlm,
+      },
+      buildCandidate: () => {
+        const prepared = prepareProviderSecretMutation({
+          operation: input.operation,
+          providerId: input.providerId,
+          ...(input.operation === "set" ? { apiKey: input.apiKey, envVar: input.envVar } : {}),
+          storage: input.storage,
+          rootDir: this.config.rootDir,
+          llmService: this.llmService,
+        });
+        preparedMutation = prepared;
+        const llm = this.llmService.exportConfigFile();
+        const runtimeLlm = this.llmService.snapshotRuntimeConfigForPersistence();
+        if (prepared.apiKeyEnv) {
+          const provider = llm.providers.find((entry) => entry.providerId === prepared.providerId);
+          const runtimeProvider = runtimeLlm.providers.find((entry) => entry.providerId === prepared.providerId);
+          if (!provider || !runtimeProvider) {
+            throw new ValidationError({ message: `Unknown LLM provider: ${prepared.providerId}` });
+          }
+          provider.apiKeyEnv = prepared.apiKeyEnv;
+          runtimeProvider.apiKeyEnv = prepared.apiKeyEnv;
+        }
+        const runtimeProvider = runtimeLlm.providers.find((entry) => entry.providerId === prepared.providerId);
+        if (!runtimeProvider) {
+          throw new ValidationError({ message: `Unknown LLM provider: ${prepared.providerId}` });
+        }
+        runtimeProvider.apiKey = undefined;
+        const config = structuredClone(this.config);
+        config.llm = structuredClone(llm);
+        return {
+          runtime: { config, llm, runtimeLlm, prepared },
+          payload: this.buildUnifiedConfigPayloadForRuntime(config, llm, this.readFeatureFlags()),
+        };
+      },
+      captureRuntimeOwnerRecoveryIntent: (candidate) => ({
+        version: 1,
+        providerSecretEffects: candidate.prepared?.effects ?? [],
+      }),
+      apply: (candidate) => {
+        if (!candidate.prepared) {
+          throw new Error("Provider secret candidate is missing its prepared owner transition.");
+        }
+        candidate.prepared.apply();
+        // The inline value is cleared only after its selected external owner
+        // has been written and verified. Replacing the provider snapshot then
+        // makes live runtime/config agree with the secret-free canonical file.
+        this.llmService.replaceRuntimeConfig(candidate.runtimeLlm);
+        replaceMutableConfigValue(this.config.llm, candidate.llm);
+        const status = this.llmService.getProviderSecretStatus(candidate.prepared.providerId, {
+          useCache: false,
+        });
+        appliedStatus = {
+          providerId: status.providerId,
+          hasSecret: status.hasApiKey,
+          source: status.apiKeySource,
+        };
+      },
+      restore: async (previous) => {
+        const errors: unknown[] = [];
+        // The prepared mutation owns exact keychain/env/inline compensation.
+        // It is captured inside buildCandidate after the CAS fence, so stale
+        // clients never read or mutate secret owners. Attempt every owner even
+        // if one reverse step fails so a config-owner fault cannot strand an
+        // otherwise-restorable credential effect.
+        for (const restoreOwner of [
+          () => preparedMutation?.restore(),
+          () => this.llmService.replaceRuntimeConfig(previous.runtimeLlm),
+          () => replaceMutableConfigValue(this.config.llm, previous.config.llm),
+        ]) {
+          try {
+            await restoreOwner();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (errors.length > 0) {
+          throw new AggregateError(errors, "Provider secret owner compensation did not fully complete.");
+        }
+      },
+    });
+
+    if (!appliedStatus) {
+      throw new Error("Provider secret generation committed without applying its runtime owner.");
+    }
+    return { revision: commit.revision, ...appliedStatus };
   }
 
   public getPersonalityCatalog() {
@@ -6543,11 +7787,197 @@ export class GatewayService {
     }
   }
 
-  public updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings {
-    return settingsAuthService.updateSettings(
-      createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-      input,
-    );
+  public async updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings> {
+    const deps = {
+      ...createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+      // Candidate construction runs under the generation write fence, so it
+      // must use the already-submitted CAS revision rather than the public read
+      // path (which correctly rejects mixed-generation reads at that point).
+      readSettingsRevision: () => input.expectedRevision ?? this.configGenerationService.getRevision(),
+    };
+    const previousRuntime: settingsAuthService.SettingsConfigCandidate = {
+      config: structuredClone(this.config),
+      features: structuredClone(this.readFeatureFlags()),
+      llm: this.llmService.exportConfigFile(),
+      settings: this.getSettings(),
+      input: structuredClone(input),
+    };
+
+    let ownerRollback: { rollback(): Promise<void> } | undefined;
+    await this.configGenerationService.commit({
+      expectedRevision: input.expectedRevision,
+      requireExpectedRevision: true,
+      previousRuntime,
+      buildCandidate: () => {
+        const candidate = settingsAuthService.buildSettingsCandidate(deps, input);
+        if (candidate.input.llamaCpp) {
+          // This executes before staging or a durable transaction decision.
+          // Process identity cannot change under active request leases because
+          // exact owner rollback would otherwise have to interrupt live work.
+          this.llamaCppRuntime.assertCanApplyConfig(candidate.config.assistant.llamaCpp);
+        }
+        return {
+          runtime: candidate,
+          payload: this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
+        };
+      },
+      captureRuntimeOwnerRecoveryIntent: (candidate) => ({
+        version: 1,
+        ...(candidate.input.mesh
+          ? {
+              meshArtifact: this.storage.mesh.snapshotRuntimeArtifacts(
+                candidate.config.assistant.mesh.nodeId,
+                process.env[candidate.config.assistant.mesh.security.joinTokenEnv],
+              ),
+            }
+          : {}),
+      }),
+      apply: async (candidate) => {
+        await this.applySettingsRuntimeCandidate(candidate, (receipt) => {
+          ownerRollback = receipt;
+        });
+      },
+      restore: async () => {
+        if (!ownerRollback) {
+          throw new Error("Settings owner apply did not register an exact rollback receipt.");
+        }
+        const rollback = ownerRollback;
+        ownerRollback = undefined;
+        await rollback.rollback();
+      },
+    });
+    if (didDisengageAutonomyKillSwitch(previousRuntime.features, this.readFeatureFlags())) {
+      this.resumeRunsAfterAutonomyKillSwitchDisengaged();
+    }
+    return this.getSettings();
+  }
+
+  /** @internal Transactional owner-apply seam used by config-generation proof. */
+  public async applySettingsRuntimeCandidate(
+    candidate: settingsAuthService.SettingsConfigCandidate,
+    registerRollback: (receipt: { rollback(): Promise<void> }) => void,
+    reason: "settings_update" | "rollback" = "settings_update",
+  ): Promise<{ rollback(): Promise<void> }> {
+    const input = candidate.input;
+    const compensations: Array<() => void | Promise<void>> = [];
+    const previousConfig = structuredClone(this.config);
+    const previousFeatures = structuredClone(this.readFeatureFlags());
+    let rolledBack = false;
+    const rollback = async (): Promise<void> => {
+      if (rolledBack) {
+        return;
+      }
+      rolledBack = true;
+      const compensationErrors: unknown[] = [];
+      for (const compensate of [...compensations].reverse()) {
+        try {
+          await compensate();
+        } catch (compensationError) {
+          compensationErrors.push(compensationError);
+        }
+      }
+      if (compensationErrors.length > 0) {
+        throw new AggregateError(compensationErrors, "One or more settings owner reverse compensations failed.");
+      }
+    };
+    const rollbackReceipt = { rollback };
+    // Registration precedes every owner effect. ConfigGenerationService invokes
+    // this receipt only after its monotonic rollback canonical and committed
+    // recovery marker are durable.
+    registerRollback(rollbackReceipt);
+
+    // Process transitions can fail after changing desired state. Run them
+    // first and register semantic compensation before each attempt.
+    if (input.llamaCpp) {
+      const previousLlamaConfig = this.llamaCppRuntime.getConfigSnapshot();
+      const previousLlamaLifecycle = this.llamaCppRuntime.getLifecycleSnapshot();
+      const candidateLlamaEnabled = candidate.config.assistant.llamaCpp.enabled;
+      const candidateLlamaLifecycle = {
+        persistentDemand: {
+          manual: candidateLlamaEnabled && previousLlamaLifecycle.persistentDemand.manual,
+          api: candidateLlamaEnabled && previousLlamaLifecycle.persistentDemand.api,
+          autostart: candidateLlamaEnabled && candidate.config.assistant.llamaCpp.autoStart,
+        },
+        ...(this.llamaCppRuntime.assessConfigTransition(candidate.config.assistant.llamaCpp).identityChanged
+          ? {}
+          : previousLlamaLifecycle.idleShutdownRemainingMs === undefined
+            ? {}
+            : { idleShutdownRemainingMs: previousLlamaLifecycle.idleShutdownRemainingMs }),
+      };
+      compensations.push(async () => {
+        await transitionLlamaCppRuntimeConfig(
+          this.llamaCppRuntime,
+          previousLlamaConfig,
+          previousLlamaLifecycle,
+          "rollback",
+        );
+      });
+      await transitionLlamaCppRuntimeConfig(
+        this.llamaCppRuntime,
+        candidate.config.assistant.llamaCpp,
+        candidateLlamaLifecycle,
+        reason,
+      );
+    }
+
+    if (input.npu) {
+      const previousNpuConfig = this.npuSidecar.getConfigSnapshot();
+      compensations.push(async () => {
+        this.npuSidecar.updateConfig(previousNpuConfig);
+        await this.npuSidecar.stop("rollback");
+      });
+      this.npuSidecar.updateConfig(candidate.config.assistant.npu);
+      await this.npuSidecar.stop(reason);
+    }
+
+    if (input.mesh) {
+      const meshReplacement = this.meshService.replaceOptionsReversibly({
+        enabled: candidate.config.assistant.mesh.enabled,
+        mode: candidate.config.assistant.mesh.mode,
+        localNodeId: candidate.config.assistant.mesh.nodeId,
+        localNodeLabel: candidate.config.assistant.mesh.label,
+        advertiseAddress: candidate.config.assistant.mesh.advertiseAddress,
+        requireMtls: candidate.config.assistant.mesh.security.requireMtls,
+        tailnetEnabled: candidate.config.assistant.mesh.security.tailnet.enabled,
+        joinToken: process.env[candidate.config.assistant.mesh.security.joinTokenEnv],
+        defaultLeaseTtlSeconds: candidate.config.assistant.mesh.leases.ttlSeconds,
+      });
+      compensations.push(() => meshReplacement.rollback());
+    }
+
+    if (input.llm || input.llamaCpp) {
+      const previousLlm = this.llmService.exportConfigFile();
+      compensations.push(() => {
+        this.llmService.replaceRuntimeConfig(previousLlm);
+      });
+      this.llmService.replaceRuntimeConfig(candidate.llm);
+    }
+    if (input.defaultToolProfile || input.toolApprovalMode || input.networkAllowlist) {
+      const previousAllowlist = [...previousConfig.toolPolicy.sandbox.networkAllowlist];
+      compensations.push(() => this.llmService.updateNetworkAllowlist(previousAllowlist, { enforce: true }));
+      this.llmService.updateNetworkAllowlist(candidate.config.toolPolicy.sandbox.networkAllowlist, { enforce: true });
+    }
+
+    compensations.push(() => {
+      replaceMutableConfigValue(this.config.assistant, previousConfig.assistant);
+      replaceMutableConfigValue(this.config.toolPolicy, previousConfig.toolPolicy);
+      replaceMutableConfigValue(this.config.budgets, previousConfig.budgets);
+      replaceMutableConfigValue(this.config.llm, previousConfig.llm);
+    });
+    replaceMutableConfigValue(this.config.assistant, candidate.config.assistant);
+    replaceMutableConfigValue(this.config.toolPolicy, candidate.config.toolPolicy);
+    replaceMutableConfigValue(this.config.budgets, candidate.config.budgets);
+    replaceMutableConfigValue(this.config.llm, candidate.llm);
+
+    // Feature publication is last because it is durable and can wake parked
+    // autonomous runs. No later owner step is allowed to fail after it.
+    if (input.features) {
+      compensations.push(() => {
+        this.updateFeatureFlags(previousFeatures, { resumeParkedRuns: false });
+      });
+      this.updateFeatureFlags(candidate.features, { resumeParkedRuns: false });
+    }
+    return rollbackReceipt;
   }
 
   /** @internal */ public assertDeploymentProfileUpdate(input: {
@@ -6617,16 +8047,18 @@ export class GatewayService {
   }
 
   public getAuthRuntimeSettings(): AuthRuntimeSettings {
+    this.configGenerationService.assertRuntimeReadsReady();
     return settingsAuthService.getAuthRuntimeSettings(
       createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
     );
   }
 
-  public updateAuthSettings(input: AuthSettingsUpdateInput): AuthRuntimeSettings {
-    return settingsAuthService.updateAuthSettings(
-      createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-      input,
-    );
+  public async updateAuthSettings(
+    input: AuthSettingsUpdateInput & { expectedRevision: number },
+  ): Promise<AuthRuntimeSettings> {
+    const { expectedRevision, ...auth } = input;
+    const updated = await this.updateSettings({ expectedRevision, auth });
+    return updated.auth;
   }
 
   public getAuthCredentialPlan() {
@@ -6721,6 +8153,14 @@ export class GatewayService {
     return validation;
   }
 
+  public reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> {
+    return this.skillHubReviewService.reviewSource(input);
+  }
+
+  public prepareSkillHubRollbackReview(input: SkillHubRollbackReviewInput): Promise<SkillHubReviewResult> {
+    return this.skillHubReviewService.prepareRollbackReview(input);
+  }
+
   public async installSkillImport(input: {
     sourceRef: string;
     sourceType?: SkillImportValidationResult["candidate"]["sourceType"];
@@ -6739,7 +8179,16 @@ export class GatewayService {
       (skill) => skill.source === "extra" && path.resolve(skill.dir) === path.resolve(installed.installedPath),
     );
     if (installedSkill) {
-      this.setSkillState(installedSkill.skillId, "disabled", "Imported skill starts disabled by default.");
+      const expectedRevision = this.storage.skillAggregateRevisions.ensure(
+        "runtime_skill",
+        installedSkill.skillId,
+      ).revision;
+      this.setSkillState(
+        installedSkill.skillId,
+        "disabled",
+        "Imported skill starts disabled by default.",
+        expectedRevision,
+      );
     }
     this.skillStateService.recordSkillImportEvent(installed.validation, "import_installed");
     this.publishRealtime("system", "skills", {
@@ -7057,6 +8506,24 @@ export class GatewayService {
     return result;
   }
 
+  public acceptInboundChannelEvent(
+    input: Parameters<InboundChannelEventService["accept"]>[0],
+  ): ReturnType<InboundChannelEventService["accept"]> {
+    return this.inboundChannelEventService.accept(input);
+  }
+
+  public acceptInboundChannelEvents(
+    inputs: Parameters<InboundChannelEventService["acceptMany"]>[0],
+  ): ReturnType<InboundChannelEventService["acceptMany"]> {
+    return this.inboundChannelEventService.acceptMany(inputs);
+  }
+
+  public awaitInboundChannelCommandResult(
+    inboundEventId: string,
+  ): ReturnType<InboundChannelEventService["awaitCommandResult"]> {
+    return this.inboundChannelEventService.awaitCommandResult(inboundEventId);
+  }
+
   public getProviderSecretStatus(providerId: string): {
     providerId: string;
     hasSecret: boolean;
@@ -7081,12 +8548,18 @@ export class GatewayService {
     return this.llmService.listModels(providerId);
   }
 
-  public async createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    return llmCompletionService.createChatCompletion(this, request);
+  public async createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext = {},
+  ): Promise<ChatCompletionResponse> {
+    return llmCompletionService.createChatCompletion(this, request, attribution);
   }
 
-  public async *createChatCompletionStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
-    yield* llmCompletionService.createChatCompletionStream(this, request);
+  public async *createChatCompletionStream(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext = {},
+  ): AsyncGenerator<Record<string, unknown>> {
+    yield* llmCompletionService.createChatCompletionStream(this, request, attribution);
   }
 
   /** @internal */ public recordLlmRuntimeMeasurement(record: LlmRuntimeMeasurementRecord): void {
@@ -7267,7 +8740,10 @@ export class GatewayService {
     }
   }
 
-  public updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"] {
+  public updateFeatureFlags(
+    patch: Partial<RuntimeSettings["features"]>,
+    options: { resumeParkedRuns?: boolean } = {},
+  ): RuntimeSettings["features"] {
     if (patch.durableKernelV1Enabled === false) {
       throw new ValidationError({
         message: "features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.",
@@ -7282,7 +8758,10 @@ export class GatewayService {
     // this is the sole writer, so no invalidation race with the TTL path.
     this.featureFlagsCache = next;
     this.featureFlagsCacheAtMs = Date.now();
-    if (autonomyKillSwitchDisengaged) {
+    if (patch.signalInboundV1Enabled !== undefined) {
+      this.signalInboundRuntimeService?.sync();
+    }
+    if (autonomyKillSwitchDisengaged && options.resumeParkedRuns !== false) {
       // Runs parked while the kill switch was engaged wait on a per-run event that
       // nothing else emits; without an explicit resume they stay "waiting" forever.
       // Best-effort — the flag write above already succeeded and must not be undone
@@ -7298,8 +8777,35 @@ export class GatewayService {
     return next;
   }
 
+  private resumeRunsAfterAutonomyKillSwitchDisengaged(): void {
+    try {
+      this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
+    } catch (error) {
+      log.warn("Failed to resume autonomy-kill-switch-parked durable runs", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private applyStoredFeatureFlags(): void {
     this.config.assistant.features = this.readFeatureFlags();
+  }
+
+  private applyStartupFeatureFlags(): void {
+    if (!this.configGenerationService.isRuntimeOwnerReconciliationPending()) {
+      this.applyStoredFeatureFlags();
+      return;
+    }
+
+    // During forward recovery the canonical generation, not a potentially
+    // stale system_settings projection, owns the exact flag set. Replace the
+    // projection without waking parked autonomy runs; deferred startup clears
+    // the durable decision before any scheduler/worker is started.
+    const canonicalFeatures = structuredClone(this.config.assistant.features);
+    this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, canonicalFeatures);
+    this.config.assistant.features = canonicalFeatures;
+    this.featureFlagsCache = canonicalFeatures;
+    this.featureFlagsCacheAtMs = Date.now();
   }
 
   /** @internal */ public readFeatureFlags(): RuntimeSettings["features"] {
@@ -7368,8 +8874,8 @@ export class GatewayService {
       this.recordDevDiagnostic({
         level: "warn",
         category: "channels",
-        event: "signal.inbound.sync_failed",
-        message: "Signal inbound runtime sync failed.",
+        event: "signal.legacy_inbound_settings.reconcile_failed",
+        message: "Signal outbound-only legacy-setting reconciliation failed.",
         context: {
           error: (error as Error).message,
         },
@@ -7584,10 +9090,12 @@ export class GatewayService {
 
   public async close(): Promise<void> {
     this.closing = true;
+    await this.runtimeReleaseTrustService.close();
     this.chatProactiveService.stopScheduler();
     this.improvementService.stopScheduler();
     this.durableRunService.stopWorker();
     this.approvalEffectsService.stopWorker();
+    this.inboundChannelEventService.close();
     this.chatTurnExecutionRegistry?.close("Gateway service is closing.");
     this.promptPackService?.close();
     if (this.maintenanceScheduler) {
@@ -7598,6 +9106,7 @@ export class GatewayService {
       this.orchestrationWorktreeReapScheduler.stop();
       this.orchestrationWorktreeReapScheduler = undefined;
     }
+    this.orchestrationWorktreeService.close();
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
       this.backgroundTasks.clear();
@@ -7609,6 +9118,30 @@ export class GatewayService {
     await this.npuSidecar.close();
     await this.llamaCppRuntime.close();
     this.storage.close();
+  }
+
+  /**
+   * Stop every non-HTTP producer/listener from admitting new work. Existing
+   * reservations are left alone so a pause/force drain may settle them before
+   * close() tears down services and storage.
+   */
+  public async stopExternalAdmission(): Promise<void> {
+    this.closing = true;
+    this.chatProactiveService.stopScheduler();
+    this.improvementService.stopScheduler();
+    this.durableRunService.stopAdmission();
+    this.approvalEffectsService.stopAdmission();
+    this.inboundChannelEventService.close();
+    if (this.maintenanceScheduler) {
+      this.maintenanceScheduler.stop();
+      this.maintenanceScheduler = undefined;
+    }
+    if (this.orchestrationWorktreeReapScheduler) {
+      this.orchestrationWorktreeReapScheduler.stop();
+      this.orchestrationWorktreeReapScheduler = undefined;
+    }
+    this.signalInboundRuntimeService.stop();
+    await this.discordRuntimeService.close();
   }
 
   public async invokeAndUnwrap(
@@ -7731,8 +9264,9 @@ export class GatewayService {
       return;
     }
 
-    const task = this.approvalExplainer
-      .explainApproval(approval)
+    const task = this.tryRunWithSharedHostWork("agent", `approval-explanation:${approval.approvalId}`, () =>
+      this.approvalExplainer.explainApproval(approval),
+    )
       .catch((error) => {
         if (this.closing) {
           return;
@@ -7782,8 +9316,8 @@ export class GatewayService {
       return;
     }
 
-    const task = this.memoryLifecycleService
-      .composeContext({
+    const task = this.tryRunWithSharedHostWork("worker", `orchestration-memory-context:${run.runId}`, () =>
+      this.memoryLifecycleService.composeContext({
         scope: "orchestration",
         prompt: [
           `Plan goal: ${plan.goal}`,
@@ -7800,8 +9334,10 @@ export class GatewayService {
         // Finding 1: scope orchestration memory-item collection to the run's workspace.
         workspaceId: run.workspaceId ?? "default",
         forceRefresh: true,
-      })
+      }),
+    )
       .then((pack) => {
+        if (!pack) return;
         this.publishRealtime(
           "memory_qmd_generated",
           "orchestration",
@@ -7857,7 +9393,7 @@ export class GatewayService {
     }
   }
 
-  private async ensureChatMessageProjection(sessionId: string): Promise<void> {
+  public async ensureChatMessageProjection(sessionId: string): Promise<void> {
     if (this.chatMessageProjectionBackfillAttempted.has(sessionId)) {
       return;
     }
@@ -8036,6 +9572,7 @@ export class GatewayService {
       providerId?: string;
       model?: string;
       guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
+      compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
     },
   ): Promise<ChatCompletionRequest["messages"]> {
     return chatMessageHistoryService.buildLlmMessagesFromTranscript(
@@ -8069,6 +9606,7 @@ export class GatewayService {
       providerId?: string;
       model?: string;
       guidanceSystemInstruction?: ChatCompletionRequest["messages"][number]["content"];
+      compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {
@@ -8177,167 +9715,80 @@ export class GatewayService {
     return onboardingMarkerHelpers.persistOnboardingMarker(this);
   }
 
-  private async loadCronJobsFromConfig(): Promise<void> {
-    return cronJobConfigHelpers.loadCronJobsFromConfig(this);
-  }
-
-  private persistCronJobsConfig(): void {
-    return cronJobConfigHelpers.persistCronJobsConfig(this);
-  }
-
-  private getCronJobsConfigPath(): string {
-    return cronJobConfigHelpers.getCronJobsConfigPath(this);
-  }
-
   // ensureWeeklyImprovementCronJob moved to ImprovementService
 
-  private ensurePrivateBetaBackupCronJob(): void {
+  private ensurePrivateBetaBackupCronJob(): Promise<void> {
     return cronJobConfigHelpers.ensurePrivateBetaBackupCronJob(this);
   }
 
-  private ensureMemoryFlushCronJob(): void {
+  private ensureMemoryFlushCronJob(): Promise<void> {
     return cronJobConfigHelpers.ensureMemoryFlushCronJob(this);
   }
 
-  private ensureMemoryConsolidationCronJob(): void {
+  private ensureMemoryConsolidationCronJob(): Promise<void> {
     return cronJobConfigHelpers.ensureMemoryConsolidationCronJob(this);
   }
 
-  private ensureCostReportCronJob(): void {
+  private ensureCostReportCronJob(): Promise<void> {
     return cronJobConfigHelpers.ensureCostReportCronJob(this);
   }
 
-  private ensureUpdateReviewCronJob(): void {
+  private ensureUpdateReviewCronJob(): Promise<void> {
     return cronJobConfigHelpers.ensureUpdateReviewCronJob(this);
   }
 
-  /** @internal */ public persistLlmConfig(): void {
-    const filePath = path.join(this.config.rootDir, "config", "llm-providers.json");
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    fsSync.writeFileSync(filePath, JSON.stringify(this.llmService.exportConfigFile(), null, 2), "utf8");
-    this.persistUnifiedConfig();
-  }
-
-  /** @internal */ public persistToolPolicyConfig(): void {
-    const filePath = path.join(this.config.rootDir, "config", "tool-policy.json");
-    const payload = {
-      ...this.config.toolPolicy,
-      sandbox: {
-        ...this.config.toolPolicy.sandbox,
-        writeJailRoots: this.config.toolPolicy.sandbox.writeJailRoots.map((root) => this.serializeRootPath(root)),
-        readOnlyRoots: this.config.toolPolicy.sandbox.readOnlyRoots.map((root) => this.serializeRootPath(root)),
-      },
-    };
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    fsSync.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
-    this.persistUnifiedConfig();
-  }
-
-  /** @internal */ public persistBudgetsConfig(): void {
-    const filePath = path.join(this.config.rootDir, "config", "budgets.json");
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    fsSync.writeFileSync(filePath, JSON.stringify(this.config.budgets, null, 2), "utf8");
-    this.persistUnifiedConfig();
-  }
-
-  /** @internal */ public persistAssistantConfig(): void {
-    const filePath = path.join(this.config.rootDir, "config", "assistant.config.json");
-    const payload = {
-      environment: this.config.assistant.environment,
-      deploymentProfile: this.config.assistant.deploymentProfile,
-      defaultToolProfile: this.config.assistant.defaultToolProfile,
-      dataDir: this.config.assistant.dataDir,
-      transcriptsDir: this.config.assistant.transcriptsDir,
-      auditDir: this.config.assistant.auditDir,
-      workspaceDir: this.config.assistant.workspaceDir,
-      worktreesDir: this.config.assistant.worktreesDir,
-      auth: {
-        mode: this.config.assistant.auth.mode,
-        allowLoopbackBypass: this.config.assistant.auth.allowLoopbackBypass,
-        token: {
-          queryParam: this.config.assistant.auth.token.queryParam,
-        },
-        basic: {},
-      },
-      approvalExplainer: this.config.assistant.approvalExplainer,
-      memory: this.config.assistant.memory,
-      web: this.config.assistant.web,
-      mesh: this.config.assistant.mesh,
-      npu: this.config.assistant.npu,
-      llamaCpp: this.config.assistant.llamaCpp,
-      database: this.config.assistant.database,
-      sqlite: this.config.assistant.sqlite,
-      durable: this.config.assistant.durable,
-      features: this.readFeatureFlags(),
-      budgets: this.config.assistant.budgets,
-    };
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    fsSync.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
-    this.persistUnifiedConfig();
-  }
-
-  /** @internal */ public persistUnifiedConfig(): void {
-    const filePath = path.join(this.config.rootDir, "config", "goatcitadel.json");
+  private buildUnifiedConfigPayloadForRuntime(
+    runtimeConfig: GatewayRuntimeConfig,
+    llmConfig: ReturnType<LlmService["exportConfigFile"]>,
+    features: RuntimeSettings["features"],
+  ): CompleteUnifiedConfigPayload {
     const cronJobs = {
-      jobs: this.storage.cronJobs.list().map((job) => ({
-        jobId: job.jobId,
-        name: job.name,
-        action: job.action,
-        actionConfig: job.actionConfig,
-        description: job.description,
-        schedule: job.schedule,
-        enabled: job.enabled,
-        endAt: job.endAt,
-        lastRunAt: job.lastRunAt,
-        nextRunAt: job.nextRunAt,
-      })),
+      jobs: this.storage.cronJobs.list().map(projectCanonicalCronSpec),
     };
     const assistantPayload = {
-      environment: this.config.assistant.environment,
-      deploymentProfile: this.config.assistant.deploymentProfile,
-      defaultToolProfile: this.config.assistant.defaultToolProfile,
-      dataDir: this.config.assistant.dataDir,
-      transcriptsDir: this.config.assistant.transcriptsDir,
-      auditDir: this.config.assistant.auditDir,
-      workspaceDir: this.config.assistant.workspaceDir,
-      worktreesDir: this.config.assistant.worktreesDir,
+      environment: runtimeConfig.assistant.environment,
+      deploymentProfile: runtimeConfig.assistant.deploymentProfile,
+      defaultToolProfile: runtimeConfig.assistant.defaultToolProfile,
+      dataDir: runtimeConfig.assistant.dataDir,
+      transcriptsDir: runtimeConfig.assistant.transcriptsDir,
+      auditDir: runtimeConfig.assistant.auditDir,
+      workspaceDir: runtimeConfig.assistant.workspaceDir,
+      worktreesDir: runtimeConfig.assistant.worktreesDir,
       auth: {
-        mode: this.config.assistant.auth.mode,
-        allowLoopbackBypass: this.config.assistant.auth.allowLoopbackBypass,
+        mode: runtimeConfig.assistant.auth.mode,
+        allowLoopbackBypass: runtimeConfig.assistant.auth.allowLoopbackBypass,
         token: {
-          queryParam: this.config.assistant.auth.token.queryParam,
+          queryParam: runtimeConfig.assistant.auth.token.queryParam,
         },
         basic: {},
       },
-      approvalExplainer: this.config.assistant.approvalExplainer,
-      memory: this.config.assistant.memory,
-      web: this.config.assistant.web,
-      mesh: this.config.assistant.mesh,
-      npu: this.config.assistant.npu,
-      llamaCpp: this.config.assistant.llamaCpp,
-      database: this.config.assistant.database,
-      sqlite: this.config.assistant.sqlite,
-      durable: this.config.assistant.durable,
-      features: this.readFeatureFlags(),
-      budgets: this.config.assistant.budgets,
+      approvalExplainer: runtimeConfig.assistant.approvalExplainer,
+      memory: runtimeConfig.assistant.memory,
+      web: runtimeConfig.assistant.web,
+      mesh: runtimeConfig.assistant.mesh,
+      npu: runtimeConfig.assistant.npu,
+      llamaCpp: runtimeConfig.assistant.llamaCpp,
+      database: runtimeConfig.assistant.database,
+      sqlite: runtimeConfig.assistant.sqlite,
+      durable: runtimeConfig.assistant.durable,
+      features,
+      budgets: runtimeConfig.assistant.budgets,
     };
     const toolPolicyPayload = {
-      ...this.config.toolPolicy,
+      ...runtimeConfig.toolPolicy,
       sandbox: {
-        ...this.config.toolPolicy.sandbox,
-        writeJailRoots: this.config.toolPolicy.sandbox.writeJailRoots.map((root) => this.serializeRootPath(root)),
-        readOnlyRoots: this.config.toolPolicy.sandbox.readOnlyRoots.map((root) => this.serializeRootPath(root)),
+        ...runtimeConfig.toolPolicy.sandbox,
+        writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map((root) => this.serializeRootPath(root)),
+        readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map((root) => this.serializeRootPath(root)),
       },
     };
-    const unifiedPayload = buildUnifiedConfigPayload(
+    return buildUnifiedConfigPayload(
       assistantPayload,
       toolPolicyPayload,
-      this.config.budgets,
-      this.llmService.exportConfigFile(),
+      runtimeConfig.budgets,
+      llmConfig,
       cronJobs,
-    );
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    fsSync.writeFileSync(filePath, JSON.stringify(unifiedPayload, null, 2), "utf8");
+    ) as CompleteUnifiedConfigPayload;
   }
 
   private serializeRootPath(fullPath: string): string {
@@ -8433,6 +9884,32 @@ function dedupeStrings(values: readonly string[]): string[] {
     out.push(trimmed);
   }
   return out;
+}
+
+function replaceMutableConfigValue(target: object, source: object): void {
+  const targetRecord = target as Record<string, unknown>;
+  const sourceRecord = source as Record<string, unknown>;
+  for (const key of Object.keys(targetRecord)) {
+    if (!Object.prototype.hasOwnProperty.call(sourceRecord, key)) {
+      delete targetRecord[key];
+    }
+  }
+  for (const [key, nextValue] of Object.entries(sourceRecord)) {
+    const currentValue = targetRecord[key];
+    if (Array.isArray(currentValue) && Array.isArray(nextValue)) {
+      currentValue.splice(0, currentValue.length, ...structuredClone(nextValue));
+      continue;
+    }
+    if (isPlainMutableRecord(currentValue) && isPlainMutableRecord(nextValue)) {
+      replaceMutableConfigValue(currentValue, nextValue);
+      continue;
+    }
+    targetRecord[key] = structuredClone(nextValue);
+  }
+}
+
+function isPlainMutableRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readRecordString(record: Record<string, unknown>, key: string): string | undefined {

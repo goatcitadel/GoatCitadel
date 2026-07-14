@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readBoundedResponseText } from "../bounded-response-reader.js";
 import { assertSafeGitPositionalArg } from "../security-utils.js";
+import { readBoundedSkillSourceManifestSync } from "../skill-content-integrity.js";
 
 const execFileAsync = promisify(execFile);
 const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
@@ -674,7 +675,7 @@ async function readInstalledSkillSourceManifests(
       continue;
     }
     try {
-      const parsed = JSON.parse(await fs.readFile(manifestPath, "utf8")) as InstalledSkillSourceManifest;
+      const parsed = readBoundedSkillSourceManifestSync(manifestPath) as InstalledSkillSourceManifest;
       manifests.push({
         skillId: entry.name,
         ...parsed,

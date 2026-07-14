@@ -10,7 +10,7 @@ import type {
   ToolInvokeResult,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { PolicyViolationError } from "@goatcitadel/contracts";
+import { PolicyViolationError, TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
 import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { Storage } from "@goatcitadel/storage";
 import {
@@ -20,9 +20,22 @@ import {
 import { applyMcpRedaction } from "./mcp-server-policy.js";
 import { MCP_APPROVAL_INBOX_LIST_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
+import {
+  buildToolCallBeforeHookInterpositionBinding,
+  buildToolRuntimeOwnerBinding,
+} from "./tool-runtime-interposition.js";
 import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
 
 const integrationTempRoots: string[] = [];
+const UNKNOWN_PLUGIN_EFFECT = {
+  version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+  potential: "unknown",
+  sourceKind: "plugin",
+  reason: "plugin_runtime_untrusted",
+} as const;
+const STABLE_PLUGIN_RUNTIME_OWNER = { kind: "plugin", bindingHash: "a".repeat(64) } as const;
+const EMPTY_HOOK_BINDING = buildToolCallBeforeHookInterpositionBinding([]);
+const VERIFIED_WORKSPACE_CWD = "F:\\workspace\\project";
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -32,7 +45,7 @@ afterEach(async () => {
 function createToolRequest(overrides: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
   return {
     toolName: "shell.exec",
-    args: { command: "echo hi" },
+    args: { command: "echo hi", cwd: VERIFIED_WORKSPACE_CWD },
     agentId: "agent-1",
     sessionId: "session-1",
     ...overrides,
@@ -106,6 +119,13 @@ function createHost(overrides: Partial<ToolInvocationCoordinatorHost> = {}): Too
     isValidToolName: vi.fn(() => true),
     evaluateToolDeploymentGuard: vi.fn(() => undefined),
     resolveToolHookWorkspaceId: vi.fn(() => "workspace-1"),
+    resolveWorkspacePathBridgeBeforeExecution: vi.fn(async (_request, context) => ({
+      status: "verified" as const,
+      snapshotId: `fixture-${context.invocationId}-${context.phase}`,
+      canonicalCwd: VERIFIED_WORKSPACE_CWD,
+      snapshotFingerprintSha256: "b".repeat(64),
+    })),
+    resolveToolCallBeforeHookInterposition: vi.fn(() => buildToolCallBeforeHookInterpositionBinding([])),
     parseToolCallHookPatch: vi.fn(() => undefined),
     primeToolApprovalLifecycle: vi.fn(
       (): ApprovalRequest =>
@@ -329,6 +349,52 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(sideEffectStarted).toBe(false);
   });
 
+  it("keeps auxiliary after-hook dispatch distinct from a pre-executor approval", async () => {
+    const executionFence = vi.fn();
+    const auxiliaryEffectFence = vi.fn();
+    const afterBinding = { hash: "a".repeat(64), count: 1 };
+    const enqueueAfterHooks = vi.fn((input: { beforeExternalDispatch?: () => void }) => {
+      input.beforeExternalDispatch?.();
+      return [];
+    });
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        resolveToolCallBeforeHookInterposition: vi.fn(() => afterBinding),
+        hooksService: {
+          runInlineHooks: vi.fn(async () => ({ runs: [] })),
+          enqueueAfterHooks,
+        },
+        policyEngine: {
+          invoke: vi.fn(async () => ({
+            outcome: "approval_required",
+            approvalId: "approval-after-hook",
+            policyReason: "operator approval required",
+            auditEventId: "audit-approval-after-hook",
+          })),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: true, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest(), {
+      executionFence,
+      auxiliaryEffectFence,
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: afterBinding,
+      toolRuntimeOwner: buildToolRuntimeOwnerBinding("builtin"),
+    });
+
+    expect(result).toMatchObject({ outcome: "approval_required", approvalId: "approval-after-hook" });
+    expect(executionFence).not.toHaveBeenCalled();
+    expect(auxiliaryEffectFence).toHaveBeenCalled();
+    expect(enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "tool.call.after",
+        beforeExternalDispatch: auxiliaryEffectFence,
+      }),
+    );
+  });
+
   it("checks durable ownership after plugin policy preflight and before the override handler", async () => {
     const pluginHandler = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
@@ -343,6 +409,7 @@ describe("ToolInvocationCoordinatorService", () => {
       createHost({
         pluginToolOverrideService: {
           resolveActiveHandler: vi.fn(() => pluginHandler),
+          resolveRuntimeOwnerBinding: vi.fn(() => STABLE_PLUGIN_RUNTIME_OWNER),
         },
       }),
     );
@@ -630,6 +697,7 @@ describe("ToolInvocationCoordinatorService", () => {
         toolName: "shell.exec",
         args: {
           command: "pwd",
+          cwd: VERIFIED_WORKSPACE_CWD,
         },
         ignored: true,
       });
@@ -662,8 +730,10 @@ describe("ToolInvocationCoordinatorService", () => {
         toolName: "shell.exec",
         args: {
           command: "pwd",
+          cwd: VERIFIED_WORKSPACE_CWD,
         },
       }),
+      expect.objectContaining({ beforeExecute: expect.any(Function) }),
     );
     expect(enqueueAfterHooks).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -672,6 +742,7 @@ describe("ToolInvocationCoordinatorService", () => {
           toolName: "shell.exec",
           args: {
             command: "pwd",
+            cwd: VERIFIED_WORKSPACE_CWD,
           },
           result: expect.objectContaining({
             auditEventId: "audit-patched",
@@ -2104,6 +2175,222 @@ describe("ToolInvocationCoordinatorService", () => {
         externalRuntime: true,
       }),
     );
+  });
+
+  it("executes only the exact admitted plugin runtime owner generation", async () => {
+    const events: string[] = [];
+    const pluginHandler = vi.fn(async (): Promise<ToolInvokeResult> => {
+      events.push("handler");
+      return {
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-plugin-owner",
+        policyReason: "plugin override",
+      };
+    });
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-07-13T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({ pluginToolOverrideService: overrideService }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+      executionFence: () => events.push("main-fence"),
+      auxiliaryEffectFence: () => events.push("aux-fence"),
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+      toolRuntimeOwner: admittedOwner,
+    });
+
+    expect(result.outcome).toBe("executed");
+    expect(events.indexOf("main-fence")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("handler")).toBeGreaterThan(events.indexOf("main-fence"));
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a plugin handler swapped during awaited policy preflight before the executor fence", async () => {
+    const originalHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "evt-original-race",
+        policyReason: "original handler",
+      }),
+    );
+    const replacementHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "evt-replacement-race",
+        policyReason: "replacement handler",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-07-13T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+    const executionFence = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        pluginToolOverrideService: overrideService,
+        policyEngine: {
+          invoke: vi.fn(async () => {
+            overrideService.registerHandler({
+              pluginId: "p",
+              toolName: "web_search",
+              handler: replacementHandler,
+            });
+            return {
+              outcome: "executed",
+              auditEventId: "evt-policy-race",
+              policyReason: "allowed external runtime",
+              result: { externalRuntime: true },
+            };
+          }),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+      executionFence,
+      auxiliaryEffectFence: vi.fn(),
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+      toolRuntimeOwner: admittedOwner,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("runtime owner binding drifted"),
+    });
+    expect(executionFence).not.toHaveBeenCalled();
+    expect(originalHandler).not.toHaveBeenCalled();
+    expect(replacementHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(["added", "removed", "replaced"] as const)(
+    "blocks a plugin runtime owner that is %s after profile seal",
+    async (driftKind) => {
+      const originalHandler = vi.fn(
+        async (): Promise<ToolInvokeResult> => ({
+          outcome: "executed",
+          auditEventId: "evt-original-handler",
+          policyReason: "original handler",
+        }),
+      );
+      const replacementHandler = vi.fn(
+        async (): Promise<ToolInvokeResult> => ({
+          outcome: "executed",
+          auditEventId: "evt-replacement-handler",
+          policyReason: "replacement handler",
+        }),
+      );
+      const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+      let admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+
+      if (driftKind !== "added") {
+        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
+        overrideService.registerOverrideClaim({
+          pluginId: "p",
+          toolName: "web_search",
+          override: true,
+          claimedAt: "2026-07-13T00:00:00.000Z",
+        });
+        overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+        admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+      }
+
+      if (driftKind === "added") {
+        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
+        overrideService.registerOverrideClaim({
+          pluginId: "p",
+          toolName: "web_search",
+          override: true,
+          claimedAt: "2026-07-13T00:00:00.000Z",
+        });
+        overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+      } else if (driftKind === "removed") {
+        overrideService.unregisterHandler({ pluginId: "p", toolName: "web_search" });
+      } else {
+        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: replacementHandler });
+      }
+
+      const policyInvoke = vi.fn(
+        async (): Promise<ToolInvokeResult> => ({
+          outcome: "executed",
+          auditEventId: "evt-policy-should-not-run",
+          policyReason: "allowed",
+        }),
+      );
+      const coordinator = new ToolInvocationCoordinatorService(
+        createHost({
+          pluginToolOverrideService: overrideService,
+          policyEngine: {
+            invoke: policyInvoke,
+            evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+          },
+        }),
+      );
+
+      const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+        executionFence: vi.fn(),
+        auxiliaryEffectFence: vi.fn(),
+        effectPotential: UNKNOWN_PLUGIN_EFFECT,
+        toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+        toolRuntimeOwner: admittedOwner,
+      });
+
+      expect(result).toMatchObject({
+        outcome: "blocked",
+        policyReason: expect.stringContaining("runtime owner binding drifted"),
+      });
+      expect(policyInvoke).not.toHaveBeenCalled();
+      expect(originalHandler).not.toHaveBeenCalled();
+      expect(replacementHandler).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed for a legacy active plugin host with no frozen owner binding", async () => {
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "evt-legacy-plugin",
+        policyReason: "legacy plugin",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        pluginToolOverrideService: {
+          resolveActiveHandler: vi.fn(() => pluginHandler),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+      executionFence: vi.fn(),
+      auxiliaryEffectFence: vi.fn(),
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("runtime owner binding drifted"),
+    });
+    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
   it("enforces a redact Citadel Ward on plugin-override output the plugin cannot know about", async () => {

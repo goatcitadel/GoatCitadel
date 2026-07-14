@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import type { ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionMessage,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ModelUsageAttributionContext,
+} from "@goatcitadel/contracts";
 
 import { sendRouteError } from "./_error-handler.js";
 
@@ -27,6 +32,8 @@ const turnCompleteSchema = z.object({
   channel_ref: z.string().optional(),
   messages: z.array(turnMessageSchema).min(1),
 });
+
+const DEFAULT_WORKSPACE_ID = "default";
 
 // Protocol markers a MatterGoat agent emits inline (e.g. <<MG:FINAL_SYNTHESIS:...>>).
 // GoatCitadel parses them out of the model's OWN (trusted, just-generated) output
@@ -149,7 +156,21 @@ export const turnsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result: ChatCompletionResponse = await fastify.services.llm.createChatCompletion(completionRequest);
+      const usageAttribution: ModelUsageAttributionContext = {
+        operationId: `mattergoat:${body.session_id}:${body.turn_id}:${body.agent_ref}`,
+        dispatchGeneration: `mattergoat-turn:${body.turn_id}`,
+        callKind: "delegation_worker",
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        sessionId: body.session_id,
+        turnId: body.turn_id,
+        taskId: `mattergoat:${body.operation?.trim() || "turn_complete"}:${body.turn_id}`,
+        agentId: body.agent_ref,
+        workerId: body.agent_ref,
+      };
+      const result: ChatCompletionResponse = await fastify.services.llm.createChatCompletion(
+        completionRequest,
+        usageAttribution,
+      );
 
       const message = asString(result.choices?.[0]?.message?.content);
       const usage = result.usage ?? {};

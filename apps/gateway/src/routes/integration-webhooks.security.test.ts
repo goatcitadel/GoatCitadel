@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import { integrationWebhookRoutes } from "./integration-webhooks.js";
 
@@ -20,8 +21,12 @@ describe("integration webhook security routes", () => {
       deduped: false,
       session: { sessionId: "sess-1" },
     }));
+    const acceptInboundChannelEvent = vi.fn(async (input: DurableInboundChannelAcceptInput) =>
+      durableAcceptance(input),
+    );
     const recordDevDiagnostic = vi.fn();
     app = buildApp({
+      acceptInboundChannelEvent,
       ingestChannelMessage,
       recordDevDiagnostic,
       getIntegrationConnection: vi.fn(() => buildConnection("discord")),
@@ -37,16 +42,25 @@ describe("integration webhook security routes", () => {
     const response = await signedInboundRequest("discord", payload);
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "discord",
-      `generic-channel:${connectionId}:discord:${payload.eventId}`,
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: payload.eventId,
-        account: connectionId,
-        actorId: "user-1",
-        content: "hello",
+        channel: "discord",
+        connectionId,
+        idempotencyKey: `generic-channel:${connectionId}:discord:${payload.eventId}`,
+        eventType: "generic-channel",
+        dispatchKind: "record_only",
+        message: expect.objectContaining({
+          eventId: payload.eventId,
+          account: connectionId,
+          actorId: "user-1",
+          content: "hello",
+        }),
       }),
     );
+    const acceptedInput = acceptInboundChannelEvent.mock.calls[0]?.[0];
+    expect(acceptedInput).not.toHaveProperty("inboundAccessConfig");
+    expect(JSON.stringify(acceptedInput)).not.toContain("generic-secret");
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
     expect(recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.inbound_access_legacy_open", category: "channels" }),
     );
@@ -159,6 +173,31 @@ describe("integration webhook security routes", () => {
     expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
 
+  it("does not acknowledge signed generic inbound when durable acceptance fails", async () => {
+    const ingestChannelMessage = vi.fn();
+    const acceptInboundChannelEvent = vi.fn(async () => {
+      throw new Error("storage unavailable");
+    });
+    app = buildApp({
+      acceptInboundChannelEvent,
+      ingestChannelMessage,
+      getIntegrationConnection: vi.fn(() => buildConnection("discord")),
+    });
+    await app.register(integrationWebhookRoutes);
+
+    const response = await signedInboundRequest("discord", {
+      eventId: "evt-storage-failed",
+      account: connectionId,
+      actorId: "user-1",
+      content: "retry me",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Durable inbound channel acceptance failed" });
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+  });
+
   it("rejects missing event ids and mismatched connection accounts before ingest", async () => {
     const ingestChannelMessage = vi.fn();
     app = buildApp({
@@ -189,7 +228,11 @@ describe("integration webhook security routes", () => {
       deduped: false,
       session: { sessionId: "sess-provenance" },
     }));
+    const acceptInboundChannelEvent = vi.fn(async (input: DurableInboundChannelAcceptInput) =>
+      durableAcceptance(input),
+    );
     app = buildApp({
+      acceptInboundChannelEvent,
       ingestChannelMessage,
       getIntegrationConnection: vi.fn(() => buildConnection("discord")),
     });
@@ -205,7 +248,7 @@ describe("integration webhook security routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    const message = ingestChannelMessage.mock.calls[0]?.[2] as Record<string, unknown>;
+    const message = acceptInboundChannelEvent.mock.calls[0]?.[0]?.message as Record<string, unknown>;
     expect(message).toMatchObject({
       eventId: "evt-provenance",
       account: connectionId,
@@ -299,8 +342,23 @@ describe("integration webhook security routes", () => {
   function buildApp(methods: Record<string, unknown>): FastifyInstance {
     const next = Fastify();
     next.decorate("services", {
-      integrationWebhooks: methods,
+      integrationWebhooks: {
+        acceptInboundChannelEvent: async (input: DurableInboundChannelAcceptInput) => durableAcceptance(input),
+        ...methods,
+      },
     } as never);
     return next;
+  }
+
+  function durableAcceptance(input: Pick<DurableInboundChannelAcceptInput, "eventType" | "message">) {
+    return {
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: `inbound-${input.message.eventId}`,
+    };
   }
 });

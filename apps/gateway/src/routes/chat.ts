@@ -6,6 +6,7 @@ import { registerChatMessageRoutes } from "./chat.messages.js";
 import { registerChatDelegateRoutes } from "./chat.delegate.js";
 import { registerChatToolRoutes } from "./chat.tools.js";
 import { registerChatMiscRoutes } from "./chat.misc.js";
+import { registerChatCompactionBreakerActionRoutes } from "./chat.compaction-breaker-actions.js";
 
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatProjectRoutes(fastify);
@@ -13,6 +14,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatMessageRoutes(fastify);
   registerChatDelegateRoutes(fastify);
   registerChatMiscRoutes(fastify);
+  await registerChatCompactionBreakerActionRoutes(fastify);
   registerChatToolRoutes(fastify);
   registerChatAttachmentRoutes(fastify);
 };

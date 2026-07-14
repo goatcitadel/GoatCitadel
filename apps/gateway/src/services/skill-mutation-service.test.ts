@@ -7,6 +7,7 @@ import { Storage } from "@goatcitadel/storage";
 import type { SkillLifecycleRecord } from "@goatcitadel/contracts";
 import { SkillMutationService, type SkillMutationLifecycleStore } from "./skill-mutation-service.js";
 import { __internal } from "./capability-system-service.js";
+import { SKILL_CONTENT_INTEGRITY_LIMITS } from "./skill-content-integrity.js";
 
 const { isSkillCallable } = __internal;
 
@@ -366,6 +367,20 @@ describe("SkillMutationService", () => {
     expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow(/conflict/i);
     expect(fsSync.readFileSync(skillFilePath, "utf8")).toContain("Operator edit.");
     expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
+  });
+
+  it("bounds existing source.json snapshots before reading rollback bytes", () => {
+    const harness = createHarness();
+    const skillDir = path.join(harness.service.selfSkillsRoot, "oversized-provenance");
+    fsSync.mkdirSync(skillDir, { recursive: true });
+    fsSync.writeFileSync(path.join(skillDir, "SKILL.md"), buildSkillMarkdown("Existing skill bytes."), "utf8");
+    const sourceJsonPath = path.join(skillDir, "source.json");
+    fsSync.writeFileSync(sourceJsonPath, "");
+    fsSync.truncateSync(sourceJsonPath, SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes + 1);
+
+    expect(() => harness.service.captureSnapshotFor({ skillId: "oversized-provenance" })).toThrow(
+      `exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes} bytes`,
+    );
   });
 
   it("does not publish a partial durable artifact when the exclusive write creates then throws", () => {

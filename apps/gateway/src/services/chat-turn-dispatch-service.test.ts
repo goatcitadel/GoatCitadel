@@ -31,6 +31,51 @@ describe("chat turn dispatch durable ownership", () => {
     ).toBe(false);
   });
 
+  it("forces routed quick-web turns through durable admission", () => {
+    const durableRun = { runId: "run-routed-quick-web" } as DurableRunRecord;
+    const host = createHost({ beginDurableChatRun: vi.fn(() => durableRun) });
+    const input = {
+      content: "use the routed source for a quick lookup",
+      contextRefs: [{ kind: "attachment" as const, ref: "attachment-quick-web" }],
+    };
+    const prepared = createPrepared("chat", { normalizationProfile: "quick_web" });
+    const snapshotPrepared = createPrepared("chat", { normalizationProfile: "quick_web" }) as unknown as {
+      routedContextSnapshot?: unknown;
+    };
+    snapshotPrepared.routedContextSnapshot = { snapshotId: "snapshot-quick-web" };
+
+    expect(shouldUseDurableExecution(host, prepared, input)).toBe(true);
+    expect(
+      shouldUseDurableExecution(host, snapshotPrepared as never, { content: "use the already-resolved snapshot" }),
+    ).toBe(true);
+    launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended");
+
+    expect(host.beginDurableChatRun).toHaveBeenCalledTimes(1);
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", durableRun.runId, {
+      reservation: true,
+    });
+    expect(host.backgroundTasks.size).toBe(0);
+  });
+
+  it("rejects routed turns before dispatch when durable execution is disabled", () => {
+    const host = createHost();
+    host.config.assistant.durable.enabled = false;
+    host.isFeatureEnabled = vi.fn(() => false);
+    const input = {
+      content: "use the routed source",
+      contextRefs: [{ kind: "memory_item" as const, ref: "memory-disabled" }],
+    };
+    const prepared = createPrepared("chat");
+
+    expect(() => shouldUseDurableExecution(host, prepared, input)).toThrow(/routed chat context requires durable/i);
+    expect(() =>
+      launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended"),
+    ).toThrow(/routed chat context requires durable/i);
+    expect(host.beginDurableChatRun).not.toHaveBeenCalled();
+    expect(host.registerActiveChatTurnStream).not.toHaveBeenCalled();
+    expect(host.backgroundTasks.size).toBe(0);
+  });
+
   it("commits a non-durable streamed retry trace before background execution can outlive the request", async () => {
     const host = createHost();
     const getTrace = vi.mocked(host.storage.chatTurnTraces.get);
@@ -383,6 +428,48 @@ describe("chat turn dispatch durable ownership", () => {
     );
     expect(response.transport).toBe("integration");
     expect(response.trace?.status).toBe("completed");
+  });
+
+  it("rejects routed integration sends before admission, trace creation, or external delivery", async () => {
+    const host = createHost();
+
+    await expect(
+      sendPreparedIntegrationChatTurn(
+        host,
+        "session-1",
+        {
+          content: "do not deliver routed bytes",
+          contextRefs: [{ kind: "attachment", ref: "attachment-integration" }],
+        },
+        createPrepared("chat"),
+        createBinding(),
+        "chat_thread_turn_appended",
+      ),
+    ).rejects.toThrow(/cannot use integration delivery/i);
+
+    expect(host.beginActiveChatTurnExecution).not.toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.create).not.toHaveBeenCalled();
+    expect(host.ensureSessionInternalToolGrant).not.toHaveBeenCalled();
+    expect(host.commsSend).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prepared routed snapshot before a streamed integration envelope starts", async () => {
+    const host = createHost();
+    const prepared = createPrepared("chat") as unknown as { routedContextSnapshot?: unknown };
+    prepared.routedContextSnapshot = { snapshotId: "snapshot-integration" };
+    const stream = streamPreparedIntegrationChatTurn(
+      host,
+      "session-1",
+      { content: "do not stream routed bytes" },
+      prepared as never,
+      createBinding(),
+      "chat_thread_turn_retried",
+    );
+
+    await expect(stream.next()).rejects.toThrow(/cannot use integration delivery/i);
+    expect(host.beginActiveChatTurnExecution).not.toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.create).not.toHaveBeenCalled();
+    expect(host.commsSend).not.toHaveBeenCalled();
   });
 
   it("releases integration execution ownership when trace creation fails", async () => {

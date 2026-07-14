@@ -4,6 +4,7 @@ import type {
   DurableRunRecord,
   DurableRunTimelineEvent,
   LlmApiStyle,
+  ModelUsageAttributionContext,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -21,7 +22,10 @@ import { CommitmentClassifierService } from "./commitment-classifier-service.js"
 
 export interface ChatPostCommitRuntimeCompositionInput {
   storage: Storage;
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   resolveModelDefaults(): { providerId?: string; model?: string };
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   operatorProfileService: OperatorProfileService;

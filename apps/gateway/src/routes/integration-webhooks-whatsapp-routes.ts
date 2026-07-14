@@ -1,16 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import {
-  deriveWhatsAppWebhookIdempotencyKey,
-  normalizeWhatsAppWebhookPayload,
+  deriveWhatsAppWebhookEventIdempotencyKey,
+  normalizeWhatsAppWebhookPayloads,
   verifyWhatsAppWebhookSignature,
 } from "../services/whatsapp-webhook.js";
-import { resolveWhatsAppAppSecret, resolveWhatsAppVerifyToken } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  resolveWhatsAppAppSecret,
+  resolveWhatsAppVerifyToken,
+} from "./integration-webhooks-shared.js";
 import { timingSafeStringEqual } from "../services/webhook-json-helpers.js";
 import {
-  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
-  createWebhookPreParsing,
   createWebhookHandler,
+  dispatchInboundWebhookBatch,
   dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -18,9 +21,12 @@ import {
 } from "./webhook-handler-factory.js";
 import { connectionParamsSchema } from "./integration-webhook-schemas.js";
 
-type WhatsAppDispatchPayload = Exclude<ReturnType<typeof normalizeWhatsAppWebhookPayload>, { kind: "ignore" }>;
+type WhatsAppDispatchPayload = Array<
+  Exclude<ReturnType<typeof normalizeWhatsAppWebhookPayloads>[number], { kind: "ignore" }>
+>;
 
 export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
+  const routeOptions = createWebhookRouteOptions("whatsappRawBody");
   fastify.get(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
     {
@@ -69,11 +75,12 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
     {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("whatsappRawBody"),
+      ...routeOptions,
       config: {
+        ...routeOptions.config,
         rateLimit: {
-          max: 500,
+          ...routeOptions.config.rateLimit,
+          max: routeOptions.config.rateLimit.max,
         },
       },
     },
@@ -101,74 +108,95 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
         return { ok: true as const };
       },
       parsePayload: ({ connectionId, request }) => {
-        const normalized = normalizeWhatsAppWebhookPayload({
+        const normalized = normalizeWhatsAppWebhookPayloads({
           connectionId,
           payload: request.body,
           voiceInboundEnabled: fastify.services.integrationWebhooks.isVoiceInboundEnabled?.() === true,
         });
-        if (normalized.kind === "ignore") {
+        const messages = normalized.filter((event) => event.kind === "message");
+        if (messages.length === 0) {
+          const ignored = normalized.find((event) => event.kind === "ignore");
           return {
             kind: "reply" as const,
-            payload: createIgnoredWebhookReply(normalized.eventType, normalized.reason),
+            payload: createIgnoredWebhookReply(ignored?.eventType, ignored?.reason ?? "No supported WhatsApp events"),
           };
         }
         return {
           kind: "dispatch" as const,
-          parsed: normalized,
+          parsed: messages,
         };
       },
-      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
-        const dispatchOptions = {
-          channel: "whatsapp",
-          connectionId,
-          idempotencyKey: deriveWhatsAppWebhookIdempotencyKey(connectionId, request.body, rawBody),
-          eventType: parsed.eventType,
-          bindingTarget: parsed.peer,
-          inboundAccessConfig: connection.config,
-          message: {
-            eventId: parsed.eventId,
-            account: parsed.account,
-            peer: parsed.peer,
-            actorId: parsed.actorId,
-            actorType: parsed.actorType,
-            displayName: parsed.displayName,
-            content: parsed.content,
-            metadata: parsed.metadata,
-          },
-          responseOptions: {
-            deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
-          },
-        };
-        const voiceMedia = parsed.voiceMedia;
+      dispatch: async ({ connectionId, connection, parsed }) => {
+        const batch = parsed.map((event) => {
+          const dispatchOptions = {
+            channel: "whatsapp",
+            connectionId,
+            idempotencyKey: deriveWhatsAppWebhookEventIdempotencyKey(connectionId, event),
+            eventType: event.eventType,
+            bindingTarget: event.peer,
+            inboundAccessConfig: connection.config,
+            message: {
+              eventId: event.eventId,
+              account: event.account,
+              peer: event.peer,
+              actorId: event.actorId,
+              actorType: event.actorType,
+              displayName: event.displayName,
+              content: event.content,
+              metadata: event.metadata,
+            },
+            responseOptions: {
+              deliveryReplyToMessageId: event.deliveryReplyToMessageId,
+            },
+          };
+          return {
+            event,
+            dispatchOptions,
+            durableInput: event.voiceMedia
+              ? {
+                  ...dispatchOptions,
+                  dispatchKind: "voice_agent_turn" as const,
+                  voiceRequest: {
+                    channel: "whatsapp" as const,
+                    connectionConfig: {},
+                    mediaId: event.voiceMedia.mediaId,
+                    mimeType: event.voiceMedia.mimeType,
+                  },
+                  voiceFallbackContent: event.content,
+                }
+              : {
+                  ...dispatchOptions,
+                  dispatchKind: "agent_turn" as const,
+                },
+          };
+        });
+
+        if (batch.length > 1) {
+          return dispatchInboundWebhookBatch(
+            fastify.services.integrationWebhooks,
+            batch.map(({ durableInput }) => durableInput),
+          );
+        }
+
+        const single = batch[0]!;
+        const voiceMedia = single.event.voiceMedia;
         if (voiceMedia) {
-          const transcribeChannelVoice = fastify.services.integrationWebhooks.transcribeChannelVoice;
-          if (!transcribeChannelVoice) {
-            return {
-              ok: false as const,
-              statusCode: 503,
-              error: "Voice transcription is not configured",
-              logReason: "voice_transcription_not_configured",
-            };
-          }
-          // channelVoiceInboundV1Enabled path (voiceMedia only exists when the
-          // flag is on): trust gate first (no download for unknown senders),
-          // fast webhook ack, async download/transcription/ingest, placeholder
-          // fallback on failure so the message is never silently dropped.
+          // Persist the media reference before ACK; the durable worker obtains
+          // current connection credentials and owns transcription/retry.
           return dispatchInboundVoiceWebhookMessage(fastify.services.integrationWebhooks, {
-            ...dispatchOptions,
+            ...single.dispatchOptions,
             voice: {
-              transcribe: () =>
-                transcribeChannelVoice({
-                  channel: "whatsapp",
-                  connectionConfig: connection.config,
-                  mediaId: voiceMedia.mediaId,
-                  mimeType: voiceMedia.mimeType,
-                }),
-              fallbackContent: parsed.content,
+              request: {
+                channel: "whatsapp",
+                connectionConfig: {},
+                mediaId: voiceMedia.mediaId,
+                mimeType: voiceMedia.mimeType,
+              },
+              fallbackContent: single.event.content,
             },
           });
         }
-        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
+        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, single.dispatchOptions);
       },
     }),
   );

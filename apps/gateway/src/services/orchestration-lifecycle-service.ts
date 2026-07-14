@@ -9,6 +9,7 @@
 import {
   ConflictError,
   redactStructuredSecrets,
+  type DurableChildWatcherCreateRequest,
   type DurableRunCreateRequest,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
@@ -92,11 +93,15 @@ export interface OrchestrationLifecycleRuntimeDeps {
       worktreePath: string;
       worktreeStatus: NonNullable<OrchestrationRun["worktreeStatus"]>;
       worktreeBaseRef: string;
+      worktreeLeaseOwnerId?: string;
+      worktreeLeaseGeneration?: number;
+      worktreeLeaseExpiresAt?: string;
     }>;
     release(input: {
       run: OrchestrationRun;
       reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
     }): Promise<void>;
+    ensureLeaseForExecution(run: OrchestrationRun): OrchestrationRun;
   };
   readonly phaseExecutor: {
     execute(input: {
@@ -200,6 +205,7 @@ export interface OrchestrationLifecycleHost {
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
   ): void;
+  watchDurableChildRun?(input: DurableChildWatcherCreateRequest): unknown;
 }
 
 async function releaseOrchestrationWorktreeIfAvailable(
@@ -280,6 +286,48 @@ function lockFreshDurableExecutionLease(
     throw error;
   }
   return locked;
+}
+
+interface OrchestrationWorktreeExecutionFence {
+  worktreePath: string;
+  ownerId: string;
+  generation: number;
+}
+
+function readOrchestrationWorktreeExecutionFence(
+  run: OrchestrationRun,
+): OrchestrationWorktreeExecutionFence | undefined {
+  const worktreePath = run.worktreePath?.trim();
+  const ownerId = run.worktreeLeaseOwnerId?.trim();
+  const generation = run.worktreeLeaseGeneration;
+  if (!worktreePath || !ownerId || !Number.isSafeInteger(generation) || (generation ?? 0) < 1) {
+    return undefined;
+  }
+  return { worktreePath, ownerId, generation: generation! };
+}
+
+function assertFreshOrchestrationWorktreeExecutionFence(
+  host: OrchestrationLifecycleHost,
+  runId: string,
+  expected: OrchestrationWorktreeExecutionFence | undefined,
+): void {
+  if (!expected) {
+    return;
+  }
+  const current = host.storage.orchestration.getRun(runId);
+  if (
+    current.worktreeStatus === "ready" &&
+    current.worktreePath === expected.worktreePath &&
+    current.worktreeLeaseOwnerId === expected.ownerId &&
+    current.worktreeLeaseGeneration === expected.generation
+  ) {
+    return;
+  }
+  const error = new Error(
+    `Orchestration run ${runId} lost worktree owner ${expected.ownerId} generation ${expected.generation}.`,
+  );
+  error.name = "DurableWorkerInterruptionError";
+  throw error;
 }
 
 async function markOrchestrationRunCancelled(
@@ -794,6 +842,9 @@ async function allocateOrchestrationOwnership(
       worktreePath: worktree.worktreePath,
       worktreeStatus: worktree.worktreeStatus,
       worktreeBaseRef: worktree.worktreeBaseRef,
+      worktreeLeaseOwnerId: worktree.worktreeLeaseOwnerId,
+      worktreeLeaseGeneration: worktree.worktreeLeaseGeneration,
+      worktreeLeaseExpiresAt: worktree.worktreeLeaseExpiresAt,
       executionState: "worktree_ready",
     });
     host.updateDurableRunState({
@@ -807,6 +858,9 @@ async function allocateOrchestrationOwnership(
       worktreePath: linked.worktreePath,
       worktreeStatus: linked.worktreeStatus,
       worktreeBaseRef: linked.worktreeBaseRef,
+      worktreeLeaseOwnerId: linked.worktreeLeaseOwnerId,
+      worktreeLeaseGeneration: linked.worktreeLeaseGeneration,
+      worktreeLeaseExpiresAt: linked.worktreeLeaseExpiresAt,
     });
     publishRunRealtime(host, plan, linked, { event: "worktree_allocated" });
     return linked;
@@ -1296,6 +1350,8 @@ export async function executeDurableOrchestrationRun(
   }
   const plan = host.storage.orchestration.getPlan(payload.planId, runWorkspaceId);
   host.orchestrationEngine.validate(plan);
+  run = runtime.worktrees.ensureLeaseForExecution(run);
+  const worktreeExecutionFence = readOrchestrationWorktreeExecutionFence(run);
   const policyContext: OrchestrationRunPolicyContext = {
     operatorId: payload.operatorId ?? run.operatorId,
     authActorId: payload.authActorId ?? run.authActorId,
@@ -1313,6 +1369,7 @@ export async function executeDurableOrchestrationRun(
     let committedRun!: OrchestrationRun;
     host.storage.runImmediateTransaction(() => {
       lockFreshDurableExecutionLease(host, durableRun.runId, expectedLeaseOwnerId);
+      assertFreshOrchestrationWorktreeExecutionFence(host, run.runId, worktreeExecutionFence);
       host.updateDurableRunState({
         runId: durableRun.runId,
         metadata: commitOptions.durableMetadata ?? {
@@ -1940,6 +1997,21 @@ function persistDispatchedChildPhase(
       childTurnId: dispatch.childTurnId,
       childRunId: dispatch.childRunId,
     });
+    if (dispatch.childRunId) {
+      host.watchDurableChildRun?.({
+        watcherId: `orchestration-child:${durableRun.runId}:${dispatch.phaseId}`,
+        parentRunId: durableRun.runId,
+        childRunId: dispatch.childRunId,
+        source: "orchestration_phase",
+        metadata: {
+          orchestrationRunId: run.runId,
+          planId: plan.planId,
+          phaseId: dispatch.phaseId,
+          ...(dispatch.childSessionId ? { childSessionId: dispatch.childSessionId } : {}),
+          ...(dispatch.childTurnId ? { childTurnId: dispatch.childTurnId } : {}),
+        },
+      });
+    }
   });
 }
 

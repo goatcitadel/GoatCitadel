@@ -85,6 +85,17 @@ describe("turns routes", () => {
       { role: "system", content: "system prompt" },
       { role: "user", content: "alice: why is this failing?" },
     ]);
+    expect(createChatCompletion.mock.calls[0][1]).toEqual({
+      operationId: "mattergoat:mg_session_1:mg_turn_1:agent_1",
+      dispatchGeneration: "mattergoat-turn:mg_turn_1",
+      callKind: "delegation_worker",
+      workspaceId: "default",
+      sessionId: "mg_session_1",
+      turnId: "mg_turn_1",
+      taskId: "mattergoat:mattergoat_collaborate:mg_turn_1",
+      agentId: "agent_1",
+      workerId: "agent_1",
+    });
   });
 
   it("runs as the referenced agent's provider/model and prepends its framing", async () => {
@@ -172,6 +183,41 @@ describe("turns routes", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().needs_approval).toBe(true);
   });
+
+  it.each(["ModelUsageSettlementError", "ModelUsageDispatchUncertainError", "ModelUsageDispatchPersistenceError"])(
+    "fails the turn closed and redacts %s",
+    async (errorName) => {
+      const accountingError = Object.assign(new Error(`canonical usage failure secret-token: ${errorName}`), {
+        name: errorName,
+      });
+      const createChatCompletion = vi.fn(async () => {
+        throw accountingError;
+      });
+      app = buildApp(createChatCompletion);
+      await app.register(turnsRoutes);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/turns/complete",
+        payload: validBody,
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: "Internal server error" });
+      expect(res.body).not.toContain("secret-token");
+      expect(createChatCompletion).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          operationId: "mattergoat:mg_session_1:mg_turn_1:agent_1",
+          dispatchGeneration: "mattergoat-turn:mg_turn_1",
+          workspaceId: "default",
+          sessionId: "mg_session_1",
+          turnId: "mg_turn_1",
+          agentId: "agent_1",
+        }),
+      );
+    },
+  );
 
   it("rejects an invalid body with 400", async () => {
     app = buildApp(vi.fn());

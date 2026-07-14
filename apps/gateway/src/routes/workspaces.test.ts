@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { workspacesRoutes } from "./workspaces.js";
 
 describe("workspace and guidance routes", () => {
@@ -18,25 +19,30 @@ describe("workspace and guidance routes", () => {
       listWorkspaces: vi.fn(() => []),
       createWorkspace: vi.fn((input: Record<string, unknown>) => ({
         workspaceId: "workspace-created",
+        revision: 1,
         lifecycleStatus: "active",
         ...input,
       })),
       getWorkspace: vi.fn((workspaceId: string) => ({
         workspaceId,
+        revision: 1,
         name: "Default",
         slug: "default",
         lifecycleStatus: "active",
       })),
-      updateWorkspace: vi.fn((workspaceId: string, input: Record<string, unknown>) => ({
+      updateWorkspace: vi.fn((workspaceId: string, input: Record<string, unknown>, expectedRevision: number) => ({
         workspaceId,
+        revision: expectedRevision + 1,
         ...input,
       })),
-      archiveWorkspace: vi.fn((workspaceId: string) => ({
+      archiveWorkspace: vi.fn((workspaceId: string, expectedRevision: number) => ({
         workspaceId,
+        revision: expectedRevision + 1,
         lifecycleStatus: "archived",
       })),
-      restoreWorkspace: vi.fn((workspaceId: string) => ({
+      restoreWorkspace: vi.fn((workspaceId: string, expectedRevision: number) => ({
         workspaceId,
+        revision: expectedRevision + 1,
         lifecycleStatus: "active",
       })),
       listGlobalGuidance: vi.fn(async () => [{ docType: "goatcitadel", scope: "global" }]),
@@ -159,16 +165,19 @@ describe("workspace and guidance routes", () => {
       method: "PATCH",
       url: "/api/v1/workspaces/workspace-created",
       payload: {
+        expectedRevision: 3,
         name: "Research Lab",
       },
     });
     const archiveResponse = await app!.inject({
       method: "POST",
       url: "/api/v1/workspaces/workspace-created/archive",
+      payload: { expectedRevision: 4 },
     });
     const restoreResponse = await app!.inject({
       method: "POST",
       url: "/api/v1/workspaces/workspace-created/restore",
+      payload: { expectedRevision: 5 },
     });
 
     expect(createResponse.statusCode).toBe(201);
@@ -186,11 +195,9 @@ describe("workspace and guidance routes", () => {
       },
     });
     expect(service.getWorkspace).toHaveBeenCalledWith("workspace-created");
-    expect(service.updateWorkspace).toHaveBeenCalledWith("workspace-created", {
-      name: "Research Lab",
-    });
-    expect(service.archiveWorkspace).toHaveBeenCalledWith("workspace-created");
-    expect(service.restoreWorkspace).toHaveBeenCalledWith("workspace-created");
+    expect(service.updateWorkspace).toHaveBeenCalledWith("workspace-created", { name: "Research Lab" }, 3);
+    expect(service.archiveWorkspace).toHaveBeenCalledWith("workspace-created", 4);
+    expect(service.restoreWorkspace).toHaveBeenCalledWith("workspace-created", 5);
     expect(archiveResponse.json()).toMatchObject({ lifecycleStatus: "archived" });
     expect(restoreResponse.json()).toMatchObject({ lifecycleStatus: "active" });
   });
@@ -278,16 +285,19 @@ describe("workspace and guidance routes", () => {
       method: "PATCH",
       url: "/api/v1/workspaces/missing",
       payload: {
+        expectedRevision: 1,
         name: "Research",
       },
     });
     const archiveResponse = await app!.inject({
       method: "POST",
       url: "/api/v1/workspaces/missing/archive",
+      payload: { expectedRevision: 1 },
     });
     const restoreResponse = await app!.inject({
       method: "POST",
       url: "/api/v1/workspaces/missing/restore",
+      payload: { expectedRevision: 1 },
     });
     const workspaceGuidanceResponse = await app!.inject({
       method: "GET",
@@ -303,13 +313,68 @@ describe("workspace and guidance routes", () => {
 
     expect(createResponse.statusCode).toBe(400);
     expect(getResponse.statusCode).toBe(404);
-    expect(updateResponse.statusCode).toBe(400);
-    expect(archiveResponse.statusCode).toBe(400);
-    expect(restoreResponse.statusCode).toBe(400);
+    expect(updateResponse.statusCode).toBe(500);
+    expect(archiveResponse.statusCode).toBe(500);
+    expect(restoreResponse.statusCode).toBe(500);
     expect(workspaceGuidanceResponse.statusCode).toBe(400);
     expect(workspaceGuidanceUpdateResponse.statusCode).toBe(400);
     expect(createResponse.json()).toEqual({ error: "duplicate slug" });
     expect(getResponse.json()).toEqual({ error: "missing workspace" });
+  });
+
+  it("preserves workspace revision conflicts as structured HTTP 409 responses", async () => {
+    const conflict = new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: "workspace changed",
+      details: {
+        resourceKind: "workspace",
+        resourceId: "workspace-1",
+        expectedRevision: 2,
+        currentRevision: 3,
+      },
+    });
+    await registerWorkspaceService({
+      updateWorkspace: vi.fn(() => {
+        throw conflict;
+      }),
+      archiveWorkspace: vi.fn(() => {
+        throw conflict;
+      }),
+      restoreWorkspace: vi.fn(() => {
+        throw conflict;
+      }),
+    });
+
+    const responses = await Promise.all([
+      app!.inject({
+        method: "PATCH",
+        url: "/api/v1/workspaces/workspace-1",
+        payload: { expectedRevision: 2, name: "Draft" },
+      }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/workspaces/workspace-1/archive",
+        payload: { expectedRevision: 2 },
+      }),
+      app!.inject({
+        method: "POST",
+        url: "/api/v1/workspaces/workspace-1/restore",
+        payload: { expectedRevision: 2 },
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "WRITE_CONFLICT",
+        details: {
+          resourceKind: "workspace",
+          resourceId: "workspace-1",
+          expectedRevision: 2,
+          currentRevision: 3,
+        },
+      });
+    }
   });
 
   it("rejects malformed workspace and guidance inputs before calling services", async () => {

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Approval lifecycle state and its side effects remain one audited owner during the parity integration. */
 /**
  * Approval lifecycle service.
  *
@@ -9,11 +10,13 @@
  * the only possible implementation.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  canonicalJsonString,
   type ApprovalEffectRecord,
   type ApprovalListResponse,
+  type ApprovalReplayEvent,
   ConflictError,
   type ApprovalBulkResolveInput,
   type ApprovalBulkResolveResult,
@@ -94,6 +97,7 @@ export interface ApprovalLifecycleHost {
     | "chatTurnTraces"
     | "chatToolRuns"
     | "codeModeRuns"
+    | "governanceJourneyEvents"
     | "runImmediateTransaction"
   >;
 
@@ -698,7 +702,7 @@ function commitStandardApprovalResolution(
   );
   const expiredRemoteTokenCount = storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
 
-  storage.approvalEvents.append({
+  const resolutionEvent = storage.approvalEvents.append({
     approvalId,
     eventType: "resolved",
     actorId: input.resolvedBy,
@@ -717,6 +721,8 @@ function commitStandardApprovalResolution(
         : {}),
     },
   });
+
+  recordApprovalResolutionJourney(storage, approval, input, resolutionEvent, options.expiration);
 
   markChatInlineApprovalResolved(host, approval, input);
 
@@ -785,6 +791,90 @@ function commitStandardApprovalResolution(
 
   const effects = storage.approvalEffects.listByApproval(approvalId);
   return buildApprovalResolveResult(storage, approval, effects);
+}
+
+function recordApprovalResolutionJourney(
+  storage: ApprovalLifecycleHost["storage"],
+  approval: ApprovalRequest,
+  input: ApprovalResolveInput,
+  sourceEvent: ApprovalReplayEvent,
+  expiration?: ApprovalExpirationContext,
+): void {
+  const workspaceId = asJourneyIdentifier(approval.linkage?.workspaceId);
+  if (!workspaceId) {
+    // Legacy approval paths can lack workspace ownership. Never relabel those
+    // decisions as `default` or globally visible just to fill the projection.
+    return;
+  }
+
+  const action = expiration ? "expired" : `resolved_${approval.status}`;
+  const eventId = `approval:journey:${sourceEvent.eventId}`;
+  const fingerprint = createHash("sha256")
+    .update(
+      canonicalJsonString({
+        action,
+        actorId: sourceEvent.actorId,
+        approvalId: approval.approvalId,
+        sourceEventId: sourceEvent.eventId,
+        sourceTimestamp: sourceEvent.timestamp,
+        status: approval.status,
+        workspaceId,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+
+  storage.governanceJourneyEvents.create({
+    schemaVersion: "goatcitadel.journey-event.v1",
+    eventId,
+    idempotencyKey: `approval:lifecycle:${sourceEvent.eventId}`,
+    scopeKind: "workspace",
+    workspaceId,
+    eventType: "approval_lifecycle",
+    subjectKind: "approval",
+    subjectId: approval.approvalId,
+    action,
+    actorId: sourceEvent.actorId,
+    actorType: isSystemActor(sourceEvent.actorId) ? "system" : "operator",
+    sessionId: asJourneyIdentifier(approval.linkage?.sessionId),
+    turnId: asJourneyIdentifier(approval.linkage?.turnId),
+    approvalId: approval.approvalId,
+    fingerprint,
+    sourceKind: "approval_event",
+    sourceId: sourceEvent.eventId,
+    trustDisposition: expiration ? "expired" : approval.status,
+    poisoningStatus: "clean",
+    evidenceRefs: [{ owner: "approval", refId: approval.approvalId }],
+    provenance: {
+      sourceRequired: true,
+      approvalRequired: false,
+      ...approvalJourneyLinkageProvenance(approval),
+    },
+    summary: {
+      decision: expiration ? "expired" : input.decision,
+      status: approval.status,
+      expired: Boolean(expiration),
+    },
+    occurredAt: sourceEvent.timestamp,
+    recordedAt: sourceEvent.timestamp,
+  });
+}
+
+function approvalJourneyLinkageProvenance(approval: ApprovalRequest): Record<string, string> {
+  const provenance: Record<string, string> = {};
+  for (const key of ["taskId", "runId", "durableRunId", "correlationId", "traceId"] as const) {
+    const value = asJourneyIdentifier(approval.linkage?.[key]);
+    if (value) provenance[key] = value;
+  }
+  return provenance;
+}
+
+function asJourneyIdentifier(value: string | undefined): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 256 ? value : undefined;
+}
+
+function isSystemActor(actorId: string): boolean {
+  return actorId === "system" || actorId.startsWith("system:");
 }
 
 function markChatInlineApprovalResolved(

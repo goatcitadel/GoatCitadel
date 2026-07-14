@@ -8,6 +8,7 @@ import type {
   TaskActivityRecord,
   TaskSubagentSession,
 } from "@goatcitadel/contracts";
+import { ModelUsageSettlementError } from "@goatcitadel/gateway-core";
 import { describe, expect, it, vi } from "vitest";
 import { ChatDelegationService, type ChatDelegationServiceHost } from "./chat-delegation-service.js";
 
@@ -776,6 +777,42 @@ describe("ChatDelegationService subagent budget enforcement", () => {
         activity.message.includes("synchronous child abort rejection"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("surfaces an authoritative settlement fault raised during timeout abort without recording a generic child failure", async () => {
+    const { deps, service } = createHarness({
+      prefs: buildPrefs({ mode: "chat" }),
+      subagentDefaults: { childTimeoutSeconds: 0.01, maxDepth: 4 },
+    });
+    const settlementError = new ModelUsageSettlementError(
+      "usage-timeout-child",
+      "cancelled",
+      new Error("usage settlement write failed"),
+    );
+    deps.agentSendChatMessage = vi.fn(
+      async (_childSessionId: string, _request: unknown, options?: { abortSignal?: AbortSignal }) =>
+        new Promise<ChatSendMessageResponse>((_resolve, reject) => {
+          const rejectOnAbort = (): void => reject(settlementError);
+          if (options?.abortSignal?.aborted) {
+            rejectOnAbort();
+            return;
+          }
+          options?.abortSignal?.addEventListener("abort", rejectOnAbort, { once: true });
+        }),
+    ) as never;
+
+    await expect(
+      service.runChatDelegation("sess-1", {
+        objective: "Surface canonical accounting failure from a timed-out delegate",
+        roles: ["researcher"],
+      }),
+    ).rejects.toBe(settlementError);
+
+    expect(deps.storage.chatDelegationSteps.finishOwnedDispatchWithError).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.persistDelegationSubagentProjection).not.toHaveBeenCalledWith(
+      "delegate-session-1",
+      expect.objectContaining({ status: "failed" }),
+    );
   });
 
   it("applies the default child timeout to legacy Cowork children", async () => {

@@ -1,4 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
+import { randomUUID } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { A2APeerAuthFailure, A2APeerAuthResult, A2ARouteService } from "./a2a-route-service.js";
@@ -11,6 +12,11 @@ import {
   loadA2AGrpcServiceDefinition,
 } from "./a2a-grpc-proto.js";
 import { httpJsonServiceError, readNumber, readString } from "./a2a-route-utils.js";
+import {
+  SharedHostAdmissionClosedError,
+  type SharedHostLifecycleAdmissionPort,
+  type SharedHostWorkReservation,
+} from "./shared-host-lifecycle-service.js";
 
 export interface A2AGrpcServerHandle {
   enabled: boolean;
@@ -21,6 +27,7 @@ export interface A2AGrpcServerHandle {
 export interface StartA2AGrpcServerInput {
   config: GatewayRuntimeConfig;
   a2a: A2ARouteService;
+  sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
   logger?: Pick<FastifyBaseLogger, "info" | "warn" | "error">;
 }
 
@@ -33,18 +40,28 @@ export async function startA2AGrpcServer(input: StartA2AGrpcServerInput): Promis
     };
   }
 
+  const listenerAdmission = reserveGrpcWork(input.sharedHostLifecycle, "worker", "a2a-grpc-listener");
   const server = new grpc.Server();
-  server.addService(loadA2AGrpcServiceDefinition(), createA2AGrpcHandlers(input.a2a));
+  server.addService(loadA2AGrpcServiceDefinition(), createA2AGrpcHandlers(input.a2a, input.sharedHostLifecycle));
   const bindAddress = `${grpcConfig.host}:${grpcConfig.port}`;
-  const port = await new Promise<number>((resolve, reject) => {
-    server.bindAsync(bindAddress, grpc.ServerCredentials.createInsecure(), (error, boundPort) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(boundPort);
+  let port: number;
+  try {
+    port = await new Promise<number>((resolve, reject) => {
+      server.bindAsync(bindAddress, grpc.ServerCredentials.createInsecure(), (error, boundPort) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(boundPort);
+      });
     });
-  });
+    if (listenerAdmission?.signal.aborted) {
+      server.forceShutdown();
+      throw grpcStatusError(grpc.status.UNAVAILABLE, "A2A gRPC listener startup was interrupted by host drain.");
+    }
+  } finally {
+    listenerAdmission?.release();
+  }
   const address = `grpc://${grpcConfig.host}:${port}`;
   input.logger?.info({ address }, "A2A gRPC listener started");
   return {
@@ -68,28 +85,33 @@ function shouldStartA2AGrpcServer(config: GatewayRuntimeConfig): boolean {
   return Boolean(a2a.enabled && a2a.inbound.enabled && a2a.bindings.includes("GRPC") && a2a.inbound.grpc.enabled);
 }
 
-function createA2AGrpcHandlers(a2a: A2ARouteService): grpc.UntypedServiceImplementation {
+function createA2AGrpcHandlers(
+  a2a: A2ARouteService,
+  lifecycle?: SharedHostLifecycleAdmissionPort,
+): grpc.UntypedServiceImplementation {
   return {
-    sendMessage: unary(a2a, async (peer, request: A2AGrpcJsonRequest) => ({
+    sendMessage: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(await a2a.sendGrpcMessage(peer, parseJsonRequest(request)))),
     })),
-    sendStreamingMessage: unary(a2a, async (peer, request: A2AGrpcJsonRequest) => {
+    sendStreamingMessage: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => {
       const result = await a2a.sendGrpcStreamingMessage(peer, parseJsonRequest(request));
       return {
         taskJson: JSON.stringify(projectA2AExternalValue(result.task)),
         eventJson: result.events.map((event) => JSON.stringify(projectA2AExternalValue(event))),
       };
     }),
-    getTask: unary(a2a, (peer, request: A2AGrpcTaskRequest) => ({
+    getTask: unary(a2a, lifecycle, (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(a2a.getGrpcTask(peer, taskRequestParams(request)))),
     })),
-    cancelTask: unary(a2a, async (peer, request: A2AGrpcTaskRequest) => ({
+    cancelTask: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(await a2a.cancelGrpcTask(peer, taskRequestParams(request)))),
     })),
     subscribeToTask: async (
       call: grpc.ServerWritableStream<A2AGrpcTaskEventsRequest, { json: string }>,
     ): Promise<void> => {
+      let reservation: SharedHostWorkReservation | undefined;
       try {
+        reservation = reserveGrpcWork(lifecycle, "agent", "a2a-grpc-stream");
         const peer = authenticateGrpcPeer(a2a, call.metadata);
         const result = a2a.getGrpcTaskEvents(peer, taskEventsRequestParams(call.request));
         for (const event of result.events) {
@@ -97,30 +119,32 @@ function createA2AGrpcHandlers(a2a: A2ARouteService): grpc.UntypedServiceImpleme
         }
         call.end();
       } catch (error) {
-        call.destroy(toGrpcError(error));
+        call.emit("error", toGrpcError(error));
+      } finally {
+        reservation?.release();
       }
     },
-    setTaskPushNotificationConfig: unary(a2a, async (peer, request: A2AGrpcJsonRequest) => ({
+    setTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(await a2a.setGrpcTaskPushNotificationConfig(peer, parseJsonRequest(request))),
       ),
     })),
-    getTaskPushNotificationConfig: unary(a2a, (peer, request: A2AGrpcTaskRequest) => ({
+    getTaskPushNotificationConfig: unary(a2a, lifecycle, (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(a2a.getGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
       ),
     })),
-    listTaskPushNotificationConfig: unary(a2a, (peer, request: A2AGrpcJsonRequest) => ({
+    listTaskPushNotificationConfig: unary(a2a, lifecycle, (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(a2a.listGrpcTaskPushNotificationConfigs(peer, parseJsonRequest(request))),
       ),
     })),
-    deleteTaskPushNotificationConfig: unary(a2a, (peer, request: A2AGrpcTaskRequest) => ({
+    deleteTaskPushNotificationConfig: unary(a2a, lifecycle, (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(a2a.deleteGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
       ),
     })),
-    getAuthenticatedExtendedCard: unary(a2a, (peer) => ({
+    getAuthenticatedExtendedCard: unary(a2a, lifecycle, (peer) => ({
       json: JSON.stringify(
         projectA2AExternalValue(
           a2a.getGrpcAuthenticatedExtendedAgentCard(peer, { checkedAt: new Date().toISOString() }),
@@ -132,18 +156,51 @@ function createA2AGrpcHandlers(a2a: A2ARouteService): grpc.UntypedServiceImpleme
 
 function unary<TRequest, TResponse>(
   a2a: A2ARouteService,
+  lifecycle: SharedHostLifecycleAdmissionPort | undefined,
   handler: (peer: A2APeerAuthResult, request: TRequest) => Promise<TResponse> | TResponse,
 ): grpc.handleUnaryCall<TRequest, TResponse> {
   return (call, callback) => {
     void (async () => {
+      let reservation: SharedHostWorkReservation | undefined;
+      let replied = false;
       try {
+        reservation = reserveGrpcWork(lifecycle, "agent", "a2a-grpc-unary");
+        const onDrainAbort = () => {
+          if (replied) return;
+          replied = true;
+          callback(grpcStatusError(grpc.status.UNAVAILABLE, "A2A gRPC request interrupted by host drain."));
+        };
+        reservation?.signal.addEventListener("abort", onDrainAbort, { once: true });
         const peer = authenticateGrpcPeer(a2a, call.metadata);
-        callback(null, await handler(peer, call.request));
+        const response = await handler(peer, call.request);
+        reservation?.signal.removeEventListener("abort", onDrainAbort);
+        if (!replied) {
+          replied = true;
+          callback(null, response);
+        }
       } catch (error) {
-        callback(toGrpcError(error));
+        if (!replied) {
+          replied = true;
+          callback(toGrpcError(error));
+        }
+      } finally {
+        reservation?.release();
       }
     })();
   };
+}
+
+function reserveGrpcWork(
+  lifecycle: SharedHostLifecycleAdmissionPort | undefined,
+  kind: "agent" | "worker",
+  label: string,
+): SharedHostWorkReservation | undefined {
+  const admission = lifecycle?.tryReserve(kind, `${label}:${randomUUID()}`);
+  if (!admission) return undefined;
+  if (!admission.admitted) {
+    throw new SharedHostAdmissionClosedError(admission.state, admission.reason);
+  }
+  return admission.reservation;
 }
 
 function authenticateGrpcPeer(a2a: A2ARouteService, metadata: grpc.Metadata): A2APeerAuthResult {
@@ -216,6 +273,9 @@ function parseJsonObject(value: string | undefined): Record<string, unknown> {
 }
 
 function toGrpcError(error: unknown): grpc.ServiceError {
+  if (error instanceof SharedHostAdmissionClosedError) {
+    return grpcStatusError(grpc.status.UNAVAILABLE, projectA2AExternalErrorText(error.message));
+  }
   if (isGrpcServiceError(error)) {
     return grpcStatusError(
       error.code,

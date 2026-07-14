@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupRetentionService, restoreBackupOffline } from "./backup-retention-service.js";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -28,7 +29,13 @@ async function createSensitiveRuntimeFixture(): Promise<string> {
   await fs.mkdir(path.join(rootDir, "data", "transcripts"), { recursive: true });
   await fs.mkdir(path.join(rootDir, "data", "audit"), { recursive: true });
   await fs.mkdir(path.join(rootDir, "config"), { recursive: true });
-  await fs.writeFile(path.join(rootDir, "data", "index.db"), "sqlite\n", "utf8");
+  const db = new DatabaseSync(path.join(rootDir, "data", "index.db"));
+  try {
+    db.exec("CREATE TABLE backup_fixture (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+    db.exec("INSERT INTO backup_fixture (value) VALUES ('sqlite');");
+  } finally {
+    db.close();
+  }
   await fs.writeFile(path.join(rootDir, "data", "transcripts", "session.jsonl"), '{"event":"hello"}\n', "utf8");
   await fs.writeFile(path.join(rootDir, "data", "audit", "events.jsonl"), '{"event":"audit"}\n', "utf8");
   await fs.writeFile(
@@ -62,7 +69,7 @@ function createConfig(rootDir: string): GatewayRuntimeConfig {
   } as GatewayRuntimeConfig;
 }
 
-function createStorageMock() {
+function createStorageMock(databasePath: string) {
   return {
     gatewaySql: {
       exec: vi.fn(),
@@ -77,6 +84,10 @@ function createStorageMock() {
     realtimeEvents: {
       pruneOlderThan: vi.fn(),
     },
+    createSqliteSnapshot: vi.fn(async (destinationPath: string) => {
+      await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+      await fs.copyFile(databasePath, destinationPath);
+    }),
   } as never;
 }
 
@@ -90,7 +101,7 @@ describe("restoreBackupOffline — credential perms (S8)", () => {
     vi.stubEnv("GOATCITADEL_BACKUP_DIR", backupDir);
 
     const service = new BackupRetentionService({
-      storage: createStorageMock(),
+      storage: createStorageMock(path.join(sourceRoot, "data", "index.db")),
       config: createConfig(sourceRoot),
     });
     const created = await service.createBackup({ name: "sec-suite" });
@@ -126,7 +137,7 @@ describe("restoreBackupOffline — credential perms (S8)", () => {
     vi.stubEnv("GOATCITADEL_BACKUP_DIR", backupDir);
 
     const service = new BackupRetentionService({
-      storage: createStorageMock(),
+      storage: createStorageMock(path.join(sourceRoot, "data", "index.db")),
       config: createConfig(sourceRoot),
     });
     const created = await service.createBackup({ name: "sec-2" });

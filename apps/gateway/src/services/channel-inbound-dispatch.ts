@@ -10,11 +10,11 @@ import { ChannelBotLoopGuard, type BotLoopGuardConfig } from "./channel-bot-loop
 /**
  * Shared inbound-channel dispatch seam.
  *
- * Extracted from routes/webhook-handler-factory.ts so non-webhook inbound
- * transports (e.g. the Signal bridge poller) can dispatch through the EXACT
- * same trust gate — default-deny sender allowlist, bot-loop guard, and ingest
- * idempotency — without a services→routes import. The webhook handler factory
- * re-exports everything here, so webhook route modules are unchanged.
+ * Extracted from routes/webhook-handler-factory.ts so webhook and gateway
+ * transports can dispatch through the same sender trust gate and durable
+ * acceptance contract without a services→routes import. The recoverable
+ * worker owns ingest, persistent per-event bot-loop decisions, turn admission,
+ * and reply settlement.
  */
 
 /**
@@ -31,9 +31,10 @@ export const DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG: BotLoopGuardConfig = {
 };
 
 /**
- * Process-wide guard shared by every inbound channel dispatch so its in-memory
- * rate buckets accumulate across the provider routes and the Signal poller.
- * Tests may pass their own guard to dispatchInboundWebhookMessage.
+ * Process-wide rate evaluator used by the durable worker. Each event's outcome
+ * is claim-fenced and persisted before execution, so a retry or restart never
+ * charges the same event twice even though aggregate rate buckets are local to
+ * the current Gateway process.
  */
 const sharedInboundBotLoopGuard = new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG);
 
@@ -161,6 +162,18 @@ export type IntegrationWebhookRouteLike = {
    */
   isVoiceInboundEnabled?: () => boolean;
   transcribeChannelVoice?: (input: ChannelVoiceInboundRequest) => Promise<ChannelVoiceTranscriptionResult>;
+  /**
+   * Canonical production ingress owner. When present, provider callbacks return
+   * after this method commits a bounded durable envelope; model execution and
+   * outbound reply delivery happen in the recoverable worker.
+   */
+  acceptInboundChannelEvent?: (input: DurableInboundChannelAcceptInput) => Promise<DurableInboundChannelAcceptResult>;
+  /** Atomically commits every accepted event from one provider callback. */
+  acceptInboundChannelEvents?: (
+    inputs: readonly DurableInboundChannelAcceptInput[],
+  ) => Promise<DurableInboundChannelAcceptResult[]>;
+  awaitInboundChannelCommandResult?: (eventId: string) => Promise<DurableInboundChannelCommandResult>;
+  findRemoteActionTokenId?: (token: string) => string | undefined;
 };
 
 export type InboundWebhookDispatchOptions = {
@@ -182,6 +195,121 @@ export type InboundWebhookDispatchOptions = {
     channelSystemInstruction?: string;
   };
 };
+
+export type DurableInboundChannelAcceptInput = InboundWebhookDispatchOptions & {
+  dispatchKind: "agent_turn" | "voice_agent_turn" | "record_only" | "command";
+  voiceRequest?: ChannelVoiceInboundRequest;
+  voiceFallbackContent?: string;
+};
+
+export type DurableInboundChannelAcceptResult = {
+  accepted: true;
+  durableAccepted: true;
+  deduped: boolean;
+  replied: false;
+  queued: boolean;
+  eventType: string;
+  inboundEventId: string;
+  commandResultText?: string;
+};
+
+export type DurableInboundChannelCommandResult =
+  | { status: "completed"; resultText: string }
+  | { status: "manual_reconciliation_required" | "failed"; message: string };
+
+export async function dispatchInboundWebhookCommand(
+  integrationWebhooks: IntegrationWebhookRouteLike,
+  input: InboundWebhookDispatchOptions,
+): Promise<{
+  acceptance: DurableInboundChannelAcceptResult;
+  result: DurableInboundChannelCommandResult;
+}> {
+  const gate = evaluateInboundWebhookAccess(integrationWebhooks, input);
+  if (!gate.allowed) {
+    throw new Error(`Inbound command was denied by sender policy: ${gate.response.reason}`);
+  }
+  const acceptInbound = integrationWebhooks.acceptInboundChannelEvent;
+  const awaitResult = integrationWebhooks.awaitInboundChannelCommandResult;
+  if (!acceptInbound || !awaitResult) {
+    throw new Error("Durable inbound command acceptance is unavailable.");
+  }
+  const { inboundAccessConfig: _inboundAccessConfig, allowedSenders: _allowedSenders, ...secretFreeInput } = input;
+  const acceptance = await acceptInbound({ ...secretFreeInput, dispatchKind: "command" });
+  const result = acceptance.commandResultText
+    ? { status: "completed" as const, resultText: acceptance.commandResultText }
+    : await awaitResult(acceptance.inboundEventId);
+  return { acceptance, result };
+}
+
+/**
+ * Commit a provider webhook batch before its HTTP acknowledgement is emitted.
+ * Sender policy is evaluated per event before the single atomic acceptance
+ * call. A missing batch owner fails closed so callbacks are retried instead of
+ * acknowledging only a prefix of the provider batch.
+ */
+export async function dispatchInboundWebhookBatch(
+  integrationWebhooks: IntegrationWebhookRouteLike,
+  inputs: readonly DurableInboundChannelAcceptInput[],
+) {
+  const allowed: DurableInboundChannelAcceptInput[] = [];
+  const ignoredByIndex = new Map<number, ReturnType<typeof evaluateInboundWebhookAccess> & { allowed: false }>();
+
+  inputs.forEach((input, index) => {
+    const gate = evaluateInboundWebhookAccess(integrationWebhooks, input);
+    if (gate.allowed) {
+      // Access has already been decided. Do not carry connector credentials or
+      // other connection config across the durable acceptance boundary.
+      const { inboundAccessConfig: _inboundAccessConfig, allowedSenders: _allowedSenders, ...secretFreeInput } = input;
+      allowed.push(secretFreeInput);
+    } else {
+      ignoredByIndex.set(index, gate);
+    }
+  });
+
+  let accepted: DurableInboundChannelAcceptResult[] = [];
+  if (allowed.length > 0) {
+    const acceptBatch = integrationWebhooks.acceptInboundChannelEvents;
+    if (!acceptBatch) {
+      throw new Error("Durable inbound channel batch acceptance is unavailable.");
+    }
+    accepted = await acceptBatch(allowed);
+    if (accepted.length !== allowed.length) {
+      throw new Error(
+        `Durable inbound channel batch acceptance returned ${accepted.length} results for ${allowed.length} events.`,
+      );
+    }
+  }
+
+  let acceptedIndex = 0;
+  const events = inputs.map((input, index) => {
+    const ignored = ignoredByIndex.get(index);
+    if (ignored) {
+      return {
+        providerEventId: input.message.eventId,
+        ...ignored.response,
+      };
+    }
+    const result = accepted[acceptedIndex++];
+    if (!result) {
+      throw new Error(`Missing durable acceptance result for inbound event ${input.message.eventId}.`);
+    }
+    return {
+      providerEventId: input.message.eventId,
+      ...result,
+    };
+  });
+
+  return {
+    accepted: true as const,
+    durableAccepted: accepted.length > 0,
+    batch: true as const,
+    eventCount: inputs.length,
+    acceptedCount: accepted.length,
+    ignoredCount: ignoredByIndex.size,
+    dedupedCount: accepted.filter((result) => result.deduped).length,
+    events,
+  };
+}
 
 /**
  * Sender trust gate. Unlike the bot-loop guard, this runs before
@@ -261,105 +389,21 @@ function evaluateInboundWebhookAccess(
 export async function dispatchInboundWebhookMessage(
   integrationWebhooks: IntegrationWebhookRouteLike,
   options: InboundWebhookDispatchOptions,
-  loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
 ) {
   const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);
   if (!gate.allowed) {
     return gate.response;
   }
 
-  const ingestResult = await integrationWebhooks.ingestChannelMessage(
-    options.channel,
-    options.idempotencyKey,
-    options.message,
-  );
-  integrationWebhooks.setChatSessionBinding({
-    sessionId: ingestResult.session.sessionId,
-    transport: "integration",
-    connectionId: options.connectionId,
-    target: options.bindingTarget,
-    writable: true,
-  });
-
-  let responseTurnId: string | undefined;
-  if (!ingestResult.deduped) {
-    // Bot-loop rate cap: a runaway self/bot reply loop repeatedly hits the same
-    // (actor, connection, conversation) bucket. Once the cap is exceeded the
-    // guard suppresses the reply for the cooldown window. The session binding
-    // and ingest above are preserved so the inbound message is still recorded.
-    const guardDecision = loopGuard.decide({
-      scope: options.connectionId,
-      conversation: options.message.room ?? options.message.peer ?? options.message.account,
-      participantA: options.message.actorId,
-      participantB: options.connectionId,
-    });
-    if (guardDecision.action === "suppress") {
-      integrationWebhooks.recordDevDiagnostic?.({
-        level: "warn",
-        category: "channels",
-        event: "channel.bot_loop_suppressed",
-        message: "Suppressed an inbound channel reply because the bot-loop rate cap was reached.",
-        context: {
-          channel: options.channel,
-          connectionId: options.connectionId,
-          actorId: options.message.actorId,
-          sessionId: ingestResult.session.sessionId,
-          reason: guardDecision.reason,
-          cooldownExpiresAt: guardDecision.cooldownExpiresAt,
-        },
-      });
-      return {
-        accepted: true,
-        deduped: ingestResult.deduped,
-        replied: false,
-        suppressed: true as const,
-        suppressedReason: guardDecision.reason,
-        sessionId: ingestResult.session.sessionId,
-        turnId: undefined,
-        eventType: options.eventType,
-      };
-    }
-    await emitInboundWebhookActivity(integrationWebhooks, options, ingestResult.session.sessionId, "seen");
-    try {
-      await emitInboundWebhookActivity(integrationWebhooks, options, ingestResult.session.sessionId, "thinking");
-      const response = options.responseOptions
-        ? await integrationWebhooks.respondToExistingChatMessage(
-            ingestResult.session.sessionId,
-            options.message.eventId,
-            options.responseOptions,
-          )
-        : await integrationWebhooks.respondToExistingChatMessage(
-            ingestResult.session.sessionId,
-            options.message.eventId,
-          );
-      responseTurnId = response.turnId;
-      await emitInboundWebhookActivity(
-        integrationWebhooks,
-        options,
-        ingestResult.session.sessionId,
-        response.trace?.status === "waiting_for_approval" ? "waiting_approval" : "clear",
-        responseTurnId,
-      );
-    } catch (error) {
-      await emitInboundWebhookActivity(
-        integrationWebhooks,
-        options,
-        ingestResult.session.sessionId,
-        "failed",
-        responseTurnId,
-      );
-      throw error;
-    }
+  const acceptInbound = integrationWebhooks.acceptInboundChannelEvent;
+  if (!acceptInbound) {
+    throw new Error("Durable inbound channel acceptance is unavailable for message events.");
   }
-
-  return {
-    accepted: true,
-    deduped: ingestResult.deduped,
-    replied: !ingestResult.deduped,
-    sessionId: ingestResult.session.sessionId,
-    turnId: responseTurnId,
-    eventType: options.eventType,
-  };
+  const { inboundAccessConfig: _inboundAccessConfig, allowedSenders: _allowedSenders, ...secretFreeOptions } = options;
+  return acceptInbound({
+    ...secretFreeOptions,
+    dispatchKind: "agent_turn",
+  });
 }
 
 /**
@@ -370,12 +414,10 @@ export async function dispatchInboundWebhookMessage(
  */
 export const VOICE_TRANSCRIPT_CONTENT_PREFIX = "[voice transcript — untrusted, auto-transcribed]";
 
-const inFlightVoiceIngestIdempotencyKeys = new Set<string>();
-
 export type InboundVoiceDispatchOptions = InboundWebhookDispatchOptions & {
   voice: {
-    /** Downloads + transcribes the referenced media. Only invoked AFTER the sender trust gate passes. */
-    transcribe: () => Promise<ChannelVoiceTranscriptionResult>;
+    /** Secret-free provider media reference persisted by the durable ingress owner. */
+    request: ChannelVoiceInboundRequest;
     /** Ingested instead of a transcript when transcription fails — the message is never silently dropped. */
     fallbackContent: string;
   };
@@ -387,167 +429,32 @@ export type InboundVoiceDispatchOptions = InboundWebhookDispatchOptions & {
  * Ordering is governance-critical:
  * 1. The sender trust gate runs FIRST — a non-allowlisted sender never triggers
  *    a media download or a transcription subprocess.
- * 2. The webhook is acked immediately; download/transcription/ingest run async.
- * 3. The transcript is framed with VOICE_TRANSCRIPT_CONTENT_PREFIX and flows
- *    through the same dispatchInboundWebhookMessage policy path as text ingest.
- * 4. On transcription failure the placeholder content is ingested instead.
+ * 2. The bounded secret-free media reference is durably accepted before ACK.
+ * 3. Download/transcription/ingest run only from the recoverable worker.
+ * 4. A missing durable owner fails closed so the provider can retry.
  */
 export async function dispatchInboundVoiceWebhookMessage(
   integrationWebhooks: IntegrationWebhookRouteLike,
   options: InboundVoiceDispatchOptions,
-  loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
 ) {
   const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);
   if (!gate.allowed) {
     return gate.response;
   }
-  if (!reserveInboundVoiceIngest(options.idempotencyKey)) {
-    return {
-      accepted: true,
-      replied: false,
-      deduped: true as const,
-      queued: false as const,
-      transcription: "deduped" as const,
-      eventType: options.eventType,
-    };
+  const acceptInbound = integrationWebhooks.acceptInboundChannelEvent;
+  if (!acceptInbound) {
+    throw new Error("Durable inbound channel acceptance is unavailable for voice events.");
   }
-  void runInboundVoiceIngestTask(integrationWebhooks, options, loopGuard).finally(() => {
-    releaseInboundVoiceIngest(options.idempotencyKey);
+  const {
+    voice,
+    inboundAccessConfig: _inboundAccessConfig,
+    allowedSenders: _allowedSenders,
+    ...dispatchOptions
+  } = options;
+  return acceptInbound({
+    ...dispatchOptions,
+    dispatchKind: "voice_agent_turn",
+    voiceRequest: voice.request,
+    voiceFallbackContent: voice.fallbackContent,
   });
-  return {
-    accepted: true,
-    replied: false,
-    queued: true as const,
-    transcription: "pending" as const,
-    eventType: options.eventType,
-  };
-}
-
-function reserveInboundVoiceIngest(idempotencyKey: string): boolean {
-  if (inFlightVoiceIngestIdempotencyKeys.has(idempotencyKey)) {
-    return false;
-  }
-  inFlightVoiceIngestIdempotencyKeys.add(idempotencyKey);
-  return true;
-}
-
-function releaseInboundVoiceIngest(idempotencyKey: string): void {
-  inFlightVoiceIngestIdempotencyKeys.delete(idempotencyKey);
-}
-
-async function runInboundVoiceIngestTask(
-  integrationWebhooks: IntegrationWebhookRouteLike,
-  options: InboundVoiceDispatchOptions,
-  loopGuard: ChannelBotLoopGuard,
-): Promise<void> {
-  const { voice, ...dispatchOptions } = options;
-  let content = voice.fallbackContent;
-  try {
-    const result = await voice.transcribe();
-    if (result.ok) {
-      content = `${VOICE_TRANSCRIPT_CONTENT_PREFIX} ${result.transcript}`;
-    } else {
-      integrationWebhooks.recordDevDiagnostic?.({
-        level: "warn",
-        category: "channels",
-        event: "channel.voice_transcription_failed",
-        message: "Inbound channel voice transcription failed; ingesting the placeholder content instead.",
-        context: {
-          channel: options.channel,
-          connectionId: options.connectionId,
-          actorId: options.message.actorId,
-          eventId: options.message.eventId,
-          reason: result.reason,
-          detail: result.detail,
-        },
-      });
-    }
-  } catch (error) {
-    integrationWebhooks.recordDevDiagnostic?.({
-      level: "warn",
-      category: "channels",
-      event: "channel.voice_transcription_failed",
-      message: "Inbound channel voice transcription threw; ingesting the placeholder content instead.",
-      context: {
-        channel: options.channel,
-        connectionId: options.connectionId,
-        actorId: options.message.actorId,
-        eventId: options.message.eventId,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
-  try {
-    await dispatchInboundWebhookMessage(
-      integrationWebhooks,
-      {
-        ...dispatchOptions,
-        message: {
-          ...dispatchOptions.message,
-          content,
-        },
-      },
-      loopGuard,
-    );
-  } catch (error) {
-    integrationWebhooks.recordDevDiagnostic?.({
-      level: "error",
-      category: "channels",
-      event: "channel.voice_inbound_dispatch_failed",
-      message: "Inbound channel voice ingest failed after the webhook was already acked.",
-      context: {
-        channel: options.channel,
-        connectionId: options.connectionId,
-        actorId: options.message.actorId,
-        eventId: options.message.eventId,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
-}
-
-async function emitInboundWebhookActivity(
-  integrationWebhooks: IntegrationWebhookRouteLike,
-  options: {
-    channel: string;
-    connectionId: string;
-    idempotencyKey: string;
-    bindingTarget?: string;
-    message: IngestChannelMessageInput;
-  },
-  sessionId: string,
-  phase: ChannelActivityInput["phase"],
-  turnId?: string,
-): Promise<void> {
-  const target = options.bindingTarget ?? options.message.room ?? options.message.peer ?? options.message.account;
-  if (!target?.trim()) {
-    return;
-  }
-  try {
-    await integrationWebhooks.emitChannelActivity({
-      connectionId: options.connectionId,
-      target,
-      messageId: options.message.eventId,
-      threadId: options.message.threadId,
-      sessionId,
-      turnId,
-      phase,
-      correlationId: options.idempotencyKey,
-    });
-  } catch (error) {
-    integrationWebhooks.recordDevDiagnostic?.({
-      level: "warn",
-      category: "channels",
-      event: "channel.activity_failed",
-      message: "Channel activity signal failed and the inbound reply flow continued.",
-      context: {
-        channel: options.channel,
-        connectionId: options.connectionId,
-        phase,
-        sessionId,
-        messageId: options.message.eventId,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
 }

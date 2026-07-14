@@ -23,6 +23,7 @@ import {
   NotFoundError,
   type ApprovalWaitWorkflowPayload,
   type ChatSendMessageRequest,
+  type ChatRoutedContextSnapshotRecord,
   type ChatTurnTraceRecord,
   type ConnectorDeliveryWorkflowPayload,
   type CuratorTickWorkflowPayload,
@@ -40,7 +41,13 @@ import {
   isDurableRunTerminal,
   redactStructuredSecrets,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import {
+  sealChatTurnCapabilityProfile,
+  verifyChatRoutedContextSnapshot,
+  verifyChatTurnCapabilityCatalogBinding,
+  verifyChatTurnCapabilitySkillBindings,
+  type Storage,
+} from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
@@ -55,7 +62,7 @@ import {
   type GeneralChatPostCommitEffect,
   type GeneralChatPostCommitProgress,
 } from "./chat-durable-run-service.js";
-import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { upsertChatCapabilityProfileSystemInstruction, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { enqueueAgentEndHook } from "./chat-turn-stream-events.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
@@ -79,10 +86,14 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
     | "approvals"
     | "audit"
     | "chatMessages"
+    | "chatTurnCapabilityProfiles"
+    | "capabilityCatalogSnapshots"
     | "externalSideEffectRuns"
     | "mutationIdempotency"
     | "remoteActionTokens"
+    | "routedContextSnapshots"
     | "runImmediateTransaction"
+    | "skillLifecycle"
   >;
 
 /** Channel routing recorded on an autonomous turn's `metadata.autonomous`. */
@@ -162,6 +173,9 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
       ingestUserMessage?: boolean;
       turnId?: string;
       assistantMessageId?: string;
+      capabilityProfileId?: string;
+      capabilityProfileHash?: string;
+      capabilityProfileContent?: string;
     },
   ): Promise<PreparedAgentChatTurn>;
   requireConnectorRecord(connectorId: string): ConnectorRecord;
@@ -429,8 +443,13 @@ function buildDurableRealtimeOptions(input: {
 
 // ---------- Pure payload parsers ----------
 
-export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnExecutionPayload | undefined {
-  const payload = run.payload as Partial<DurableChatTurnExecutionPayload> | undefined;
+export type DurableChatTurnPayload = DurableChatTurnExecutionPayload & {
+  routedContextSnapshotId?: string;
+  routedContextSnapshotHash?: string;
+};
+
+export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnPayload | undefined {
+  const payload = run.payload as Partial<DurableChatTurnPayload> | undefined;
   if (!payload || payload.version !== "chat.turn.execute.v1") {
     return undefined;
   }
@@ -446,7 +465,56 @@ export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatT
   ) {
     return undefined;
   }
-  return payload as DurableChatTurnExecutionPayload;
+  if (
+    (payload.capabilityProfileId !== undefined && typeof payload.capabilityProfileId !== "string") ||
+    (payload.capabilityProfileHash !== undefined && typeof payload.capabilityProfileHash !== "string") ||
+    Boolean(payload.capabilityProfileId) !== Boolean(payload.capabilityProfileHash)
+  ) {
+    return undefined;
+  }
+  if (containsRawDurableRoutedContext(payload)) {
+    return undefined;
+  }
+  if (
+    (payload.routedContextSnapshotId !== undefined &&
+      (typeof payload.routedContextSnapshotId !== "string" ||
+        !payload.routedContextSnapshotId.trim() ||
+        payload.routedContextSnapshotId.length > 256)) ||
+    (payload.routedContextSnapshotHash !== undefined &&
+      (typeof payload.routedContextSnapshotHash !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(payload.routedContextSnapshotHash))) ||
+    Boolean(payload.routedContextSnapshotId) !== Boolean(payload.routedContextSnapshotHash) ||
+    (Boolean(payload.routedContextSnapshotId) && !payload.capabilityProfileId)
+  ) {
+    return undefined;
+  }
+  return payload as DurableChatTurnPayload;
+}
+
+function containsRawDurableRoutedContext(value: unknown): boolean {
+  const forbiddenKeys = new Set([
+    "contextrefs",
+    "routedcontext",
+    "routedcontextsnapshot",
+    "routedcontextsources",
+    "resolvedroutedcontextsources",
+    "routedcontextentries",
+    "routedcontexttext",
+    "admittedtext",
+    "sourcecontent",
+  ]);
+  const visit = (candidate: unknown): boolean => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    if (Array.isArray(candidate)) {
+      return candidate.some(visit);
+    }
+    return Object.entries(candidate as Record<string, unknown>).some(
+      ([key, nested]) => forbiddenKeys.has(key.toLowerCase()) || visit(nested),
+    );
+  };
+  return visit(value);
 }
 
 export function parseGeneralChatPostCommitEffectWorkflowPayload(
@@ -774,23 +842,9 @@ export function buildDurableWorkflowExecutors(
     },
     "connector.delivery": {
       execute: (run, context) => executeDurableConnectorDeliveryRun(hosts.connectorDelivery, run, context),
-      isRecoverable: (run) =>
-        parseConnectorDeliveryWorkflowPayload(run)
-          ? { recoverable: true }
-          : { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." },
-      markUnrecoverable: async (run, reason, context) => {
-        throwIfDurableWorkflowAborted(context);
-        publishUnrecoverableProjectionSafely(
-          hosts.connectorDelivery,
-          run,
-          reason,
-          {
-            runId: run.runId,
-            connectorId: parseConnectorDeliveryWorkflowPayload(run)?.connectorId,
-          },
-          context,
-        );
-      },
+      isRecoverable: (run) => isDurableConnectorDeliveryRecoverable(hosts.connectorDelivery, run),
+      markUnrecoverable: (run, reason, context) =>
+        markDurableConnectorDeliveryUnrecoverable(hosts.connectorDelivery, run, reason, context),
     },
     "hook.delivery": {
       execute: (run, context) => executeDurableHookDeliveryRun(hosts.hookDelivery, run, context),
@@ -1283,6 +1337,7 @@ export async function executeDurableConnectorDeliveryRun(
     label: `Durable connector delivery ${run.runId}`,
     output: { durableRunId: run.runId, connectorId: connector.connectorId, action: payload.action },
     requireDurableBoundaryRecord: true,
+    isExternalCallProvenNotDispatched: isConnectorDeliveryExternalCallProvenNotDispatched,
     execute: (claim) => {
       const assertApprovalActionFresh = () =>
         assertApprovalActionFreshForDelivery(host, payload, approvalActionTokenRef);
@@ -1299,34 +1354,13 @@ export async function executeDurableConnectorDeliveryRun(
             )
           : payload;
       return dispatchConnectorDelivery(connector, dispatchPayload, {
-        commsSend: (input) => {
-          markExternalCallStarted();
-          return host.commsSend(input);
-        },
-        commsReply: (input) => {
-          markExternalCallStarted();
-          return host.commsReply(input);
-        },
-        commsReact: (input) => {
-          markExternalCallStarted();
-          return host.commsReact(input);
-        },
-        commsUnsend: (input) => {
-          markExternalCallStarted();
-          return host.commsUnsend(input);
-        },
-        commsTyping: (input) => {
-          markExternalCallStarted();
-          return host.commsTyping(input);
-        },
-        commsActivity: (input) => {
-          markExternalCallStarted();
-          return host.commsActivity(input);
-        },
-        invokeMcpTool: (input) => {
-          markExternalCallStarted();
-          return host.invokeMcpTool({ ...input, signal: context?.signal });
-        },
+        commsSend: (input) => invokeConnectorDeliveryTransport(() => host.commsSend(input)),
+        commsReply: (input) => invokeConnectorDeliveryTransport(() => host.commsReply(input)),
+        commsReact: (input) => invokeConnectorDeliveryTransport(() => host.commsReact(input)),
+        commsUnsend: (input) => invokeConnectorDeliveryTransport(() => host.commsUnsend(input)),
+        commsTyping: (input) => invokeConnectorDeliveryTransport(() => host.commsTyping(input)),
+        commsActivity: (input) => invokeConnectorDeliveryTransport(() => host.commsActivity(input)),
+        invokeMcpTool: (input) => host.invokeMcpTool({ ...input, signal: context?.signal }),
         mcpInvokeContext: {
           workspaceId,
           taskId: payload.taskId,
@@ -1353,7 +1387,6 @@ export async function executeDurableConnectorDeliveryRun(
           },
         },
         publishRealtime: (eventType, source, eventPayload, options) => {
-          markExternalCallStarted();
           host.publishRealtime(eventType, source, eventPayload, options);
         },
         markExternalCallStarted,
@@ -1414,6 +1447,89 @@ export async function executeDurableConnectorDeliveryRun(
     }
   }
   publishConnectorDeliveryCompletedSafely(host, run, connector, payload, checkpointState);
+}
+
+class ConnectorDeliveryDispatchFailureError extends Error {
+  public constructor(
+    message: string,
+    public readonly deliveryStatus: string | undefined,
+    public readonly providerMessageId: string | undefined,
+    public readonly provenNotDispatched: boolean,
+  ) {
+    super(message);
+    this.name = "ConnectorDeliveryDispatchFailureError";
+  }
+}
+
+async function invokeConnectorDeliveryTransport<TValue>(invoke: () => Promise<TValue>): Promise<TValue> {
+  const result = await invoke();
+  const failure = readConnectorDeliveryTransportFailure(result);
+  if (!failure) {
+    return result;
+  }
+  throw new ConnectorDeliveryDispatchFailureError(
+    failure.message,
+    failure.deliveryStatus,
+    failure.providerMessageId,
+    failure.provenNotDispatched,
+  );
+}
+
+function readConnectorDeliveryTransportFailure(value: unknown):
+  | {
+      message: string;
+      deliveryStatus?: string;
+      providerMessageId?: string;
+      provenNotDispatched: boolean;
+    }
+  | undefined {
+  const record = readUnknownRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const outcome = readTrimmedString(record.outcome);
+  if (outcome && outcome !== "executed") {
+    return {
+      message: readTrimmedString(record.policyReason) ?? `Connector delivery returned ${outcome} before dispatch.`,
+      deliveryStatus: "blocked",
+      provenNotDispatched: true,
+    };
+  }
+  if (outcome === "executed") {
+    return readConnectorDeliveryTransportFailure(record.result);
+  }
+  if (readTrimmedString(record.status)?.toLowerCase() !== "failed") {
+    return undefined;
+  }
+  const deliveryStatus = readTrimmedString(record.deliveryStatus)?.toLowerCase();
+  const providerMessageId = readTrimmedString(record.providerMessageId);
+  return {
+    message:
+      readTrimmedString(record.error) ?? readTrimmedString(record.fallbackReason) ?? "Connector delivery failed.",
+    deliveryStatus,
+    providerMessageId,
+    provenNotDispatched: !providerMessageId && (deliveryStatus === "blocked" || deliveryStatus === "not_available"),
+  };
+}
+
+function isConnectorDeliveryExternalCallProvenNotDispatched(error: unknown): boolean {
+  if (error instanceof ConnectorDeliveryDispatchFailureError) {
+    return error.provenNotDispatched;
+  }
+  const record = readUnknownRecord(error);
+  if (!record || readTrimmedString(record.providerMessageId)) {
+    return false;
+  }
+  const deliveryStatus = readTrimmedString(record.deliveryStatus)?.toLowerCase();
+  return deliveryStatus === "blocked" || deliveryStatus === "not_available";
+}
+
+function readUnknownRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 class ApprovalActionDeliveryUnavailableError extends Error {
@@ -1645,6 +1761,7 @@ export async function executeDurableChatTurnRun(
   if (userMessageError) {
     throw new Error(userMessageError);
   }
+  const routedContextSnapshot = loadAndVerifyDurableChatRoutedContextSnapshot(host, run, payload);
   const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage);
   if (recoveryTrace.outcome === "invalid") {
     throw new Error(recoveryTrace.reason);
@@ -1659,6 +1776,13 @@ export async function executeDurableChatTurnRun(
     policyRunId: payload.request.policyRunId ?? run.runId,
     signal: context?.signal,
   };
+  const capabilityProfileStore = host.storage.chatTurnCapabilityProfiles;
+  if (payload.capabilityProfileId && !capabilityProfileStore) {
+    throw new Error(`Durable Chat run ${run.runId} cannot load its bound capability profile.`);
+  }
+  const existingCapabilityProfile = payload.capabilityProfileId
+    ? undefined
+    : capabilityProfileStore?.findByTurn(payload.turnId);
   const prepared = await host.prepareAgentChatTurn(payload.sessionId, request, {
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,
@@ -1667,7 +1791,46 @@ export async function executeDurableChatTurnRun(
     ingestUserMessage: false,
     turnId: payload.turnId,
     assistantMessageId: payload.assistantMessageId,
+    capabilityProfileId: payload.capabilityProfileId ?? existingCapabilityProfile?.profileId,
+    capabilityProfileHash: payload.capabilityProfileHash ?? existingCapabilityProfile?.hashes.profileHash,
+    capabilityProfileContent: userMessage.content,
   });
+  assertDurableChatCapabilityProfileBinding(run.runId, payload, prepared);
+  if (routedContextSnapshot) {
+    injectFrozenDurableChatRoutedContext(prepared, routedContextSnapshot);
+  }
+  // Explicit legacy-only backfill: runs admitted before capability profiles
+  // existed may receive one here. Newly admitted runs always carry payload
+  // profile references and take the fail-closed branch above.
+  if (prepared.capabilityProfile && !existingCapabilityProfile && !payload.capabilityProfileId) {
+    if (!capabilityProfileStore || !host.storage.capabilityCatalogSnapshots) {
+      throw new Error(`Durable Chat run ${run.runId} cannot persist its legacy capability profile backfill.`);
+    }
+    const { hashes: _hashes, ...draft } = prepared.capabilityProfile;
+    const durableProfile = sealChatTurnCapabilityProfile({
+      ...draft,
+      identity: {
+        ...draft.identity,
+        durableRunId: run.runId,
+      },
+    });
+    prepared.history = upsertChatCapabilityProfileSystemInstruction(prepared.history, durableProfile);
+    if (!prepared.capabilityCatalogSnapshot) {
+      throw new Error(`Durable Chat run ${run.runId} cannot bind its legacy profile without a catalog snapshot.`);
+    }
+    const catalogSnapshot = prepared.capabilityCatalogSnapshot;
+    verifyChatTurnCapabilityCatalogBinding(durableProfile, catalogSnapshot);
+    verifyChatTurnCapabilitySkillBindings(durableProfile, host.storage.skillLifecycle.list());
+    host.storage.runImmediateTransaction(() => {
+      prepared.capabilityCatalogSnapshot = host.storage.capabilityCatalogSnapshots.create(catalogSnapshot);
+      prepared.capabilityProfile = capabilityProfileStore.create(durableProfile);
+      host.storage.chatTurnTraces.patch(payload.turnId, {
+        capabilitySnapshotId: durableProfile.catalog.snapshotId,
+        capabilityProfileId: durableProfile.profileId,
+        capabilityProfileHash: durableProfile.hashes.profileHash,
+      });
+    });
+  }
   throwIfDurableWorkflowAborted(context);
   if (committedRecoveryTrace) {
     host.finalizeDurableChatRun(run.runId, prepared, committedRecoveryTrace, run.leaseOwnerId);
@@ -1708,6 +1871,105 @@ export async function executeDurableChatTurnRun(
     },
   );
   await reconcileDurableChatPostCommit(host, run, payload);
+}
+
+export function loadAndVerifyDurableChatRoutedContextSnapshot(
+  host: Pick<DurableChatTurnWorkflowHost, "storage">,
+  run: DurableRunRecord,
+  payload: DurableChatTurnPayload,
+): ChatRoutedContextSnapshotRecord | undefined {
+  if (!payload.routedContextSnapshotId || !payload.routedContextSnapshotHash) {
+    return undefined;
+  }
+  const snapshotStore = host.storage.routedContextSnapshots;
+  const profileStore = host.storage.chatTurnCapabilityProfiles;
+  if (!snapshotStore || !profileStore || !payload.capabilityProfileId || !payload.capabilityProfileHash) {
+    throw new Error(`Durable Chat run ${run.runId} cannot load its frozen routed-context binding.`);
+  }
+  const snapshot = snapshotStore.get(payload.routedContextSnapshotId);
+  verifyChatRoutedContextSnapshot(snapshot);
+  const profile = profileStore.get(payload.capabilityProfileId);
+  const trace = host.storage.chatTurnTraces.get(payload.turnId);
+  const traceBinding = trace?.routing?.routedContext;
+  if (
+    snapshot.snapshotId !== payload.routedContextSnapshotId ||
+    snapshot.snapshotHash !== payload.routedContextSnapshotHash ||
+    snapshot.turnId !== payload.turnId ||
+    snapshot.sessionId !== payload.sessionId ||
+    snapshot.capabilityProfileId !== payload.capabilityProfileId ||
+    snapshot.capabilityProfileHash !== payload.capabilityProfileHash ||
+    profile.profileId !== payload.capabilityProfileId ||
+    profile.hashes.profileHash !== payload.capabilityProfileHash ||
+    profile.identity.turnId !== payload.turnId ||
+    profile.identity.sessionId !== payload.sessionId ||
+    profile.identity.workspaceId !== snapshot.workspaceId ||
+    profile.identity.durableRunId !== run.runId ||
+    profile.selection.effectiveProviderId !== snapshot.budget.effectiveProviderId ||
+    profile.selection.effectiveModel !== snapshot.budget.effectiveModel ||
+    trace?.turnId !== payload.turnId ||
+    trace.sessionId !== payload.sessionId ||
+    trace.capabilityProfileId !== payload.capabilityProfileId ||
+    trace.capabilityProfileHash !== payload.capabilityProfileHash ||
+    trace.durable?.runId !== run.runId ||
+    traceBinding?.snapshotId !== snapshot.snapshotId ||
+    traceBinding.snapshotHash !== snapshot.snapshotHash ||
+    traceBinding.sourceRequestHash !== snapshot.sourceRequestHash ||
+    traceBinding.contentHash !== snapshot.contentHash
+  ) {
+    throw new Error(`Durable Chat run ${run.runId} has a mismatched frozen routed-context snapshot.`);
+  }
+  return snapshot;
+}
+
+export function injectFrozenDurableChatRoutedContext(
+  prepared: PreparedAgentChatTurn,
+  snapshot: ChatRoutedContextSnapshotRecord,
+): void {
+  verifyChatRoutedContextSnapshot(snapshot);
+  if (
+    prepared.routedContextSnapshot &&
+    (prepared.routedContextSnapshot.snapshotId !== snapshot.snapshotId ||
+      prepared.routedContextSnapshot.snapshotHash !== snapshot.snapshotHash)
+  ) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} has a conflicting routed-context snapshot attachment.`);
+  }
+  prepared.routedContextSnapshot = snapshot;
+  if (!snapshot.contextText) {
+    return;
+  }
+  const marker = "Routed context snapshot (immutable).";
+  const existing = prepared.history.filter(
+    (message) => message.role === "system" && typeof message.content === "string" && message.content.startsWith(marker),
+  );
+  if (existing.length > 1 || (existing.length === 1 && existing[0]?.content !== snapshot.contextText)) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} has conflicting routed-context prompt state.`);
+  }
+  if (existing.length === 1) {
+    return;
+  }
+  const insertionIndex = prepared.history.findIndex((message) => message.role !== "system");
+  prepared.history.splice(insertionIndex < 0 ? prepared.history.length : insertionIndex, 0, {
+    role: "system",
+    content: snapshot.contextText,
+  });
+}
+
+export function assertDurableChatCapabilityProfileBinding(
+  runId: string,
+  payload: { capabilityProfileId?: string; capabilityProfileHash?: string },
+  prepared: Pick<PreparedAgentChatTurn, "capabilityProfile">,
+): void {
+  if (!payload.capabilityProfileId) {
+    return;
+  }
+  if (
+    !prepared.capabilityProfile ||
+    prepared.capabilityProfile.profileId !== payload.capabilityProfileId ||
+    prepared.capabilityProfile.hashes.profileHash !== payload.capabilityProfileHash ||
+    prepared.capabilityProfile.identity.durableRunId !== runId
+  ) {
+    throw new Error(`Durable Chat run ${runId} has a malformed or missing bound capability profile.`);
+  }
 }
 
 async function reconcileDurableChatPostCommit(
@@ -2484,6 +2746,135 @@ function isDurableChatTurnRecoverable(
     };
   }
   return { recoverable: true };
+}
+
+function isDurableConnectorDeliveryRecoverable(
+  host: DurableConnectorDeliveryWorkflowHost,
+  run: DurableRunRecord,
+): DurableWorkflowRecoverability {
+  const payload = parseConnectorDeliveryWorkflowPayload(run);
+  if (!payload) {
+    return { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." };
+  }
+
+  let sideEffect: ExternalSideEffectRunRecord | undefined;
+  try {
+    sideEffect = readDurableConnectorDeliverySideEffect(host, run, payload);
+  } catch {
+    return {
+      recoverable: false,
+      reason:
+        "Connector delivery recovery could not establish external side-effect boundary truth; automatic replay is blocked pending manual reconciliation.",
+    };
+  }
+
+  if (!sideEffect) {
+    return { recoverable: true };
+  }
+  if (sideEffect.resumeState === "manual_review_unknown_external_outcome") {
+    return connectorDeliveryManualReconciliationRequired(sideEffect);
+  }
+  switch (sideEffect.status) {
+    case "claimed_not_sent":
+    case "failed_before_boundary":
+    case "completed":
+    case "blocked_duplicate":
+      return { recoverable: true };
+    case "external_call_started":
+    case "unknown_external_outcome":
+      return connectorDeliveryManualReconciliationRequired(sideEffect);
+    case "payload_mismatch":
+      return {
+        recoverable: false,
+        reason: "Connector delivery external side-effect identity no longer matches; automatic replay is blocked.",
+      };
+    case "idempotency_unavailable":
+      return {
+        recoverable: false,
+        reason: "Connector delivery lacked replay-safe idempotency; automatic replay is blocked.",
+      };
+  }
+}
+
+function readDurableConnectorDeliverySideEffect(
+  host: DurableConnectorDeliveryWorkflowHost,
+  run: DurableRunRecord,
+  payload: ConnectorDeliveryWorkflowPayload,
+): ExternalSideEffectRunRecord | undefined {
+  const workspaceId = payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run);
+  const connector = host.requireConnectorRecord(payload.connectorId);
+  const connectorTypes = new Set(
+    [connector.connectorType, payload.connectorType?.trim()].filter((candidate): candidate is string =>
+      Boolean(candidate),
+    ),
+  );
+  for (const connectorType of connectorTypes) {
+    const routePath = [
+      "external_side_effect",
+      "durable_connector_delivery",
+      `connector.${connectorType}`,
+      connector.connectorId,
+      payload.action,
+    ].join(":");
+    const sideEffect = host.storage.externalSideEffectRuns.findByIdempotency(
+      routePath,
+      `durable-connector:${run.runId}`,
+      workspaceId,
+    );
+    if (sideEffect) {
+      return sideEffect;
+    }
+  }
+  return undefined;
+}
+
+function connectorDeliveryManualReconciliationRequired(
+  sideEffect: ExternalSideEffectRunRecord,
+): DurableWorkflowRecoverability {
+  return {
+    recoverable: false,
+    reason: `Connector delivery external side-effect ${sideEffect.runId} may have crossed the provider boundary; automatic replay is blocked and manual reconciliation is required.`,
+  };
+}
+
+function markDurableConnectorDeliveryUnrecoverable(
+  host: DurableConnectorDeliveryWorkflowHost,
+  run: DurableRunRecord,
+  reason: string,
+  context?: DurableWorkflowFinalizationContext,
+): void {
+  throwIfDurableWorkflowAborted(context);
+  const payload = parseConnectorDeliveryWorkflowPayload(run);
+  if (payload) {
+    try {
+      const sideEffect = readDurableConnectorDeliverySideEffect(host, run, payload);
+      if (sideEffect?.status === "external_call_started") {
+        host.storage.externalSideEffectRuns.markFailureIfStatus(
+          sideEffect.runId,
+          "external_call_started",
+          {
+            status: "unknown_external_outcome",
+            errorText: reason,
+          },
+          new Date().toISOString(),
+        );
+      }
+    } catch (error) {
+      void error;
+      // Durable terminalization still proceeds. A failed effect-ledger CAS can
+      // only make recovery more conservative; it never authorizes replay.
+    }
+  }
+  publishUnrecoverableProjectionSafely(
+    host,
+    run,
+    reason,
+    {
+      runId: run.runId,
+      connectorId: payload?.connectorId,
+    },
+    context,
+  );
 }
 
 function markDurableProactiveTickUnrecoverable(

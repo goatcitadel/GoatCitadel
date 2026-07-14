@@ -46,6 +46,11 @@ describe("GatewayService loop44 facade behavior", () => {
         })),
       },
       skillStateService: { recordSkillImportEvent: vi.fn() },
+      storage: {
+        skillAggregateRevisions: {
+          ensure: vi.fn(() => ({ revision: 7 })),
+        },
+      },
       publishRealtime: vi.fn(),
       reloadSkills: vi.fn(async () => [
         {
@@ -99,10 +104,12 @@ describe("GatewayService loop44 facade behavior", () => {
       installedSkillId: "skill-fs-reviewer",
     });
     expect(gateway.reloadSkills).toHaveBeenCalledTimes(1);
+    expect(gateway.storage.skillAggregateRevisions.ensure).toHaveBeenCalledWith("runtime_skill", "skill-fs-reviewer");
     expect(gateway.setSkillState).toHaveBeenCalledWith(
       "skill-fs-reviewer",
       "disabled",
       "Imported skill starts disabled by default.",
+      7,
     );
     expect(gateway.skillStateService.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_installed");
     expect(gateway.publishRealtime).toHaveBeenCalledWith("system", "skills", {

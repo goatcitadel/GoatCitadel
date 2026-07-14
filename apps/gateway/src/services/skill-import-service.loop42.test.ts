@@ -32,50 +32,31 @@ describe("SkillImportService loop42 git install behavior", () => {
     fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  // 120s: spawns real git clone/rev-parse subprocesses; under a loaded machine
-  // (verify lanes building concurrently) the global 15s testTimeout is exceeded.
   it(
-    "installs local git sources, records resolved HEAD metadata, and cleans cloned materialization",
+    "rejects local git transport instead of weakening the HTTPS-only clone boundary",
     { timeout: 120_000 },
     async () => {
       const repoDir = createGitSkillRepo(rootDir);
-      const expectedHead = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: repoDir,
-        encoding: "utf8",
-        windowsHide: true,
-      }).trim();
       const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
 
-      const installed = await service.installImport({
-        sourceRef: repoDir,
-        sourceType: "git_url",
-        sourceProvider: "github",
-      });
-      const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
-
-      expect(fs.existsSync(path.join(installed.installedPath, "SKILL.md"))).toBe(true);
-      expect(manifest).toMatchObject({
-        manifestVersion: 2,
-        candidate: expect.objectContaining({
-          sourceProvider: "github",
-          sourceType: "git_url",
+      await expect(
+        service.installImport({
           sourceRef: repoDir,
-          repositoryUrl: repoDir,
+          sourceType: "git_url",
+          sourceProvider: "github",
         }),
-        resolvedUpstream: {
-          url: repoDir,
-          ref: "HEAD",
-          version: expectedHead,
-        },
-      });
+      ).rejects.toThrow("Failed to clone git source");
+      expect(fs.existsSync(path.join(rootDir, "skills", "extra", "git-runtime-tool"))).toBe(false);
       expect(service.listHistory(1)).toEqual([
         expect.objectContaining({
           action: "install",
-          outcome: "accepted",
+          outcome: "failed",
           sourceProvider: "github",
           sourceType: "git_url",
           sourceRef: repoDir,
-          skillId: "git-runtime-tool",
+          details: expect.objectContaining({
+            error: expect.stringContaining("Failed to clone git source"),
+          }),
         }),
       ]);
     },

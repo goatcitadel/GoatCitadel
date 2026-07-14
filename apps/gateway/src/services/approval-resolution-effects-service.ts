@@ -21,12 +21,19 @@ import type {
   DurableRunRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ConflictError, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
+import {
+  buildToolEffectEvidence,
+  ConflictError,
+  isChatTurnTerminalStatus,
+  NotFoundError,
+} from "@goatcitadel/contracts";
 import { getRequestAttribution, runWithIsolatedRequestAttribution, type Storage } from "@goatcitadel/storage";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import { materializeApprovedSkillHubIntent, type SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { markTerminalChatPostCommitPending } from "./chat-durable-run-service.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
+import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 
 export type ApprovalObservabilityEffectInput = ApprovalObservabilityEffectInputContract;
 
@@ -45,6 +52,7 @@ const APPROVAL_EFFECT_HEARTBEAT_MS = 5_000;
 const APPROVAL_EFFECT_POLL_MIN_MS = 1_000;
 const APPROVAL_EFFECT_POLL_JITTER_MS = 500;
 const APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS = 2_000;
+const APPROVAL_EFFECT_CODE_MODE_CLAIM_RETRY_MS = 1_000;
 const APPROVAL_OBSERVABILITY_RETRY_BASE_MS = 1_000;
 const APPROVAL_OBSERVABILITY_RETRY_MAX_MS = 5 * 60_000;
 const APPROVAL_OBSERVABILITY_PREDECESSOR_RETRY_MS = 250;
@@ -94,6 +102,7 @@ export interface ApprovalResolutionEffectsResult {
 
 export interface ApprovalEffectsServiceDeps {
   backgroundTasks: Set<Promise<void>>;
+  sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
   wakeDurableRun(
     runId: string,
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
@@ -102,6 +111,12 @@ export interface ApprovalEffectsServiceDeps {
   findProactiveDurableRunIdsForApproval(approvalId: string): string[];
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
+  executeApprovedSkillHubLifecycleOperation?(
+    operationId: string,
+    approvalId: string,
+    requestSha256: string,
+    signal?: AbortSignal,
+  ): Promise<SkillHubLifecycleApplyResult>;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -127,6 +142,7 @@ export interface ApprovalEffectsServiceContext {
     Storage,
     | "approvalEffects"
     | "approvals"
+    | "skillHubOperations"
     | "approvalWaitRuns"
     | "pendingApprovalActions"
     | "approvalInbox"
@@ -191,6 +207,17 @@ export class ApprovalEffectsService {
     this.activeEffectAbortControllers.clear();
   }
 
+  /** Stop future claims while allowing the currently admitted effect to settle. */
+  public stopAdmission(): void {
+    this.workerStopped = true;
+    this.workerRequested = false;
+    this.observabilityWorkerRequested = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+  }
+
   public requestEffectProcessing(): void {
     this.requestActionEffectProcessing();
     this.requestObservabilityEffectProcessing();
@@ -205,6 +232,12 @@ export class ApprovalEffectsService {
       return;
     }
     this.workerActive = true;
+    const reservation = this.reserveWorker("approval-effects-action");
+    if (reservation === null) {
+      this.workerActive = false;
+      this.workerRequested = false;
+      return;
+    }
     const backgroundTasks = this.deps.backgroundTasks;
     const task = runWithIsolatedRequestAttribution({}, () =>
       Promise.resolve().then(async () => {
@@ -221,6 +254,7 @@ export class ApprovalEffectsService {
           if (this.actionWorkerTask === task) {
             this.actionWorkerTask = undefined;
           }
+          reservation?.release();
         }
       }),
     );
@@ -237,6 +271,12 @@ export class ApprovalEffectsService {
       return;
     }
     this.observabilityWorkerActive = true;
+    const reservation = this.reserveWorker("approval-effects-observability");
+    if (reservation === null) {
+      this.observabilityWorkerActive = false;
+      this.observabilityWorkerRequested = false;
+      return;
+    }
     const backgroundTasks = this.deps.backgroundTasks;
     const task = runWithIsolatedRequestAttribution({}, () =>
       Promise.resolve().then(async () => {
@@ -250,10 +290,27 @@ export class ApprovalEffectsService {
         } finally {
           this.observabilityWorkerActive = false;
           backgroundTasks.delete(task);
+          reservation?.release();
         }
       }),
     );
     backgroundTasks.add(task);
+  }
+
+  private reserveWorker(label: string): SharedHostWorkReservation | undefined | null {
+    const admission = this.deps.sharedHostLifecycle?.tryReserve("worker", `${label}:${this.workerId}:${randomUUID()}`);
+    if (!admission) return undefined;
+    if (!admission.admitted) return null;
+    const stopOnForceDrain = () => this.stopWorker();
+    admission.reservation.signal.addEventListener("abort", stopOnForceDrain, { once: true });
+    const release = admission.reservation.release.bind(admission.reservation);
+    return {
+      ...admission.reservation,
+      release: () => {
+        admission.reservation.signal.removeEventListener("abort", stopOnForceDrain);
+        release();
+      },
+    };
   }
 
   private publishWorkerFailure(lane: "action" | "observability", error: unknown): void {
@@ -327,6 +384,23 @@ export class ApprovalEffectsService {
     }
     const enqueued: ApprovalEffectRecord[] = [];
     const wakePayload = buildWakePayload(approval, input);
+    if (approval.kind === "skill_hub.lifecycle" && input.decision === "approve") {
+      const intent = materializeApprovedSkillHubIntent(approval);
+      this.ctx.storage.skillHubOperations.createIntent(intent);
+      enqueued.push(
+        this.ctx.storage.approvalEffects.upsert({
+          approvalId: approval.approvalId,
+          effectKind: "skill_hub_lifecycle_apply",
+          targetKind: "skill_hub_operation",
+          targetId: intent.operationId,
+          payload: {
+            operationId: intent.operationId,
+            approvalId: intent.approvalId,
+            requestSha256: intent.requestSha256,
+          },
+        }),
+      );
+    }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -714,6 +788,9 @@ export class ApprovalEffectsService {
       case "pending_action_execute":
         await this.handlePendingActionExecute(effect, signal);
         return;
+      case "skill_hub_lifecycle_apply":
+        await this.handleSkillHubLifecycleApply(effect, signal);
+        return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
         return;
@@ -738,6 +815,46 @@ export class ApprovalEffectsService {
 
   private workerIdForEffect(effect: ApprovalEffectRecord): string {
     return effect.effectKind === "approval_observability" ? this.observabilityWorkerId : this.workerId;
+  }
+
+  private async handleSkillHubLifecycleApply(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
+    const execute = this.deps.executeApprovedSkillHubLifecycleOperation;
+    const operationId = asOptionalString(effect.payload.operationId);
+    const approvalId = asOptionalString(effect.payload.approvalId);
+    const requestSha256 = asOptionalString(effect.payload.requestSha256);
+    if (!execute || !operationId || !approvalId || !requestSha256) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Skill Hub lifecycle effect is missing its executor or immutable operation identity.",
+        result: { operationId, approvalId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = await execute(operationId, approvalId, requestSha256, signal);
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            operationId,
+            settlementId: applied.settlement.settlementId,
+            disposition: applied.settlement.disposition,
+            resultSha256: applied.settlement.resultSha256,
+            replayed: applied.replayed,
+          },
+        },
+      );
+      if (!completed) throw new Error(`Skill Hub lifecycle effect ${effect.effectId} lost its completion lease.`);
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        operationId,
+        approvalId,
+      });
+    }
   }
 
   private async handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void> {
@@ -1208,26 +1325,47 @@ export class ApprovalEffectsService {
         typeof pendingAction.request?.runId === "string" && pendingAction.request.runId.trim()
           ? pendingAction.request.runId.trim()
           : undefined;
-      this.ctx.publishRealtime(
-        "approval_effect_deferred",
-        "approvals",
+      const deferredReason = "Code Mode execution claim is still active; retry is scheduled.";
+      this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        new Error(deferredReason),
         {
-          approvalId: effect.approvalId,
-          effectKind: effect.effectKind,
-          targetId: effect.targetId,
+          deliveryState: "retry_scheduled",
           actionType: pendingAction.actionType,
+          approvalId: effect.approvalId,
+          ...(codeModeRunId ? { runId: codeModeRunId } : {}),
           reason: "code_mode_run_already_claimed",
           resolutionStatus: refreshedPendingAction?.resolutionStatus ?? pendingAction.resolutionStatus ?? "pending",
         },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: effect.approvalId,
-            ...(codeModeRunId ? { runId: codeModeRunId } : {}),
-          },
-        },
+        APPROVAL_EFFECT_CODE_MODE_CLAIM_RETRY_MS,
       );
+      try {
+        this.ctx.publishRealtime(
+          "approval_effect_deferred",
+          "approvals",
+          {
+            approvalId: effect.approvalId,
+            effectKind: effect.effectKind,
+            targetId: effect.targetId,
+            actionType: pendingAction.actionType,
+            reason: "code_mode_run_already_claimed",
+            resolutionStatus: refreshedPendingAction?.resolutionStatus ?? pendingAction.resolutionStatus ?? "pending",
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: {
+              approvalId: effect.approvalId,
+              ...(codeModeRunId ? { runId: codeModeRunId } : {}),
+            },
+          },
+        );
+      } catch (diagnosticError) {
+        void diagnosticError;
+        // The durable effect retry is authoritative. A retained-stream
+        // diagnostic failure must not terminalize or strand the pending action.
+      }
       return;
     }
 
@@ -1409,8 +1547,15 @@ export class ApprovalEffectsService {
           .listByTurn(inlineApproval.turnId)
           .find((candidate) => candidate.approvalId === effect.approvalId);
         if (toolRun && toolRun.status !== "executed") {
+          const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "completed" });
           this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
             status: "executed",
+            effectPotential: "unknown",
+            effectDisposition: settlement.disposition,
+            effectOutcomeKind: settlement.outcomeKind,
+            effectEvidence: settlement.evidence,
+            failureGuidance:
+              "Approved execution completed without a canonical effect receipt. Inspect external or runtime state before retrying or running it again.",
             result: toolResult,
             finishedAt: now,
           });
@@ -1710,8 +1855,15 @@ export class ApprovalEffectsService {
         .listByTurn(currentTrace.turnId)
         .find((candidate) => candidate.approvalId === input.approvalId);
       if (toolRun && toolRun.status !== "failed") {
+        const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "dispatch_failed" });
         this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
+          effectPotential: "unknown",
+          effectDisposition: settlement.disposition,
+          effectOutcomeKind: settlement.outcomeKind,
+          effectEvidence: settlement.evidence,
+          failureGuidance:
+            "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
           result: input.toolResult,
           error: input.failure.message,
           finishedAt: input.now,
@@ -2995,6 +3147,17 @@ function readStoredApprovedActionExecutionFailure(
     asOptionalString(actionRecord.reason) ??
     asOptionalString(actionRecord.error) ??
     "Approved action could not execute.";
+  const executionRecovery = asRecord(actionRecord.executionRecovery);
+  if (
+    actionRecord.manualReconciliationRequired === true ||
+    executionRecovery?.disposition === "manual_reconciliation"
+  ) {
+    return {
+      message: policyReason,
+      kind: "manual_reconciliation",
+      manualReconciliationRequired: true,
+    };
+  }
   const result = asRecord(actionRecord.result);
   const domainFailure = result ? readToolDomainExecutionFailure(result, policyReason) : undefined;
   if (domainFailure) {

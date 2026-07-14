@@ -212,13 +212,24 @@ describe("gateway route service facades", () => {
     const port = createWorkspacesRoutePort({
       storage: {
         workspaces: {
-          archive: fn((workspaceId: string) => ({ workspaceId, name: "Archived", slug: "archived" })),
+          archiveWithRevision: fn((workspaceId: string, expectedRevision: number) => ({
+            workspaceId,
+            revision: expectedRevision + 1,
+            name: "Archived",
+            slug: "archived",
+          })),
           create: fn((input: { name: string }) => ({ workspaceId: "workspace-1", name: input.name, slug: "ops" })),
           get: fn((workspaceId: string) => ({ workspaceId, name: "Ops", slug: "ops" })),
           list: fn((view: string, limit: number) => [{ view, limit }]),
-          restore: fn((workspaceId: string) => ({ workspaceId, name: "Restored", slug: "restored" })),
-          update: fn((workspaceId: string, input: { name?: string }) => ({
+          restoreWithRevision: fn((workspaceId: string, expectedRevision: number) => ({
             workspaceId,
+            revision: expectedRevision + 1,
+            name: "Restored",
+            slug: "restored",
+          })),
+          updateWithRevision: fn((workspaceId: string, input: { name?: string }, expectedRevision: number) => ({
+            workspaceId,
+            revision: expectedRevision + 1,
             name: input.name ?? "Ops",
             slug: "ops",
           })),
@@ -238,9 +249,9 @@ describe("gateway route service facades", () => {
     const service = createWorkspacesRouteService(port);
 
     expect(service.createWorkspace({ name: "Ops" } as never)).toMatchObject({ workspaceId: "workspace-1" });
-    expect(service.archiveWorkspace("workspace-1")).toMatchObject({ workspaceId: "normalized:workspace-1" });
-    expect(service.restoreWorkspace("workspace-1")).toMatchObject({ workspaceId: "normalized:workspace-1" });
-    expect(service.updateWorkspace("workspace-1", { name: "Ops 2" } as never)).toMatchObject({
+    expect(service.archiveWorkspace("workspace-1", 2)).toMatchObject({ workspaceId: "normalized:workspace-1" });
+    expect(service.restoreWorkspace("workspace-1", 3)).toMatchObject({ workspaceId: "normalized:workspace-1" });
+    expect(service.updateWorkspace("workspace-1", { name: "Ops 2" } as never, 4)).toMatchObject({
       workspaceId: "normalized:workspace-1",
       name: "Ops 2",
     });
@@ -274,12 +285,22 @@ describe("gateway route service facades", () => {
       storage: {
         gatewaySql: { prepare: vi.fn() },
         workspaces: {
-          archive: fn((workspaceId: string) => ({ workspaceId })),
+          archiveWithRevision: fn((workspaceId: string, expectedRevision: number) => ({
+            workspaceId,
+            expectedRevision,
+          })),
           create: fn((input: unknown) => ({ workspaceId: "workspace-1", input })),
           get: fn((workspaceId: string) => ({ workspaceId })),
           list: fn(() => []),
-          restore: fn((workspaceId: string) => ({ workspaceId })),
-          update: fn((workspaceId: string, input: unknown) => ({ workspaceId, input })),
+          restoreWithRevision: fn((workspaceId: string, expectedRevision: number) => ({
+            workspaceId,
+            expectedRevision,
+          })),
+          updateWithRevision: fn((workspaceId: string, input: unknown, expectedRevision: number) => ({
+            workspaceId,
+            input,
+            expectedRevision,
+          })),
         },
       },
       llmService: {
@@ -325,10 +346,6 @@ describe("gateway route service facades", () => {
       updateFeatureFlags: fn((patch: unknown) => ({ patch })),
       assertDeploymentProfileUpdate: fn((input: unknown) => ({ input })),
       assertFirecrawlRuntimeUpdate: fn((input: unknown) => ({ input })),
-      persistAssistantConfig: fn(() => undefined),
-      persistBudgetsConfig: fn(() => undefined),
-      persistLlmConfig: fn(() => undefined),
-      persistToolPolicyConfig: fn(() => undefined),
       getSession: fn((sessionId: string) => ({ sessionId })),
       invokeAndUnwrap: fn((request: unknown, realtimeType?: string) => ({ request, realtimeType })),
     };
@@ -345,7 +362,10 @@ describe("gateway route service facades", () => {
 
     const workspaces = createWorkspacesRoutePortForGateway(gateway as never);
     expect(workspaces.createWorkspace({ name: "Ops" } as never)).toMatchObject({ workspaceId: "workspace-1" });
-    expect(workspaces.archiveWorkspace(" workspace-1 ")).toEqual({ workspaceId: "workspace-1" });
+    expect(workspaces.archiveWorkspace(" workspace-1 ", 9)).toEqual({
+      workspaceId: "workspace-1",
+      expectedRevision: 9,
+    });
     await expect(workspaces.listGlobalGuidance()).resolves.toEqual([]);
     await expect(workspaces.listWorkspaceGuidance("workspace-1")).resolves.toEqual({
       workspaceId: "workspace-1",
@@ -368,14 +388,6 @@ describe("gateway route service facades", () => {
       input: { deploymentProfile: "local" },
     });
     expect(runtime.assertFirecrawlRuntimeUpdate({ enabled: true })).toEqual({ input: { enabled: true } });
-    runtime.persistAssistantConfig();
-    runtime.persistBudgetsConfig();
-    runtime.persistLlmConfig();
-    runtime.persistToolPolicyConfig();
-    expect(gateway.persistAssistantConfig).toHaveBeenCalledTimes(1);
-    expect(gateway.persistBudgetsConfig).toHaveBeenCalledTimes(1);
-    expect(gateway.persistLlmConfig).toHaveBeenCalledTimes(1);
-    expect(gateway.persistToolPolicyConfig).toHaveBeenCalledTimes(1);
 
     const auth = createSettingsAuthRuntimeDependenciesForGateway(gateway as never);
     expect(auth.createApproval({ kind: "runtime" } as never)).toEqual({

@@ -43,6 +43,7 @@ import {
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import {
+  enforcePreparedRoutedContextOrchestrationBypass,
   resolvePreparedTurnMode,
   type ChatTurnPrepHost,
   type PreparedAgentChatTurn,
@@ -55,6 +56,7 @@ import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
+import { persistInitialChatTurnTrace, persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnLeaseControl,
@@ -280,9 +282,11 @@ export async function agentSendChatMessage(
         { abortSignal: options?.abortSignal },
       );
     }
-    const modeOrchestration = requireDurableExecution
-      ? undefined
-      : await host.resolvePreparedTurnOrchestration(prepared);
+    const routedContextOrchestrationBypassed = enforcePreparedRoutedContextOrchestrationBypass(prepared);
+    const modeOrchestration =
+      requireDurableExecution || routedContextOrchestrationBypassed
+        ? undefined
+        : await host.resolvePreparedTurnOrchestration(prepared);
     if (modeOrchestration) {
       host.recordDevDiagnostic({
         level: "info",
@@ -448,30 +452,59 @@ async function runAgentSendChatMessageLlmPath(
     : undefined;
   try {
     options?.assertDispatchOwnership?.();
+    const admit = () => {
+      persistPreparedChatCapabilityAdmission(host.storage, prepared);
+      persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+    };
+    if (typeof host.storage.runImmediateTransaction === "function") {
+      host.storage.runImmediateTransaction(admit);
+    } else {
+      if (prepared.capabilityProfile) {
+        throw new Error("Chat capability admission requires a storage transaction boundary.");
+      }
+      admit();
+    }
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
       sessionId,
       turnId,
       userMessageId: prepared.userEventId,
+      ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
       parentTurnId: prepared.parentTurnId,
       branchKind: prepared.branchKind,
       sourceTurnId: prepared.sourceTurnId,
       content: prepared.content,
-      mode,
-      providerId: input.providerId ?? prepared.prefs.providerId,
-      model: input.model ?? prepared.prefs.model,
-      webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-      memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-      thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-      speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-      subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
+      mode: prepared.capabilityProfile?.selection.mode ?? mode,
+      providerId:
+        prepared.capabilityProfile?.selection.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
+      model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+      webMode: prepared.capabilityProfile?.selection.webMode ?? prepared.normalized.webMode ?? prepared.prefs.webMode,
+      memoryMode:
+        prepared.capabilityProfile?.selection.memory.mode ??
+        prepared.normalized.memoryMode ??
+        prepared.prefs.memoryMode,
+      retrievalMode: prepared.capabilityProfile?.selection.memory.retrievalMode ?? prepared.autonomy.retrievalMode,
+      thinkingLevel:
+        prepared.capabilityProfile?.selection.thinkingLevel ??
+        prepared.normalized.thinkingLevel ??
+        prepared.prefs.thinkingLevel,
+      speedMode:
+        prepared.capabilityProfile?.selection.speedMode ?? prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+      subagentPolicy:
+        prepared.capabilityProfile?.selection.subagentPolicy ??
+        prepared.normalized.subagentPolicy ??
+        prepared.prefs.subagentPolicy,
       normalizationProfile: prepared.normalized.normalizationProfile,
-      toolAutonomy: prepared.effectiveToolAutonomy,
-      operatorId: input.operatorId,
-      authActorId: input.authActorId,
-      authActorSource: input.authActorSource,
-      permissionProfileId: input.permissionProfileId,
-      localOperatorOverrideId: input.localOperatorOverrideId,
+      toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
+      operatorId: prepared.capabilityProfile ? prepared.capabilityProfile.identity.operatorId : input.operatorId,
+      authActorId: prepared.capabilityProfile ? prepared.capabilityProfile.identity.authActorId : input.authActorId,
+      authActorSource: prepared.capabilityProfile
+        ? prepared.capabilityProfile.identity.authActorSource
+        : input.authActorSource,
+      permissionProfileId: prepared.capabilityProfile?.governance.permission.profileId ?? input.permissionProfileId,
+      localOperatorOverrideId: prepared.capabilityProfile
+        ? prepared.capabilityProfile.governance.permission.localOperatorOverrideId
+        : input.localOperatorOverrideId,
       policyRunId: input.policyRunId,
       policyTaskId: input.policyTaskId,
       fullWebAccess: input.fullWebAccess,
@@ -479,6 +512,9 @@ async function runAgentSendChatMessageLlmPath(
       outputMessageId: prepared.assistantMessageId,
       modelRouter: prepared.modelRouterDecision,
       signal: controller.signal,
+      capabilityProfile: prepared.capabilityProfile,
+      capabilityProfileContent: prepared.capabilityProfileContent,
+      compactionDimensionHash: prepared.compactionDimensionHash,
     });
     assertChatTurnCompletionWritable(host, prepared.turnId, controller.signal, [turnResult.turnTrace.status]);
     let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
@@ -489,6 +525,7 @@ async function runAgentSendChatMessageLlmPath(
 
     const shouldAttemptReflection =
       prepared.autonomy.reflectionMode === "on" &&
+      !prepared.capabilityProfile &&
       prepared.prefs.planningMode !== "advisory" &&
       !controller.signal.aborted &&
       !turnResult.requiresApproval &&
@@ -532,6 +569,7 @@ async function runAgentSendChatMessageLlmPath(
         sessionId,
         turnId: retryTurnId,
         userMessageId: prepared.userEventId,
+        ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
         parentTurnId: prepared.parentTurnId,
         branchKind: "retry",
         sourceTurnId: turnId,
@@ -541,6 +579,7 @@ async function runAgentSendChatMessageLlmPath(
         model: input.model ?? prepared.prefs.model,
         webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
         memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+        retrievalMode: prepared.autonomy.retrievalMode,
         thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
         speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
         subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
@@ -558,6 +597,7 @@ async function runAgentSendChatMessageLlmPath(
         outputMessageId: prepared.assistantMessageId,
         modelRouter: prepared.modelRouterDecision,
         signal: controller.signal,
+        compactionDimensionHash: prepared.compactionDimensionHash,
       });
       assertChatTurnCompletionWritable(host, retryTurnId, controller.signal, [retryResult.turnTrace.status]);
       if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {
@@ -699,7 +739,23 @@ async function runAgentSendChatMessageLlmPath(
           role: "assistant",
           content: assistantText,
         },
-        usage: assistantUsage,
+        usage:
+          assistantUsage || (turnResult.modelUsageEventIds?.length ?? 0) > 0
+            ? {
+                ...assistantUsage,
+                ...(turnResult.modelUsageEventIds?.length
+                  ? {
+                      canonicalUsageEventIds: turnResult.modelUsageEventIds,
+                      canonicalUsageOwner: {
+                        workspaceId: prepared.workspaceId,
+                        sessionId,
+                        turnId,
+                        ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
+                      },
+                    }
+                  : {}),
+              }
+            : undefined,
       },
       {
         onCommit: () => {
@@ -1057,6 +1113,7 @@ export async function retryChatTurn(
       localOperatorOverrideId: overrides.localOperatorOverrideId,
       policyRunId: overrides.policyRunId,
       policyTaskId: overrides.policyTaskId,
+      contextRefs: overrides.contextRefs,
     };
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
       action: "retry",
@@ -1150,6 +1207,7 @@ export async function* retryChatTurnStream(
         localOperatorOverrideId: overrides.localOperatorOverrideId,
         policyRunId: overrides.policyRunId,
         policyTaskId: overrides.policyTaskId,
+        contextRefs: overrides.contextRefs,
       };
       const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
         action: "retry",

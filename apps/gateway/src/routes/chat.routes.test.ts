@@ -640,7 +640,7 @@ describe("chat routes additional coverage", () => {
 
     const response = await app.inject({
       method: "DELETE",
-      url: "/api/v1/chat/sessions/sess-1",
+      url: "/api/v1/chat/sessions/sess-1?mode=hard&expectedRevision=1",
     });
 
     expect(response.statusCode).toBe(200);
@@ -648,7 +648,7 @@ describe("chat routes additional coverage", () => {
       deleted: true,
       sessionId: "sess-1",
     });
-    expect(deleteChatSession).toHaveBeenCalledWith("sess-1");
+    expect(deleteChatSession).toHaveBeenCalledWith("sess-1", 1);
   });
 
   it("streams branch-aware chat message chunks over SSE", async () => {
@@ -1368,11 +1368,15 @@ describe("chat routes additional coverage", () => {
       method: "PATCH",
       url: "/api/v1/chat/sessions/sess-1/prefs",
       payload: {
+        expectedRevision: 1,
         planningMode: "advisory",
       },
     });
     expect(prefsResponse.statusCode).toBe(200);
-    expect(updateChatSessionPrefs).toHaveBeenCalledWith("sess-1", { planningMode: "advisory" });
+    expect(updateChatSessionPrefs).toHaveBeenCalledWith("sess-1", {
+      expectedRevision: 1,
+      planningMode: "advisory",
+    });
   });
 
   it("accepts attachment payloads larger than Fastify's default JSON body limit", async () => {

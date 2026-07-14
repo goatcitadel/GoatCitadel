@@ -221,7 +221,7 @@ describe("Gateway Services B loop 30 coverage", () => {
     );
   });
 
-  it("fails approval explanations when the model call exceeds the configured timeout", async () => {
+  it("surfaces dispatch uncertainty when the model call ignores the timeout abort", async () => {
     vi.useFakeTimers();
     const ctx = createApprovalHarness({
       timeoutMs: 25,
@@ -229,13 +229,15 @@ describe("Gateway Services B loop 30 coverage", () => {
     });
 
     const pending = ctx.service.explainApproval(approval);
+    const expectation = expect(pending).rejects.toMatchObject({
+      name: "ModelUsageDispatchUncertainError",
+      message: expect.stringContaining("provider abort was not acknowledged"),
+    });
     await vi.advanceTimersByTimeAsync(25);
-    await pending;
+    await expectation;
 
-    expect(ctx.setExplanationFailed).toHaveBeenCalledWith("approval-loop30", "approval explainer timed out");
-    expect(ctx.publishRealtime).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", error: "approval explainer timed out" }),
-    );
+    expect(ctx.setExplanationFailed).not.toHaveBeenCalled();
+    expect(ctx.publishRealtime).not.toHaveBeenCalled();
   });
 
   it("reports keychain status and unavailable status without exposing secret-store failures", () => {

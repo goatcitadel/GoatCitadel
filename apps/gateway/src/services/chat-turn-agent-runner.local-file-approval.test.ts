@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ChatCompletionResponse, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
-import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
+  createMockStorage,
+  createToolCatalog,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner local file approval behavior", () => {
   it("turns local file access follow-ups into an approval-producing filesystem probe", async () => {

@@ -7,6 +7,7 @@ vi.mock("node:sqlite", () => ({
 
 import { GatewayService } from "./gateway-service.js";
 import { McpServerStore } from "./mcp-server-store.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const settings = new Map<string, unknown>();
@@ -15,6 +16,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     backgroundTasks: new Set<Promise<unknown>>(),
     chatMessageProjectionBackfillAttempted: new Set<string>(),
     closing: false,
+    sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
     config: {
       rootDir: "F:/code/personal-ai",
       assistant: {

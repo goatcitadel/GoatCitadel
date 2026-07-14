@@ -6,18 +6,24 @@ import type {
   SkillRuntimeState,
   SkillStateRecord,
 } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
-const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
+const SKILL_ACTIVATION_POLICY_AGGREGATE_ID = "global";
+const DEFAULT_SKILL_ACTIVATION_POLICY: Omit<SkillActivationPolicy, "revision"> = {
   guardedAutoThreshold: 0.72,
   requireFirstUseConfirmation: true,
 };
 
+type SkillActivationPolicyPatch = Partial<Omit<SkillActivationPolicy, "revision">>;
+type PersistedSkillState = Omit<SkillStateRecord, "revision" | "pinned" | "usageCount" | "lastUsedAt">;
+
 export interface SkillStateServiceCtx {
   gatewaySql: Storage["gatewaySql"];
   systemSettings: Pick<Storage["systemSettings"], "get" | "set">;
+  skillAggregateRevisions: Storage["skillAggregateRevisions"];
 }
 
 /**
@@ -55,7 +61,19 @@ export class SkillStateService {
   ) {}
 
   readSkillStates(): Map<string, SkillStateRecord> {
-    const rows = toSkillStateRows(
+    const rows = this.readPersistedSkillStates();
+    const metadata = this.readSkillStateMetadata();
+
+    return new Map(
+      [...rows.values()].map((row) => {
+        const revision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", row.skillId).revision;
+        return [row.skillId, this.decorateSkillState(row, revision, metadata)] as const;
+      }),
+    );
+  }
+
+  private readPersistedSkillStates(): Map<string, PersistedSkillState> {
+    const rows = toPersistedSkillStateRows(
       this.ctx.gatewaySql
         .prepare(
           `
@@ -65,19 +83,7 @@ export class SkillStateService {
         )
         .all(),
     );
-    const metadata = this.readSkillStateMetadata();
-
-    return new Map(
-      rows.map((row) => [
-        row.skillId,
-        {
-          ...row,
-          pinned: metadata[row.skillId]?.pinned,
-          usageCount: metadata[row.skillId]?.usageCount,
-          lastUsedAt: metadata[row.skillId]?.lastUsedAt,
-        },
-      ]),
-    );
+    return new Map(rows.map((row) => [row.skillId, row]));
   }
 
   ensureSkillStates(skillIds: string[]): void {
@@ -95,19 +101,110 @@ export class SkillStateService {
         note: null,
         updatedAt: now,
       });
+      this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId, now);
     }
   }
 
-  setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord {
+  setSkillState(
+    skillId: string,
+    state: SkillRuntimeState,
+    note: string | undefined,
+    expectedRevision: number,
+  ): SkillStateRecord {
     const knownSkill = this.host.listSkills().find((skill) => skill.skillId === skillId);
     if (!knownSkill) {
-      throw new Error(`Unknown skill: ${skillId}`);
-    }
-    const currentState = this.readSkillStates().get(skillId);
-    if (currentState?.pinned && currentState.state !== state) {
-      throw new Error(`Pinned skill ${skillId} cannot be changed directly; create a skill mutation proposal first.`);
+      throw new NotFoundError({ entity: "skill", id: skillId });
     }
     const now = new Date().toISOString();
+    const normalizedNote = normalizeSkillStateNote(note);
+    const result = this.ctx.skillAggregateRevisions.runWithRevision(
+      "runtime_skill",
+      skillId,
+      expectedRevision,
+      () => {
+        const currentState = this.readPersistedSkillStates().get(skillId);
+        this.assertSkillStateMutationAllowed(skillId, state, currentState);
+        if (currentState && currentState.state === state && currentState.note === normalizedNote) {
+          return { value: currentState, changed: false };
+        }
+        const next = this.persistSkillState(skillId, state, normalizedNote, currentState, now);
+        this.recordSkillStateEvent(skillId, state, normalizedNote, now);
+        return { value: next, changed: true };
+      },
+      now,
+    );
+    return this.decorateSkillState(result.value, result.revision, this.readSkillStateMetadata());
+  }
+
+  bulkSetSkillState(
+    skillIds: string[],
+    state: SkillRuntimeState,
+    note: string | undefined,
+    expectedRevisionsBySkillId: Record<string, number>,
+  ): SkillStateRecord[] {
+    const uniqueIds = [...new Set(skillIds)].sort(compareCodeUnits);
+    const knownSkillIds = new Set(this.host.listSkills().map((skill) => skill.skillId));
+    for (const skillId of uniqueIds) {
+      if (!knownSkillIds.has(skillId)) {
+        throw new NotFoundError({ entity: "skill", id: skillId });
+      }
+      if (!Object.prototype.hasOwnProperty.call(expectedRevisionsBySkillId, skillId)) {
+        throw new ValidationError({
+          code: "FIELD_REQUIRED",
+          field: `expectedRevisionsBySkillId.${skillId}`,
+        });
+      }
+    }
+    const unexpectedIds = Object.keys(expectedRevisionsBySkillId).filter((skillId) => !uniqueIds.includes(skillId));
+    if (unexpectedIds.length > 0) {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "expectedRevisionsBySkillId",
+        message: `Unexpected skill revision entries: ${unexpectedIds.sort(compareCodeUnits).join(", ")}`,
+      });
+    }
+
+    const normalizedNote = normalizeSkillStateNote(note);
+    const now = new Date().toISOString();
+    const result = this.ctx.skillAggregateRevisions.runWithRevisions(
+      uniqueIds.map((skillId) => ({
+        aggregateKind: "runtime_skill",
+        aggregateId: skillId,
+        expectedRevision: expectedRevisionsBySkillId[skillId]!,
+      })),
+      () => {
+        const currentStates = this.readPersistedSkillStates();
+        for (const skillId of uniqueIds) {
+          this.assertSkillStateMutationAllowed(skillId, state, currentStates.get(skillId));
+        }
+
+        let changed = false;
+        const values = uniqueIds.map((skillId) => {
+          const currentState = currentStates.get(skillId);
+          if (currentState && currentState.state === state && currentState.note === normalizedNote) {
+            return currentState;
+          }
+          changed = true;
+          const next = this.persistSkillState(skillId, state, normalizedNote, currentState, now);
+          this.recordSkillStateEvent(skillId, state, normalizedNote, now);
+          return next;
+        });
+        return { value: values, changed };
+      },
+      now,
+    );
+    const revisionsBySkillId = new Map(result.revisions.map((item) => [item.aggregateId, item.revision]));
+    const metadata = this.readSkillStateMetadata();
+    return result.value.map((item) => this.decorateSkillState(item, revisionsBySkillId.get(item.skillId)!, metadata));
+  }
+
+  private persistSkillState(
+    skillId: string,
+    state: SkillRuntimeState,
+    note: string | undefined,
+    current: PersistedSkillState | undefined,
+    now: string,
+  ): PersistedSkillState {
     this.ctx.gatewaySql
       .prepare(
         `
@@ -122,10 +219,25 @@ export class SkillStateService {
       .run({
         skillId,
         state,
-        note: note?.trim() || null,
+        note: note ?? null,
         updatedAt: now,
       });
 
+    return {
+      skillId,
+      state,
+      note,
+      updatedAt: now,
+      firstAutoApprovedAt: current?.firstAutoApprovedAt,
+    };
+  }
+
+  private recordSkillStateEvent(
+    skillId: string,
+    state: SkillRuntimeState,
+    note: string | undefined,
+    now: string,
+  ): void {
     this.ctx.gatewaySql
       .prepare(
         `
@@ -140,25 +252,36 @@ export class SkillStateService {
         eventId: randomUUID(),
         skillId,
         eventType: "state_updated",
-        payloadJson: JSON.stringify({ state, note: note?.trim() || undefined }),
+        payloadJson: JSON.stringify({ state, note }),
         createdAt: now,
       });
-
-    const updated = this.readSkillStates().get(skillId);
-    if (!updated) {
-      throw new Error(`Failed to persist skill state for ${skillId}`);
-    }
-
-    return updated;
   }
 
-  bulkSetSkillState(skillIds: string[], state: SkillRuntimeState, note?: string): SkillStateRecord[] {
-    const uniqueIds = [...new Set(skillIds)];
-    const updated: SkillStateRecord[] = [];
-    for (const skillId of uniqueIds) {
-      updated.push(this.setSkillState(skillId, state, note));
+  private assertSkillStateMutationAllowed(
+    skillId: string,
+    state: SkillRuntimeState,
+    currentState: PersistedSkillState | undefined,
+  ): void {
+    const pinned = this.readSkillStateMetadata()[skillId]?.pinned === true;
+    if (pinned && currentState?.state !== state) {
+      throw new ConflictError({
+        message: `Pinned skill ${skillId} cannot be changed directly; create a skill mutation proposal first.`,
+      });
     }
-    return updated;
+  }
+
+  private decorateSkillState(
+    row: PersistedSkillState,
+    revision: number,
+    metadata: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>,
+  ): SkillStateRecord {
+    return {
+      ...row,
+      revision,
+      pinned: metadata[row.skillId]?.pinned,
+      usageCount: metadata[row.skillId]?.usageCount,
+      lastUsedAt: metadata[row.skillId]?.lastUsedAt,
+    };
   }
 
   recordSkillUsage(skillIds: string[]): void {
@@ -180,7 +303,17 @@ export class SkillStateService {
   }
 
   getActivationPolicy(): SkillActivationPolicy {
-    const stored = this.ctx.systemSettings.get<SkillActivationPolicy>(SKILL_ACTIVATION_POLICY_SETTING_KEY)?.value;
+    const revision = this.ctx.skillAggregateRevisions.ensure(
+      "activation_policy",
+      SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
+    ).revision;
+    return { revision, ...this.readActivationPolicyValue() };
+  }
+
+  private readActivationPolicyValue(): Omit<SkillActivationPolicy, "revision"> {
+    const stored = this.ctx.systemSettings.get<Partial<SkillActivationPolicy>>(
+      SKILL_ACTIVATION_POLICY_SETTING_KEY,
+    )?.value;
     if (!stored) {
       return { ...DEFAULT_SKILL_ACTIVATION_POLICY };
     }
@@ -193,14 +326,27 @@ export class SkillStateService {
     };
   }
 
-  updateActivationPolicy(input: Partial<SkillActivationPolicy>): SkillActivationPolicy {
-    const current = this.getActivationPolicy();
-    const next: SkillActivationPolicy = {
-      guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
-      requireFirstUseConfirmation: input.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
-    };
-    this.ctx.systemSettings.set(SKILL_ACTIVATION_POLICY_SETTING_KEY, next);
-    return next;
+  updateActivationPolicy(input: SkillActivationPolicyPatch, expectedRevision: number): SkillActivationPolicy {
+    const result = this.ctx.skillAggregateRevisions.runWithRevision(
+      "activation_policy",
+      SKILL_ACTIVATION_POLICY_AGGREGATE_ID,
+      expectedRevision,
+      () => {
+        const current = this.readActivationPolicyValue();
+        const next: Omit<SkillActivationPolicy, "revision"> = {
+          guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
+          requireFirstUseConfirmation: input.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
+        };
+        const changed =
+          next.guardedAutoThreshold !== current.guardedAutoThreshold ||
+          next.requireFirstUseConfirmation !== current.requireFirstUseConfirmation;
+        if (changed) {
+          this.ctx.systemSettings.set(SKILL_ACTIVATION_POLICY_SETTING_KEY, next);
+        }
+        return { value: next, changed };
+      },
+    );
+    return { revision: result.revision, ...result.value };
   }
 
   /**
@@ -255,7 +401,8 @@ export class SkillStateService {
     if (!snapshot || snapshot.skillId !== skillId) {
       return false;
     }
-    this.setSkillState(skillId, snapshot.priorState, snapshot.priorNote);
+    const expectedRevision = this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
+    this.setSkillState(skillId, snapshot.priorState, snapshot.priorNote, expectedRevision);
     return true;
   }
 
@@ -327,16 +474,37 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function toSkillStateRows(value: unknown): SkillStateRecord[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (row): row is SkillStateRecord =>
-          isRecord(row) &&
-          typeof row.skillId === "string" &&
-          typeof row.state === "string" &&
-          (typeof row.note === "string" || row.note === null) &&
-          typeof row.updatedAt === "string" &&
-          (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null),
-      )
-    : [];
+function toPersistedSkillStateRows(value: unknown): PersistedSkillState[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((row) => {
+    if (
+      !isRecord(row) ||
+      typeof row.skillId !== "string" ||
+      (row.state !== "enabled" && row.state !== "sleep" && row.state !== "disabled") ||
+      (typeof row.note !== "string" && row.note !== null) ||
+      typeof row.updatedAt !== "string" ||
+      (typeof row.firstAutoApprovedAt !== "string" && row.firstAutoApprovedAt !== null)
+    ) {
+      return [];
+    }
+    return [
+      {
+        skillId: row.skillId,
+        state: row.state,
+        note: typeof row.note === "string" ? row.note : undefined,
+        updatedAt: row.updatedAt,
+        firstAutoApprovedAt: typeof row.firstAutoApprovedAt === "string" ? row.firstAutoApprovedAt : undefined,
+      },
+    ];
+  });
+}
+
+function normalizeSkillStateNote(note: string | undefined): string | undefined {
+  return note?.trim() || undefined;
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

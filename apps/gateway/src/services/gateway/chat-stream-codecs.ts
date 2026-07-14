@@ -101,6 +101,29 @@ export function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
             toolRun: value.toolRun,
           }
         : undefined;
+    case "tool_activity":
+      return typeof value.turnId === "string" &&
+        typeof value.toolRunId === "string" &&
+        typeof value.toolName === "string" &&
+        typeof value.startedAt === "string" &&
+        typeof value.activityAt === "string" &&
+        Number.isSafeInteger(value.activitySequence) &&
+        Number(value.activitySequence) > 0 &&
+        typeof value.elapsedMs === "number" &&
+        Number.isFinite(value.elapsedMs) &&
+        value.elapsedMs >= 0
+        ? {
+            ...common,
+            type: "tool_activity",
+            turnId: value.turnId,
+            toolRunId: value.toolRunId,
+            toolName: value.toolName,
+            startedAt: value.startedAt,
+            activityAt: value.activityAt,
+            activitySequence: Number(value.activitySequence),
+            elapsedMs: value.elapsedMs,
+          }
+        : undefined;
     case "approval_required": {
       const approval = toChatStreamApprovalRecord(value.approval);
       return typeof value.turnId === "string" && approval

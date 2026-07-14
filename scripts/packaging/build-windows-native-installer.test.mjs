@@ -17,10 +17,7 @@ test("uninstaller payload deletes are guarded by the install marker", () => {
 
   // The destructive long-path PowerShell delete must only run when our marker is present.
   // (Rendered ISS uses single backslashes: \\?\{app}\app .)
-  assert.match(
-    iss,
-    /Remove-Item -LiteralPath '\\\\\?\\\{app\}\\app'[\s\S]*?Check: GoatCitadelInstallMarkerExists/,
-  );
+  assert.match(iss, /Remove-Item -LiteralPath '\\\\\?\\\{app\}\\app'[\s\S]*?Check: GoatCitadelInstallMarkerExists/);
 
   // The marker-guard helpers and code-driven payload removal must be present.
   assert.match(iss, /function GoatCitadelInstallMarkerExists\(\): Boolean;/);
@@ -60,9 +57,7 @@ test("installer updates close the running desktop host without double-restarting
   assert.match(iss, /CloseApplications=force/);
   assert.match(iss, /RestartApplications=no/);
   assert.match(iss, /procedure RegisterExtraCloseApplicationsResources;/);
-  assert.ok(
-    iss.includes("RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\{#MyDesktopExe}'));"),
-  );
+  assert.ok(iss.includes("RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\{#MyDesktopExe}'));"));
   assert.match(iss, /Flags: nowait postinstall skipifsilent/);
   assert.match(iss, /procedure StopExistingGoatCitadelPayloadProcesses\(\);/);
   assert.match(iss, /param\(\$payloadRoot\)/);
@@ -87,4 +82,23 @@ test("uninstall stops the packaged runtime before removing its payload", () => {
     iss,
     /if CurUninstallStep = usUninstall then[\s\S]*?StopExistingGoatCitadelRuntime\(\);[\s\S]*?StopExistingGoatCitadelPayloadProcesses\(\);[\s\S]*?RemoveGoatCitadelPayload\(\);/,
   );
+});
+
+test("installer consumes only the exact adjacent release-evidence files", () => {
+  const iss = renderSample();
+
+  assert.ok(
+    iss.includes(
+      String.raw`Source: "{src}\release-evidence\release-certificate.json"; DestDir: "{app}\app\release-evidence"; Flags: external skipifsourcedoesntexist`,
+    ),
+  );
+  assert.ok(
+    iss.includes(
+      String.raw`Source: "{src}\release-evidence\release-certificate.sigstore.json"; DestDir: "{app}\app\release-evidence"; Flags: external skipifsourcedoesntexist`,
+    ),
+  );
+  assert.doesNotMatch(iss, /release-evidence\\\*/);
+  assert.doesNotMatch(iss, /release-evidence\\(?:release-assets|proof-bundle)/);
+  assert.doesNotMatch(iss, /recursesubdirs/);
+  assert.match(iss, /standalone installer remains usable but truthfully reports[\s\S]*proof unverified/);
 });

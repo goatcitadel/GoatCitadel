@@ -24,6 +24,27 @@ describe("chat stream codecs", () => {
     });
   });
 
+  it("decodes retained tool-activity evidence and rejects invalid sequences", () => {
+    const activity = {
+      type: "tool_activity",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      eventId: "event-tool-activity-1",
+      sequence: 4,
+      runId: "run-1",
+      toolRunId: "tool-run-1",
+      toolName: "session.status",
+      startedAt: "2026-07-13T08:00:00.000Z",
+      activityAt: "2026-07-13T08:00:05.000Z",
+      activitySequence: 1,
+      elapsedMs: 5_000,
+    } as const;
+
+    expect(toChatStreamChunk(activity)).toEqual(activity);
+    expect(toChatStreamChunk({ ...activity, activitySequence: 0 })).toBeUndefined();
+    expect(toChatStreamChunk({ ...activity, elapsedMs: -1 })).toBeUndefined();
+  });
+
   it("decodes persisted user-input prompts without weakening their record shape", () => {
     const prompt = {
       promptId: "prompt-1",

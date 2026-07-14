@@ -130,6 +130,49 @@ describe("chat-route-resolution", () => {
     expect(result.degradedReason).toContain("local to cloud");
   });
 
+  it("freezes cross-provider fallback off when capability admission is resolved", async () => {
+    const host = createHost({
+      runtime: { activeProviderId: "ollama", activeModel: "llama3.2" },
+      fallbacks: [{ providerId: "openai", model: "gpt-5.4-mini" }],
+    }) as ReturnType<typeof createHost> & { resolveCapabilityPreflight: ReturnType<typeof vi.fn> };
+    host.resolveCapabilityPreflight = vi.fn(async () => ({
+      schemaVersion: "chat.turn.capability-profile.v1",
+      fingerprint: "a".repeat(64),
+      contentHash: "b".repeat(64),
+      providerId: "ollama",
+      model: "llama3.2",
+      fallbackCount: 0,
+      selectedTools: [],
+      trustedSkills: [],
+      memory: {
+        mode: "auto",
+        retrievalMode: "standard",
+        workspaceId: "default",
+        sessionId: "session-1",
+        contextManifestRef: `chat-memory-scope:${"c".repeat(64)}`,
+        writeApprovalRequired: true,
+      },
+      approval: {
+        mode: "approve_all",
+        selectedToolCount: 0,
+        toolsRequiringApproval: [],
+        approvalGranted: false,
+      },
+      authReadiness: [],
+      blockedReasons: [],
+    }));
+
+    const result = await preflightChatRoute(host as never, "session-1", {
+      action: "send",
+      content: "Use only the frozen route.",
+    });
+
+    expect(result.fallbackPolicy).toBe("off");
+    expect(result.fallbackResult).toBe("not_applicable");
+    expect(result.capabilityProfile?.fallbackCount).toBe(0);
+    expect(result.decision.capabilityFingerprint).toBe("a".repeat(64));
+  });
+
   it("blocks when a local runtime is unreachable during preflight", async () => {
     const host = createHost({
       runtime: {

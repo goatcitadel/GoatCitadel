@@ -1,11 +1,13 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ChatCompletionRequest, ChatMessageRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { listMissingTrackedRouteAccessClasses } from "./route-access.js";
 import { withMemoryEmbeddingMetadata } from "../services/memory-embedding-metadata.js";
+import { createUtilityModelUsageAttribution } from "../services/utility-model-usage-attribution.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 const listDiagnosticsQuerySchema = z.object({
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
@@ -441,10 +443,23 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const storage = fastify.services.devVerification.storage;
     const itemId = `mem_${randomUUID().replace(/-/g, "")}`;
     const now = new Date().toISOString();
-    const metadataWithEmbedding = await withMemoryEmbeddingMetadata(
-      parsed.data.metadata ?? {},
-      `${parsed.data.title}\n${parsed.data.content}`,
-    );
+    const requestAbort = createRequestAbortScope(request, reply);
+    let metadataWithEmbedding: Record<string, unknown>;
+    try {
+      metadataWithEmbedding = await withMemoryEmbeddingMetadata(
+        parsed.data.metadata ?? {},
+        `${parsed.data.title}\n${parsed.data.content}`,
+        undefined,
+        {
+          signal: requestAbort.signal,
+          ...(fastify.services.devVerification.acquireLocalEmbeddingLease
+            ? { acquireLocalServiceLease: fastify.services.devVerification.acquireLocalEmbeddingLease }
+            : {}),
+        },
+      );
+    } finally {
+      requestAbort.dispose();
+    }
     storage.db
       .prepare(
         `
@@ -673,10 +688,20 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const startedAt = Date.now();
     try {
       const payload = buildProviderExercisePayload(parsed.data.scenario, parsed.data.providerId, parsed.data.model);
+      const usageAttribution = createUtilityModelUsageAttribution({
+        operationId: `dev-provider-exercise:${encodeURIComponent(request.id)}`,
+        utilityKind: "dev_provider_exercise",
+        requestedProviderId: payload.providerId,
+        requestedModelId: payload.model,
+        lineage: { agentId: "dev-verification" },
+      });
       if (parsed.data.scenario === "stream") {
         let chunkCount = 0;
         let preview = "";
-        for await (const chunk of fastify.services.devVerification.createChatCompletionStream(payload)) {
+        for await (const chunk of fastify.services.devVerification.createChatCompletionStream(
+          payload,
+          usageAttribution,
+        )) {
           chunkCount += 1;
           if (!preview) {
             preview = JSON.stringify(chunk).slice(0, 240);
@@ -693,7 +718,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const result = await fastify.services.devVerification.createChatCompletion(payload);
+      const result = await fastify.services.devVerification.createChatCompletion(payload, usageAttribution);
       const firstChoice = Array.isArray(result.choices) ? result.choices[0] : undefined;
       const content =
         typeof firstChoice?.message?.content === "string"
@@ -708,6 +733,9 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         outputPreview: content.slice(0, 240),
       });
     } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       return reply.send({
         ok: false,
         providerId: parsed.data.providerId,
@@ -719,6 +747,33 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function createRequestAbortScope(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(new Error("dev_verification_memory_seed_client_aborted"));
+    }
+  };
+  request.raw.once("aborted", abort);
+  reply.raw.once("close", abort);
+  if (request.raw.aborted) {
+    abort();
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      request.raw.off("aborted", abort);
+      reply.raw.off("close", abort);
+    },
+  };
+}
 
 function buildProviderExercisePayload(
   scenario: z.infer<typeof providerExerciseSchema>["scenario"],

@@ -7,6 +7,7 @@ import {
 } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -52,6 +53,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
       },
     },
     recordDevDiagnostic: vi.fn(),
+    sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
   });
   Object.assign(gateway, overrides);
   return gateway as GatewayService & Record<string, unknown>;
@@ -255,39 +257,35 @@ describe("GatewayService watchdog facade behavior", () => {
 
 describe("GatewayService maintenance scheduler facade behavior", () => {
   it("runs due scheduler collaborators and skips work while closing", async () => {
-    const runPrivateBetaBackupSchedulerIfDue = vi.fn(async () => undefined);
-    const runMemoryFlushSchedulerIfDue = vi.fn(async () => undefined);
-    const runMemoryConsolidationSchedulerIfDue = vi.fn(async () => undefined);
-    const runCostReportSchedulerIfDue = vi.fn(async () => undefined);
-    const runUpdateReviewSchedulerIfDue = vi.fn(async () => undefined);
+    const maybeRunIdleCurator = vi.fn(async () => undefined);
+    const drainInboundChannelEvents = vi.fn(async () => undefined);
     const runDueTaskCronJobs = vi.fn(async () => undefined);
+    const runCommitmentSweep = vi.fn(async () => undefined);
+    const runHeartbeatSweep = vi.fn(async () => undefined);
     const runDueEvaluation = vi.fn(async () => undefined);
     const drainDueChannelDeliveries = vi.fn(async () => []);
     const gateway = createGatewayHarness({
       closing: true,
-      runPrivateBetaBackupSchedulerIfDue,
-      runMemoryFlushSchedulerIfDue,
-      runMemoryConsolidationSchedulerIfDue,
-      runCostReportSchedulerIfDue,
-      runUpdateReviewSchedulerIfDue,
-      curatorService: { runCuratorWeeklyIfDue: vi.fn(async () => undefined) },
+      curatorService: { maybeRunIdleCurator },
+      inboundChannelEventService: { drain: drainInboundChannelEvents },
       cronAutomationService: { runDueTaskCronJobs },
+      runCommitmentSweep,
+      runHeartbeatSweep,
       memoryLifecycleService: { runDueEvaluation },
       drainDueChannelDeliveries,
     });
 
     await (GatewayService.prototype as any).runMaintenanceSchedulerTick.call(gateway);
-    expect(runPrivateBetaBackupSchedulerIfDue).not.toHaveBeenCalled();
+    expect(maybeRunIdleCurator).not.toHaveBeenCalled();
 
     gateway.closing = false;
     await (GatewayService.prototype as any).runMaintenanceSchedulerTick.call(gateway);
 
-    expect(runPrivateBetaBackupSchedulerIfDue).toHaveBeenCalledTimes(1);
-    expect(runMemoryFlushSchedulerIfDue).toHaveBeenCalledTimes(1);
-    expect(runMemoryConsolidationSchedulerIfDue).toHaveBeenCalledTimes(1);
-    expect(runCostReportSchedulerIfDue).toHaveBeenCalledTimes(1);
-    expect(runUpdateReviewSchedulerIfDue).toHaveBeenCalledTimes(1);
+    expect(maybeRunIdleCurator).toHaveBeenCalledTimes(1);
+    expect(drainInboundChannelEvents).toHaveBeenCalledTimes(1);
     expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
+    expect(runCommitmentSweep).toHaveBeenCalledTimes(1);
+    expect(runHeartbeatSweep).toHaveBeenCalledTimes(1);
     expect(runDueEvaluation).toHaveBeenCalledTimes(1);
     expect(drainDueChannelDeliveries).toHaveBeenCalledTimes(1);
   });
@@ -317,6 +315,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       turnId: "turn-current",
       delegatedChild: false,
     });
+    await Promise.allSettled([...gateway.backgroundTasks]);
     expect(noteSuccessfulRootTurn).toHaveBeenCalledWith("session-1");
 
     GatewayService.prototype.scheduleChatMemoryContextPrewarm.call(gateway, {
@@ -330,6 +329,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       prompt: "Summarize the current thread",
       relationScope: "project",
     });
+    await Promise.allSettled([...gateway.backgroundTasks]);
     expect(prewarmContext).toHaveBeenCalledWith({
       scope: "chat",
       sessionId: "session-1",
@@ -356,7 +356,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     expect(prewarmContext).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the completed turn as background-review provenance and skips delegated children", () => {
+  it("uses the completed turn as background-review provenance and skips delegated children", async () => {
     const runBackgroundReview = vi.fn(async () => ({ ran: false }));
     const gateway = createGatewayHarness({
       backgroundReviewService: { runBackgroundReview },
@@ -387,6 +387,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       turnId: "turn-current",
       delegatedChild: false,
     });
+    await Promise.allSettled([...gateway.backgroundTasks]);
     expect(runBackgroundReview).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",

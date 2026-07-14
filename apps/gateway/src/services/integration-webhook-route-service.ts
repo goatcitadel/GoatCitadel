@@ -1,6 +1,10 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const integrationWebhookRouteMethods = [
+  "acceptInboundChannelEvent",
+  "acceptInboundChannelEvents",
+  "awaitInboundChannelCommandResult",
+  "findRemoteActionTokenId",
   "getIntegrationConnection",
   "cancelLatestActiveChatTurnForSession",
   "hasRunningTurn",
@@ -24,6 +28,10 @@ export type IntegrationWebhookPort = IntegrationWebhookRoutePort;
 
 export function createIntegrationWebhookRoutePort(port: IntegrationWebhookPort): IntegrationWebhookRoutePort {
   return {
+    acceptInboundChannelEvent: (...args) => port.acceptInboundChannelEvent(...args),
+    acceptInboundChannelEvents: (...args) => port.acceptInboundChannelEvents(...args),
+    awaitInboundChannelCommandResult: (...args) => port.awaitInboundChannelCommandResult(...args),
+    findRemoteActionTokenId: (...args) => port.findRemoteActionTokenId(...args),
     getIntegrationConnection: (...args) => port.getIntegrationConnection(...args),
     cancelLatestActiveChatTurnForSession: (...args) => port.cancelLatestActiveChatTurnForSession(...args),
     emitChannelActivity: (...args) => port.emitChannelActivity(...args),

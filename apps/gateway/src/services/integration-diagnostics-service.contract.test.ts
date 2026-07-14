@@ -3,6 +3,7 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 
 const runDiscordBotLiveChecksMock = vi.hoisted(() => vi.fn());
 const runIMessageBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
+const runNtfyLiveChecksMock = vi.hoisted(() => vi.fn());
 const runZaloUserBridgeLiveChecksMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel-bot-live-probes.js", () => ({
@@ -10,6 +11,7 @@ vi.mock("./channel-bot-live-probes.js", () => ({
   runIMessageBridgeLiveChecks: runIMessageBridgeLiveChecksMock,
   runLineBotLiveChecks: vi.fn(),
   runMattermostBotLiveChecks: vi.fn(),
+  runNtfyLiveChecks: runNtfyLiveChecksMock,
   runSignalBridgeLiveChecks: vi.fn(),
   runSlackBotLiveChecks: vi.fn(),
   runTelegramBotLiveChecks: vi.fn(),
@@ -97,6 +99,7 @@ describe("integration-diagnostics-service contract behavior", () => {
   beforeEach(() => {
     runDiscordBotLiveChecksMock.mockReset();
     runIMessageBridgeLiveChecksMock.mockReset();
+    runNtfyLiveChecksMock.mockReset();
     runZaloUserBridgeLiveChecksMock.mockReset();
   });
 
@@ -155,6 +158,48 @@ describe("integration-diagnostics-service contract behavior", () => {
         fetcher: expect.any(Function),
       }),
     );
+  });
+
+  it("routes ntfy diagnostics through the single-send governed probe owner", async () => {
+    const host = createPort();
+    const connection = createIntegrationConnection("ntfy", "channel", {
+      baseUrl: "https://ntfy.example.test",
+      topic: "goatcitadel-ops",
+      token: "ntfy-secret",
+      priority: "4",
+      dryRun: true,
+    });
+    runNtfyLiveChecksMock.mockResolvedValue({
+      checks: [],
+      probe: {
+        kind: "ntfy_publish",
+        mode: "dry_run",
+        checkedAt: "2026-07-13T20:00:00.000Z",
+        steps: [{ key: "ntfy_sandbox_send", label: "Sandbox send", status: "skipped", message: "dry-run" }],
+      },
+    });
+
+    const checks = buildIntegrationConnectionChecks(host, connection);
+    const result = await runIntegrationConnectionLiveChecks(host, connection, { includeSandboxSend: true });
+
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "delivery_posture", status: "pass" }),
+        expect.objectContaining({ key: "target", status: "pass" }),
+      ]),
+    );
+    expect(runNtfyLiveChecksMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://ntfy.example.test",
+        topic: "goatcitadel-ops",
+        token: "ntfy-secret",
+        priority: "4",
+        dryRun: true,
+        includeSandboxSend: true,
+        fetcher: expect.any(Function),
+      }),
+    );
+    expect(result.probe).toMatchObject({ kind: "ntfy_publish", mode: "dry_run" });
   });
 
   it("blocks Photon iMessage live checks before BlueBubbles probes", async () => {

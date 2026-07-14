@@ -38,6 +38,7 @@ export interface ApprovedExternalRuntimePendingActionPort {
   invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
     markExternalCallStarted?: () => void,
+    options?: { signal?: AbortSignal },
   ): Promise<ToolInvokeResult>;
 }
 
@@ -82,7 +83,7 @@ export async function executeApprovedExternalRuntimePendingAction(
         );
         return toolInvokeResultFromMcpApproval(policyResult, mcpResult);
       }
-      return port.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted);
+      return port.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted, { signal });
     },
   });
 }

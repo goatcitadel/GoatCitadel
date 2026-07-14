@@ -171,6 +171,103 @@ describe("LlmService model metadata decoration", () => {
     expect(config.activeModelOutputTokenLimit).toBe(32_000);
   });
 
+  it("getModelContextWindow resolves only the exact server-owned route metadata", () => {
+    const manifestPath = writeManifest(tmp, {
+      "anthropic/claude-opus-4-7": { contextWindow: 1_000_000, outputTokenLimit: 32_000 },
+      "openai/gpt-5.4": { contextWindow: 400_000, outputTokenLimit: 16_000 },
+    });
+    const service = new LlmService(buildAnthropicConfig(), process.env, {
+      secretStore: createNoopSecretStore(),
+      modelMetadataPath: manifestPath,
+    });
+
+    expect(service.getModelContextWindow("openai", "gpt-5.4")).toBe(400_000);
+    expect(service.getModelContextWindow("openai", "gpt-missing")).toBeUndefined();
+    expect(service.getModelContextWindow("missing", "claude-opus-4-7")).toBeUndefined();
+  });
+
+  it("fingerprints canonical secret-free endpoint, auth-shape, header-name, proxy, TLS, and model route selectors", () => {
+    const manifestPath = writeManifest(tmp, {
+      "anthropic/claude-opus-4-7": { contextWindow: 1_000_000, outputTokenLimit: 32_000 },
+    });
+    const buildService = (overrides: Partial<LlmConfigFile["providers"][number]> = {}) =>
+      new LlmService(
+        {
+          activeProviderId: "anthropic",
+          activeModel: "claude-opus-4-7",
+          providers: [
+            {
+              providerId: "anthropic",
+              label: "Anthropic",
+              baseUrl: "https://api.anthropic.com/v1",
+              apiStyle: "anthropic-messages",
+              defaultModel: "claude-opus-4-7",
+              apiKeyEnv: "ANTHROPIC_TOKEN",
+              request: {
+                headers: { "X-Tenant": "tenant-secret-a", "X-Trace": "trace-secret-a" },
+                auth: {
+                  type: "bearer",
+                  headerName: "X-Provider-Auth",
+                  token: "raw-provider-secret-a",
+                  tokenEnv: "ANTHROPIC_TOKEN",
+                },
+                proxy: {
+                  url: "https://proxy.example.test/route?token=raw-query-secret-a",
+                  bypassHosts: ["B.example.test", "a.example.test"],
+                  auth: {
+                    type: "header",
+                    headerName: "X-Proxy-Auth",
+                    value: "raw-proxy-secret-a",
+                    valueEnv: "PROXY_TOKEN",
+                  },
+                  tls: { clientCertPath: "proxy-cert.pem", clientKeyPath: "proxy-key.pem" },
+                },
+                tls: { caCertPath: "provider-ca.pem", serverName: "API.ANTHROPIC.COM" },
+              },
+              ...overrides,
+            },
+          ],
+        },
+        process.env,
+        { secretStore: createNoopSecretStore(), modelMetadataPath: manifestPath },
+      );
+    const first = buildService().getProviderRouteConfigFingerprint("anthropic", "claude-opus-4-7");
+    const reorderedWithRotatedRawSecrets = buildService({
+      request: {
+        headers: { "X-Trace": "trace-secret-b", "X-Tenant": "tenant-secret-b" },
+        auth: {
+          type: "bearer",
+          headerName: "x-provider-auth",
+          token: "raw-provider-secret-b",
+          tokenEnv: "ANTHROPIC_TOKEN",
+        },
+        proxy: {
+          url: "https://proxy.example.test/route?token=raw-query-secret-b",
+          bypassHosts: ["a.example.test", "b.example.test"],
+          auth: {
+            type: "header",
+            headerName: "x-proxy-auth",
+            value: "raw-proxy-secret-b",
+            valueEnv: "PROXY_TOKEN",
+          },
+          tls: { clientKeyPath: "proxy-key.pem", clientCertPath: "proxy-cert.pem" },
+        },
+        tls: { serverName: "api.anthropic.com", caCertPath: "provider-ca.pem" },
+      },
+    }).getProviderRouteConfigFingerprint("anthropic", "claude-opus-4-7");
+    const changedAuthShape = buildService({
+      apiKeyEnv: "ANTHROPIC_TOKEN_V2",
+    }).getProviderRouteConfigFingerprint("anthropic", "claude-opus-4-7");
+    const changedEndpoint = buildService({
+      baseUrl: "https://regional.anthropic.example/v1",
+    }).getProviderRouteConfigFingerprint("anthropic", "claude-opus-4-7");
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/u);
+    expect(reorderedWithRotatedRawSecrets).toBe(first);
+    expect(changedAuthShape).not.toBe(first);
+    expect(changedEndpoint).not.toBe(first);
+  });
+
   it("getRuntimeConfig surfaces per-provider metadata for each provider's defaultModel", () => {
     const manifestPath = writeManifest(tmp, {
       "anthropic/claude-opus-4-7": { contextWindow: 1_000_000, outputTokenLimit: 32_000 },

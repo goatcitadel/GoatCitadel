@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ValidationError } from "@goatcitadel/contracts";
 import { dashboardRoutes } from "./dashboard.js";
 
 describe("dashboard route edge coverage", () => {
@@ -26,9 +27,10 @@ describe("dashboard route edge coverage", () => {
         getDashboardState: vi.fn(() => ({ nodeId: "gateway-1", ready: true })),
       },
       settings: {
-        getSettings: vi.fn(() => ({ budgetMode: "balanced" })),
+        getSettings: vi.fn(() => ({ revision: 3, budgetMode: "balanced" })),
         getAuthRuntimeSettings: vi.fn(() => ({ mode: "none" })),
         updateSettings: vi.fn((input: Record<string, unknown>) => ({
+          revision: input.expectedRevision,
           auth: input.auth,
         })),
       },
@@ -41,20 +43,21 @@ describe("dashboard route edge coverage", () => {
 
     response = await app.inject({ method: "GET", url: "/api/v1/settings" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ budgetMode: "balanced" });
+    expect(response.json()).toEqual({ revision: 3, budgetMode: "balanced" });
 
     response = await app.inject({ method: "GET", url: "/api/v1/auth/settings" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ mode: "none" });
+    expect(response.json()).toEqual({ revision: 3, mode: "none" });
 
     response = await app.inject({
       method: "PATCH",
       url: "/api/v1/auth/settings",
-      payload: { mode: "token", token: "secret" },
+      payload: { expectedRevision: 3, mode: "token", token: "secret" },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ mode: "token", token: "secret" });
+    expect(response.json()).toEqual({ revision: 3, mode: "token", token: "secret" });
     expect(services.settings.updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 3,
       auth: { mode: "token", token: "secret" },
     });
   });
@@ -63,7 +66,7 @@ describe("dashboard route edge coverage", () => {
     const services = {
       settings: {
         updateSettings: vi.fn(() => {
-          throw new Error("settings rejected");
+          throw new ValidationError({ message: "settings rejected" });
         }),
       },
     };
@@ -73,13 +76,25 @@ describe("dashboard route edge coverage", () => {
       (await app.inject({ method: "PATCH", url: "/api/v1/settings", payload: { budgetMode: "wrong" } })).statusCode,
     ).toBe(400);
     expect(
-      (await app.inject({ method: "PATCH", url: "/api/v1/settings", payload: { budgetMode: "saver" } })).statusCode,
+      (
+        await app.inject({
+          method: "PATCH",
+          url: "/api/v1/settings",
+          payload: { expectedRevision: 1, budgetMode: "saver" },
+        })
+      ).statusCode,
     ).toBe(400);
     expect(
       (await app.inject({ method: "PATCH", url: "/api/v1/auth/settings", payload: { mode: "wrong" } })).statusCode,
     ).toBe(400);
     expect(
-      (await app.inject({ method: "PATCH", url: "/api/v1/auth/settings", payload: { mode: "basic" } })).statusCode,
+      (
+        await app.inject({
+          method: "PATCH",
+          url: "/api/v1/auth/settings",
+          payload: { expectedRevision: 1, mode: "basic" },
+        })
+      ).statusCode,
     ).toBe(400);
   });
 
@@ -118,7 +133,7 @@ describe("dashboard route edge coverage", () => {
   it("maps cron service errors and validation failures to the existing route statuses", async () => {
     const services = {
       cron: {
-        listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
+        listCronJobs: vi.fn(() => [{ jobId: "job-1", revision: 1 }]),
         getCronJob: vi.fn(() => {
           throw new Error("Cron job not found: missing-job");
         }),
@@ -159,7 +174,7 @@ describe("dashboard route edge coverage", () => {
     app = await createApp(services);
 
     expect((await app.inject({ method: "GET", url: "/api/v1/cron/jobs" })).json()).toEqual({
-      items: [{ jobId: "job-1" }],
+      items: [{ jobId: "job-1", revision: 1 }],
     });
     expect((await app.inject({ method: "GET", url: "/api/v1/cron/jobs/missing-job" })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: "/api/v1/cron/jobs", payload: { jobId: "x" } })).statusCode).toBe(
@@ -178,23 +193,39 @@ describe("dashboard route edge coverage", () => {
       400,
     );
     expect(
-      (await app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/missing-job", payload: { name: "New" } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: "PATCH",
+          url: "/api/v1/cron/jobs/missing-job",
+          payload: { expectedRevision: 1, name: "New" },
+        })
+      ).statusCode,
     ).toBe(404);
     expect(
-      (await app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/missing-job", payload: { action: "wrong" } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: "PATCH",
+          url: "/api/v1/cron/jobs/missing-job",
+          payload: { expectedRevision: 1, action: "wrong" },
+        })
+      ).statusCode,
     ).toBe(400);
     expect((await app.inject({ method: "POST", url: "/api/v1/cron/jobs/bad/start" })).statusCode).toBe(400);
     expect((await app.inject({ method: "POST", url: "/api/v1/cron/jobs/bad/pause" })).statusCode).toBe(400);
     expect((await app.inject({ method: "POST", url: "/api/v1/cron/jobs/missing/run" })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: "/api/v1/cron/jobs/no-handler/run" })).statusCode).toBe(409);
-    expect((await app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/missing" })).statusCode).toBe(404);
-    expect((await app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/deleted" })).json()).toEqual({
+    expect(
+      (await app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/missing?expectedRevision=1" })).statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/deleted?expectedRevision=1" })).json(),
+    ).toEqual({
       deleted: true,
       jobId: "deleted",
     });
-    expect((await app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/system" })).statusCode).toBe(409);
+    expect(
+      (await app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/system?expectedRevision=1" })).statusCode,
+    ).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/v1/cron/review-queue?limit=0" })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: "/api/v1/cron/review-queue" })).statusCode).toBe(409);
     expect((await app.inject({ method: "POST", url: "/api/v1/cron/review-queue/missing/retry" })).statusCode).toBe(404);

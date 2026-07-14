@@ -20,6 +20,7 @@ import type { ApprovalRequest, OrchestrationPlan, OrchestrationRun } from "@goat
 import { GatewayService } from "./gateway-service.js";
 import { MEMORY_CONSOLIDATION_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import * as routeComposition from "./gateway-route-service-composition.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
@@ -27,11 +28,14 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     backgroundTasks: new Set<Promise<unknown>>(),
     closing: false,
     config: {
+      rootDir: "F:/tmp/gc-loop22",
       assistant: {
         mesh: { nodeId: "node-loop22" },
       },
     },
     recordDevDiagnostic: vi.fn(),
+    runtimeReleaseTrustService: { close: vi.fn(async () => undefined), start: vi.fn() },
+    sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
   });
   Object.assign(gateway, overrides);
   return gateway;
@@ -60,43 +64,88 @@ function createRouteDependencyHarness() {
     realtimeEventService: { name: "realtime-event" },
     researchService: { name: "research" },
     runtimeLifecycleReadService: { name: "runtime-lifecycle" },
+    opsSavedBoardRealtimeEpoch: "epoch-loop22",
+    storage: {
+      externalSourceConfigs: {},
+      externalSourceScans: {},
+      governanceJourneyEvents: {},
+      opsSavedBoards: {},
+      workspacePathBridgeSnapshots: {},
+      workspaces: {},
+    },
     taskLifecycleService: { name: "task-lifecycle" },
     toolInvocationCoordinator: { name: "tool-invocation" },
+    workspacePathBridgeRuntime: { service: { name: "workspace-path-bridge" } },
   });
 }
 
 function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
   const gateway = createGatewayHarness({
+    configGenerationService: {
+      getRollbackRuntimeOwnerRecoveryIntent: vi.fn(() => undefined),
+      getRuntimeOwnerRecoveryIntent: vi.fn(() => undefined),
+      isRuntimeOwnerReconciliationPending: vi.fn(() => false),
+      completeRuntimeOwnerReconciliation: vi.fn(async () => undefined),
+    },
+    cronConfigGenerationOwner: {
+      reconcileCommittedGeneration: vi.fn(),
+      reconcileStartupGeneration: vi.fn(async () => []),
+    },
+    cronAutomationService: {
+      recoverPendingAgentTurnCronRuns: vi.fn(async () => ({
+        checkedAt: "2026-07-13T00:00:00.000Z",
+        checkedCount: 0,
+        launchedCount: 0,
+        advancedCount: 0,
+        settledCount: 0,
+        reconciliationCount: 0,
+        staleCount: 0,
+        errors: [],
+      })),
+    },
     approvalEffectsService: { startWorker: vi.fn(), stopWorker: vi.fn() },
+    capabilitySystemService: {
+      reconcileCodeModeFinalTranscriptDeliveries: vi.fn(() => ({
+        checked: 0,
+        enqueued: 0,
+        errors: [],
+        omittedErrors: 0,
+      })),
+    },
     discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
     signalInboundRuntimeService: { stop: vi.fn(), sync: vi.fn() },
     drainDueChannelDeliveries: vi.fn(async () => [{ deliveryId: "delivery-1" }]),
-    durableRunService: { startWorker: vi.fn(), stopWorker: vi.fn() },
-    ensureCostReportCronJob: vi.fn(),
-    ensureMemoryFlushCronJob: vi.fn(),
-    ensureMemoryConsolidationCronJob: vi.fn(),
-    ensurePrivateBetaBackupCronJob: vi.fn(),
-    ensureUpdateReviewCronJob: vi.fn(),
+    durableRunService: {
+      resumeRunsWaitingForAutonomyKillSwitch: vi.fn(),
+      startWorker: vi.fn(),
+      stopWorker: vi.fn(),
+    },
+    ensureCostReportCronJob: vi.fn(async () => undefined),
+    ensureMemoryFlushCronJob: vi.fn(async () => undefined),
+    ensureMemoryConsolidationCronJob: vi.fn(async () => undefined),
+    ensurePrivateBetaBackupCronJob: vi.fn(async () => undefined),
+    ensureUpdateReviewCronJob: vi.fn(async () => undefined),
     eventIngestService: { flushPendingTranscriptOutbox: vi.fn(async () => 1) },
     curatorService: {
-      ensureCuratorWeeklyCronJob: vi.fn(),
+      ensureCuratorWeeklyCronJob: vi.fn(async () => undefined),
     },
     improvementService: {
-      ensureWeeklyImprovementCronJob: vi.fn(),
+      ensureWeeklyImprovementCronJob: vi.fn(async () => undefined),
       markInterruptedDecisionReplayRuns: vi.fn(),
       startScheduler: vi.fn(),
       stopScheduler: vi.fn(),
     },
     llamaCppRuntime: { close: vi.fn(async () => undefined), init: vi.fn(async () => undefined) },
-    loadCronJobsFromConfig: vi.fn(async () => undefined),
+    isFeatureEnabled: vi.fn((flag: string) => flag === "chatTurnInterruptionRecoveryV1Disabled"),
+    mediaVoiceService: { resumeInterruptedMediaJobs: vi.fn() },
     meshService: { init: vi.fn() },
     npuSidecar: { close: vi.fn(async () => undefined), init: vi.fn(async () => undefined) },
-    persistAssistantConfig: vi.fn(),
-    persistLlmConfig: vi.fn(),
     promptPackService: { resumeInterruptedBenchmarkRuns: vi.fn() },
     readFeatureFlags: vi.fn(() => ({ durableKernelV1Enabled: true })),
     startMaintenanceScheduler: vi.fn(),
+    startOrchestrationWorktreeReapScheduler: vi.fn(),
     startProactiveScheduler: vi.fn(),
+    scheduleProviderCatalogPrewarm: vi.fn(),
     storage: {
       realtimeStreamLeases: {
         closeOpenForNode: vi.fn(() => 2),
@@ -171,10 +220,11 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       closeReason: "process_restart",
     });
     expect(gateway.eventIngestService.flushPendingTranscriptOutbox).toHaveBeenCalled();
+    expect(gateway.capabilitySystemService.reconcileCodeModeFinalTranscriptDeliveries).toHaveBeenCalled();
     expect(gateway.drainDueChannelDeliveries).toHaveBeenCalled();
     expect(gateway.discordRuntimeService.sync).toHaveBeenCalled();
     expect(gateway.improvementService.markInterruptedDecisionReplayRuns).toHaveBeenCalled();
-    expect(gateway.loadCronJobsFromConfig).toHaveBeenCalled();
+    expect(gateway.cronConfigGenerationOwner.reconcileStartupGeneration).toHaveBeenCalled();
     expect(gateway.improvementService.ensureWeeklyImprovementCronJob).toHaveBeenCalled();
     expect(gateway.ensurePrivateBetaBackupCronJob).toHaveBeenCalled();
     expect(gateway.ensureMemoryFlushCronJob).toHaveBeenCalled();
@@ -184,14 +234,29 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.meshService.init).toHaveBeenCalled();
     expect(gateway.npuSidecar.init).toHaveBeenCalled();
     expect(gateway.llamaCppRuntime.init).toHaveBeenCalled();
-    expect(gateway.persistLlmConfig).toHaveBeenCalled();
-    expect(gateway.persistAssistantConfig).toHaveBeenCalled();
+    expect(gateway.configGenerationService.completeRuntimeOwnerReconciliation).toHaveBeenCalled();
     expect(gateway.startProactiveScheduler).toHaveBeenCalled();
     expect(gateway.startMaintenanceScheduler).toHaveBeenCalled();
-    expect(gateway.improvementService.startScheduler).toHaveBeenCalled();
+    expect(gateway.startOrchestrationWorktreeReapScheduler).toHaveBeenCalled();
     expect(gateway.durableRunService.startWorker).toHaveBeenCalled();
+    expect(gateway.durableRunService.resumeRunsWaitingForAutonomyKillSwitch).toHaveBeenCalled();
+    expect(gateway.cronAutomationService.recoverPendingAgentTurnCronRuns).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.startWorker).toHaveBeenCalled();
+    expect(gateway.mediaVoiceService.resumeInterruptedMediaJobs).toHaveBeenCalled();
     expect(gateway.promptPackService.resumeInterruptedBenchmarkRuns).toHaveBeenCalled();
+    expect(gateway.scheduleProviderCatalogPrewarm).toHaveBeenCalled();
+  });
+
+  it("reconciles a committed cron generation before clearing the startup marker", async () => {
+    const gateway = createDeferredInitHarness();
+    gateway.configGenerationService.isRuntimeOwnerReconciliationPending.mockReturnValue(true);
+
+    await (GatewayService.prototype as any).runDeferredInit.call(gateway);
+
+    expect(gateway.cronConfigGenerationOwner.reconcileCommittedGeneration).toHaveBeenCalledOnce();
+    expect(gateway.cronConfigGenerationOwner.reconcileCommittedGeneration.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.configGenerationService.completeRuntimeOwnerReconciliation.mock.invocationCallOrder[0],
+    );
   });
 
   it("skips deferred startup when closing and stops before workers if closing begins during runtime init", async () => {
@@ -207,7 +272,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     await (GatewayService.prototype as any).runDeferredInit.call(midCloseGateway);
 
     expect(midCloseGateway.llamaCppRuntime.init).toHaveBeenCalled();
-    expect(midCloseGateway.persistLlmConfig).not.toHaveBeenCalled();
+    expect(midCloseGateway.configGenerationService.completeRuntimeOwnerReconciliation).toHaveBeenCalled();
     expect(midCloseGateway.durableRunService.startWorker).not.toHaveBeenCalled();
     expect(midCloseGateway.promptPackService.resumeInterruptedBenchmarkRuns).not.toHaveBeenCalled();
   });
@@ -240,9 +305,11 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       signalInboundRuntimeService: { stop: vi.fn() },
       durableRunService: { stopWorker: vi.fn() },
       improvementService: { stopScheduler: vi.fn() },
+      inboundChannelEventService: { close: vi.fn() },
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
       maintenanceScheduler: { stop: maintenanceStop },
       npuSidecar: { close: vi.fn(async () => undefined) },
+      orchestrationWorktreeService: { close: vi.fn() },
       storage: { close: vi.fn() },
     });
 
@@ -253,6 +320,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.improvementService.stopScheduler).toHaveBeenCalled();
     expect(gateway.durableRunService.stopWorker).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.stopWorker).toHaveBeenCalled();
+    expect(gateway.inboundChannelEventService.close).toHaveBeenCalled();
     expect(maintenanceStop).toHaveBeenCalledTimes(1);
     expect(gateway.maintenanceScheduler).toBeUndefined();
     expect(gateway.backgroundTasks.size).toBe(0);
@@ -260,6 +328,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.assemblyService.close).toHaveBeenCalled();
     expect(gateway.npuSidecar.close).toHaveBeenCalled();
     expect(gateway.llamaCppRuntime.close).toHaveBeenCalled();
+    expect(gateway.orchestrationWorktreeService.close).toHaveBeenCalled();
     expect(gateway.storage.close).toHaveBeenCalled();
   });
 });

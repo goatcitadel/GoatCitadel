@@ -110,6 +110,14 @@ function resolveRelativeToolPath(
   context: ToolPathResolutionContext,
   kind: PathResolutionKind,
 ): string {
+  // Cross-runtime cwd values must reach the execution bridge byte-for-byte.
+  // In particular, path.resolve() on Windows would reinterpret /mnt/c, /c,
+  // drive-relative, UNC, and device-like values before their source flavor and
+  // safety posture can be established. Preserve the broad absolute-like set;
+  // the fresh post-hook bridge is the authority that accepts or rejects it.
+  if (kind === "cwd" && isWorkspacePathBridgeAbsoluteLikeCwd(rawPath)) {
+    return rawPath;
+  }
   const trimmed = rawPath.trim();
   if (!trimmed) {
     return rawPath;
@@ -147,6 +155,11 @@ function resolveRelativeToolPath(
   }
 
   return finalizeResolvedToolPath(projectCandidate, trimmed, context, kind);
+}
+
+export function isWorkspacePathBridgeAbsoluteLikeCwd(value: string): boolean {
+  const candidate = value.trim();
+  return /^[A-Za-z]:/u.test(candidate) || /^[\\/]/u.test(candidate);
 }
 
 function resolveAbsoluteToolPath(

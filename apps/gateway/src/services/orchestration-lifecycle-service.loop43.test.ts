@@ -445,6 +445,51 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
     );
   });
 
+  it("atomically attaches a child watcher when a real orchestration phase dispatch commits", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreeStatus: "ready",
+      },
+    });
+    vi.mocked(harness.runtime.phaseExecutor.execute).mockImplementation(async (input) => {
+      input.onChildDispatched?.({
+        phaseId: "phase-1",
+        childSessionId: "child-session-1",
+        childTurnId: "child-turn-1",
+        childRunId: "child-run-1",
+      });
+      return {
+        phaseId: "phase-1",
+        ownerAgentId: "agent-1",
+        status: "completed",
+        startedAt: "2026-05-15T12:00:01.000Z",
+        finishedAt: "2026-05-15T12:00:02.000Z",
+        outputSummary: "Phase completed",
+        costUsd: 0.5,
+      };
+    });
+
+    await executeDurableOrchestrationRun(harness.host, harness.runtime, buildDurableRun());
+
+    expect(harness.host.watchDurableChildRun).toHaveBeenCalledTimes(1);
+    expect(harness.host.watchDurableChildRun).toHaveBeenCalledWith({
+      watcherId: "orchestration-child:durable-run-1:phase-1",
+      parentRunId: "durable-run-1",
+      childRunId: "child-run-1",
+      source: "orchestration_phase",
+      metadata: {
+        orchestrationRunId: "run-1",
+        planId: "plan-1",
+        phaseId: "phase-1",
+        childSessionId: "child-session-1",
+        childTurnId: "child-turn-1",
+      },
+    });
+  });
+
   it("fences a late phase result after durable lease takeover", async () => {
     const harness = createHarness({
       run: {
@@ -1196,6 +1241,7 @@ function createHarness(options: HarnessOptions = {}): {
       return durableRun;
     }),
     recordDurableTimelineEvent: vi.fn(),
+    watchDurableChildRun: vi.fn(),
   };
   const runtime: OrchestrationLifecycleRuntimeDeps = {
     worktrees: {
@@ -1205,6 +1251,7 @@ function createHarness(options: HarnessOptions = {}): {
         worktreeBaseRef: "HEAD",
       })),
       release: vi.fn(async () => undefined),
+      ensureLeaseForExecution: vi.fn((current) => current),
       ...options.runtime?.worktrees,
     },
     phaseExecutor: {

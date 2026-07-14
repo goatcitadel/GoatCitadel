@@ -20,6 +20,7 @@ import type {
   ChatWebMode,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ModelUsageAttributionContext,
   ChatCitationRecord,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
@@ -173,6 +174,8 @@ import {
   formatPromptPackReportProviderModelLabel,
 } from "./prompt-pack/report-labels.js";
 import { resolvePromptPackJudgeTarget, shouldUsePromptPackJudgeJsonMode } from "./prompt-pack/judge-target.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import {
   applyPromptPlaceholderValues,
   extractPromptPackVersionLabel,
@@ -412,13 +415,17 @@ export interface PromptPackServiceDeps {
     >,
   ): Promise<ChatSendMessageResponse>;
   /** Raw LLM completion for model-judge scoring. */
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   /** Resolve default provider/model for prompt-runner. */
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
   /** Resolve default provider/model for prompt-pack model judging. */
   getPromptJudgeModelDefaults(): { providerId?: string; model?: string };
   /** Shared background-task set for fire-and-forget benchmark tasks. */
   backgroundTasks: Set<Promise<void>>;
+  runBackgroundWork?: <T>(label: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
   recordImprovementBenchmarkSignal?: (input: {
     benchmarkRunId: string;
     packId: string;
@@ -1054,6 +1061,9 @@ export class PromptPackService {
           }),
         );
       } catch (error) {
+        if (isAuthoritativeModelUsageAccountingError(error)) {
+          throw error;
+        }
         skipped += 1;
         const message = error instanceof Error ? error.message : String(error);
         errors.push({
@@ -1848,7 +1858,8 @@ export class PromptPackService {
 
   // ── private helpers ────────────────────────────────────────────────
 
-  private async runPromptPackBenchmarkTask(benchmarkRunId: string): Promise<void> {
+  private async runPromptPackBenchmarkTask(benchmarkRunId: string, signal?: AbortSignal): Promise<void> {
+    throwIfPromptPackBenchmarkAborted(signal ?? new AbortController().signal, benchmarkRunId);
     const claimedRow = this.claimPromptPackBenchmarkRun(benchmarkRunId);
     if (!claimedRow) {
       return;
@@ -1861,8 +1872,9 @@ export class PromptPackService {
     const completedCount = new Set(existingItems.map((item) => `${item.providerId}::${item.model}::${item.testId}`))
       .size;
 
-    await this.executeWithBenchmarkClaimHeartbeat(benchmarkRunId, async (signal) => {
-      throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+    await this.executeWithBenchmarkClaimHeartbeat(benchmarkRunId, async (claimSignal) => {
+      const executionSignal = signal ? AbortSignal.any([signal, claimSignal]) : claimSignal;
+      throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
       if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
         return;
       }
@@ -1896,7 +1908,7 @@ export class PromptPackService {
           if (stopBenchmark) {
             return;
           }
-          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
             stopBenchmark = true;
@@ -1911,10 +1923,10 @@ export class PromptPackService {
             const promptRun = await this.runPromptPackTest(run.packId, test.testId, {
               providerId: provider.providerId,
               model: provider.model,
-              signal,
+              signal: executionSignal,
               executionStyle: run.executionStyle,
             });
-            throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+            throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
             this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
             if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
               stopBenchmark = true;
@@ -1930,7 +1942,7 @@ export class PromptPackService {
             failureSignal = error instanceof Error ? error.message : String(error);
           }
 
-          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
             stopBenchmark = true;
@@ -1971,7 +1983,7 @@ export class PromptPackService {
           if (stopBenchmark) {
             return;
           }
-          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
             stopBenchmark = true;
@@ -1991,7 +2003,7 @@ export class PromptPackService {
               runId: item.runId!,
               providerId: item.providerId,
               model: item.model,
-              signal,
+              signal: executionSignal,
               force: true,
             });
             autoScoreId = scored.score.autoScoreId;
@@ -2002,9 +2014,12 @@ export class PromptPackService {
             scoreState = scored.score.scoreState;
             failureSignal = scored.score.autoVerdict !== "pass" ? `verdict_${scored.score.autoVerdict}` : undefined;
           } catch (error) {
+            if (isAuthoritativeModelUsageAccountingError(error)) {
+              throw error;
+            }
             failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
           }
-          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
           this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
           if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
             stopBenchmark = true;
@@ -2034,7 +2049,7 @@ export class PromptPackService {
         return;
       }
 
-      throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+      throwIfPromptPackBenchmarkAborted(executionSignal, benchmarkRunId);
       if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
         return;
       }
@@ -2190,7 +2205,34 @@ export class PromptPackService {
 
     heartbeatTimer = setTimeout(heartbeat, PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS);
     try {
-      return await Promise.race([execute(controller.signal), heartbeatFailure]);
+      const execution = Promise.resolve()
+        .then(() => execute(controller.signal))
+        .then<
+          { kind: "execution_succeeded"; value: T } | { kind: "execution_failed"; error: unknown },
+          { kind: "execution_succeeded"; value: T } | { kind: "execution_failed"; error: unknown }
+        >(
+          (value) => ({ kind: "execution_succeeded", value }),
+          (error) => ({ kind: "execution_failed", error }),
+        );
+      const heartbeat = heartbeatFailure.catch((error: unknown) => ({
+        kind: "heartbeat_failed" as const,
+        error,
+      }));
+      const first = await Promise.race([execution, heartbeat]);
+      if (first.kind === "execution_succeeded") {
+        return first.value;
+      }
+      if (first.kind === "execution_failed") {
+        throw first.error;
+      }
+
+      // The heartbeat aborts before rejecting. Drain the exact execution so no
+      // benchmark fallback can complete while provider accounting is unsettled.
+      const terminal = await execution;
+      if (terminal.kind === "execution_failed" && isAuthoritativeModelUsageAccountingError(terminal.error)) {
+        throw terminal.error;
+      }
+      throw first.error;
     } finally {
       active = false;
       this.activeBenchmarkAbortControllers.delete(benchmarkRunId);
@@ -2361,7 +2403,13 @@ export class PromptPackService {
       return;
     }
     this.activeBenchmarkRunIds.add(benchmarkRunId);
-    const task = this.runPromptPackBenchmarkTask(benchmarkRunId)
+    const task = (
+      this.deps.runBackgroundWork
+        ? this.deps.runBackgroundWork(`prompt-pack-benchmark:${benchmarkRunId}`, (signal) =>
+            this.runPromptPackBenchmarkTask(benchmarkRunId, signal),
+          )
+        : this.runPromptPackBenchmarkTask(benchmarkRunId)
+    )
       .catch((error) => {
         if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
           return;
@@ -2601,9 +2649,26 @@ export class PromptPackService {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           attemptCount += 1;
           try {
-            return await this.deps.createChatCompletion(request);
+            return await this.deps.createChatCompletion(
+              request,
+              createUtilityModelUsageAttribution({
+                operationId: `prompt-pack:${encodeURIComponent(input.run.runId)}:model-judge`,
+                utilityKind: "prompt_pack_model_judge",
+                requestedProviderId: providerId,
+                requestedModelId: model,
+                lineage: {
+                  sessionId: input.run.sessionId,
+                  taskId: input.run.runId,
+                  agentId: "prompt-pack-judge",
+                  parentOperationId: `prompt-pack:${encodeURIComponent(input.run.runId)}`,
+                },
+              }),
+            );
           } catch (error) {
             lastError = error as Error;
+            if (isAuthoritativeModelUsageAccountingError(lastError)) {
+              throw lastError;
+            }
             if (!isPromptPackJudgeRateLimitError(lastError) || attempt >= 2) {
               throw lastError;
             }
@@ -2693,6 +2758,9 @@ export class PromptPackService {
         judgeModel: model,
       };
     } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       return {
         error: (error as Error).message,
         attemptCount,

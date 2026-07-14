@@ -149,6 +149,9 @@ function createConnectorDeliveryLedger(options?: {
           workspaceId: (input.workspaceId as string | undefined) ?? "default",
           boundary: input.boundary as string,
           routePath: input.routePath as string,
+          catalogId: input.catalogId as string | undefined,
+          connectionId: input.connectionId as string | undefined,
+          actionId: input.actionId as string | undefined,
           actorScope: input.actorScope as string,
           idempotencyKey: input.idempotencyKey as string,
           payloadHash: input.payloadHash as string,
@@ -156,7 +159,12 @@ function createConnectorDeliveryLedger(options?: {
           replayPolicy: "idempotent_external",
           replayOutcome: input.replayOutcome as ExternalSideEffectRunRecord["replayOutcome"],
           replayAttempt: input.replayAttempt as ExternalSideEffectRunRecord["replayAttempt"],
-          resumeState: "not_resumable",
+          resumeState:
+            (options?.initialSideEffectStatus ?? input.status) === "unknown_external_outcome"
+              ? "manual_review_unknown_external_outcome"
+              : (options?.initialSideEffectStatus ?? input.status) === "completed"
+                ? "completed"
+                : "not_resumable",
           attemptCount: 0,
           createdAt: now,
           updatedAt: now,
@@ -172,11 +180,101 @@ function createConnectorDeliveryLedger(options?: {
         return sideEffectRecord;
       }),
       markFailure: vi.fn((_runId, input: { status: ExternalSideEffectRunRecord["status"] }) => {
-        sideEffectRecord = { ...sideEffectRecord!, status: input.status };
+        sideEffectRecord = {
+          ...sideEffectRecord!,
+          status: input.status,
+          resumeState:
+            input.status === "unknown_external_outcome"
+              ? "manual_review_unknown_external_outcome"
+              : "manual_retry_after_recorded_failure",
+        };
         return sideEffectRecord;
       }),
+      markFailureIfStatus: vi.fn(
+        (
+          _runId: string,
+          expectedStatus: ExternalSideEffectRunRecord["status"],
+          input: { status: ExternalSideEffectRunRecord["status"] },
+        ) => {
+          if (sideEffectRecord?.status === expectedStatus) {
+            sideEffectRecord = {
+              ...sideEffectRecord,
+              status: input.status,
+              resumeState:
+                input.status === "unknown_external_outcome"
+                  ? "manual_review_unknown_external_outcome"
+                  : "manual_retry_after_recorded_failure",
+            };
+          }
+          return sideEffectRecord!;
+        },
+      ),
       get: vi.fn(() => sideEffectRecord!),
+      findByIdempotency: vi.fn((routePath: string, idempotencyKey: string, actorScope: string) =>
+        sideEffectRecord?.routePath === routePath &&
+        sideEffectRecord.idempotencyKey === idempotencyKey &&
+        sideEffectRecord.actorScope === actorScope
+          ? sideEffectRecord
+          : undefined,
+      ),
+      listByConnection: vi.fn((connectionId: string) =>
+        sideEffectRecord?.connectionId === connectionId ? [sideEffectRecord] : [],
+      ),
     },
+  };
+}
+
+function createConnectorDeliveryRecoveryHarness(
+  run: DurableRunRecord,
+  commsSend: ReturnType<typeof vi.fn>,
+  ledger = createConnectorDeliveryLedger(),
+) {
+  let currentRun = run;
+  const durableRuns = {
+    getRun: vi.fn(() => currentRun),
+    lockFreshActiveLeaseForUpdate: vi.fn((_runId: string, leaseOwnerId: string) =>
+      currentRun.status === "running" && currentRun.leaseOwnerId === leaseOwnerId ? currentRun : undefined,
+    ),
+    updateRun: vi.fn((input: Record<string, unknown>) => {
+      currentRun = {
+        ...currentRun,
+        status: (input.status as DurableRunRecord["status"] | undefined) ?? currentRun.status,
+        version: currentRun.version + 1,
+      };
+      return currentRun;
+    }),
+    createCheckpoint: vi.fn(),
+  };
+  const connector = {
+    connectorId: "connector-effect-recovery",
+    connectorType: "integration_connection",
+    sourceId: "channel-effect-recovery",
+    status: "active",
+    capabilities: [{ id: "outbound_messages", enabled: true }],
+    metadata: {},
+  } as unknown as ConnectorRecord;
+  const host = {
+    requireConnectorRecord: vi.fn(() => connector),
+    approvalRemoteTokenSecrets: { resolve: vi.fn(), delete: vi.fn() },
+    commsSend,
+    commsReply: vi.fn(),
+    commsReact: vi.fn(),
+    commsUnsend: vi.fn(),
+    commsTyping: vi.fn(),
+    commsActivity: vi.fn(),
+    invokeMcpTool: vi.fn(),
+    resolveDurableRunHookWorkspaceId: vi.fn(() => "workspace-effect-recovery"),
+    storage: { ...ledger, durableRuns },
+    recordDurableTimelineEvent: vi.fn(),
+    publishRealtime: vi.fn(),
+  };
+  return {
+    host,
+    ledger,
+    setCurrentRun(next: DurableRunRecord) {
+      currentRun = next;
+    },
+    getCurrentRun: () => currentRun,
   };
 }
 
@@ -1446,6 +1544,153 @@ describe("durable-execution-service orchestration workflow", () => {
       }),
     );
   });
+
+  it.each([
+    ["generic provider failure", () => new Error("provider timeout after dispatch")],
+    [
+      "structured post-send failure",
+      () =>
+        Object.assign(new Error("provider acknowledged then connection dropped"), {
+          deliveryStatus: "manual_reconciliation_required",
+          providerMessageId: "provider-message-1",
+        }),
+    ],
+  ])("does not replay a connector delivery after %s", async (_label, buildFailure) => {
+    const run = buildRunWithPayload("connector.delivery", {
+      version: "connector.delivery.v1",
+      connectorId: "connector-effect-recovery",
+      connectorType: "integration_connection",
+      action: "channel.send",
+      workspaceId: "workspace-effect-recovery",
+      payload: { target: "#ops", message: "ship once" },
+    });
+    const providerCall = vi.fn(async () => {
+      throw buildFailure();
+    });
+    const harness = createConnectorDeliveryRecoveryHarness(run, providerCall);
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      deps.markExternalCallStarted?.();
+      const result = await deps.commsSend({} as never);
+      return {
+        capabilityId: "outbound_messages",
+        dispatchKind: "integration_channel_send",
+        result,
+      } as never;
+    });
+
+    await expect(executeDurableConnectorDeliveryRun(harness.host as never, run)).rejects.toThrow();
+
+    expect(providerCall).toHaveBeenCalledTimes(1);
+    expect(harness.ledger.externalSideEffectRuns.get()).toMatchObject({
+      status: "unknown_external_outcome",
+      resumeState: "manual_review_unknown_external_outcome",
+    });
+    expect(isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({
+      recoverable: false,
+      reason: expect.stringMatching(/automatic replay is blocked.*manual reconciliation is required/i),
+    });
+
+    const recoveredRun = { ...run, version: run.version + 1, leaseOwnerId: "recovered-effect-lease" };
+    harness.setCurrentRun(recoveredRun);
+    await expect(executeDurableConnectorDeliveryRun(harness.host as never, recoveredRun)).rejects.toThrow();
+    expect(providerCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a structured delivery refusal retryable when it proves the provider was not dispatched", async () => {
+    const run = buildRunWithPayload("connector.delivery", {
+      version: "connector.delivery.v1",
+      connectorId: "connector-effect-recovery",
+      connectorType: "integration_connection",
+      action: "channel.send",
+      workspaceId: "workspace-effect-recovery",
+      payload: { target: "#ops", message: "retry only when safe" },
+    });
+    const providerCall = vi
+      .fn()
+      .mockResolvedValueOnce({
+        outcome: "blocked",
+        policyReason: "destination allowlist refused before provider dispatch",
+        auditEventId: "audit-pre-boundary-1",
+      })
+      .mockResolvedValueOnce({ status: "sent", deliveryStatus: "sent", providerMessageId: "provider-message-2" });
+    const harness = createConnectorDeliveryRecoveryHarness(run, providerCall);
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      deps.markExternalCallStarted?.();
+      const result = await deps.commsSend({} as never);
+      return {
+        capabilityId: "outbound_messages",
+        dispatchKind: "integration_channel_send",
+        result,
+      } as never;
+    });
+
+    await expect(executeDurableConnectorDeliveryRun(harness.host as never, run)).rejects.toThrow(
+      /destination allowlist refused/i,
+    );
+    expect(harness.ledger.externalSideEffectRuns.get()).toMatchObject({
+      status: "failed_before_boundary",
+      resumeState: "manual_retry_after_recorded_failure",
+    });
+    expect(isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({ recoverable: true });
+
+    const recoveredRun = { ...run, version: run.version + 1, leaseOwnerId: "recovered-safe-retry-lease" };
+    harness.setCurrentRun(recoveredRun);
+    await expect(executeDurableConnectorDeliveryRun(harness.host as never, recoveredRun)).resolves.toBeUndefined();
+
+    expect(providerCall).toHaveBeenCalledTimes(2);
+    expect(harness.ledger.externalSideEffectRuns.get()).toMatchObject({
+      status: "completed",
+      resumeState: "completed",
+    });
+    expect(harness.getCurrentRun().status).toBe("completed");
+  });
+
+  it.each(["external_call_started", "unknown_external_outcome"] as const)(
+    "blocks recovery directly from a persisted %s connector effect",
+    async (status) => {
+      const run = buildRunWithPayload("connector.delivery", {
+        version: "connector.delivery.v1",
+        connectorId: "connector-effect-recovery",
+        connectorType: "integration_connection",
+        action: "channel.send",
+        workspaceId: "workspace-effect-recovery",
+        payload: { target: "#ops", message: "do not replay" },
+      });
+      const ledger = createConnectorDeliveryLedger({ initialSideEffectStatus: status });
+      ledger.externalSideEffectRuns.createOrGet(
+        {
+          workspaceId: "workspace-effect-recovery",
+          boundary: "durable_connector_delivery",
+          routePath:
+            "external_side_effect:durable_connector_delivery:connector.integration_connection:connector-effect-recovery:channel.send",
+          catalogId: "connector.integration_connection",
+          connectionId: "connector-effect-recovery",
+          actionId: "channel.send",
+          actorScope: "workspace-effect-recovery",
+          idempotencyKey: `durable-connector:${run.runId}`,
+          payloadHash: "persisted-payload-hash",
+          status,
+          replayOutcome: "claimed",
+        },
+        "2026-07-13T00:00:00.000Z",
+      );
+      const harness = createConnectorDeliveryRecoveryHarness(run, vi.fn(), ledger);
+
+      expect(isDurableWorkflowRecoverable(harness.host as never, run)).toEqual({
+        recoverable: false,
+        reason: expect.stringMatching(/manual reconciliation is required/i),
+      });
+      await markDurableWorkflowUnrecoverable(
+        harness.host as never,
+        run,
+        "Provider outcome is ambiguous; manual reconciliation is required.",
+      );
+      expect(ledger.externalSideEffectRuns.get()).toMatchObject({
+        status: "unknown_external_outcome",
+        resumeState: "manual_review_unknown_external_outcome",
+      });
+    },
+  );
 
   it("blocks autonomous connector delivery runs while the autonomy kill switch is engaged", async () => {
     const run = {
@@ -3102,6 +3347,7 @@ describe("durable-execution-service orchestration workflow", () => {
         ingestUserMessage: false,
         turnId: "turn-1",
         assistantMessageId: "assistant-1",
+        capabilityProfileContent: "Ship it",
       }),
     );
     expect(executePreparedAgentChatTurnBackground).toHaveBeenCalledWith(

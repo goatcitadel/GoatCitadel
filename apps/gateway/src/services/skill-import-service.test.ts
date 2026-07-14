@@ -1,8 +1,15 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import AdmZip from "adm-zip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SkillImportService } from "./skill-import-service.js";
+import {
+  SkillImportService,
+  __parseSkillImportGitTreeForTests,
+  __skillImportGitSecurityForTests,
+} from "./skill-import-service.js";
+import { SKILL_CONTENT_INTEGRITY_LIMITS } from "./skill-content-integrity.js";
 
 function createSystemSettingsRepo() {
   const store = new Map<string, unknown>();
@@ -306,6 +313,195 @@ describe("SkillImportService lookup", () => {
   });
 });
 
+describe("SkillImportService materialized review scope", () => {
+  it("scrubs inherited Git configuration and permits only exact HTTPS transport without redirects", () => {
+    const inherited = {
+      GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT,
+      GIT_CONFIG_KEY_0: process.env.GIT_CONFIG_KEY_0,
+      GIT_CONFIG_VALUE_0: process.env.GIT_CONFIG_VALUE_0,
+      GIT_ALLOW_PROTOCOL: process.env.GIT_ALLOW_PROTOCOL,
+      GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND,
+    };
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "url.file:///tmp/rewrite.insteadOf";
+    process.env.GIT_CONFIG_VALUE_0 = "https://github.com/";
+    process.env.GIT_ALLOW_PROTOCOL = "file:ssh:https";
+    process.env.GIT_SSH_COMMAND = "attacker-controlled-ssh";
+    try {
+      const security = __skillImportGitSecurityForTests();
+      expect(security.args).toEqual([
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.https.allow=always",
+        "-c",
+        "http.followRedirects=false",
+      ]);
+      expect(security.cloneArgs).toEqual([
+        ...security.args,
+        "clone",
+        "--quiet",
+        "--depth",
+        "1",
+        "--single-branch",
+        "--no-tags",
+        "--no-checkout",
+        `--filter=blob:limit=${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1}`,
+        "--",
+        "https://github.com/example/repo.git",
+        "C:/bounded/repo",
+      ]);
+      expect(security.env).toMatchObject({
+        GIT_ATTR_NOSYSTEM: "1",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_LFS_SKIP_SMUDGE: "1",
+        GIT_NO_LAZY_FETCH: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_TERMINAL_PROMPT: "0",
+      });
+      expect(security.env.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+      expect(security.env.GIT_CONFIG_SYSTEM).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+      expect(security.env.GIT_CONFIG_COUNT).toBeUndefined();
+      expect(security.env.GIT_CONFIG_KEY_0).toBeUndefined();
+      expect(security.env.GIT_CONFIG_VALUE_0).toBeUndefined();
+      expect(security.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+      expect(security.env.GIT_SSH_COMMAND).toBeUndefined();
+    } finally {
+      for (const [key, value] of Object.entries(inherited)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("rejects non-regular and non-portable Git tree entries before worktree materialization", () => {
+    const oid = "a".repeat(40);
+    expect(__parseSkillImportGitTreeForTests(`100644 blob ${oid}\tSKILL.md\0`)).toEqual([
+      { objectId: oid, relativePath: "SKILL.md", bytes: 0 },
+    ]);
+    for (const listing of [
+      `120000 blob ${oid}\tSKILL.md\0`,
+      `100755 blob ${oid}\tscripts/run\0`,
+      `160000 commit ${oid}\tdependencies/submodule\0`,
+      `100644 blob ${oid}\treferences/payload.txt:stream\0`,
+      `100644 blob ${oid}\t.git/config\0`,
+      `100644 blob ${oid}\treferences/CON.txt\0`,
+      `100644 blob ${oid}\tReferences/a.txt\0` + `100644 blob ${oid}\treferences/A.txt\0`,
+    ]) {
+      expect(() => __parseSkillImportGitTreeForTests(listing)).toThrow();
+    }
+  });
+
+  it("rejects sources with more than one canonical SKILL.md instead of selecting by enumeration order", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-review-ambiguous-"));
+    const sourceDir = path.join(rootDir, "ambiguous-skill-source");
+    for (const child of ["alpha", ".github"]) {
+      const skillDir = path.join(sourceDir, child);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${child}\ndescription: Ambiguous source identity fixture.\n---\n\nDo not select by filesystem order.\n`,
+      );
+    }
+
+    try {
+      const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+      await expect(
+        service.validateImport({
+          sourceRef: sourceDir,
+          sourceType: "local_path",
+          sourceProvider: "local",
+        }),
+      ).rejects.toThrow(/ambiguous.*multiple SKILL\.md/i);
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("keeps a remote source alive only for the awaited callback and cleans it after callback failure", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-review-scope-"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://example.com/skill.md") {
+          return new Response(
+            "---\nname: scoped-review\ndescription: A bounded review callback test skill.\nmetadata:\n  tools: []\n---\n\nReview safely.\n",
+            { status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    let ephemeralDir = "";
+
+    try {
+      await expect(
+        service.withMaterializedValidation(
+          { sourceRef: "https://example.com/skill.md", sourceType: "remote_bundle" },
+          async ({ skillDir, validation, validateExactDirectory }) => {
+            ephemeralDir = skillDir;
+            expect(validation.valid).toBe(true);
+            await expect(validateExactDirectory(skillDir)).resolves.toMatchObject({ valid: true });
+            await expect(fsPromises.stat(path.join(skillDir, "SKILL.md"))).resolves.toBeDefined();
+            throw new Error("callback failure");
+          },
+        ),
+      ).rejects.toThrow("callback failure");
+      await expect(fsPromises.stat(ephemeralDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      vi.unstubAllGlobals();
+      fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("bounds aggregate hosted-bundle bytes before materializing all remote assets", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-review-bounds-"));
+    const largeAsset = Buffer.alloc(2_097_100, 0x61);
+    const manifest = JSON.stringify({
+      manifestVersion: "goatcitadel.skill-bundle.v1",
+      scriptDisposition: "review_only_non_callable",
+      assets: [
+        { path: "SKILL.md", sha256: "a".repeat(64), kind: "skill" },
+        { path: "references/a.bin", sha256: "b".repeat(64), kind: "reference" },
+        { path: "references/b.bin", sha256: "c".repeat(64), kind: "reference" },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://example.com/skill.md") {
+          return new Response(
+            "---\nname: bounded-review\ndescription: A bounded hosted review fixture skill.\n---\n\nReview safely.\n",
+            { status: 200 },
+          );
+        }
+        if (url === "https://example.com/goatcitadel.skill-bundle.json") {
+          return new Response(manifest, { status: 200 });
+        }
+        if (url.endsWith("/references/a.bin") || url.endsWith("/references/b.bin")) {
+          return new Response(largeAsset, { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    try {
+      const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+      await expect(
+        service.withMaterializedValidation(
+          { sourceRef: "https://example.com/skill.md", sourceType: "remote_bundle" },
+          () => undefined,
+        ),
+      ).rejects.toThrow(/total bytes/i);
+    } finally {
+      vi.unstubAllGlobals();
+      fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+});
+
 describe("SkillImportService validation", () => {
   let rootDir: string;
 
@@ -326,6 +522,28 @@ describe("SkillImportService validation", () => {
         sourceRef: "https://animalhouse.ai/skills/animal-house",
       }),
     ).rejects.toThrow(/not installable/i);
+  });
+
+  it("rejects Windows alternate-stream and device-name zip entries", async () => {
+    for (const [name, unsafePath] of [
+      ["ads", "references/payload.txt:stream"],
+      ["device", "references/CON.txt"],
+    ] as const) {
+      const zip = new AdmZip();
+      zip.addFile(
+        "SKILL.md",
+        Buffer.from(
+          "---\nname: zip-path-review\ndescription: A bounded zip path review fixture skill.\n---\n\nReview safely.\n",
+        ),
+      );
+      zip.addFile(unsafePath, Buffer.from("unsafe path fixture"));
+      const zipPath = path.join(rootDir, `unsafe-${name}.zip`);
+      zip.writeZip(zipPath);
+      const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+      await expect(
+        service.validateImport({ sourceRef: zipPath, sourceType: "local_zip", sourceProvider: "local" }),
+      ).rejects.toThrow(/unsafe zip entry path/i);
+    }
   });
 
   it("rejects not_installable sources via repositoryUrl match", async () => {
@@ -409,6 +627,11 @@ describe("SkillImportService validation", () => {
       sourceProvider: "local",
       sourceType: "local_path",
       sourceRef: skillDir,
+      contentIntegrity: {
+        manifestVersion: "goatcitadel.skill-tree.v1",
+        algorithm: "sha256",
+        fileCount: 3,
+      },
       nonCallableUntilActivated: true,
     });
     expect(result.scriptDisposition).toMatchObject({
@@ -731,13 +954,110 @@ describe("SkillImportService validation", () => {
     });
     const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
 
-    expect(manifest.manifestVersion).toBe(2);
+    expect(manifest.manifestVersion).toBe(3);
     expect(manifest.duplicateFamily).toBe("cloudflare_dns");
     expect(manifest.reviewDisposition).toBe("allow");
     expect(typeof manifest.installedAt).toBe("string");
     expect(typeof manifest.lastReviewedAt).toBe("string");
     expect(typeof manifest.lastCheckedAt).toBe("string");
     expect(manifest).toHaveProperty("resolvedUpstream");
+    expect(manifest).toMatchObject({
+      provenance: {
+        contentIntegrity: {
+          manifestVersion: "goatcitadel.skill-tree.v1",
+          algorithm: "sha256",
+          treeSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          fileCount: 2,
+          totalBytes: expect.any(Number),
+          files: expect.arrayContaining([
+            expect.objectContaining({ path: "LICENSE" }),
+            expect.objectContaining({ path: "SKILL.md" }),
+          ]),
+        },
+      },
+    });
+  });
+
+  it("refuses to publish when the managed staging payload mutates after validation", async () => {
+    const skillDir = path.join(rootDir, "staging-race-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Staging Race Skill",
+        "description: Valid fixture for exact-byte import race detection.",
+        "---",
+        "",
+        "Use the validated instructions only.",
+        "",
+      ].join("\n"),
+    );
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+
+    const originalWriteFile = fsPromises.writeFile.bind(fsPromises);
+    vi.spyOn(fsPromises, "writeFile").mockImplementation(async (file, data, options) => {
+      await originalWriteFile(file, data, options);
+      const filePath = String(file);
+      if (path.basename(filePath) === "source.json" && filePath.includes(`${path.sep}.import-staging${path.sep}`)) {
+        await originalWriteFile(path.join(path.dirname(filePath), "SKILL.md"), "mutated after validation\n", "utf8");
+      }
+    });
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    await expect(
+      service.installImport({
+        sourceRef: skillDir,
+        sourceType: "local_path",
+        sourceProvider: "local",
+      }),
+    ).rejects.toThrow(/Staged skill payload changed after validation/);
+
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra", "staging-race-skill"))).toBe(false);
+    expect(fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8")).toContain("validated instructions");
+    expect(service.listHistory(1)[0]).toMatchObject({
+      action: "install",
+      outcome: "failed",
+      details: { error: expect.stringContaining("Staged skill payload changed after validation") },
+    });
+  });
+
+  it("rejects an oversized local tree before copying it into managed staging", async () => {
+    const skillDir = path.join(rootDir, "oversized-local-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Oversized Local Skill",
+        "description: Valid metadata paired with a payload that exceeds import limits.",
+        "---",
+        "",
+        "This content must never reach managed staging.",
+        "",
+      ].join("\n"),
+    );
+    const oversizedPath = path.join(skillDir, "oversized.bin");
+    fs.writeFileSync(oversizedPath, "");
+    fs.truncateSync(oversizedPath, SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1);
+    const copySpy = vi.spyOn(fsPromises, "cp");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    await expect(
+      service.installImport({
+        sourceRef: skillDir,
+        sourceType: "local_path",
+        sourceProvider: "local",
+      }),
+    ).rejects.toThrow(`exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes} bytes`);
+
+    expect(copySpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra", "oversized-local-skill"))).toBe(false);
+    expect(service.listHistory(1)[0]).toMatchObject({
+      action: "install",
+      outcome: "failed",
+      details: { error: expect.stringContaining("exceeds") },
+    });
   });
 
   it("requires explicit confirmation before installing high-risk local skills", async () => {

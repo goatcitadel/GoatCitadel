@@ -12,6 +12,8 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatMode,
+  ModelUsageAttributionContext,
+  ModelCouncilExecutionResult,
   ChatOrchestrationSummary,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
@@ -28,6 +30,7 @@ import type {
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { CHAT_TURN_ACTIVE_STATUSES, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import type { Storage } from "@goatcitadel/storage";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
@@ -45,6 +48,7 @@ import {
   type SubagentFanoutRuntime,
 } from "./chat-subagent-fanout-service.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
   buildDelegationFailureGuidance,
   buildEmptyAssistantTurnFallbackText,
@@ -63,7 +67,11 @@ import {
 import type { ChatStreamMutationLifecycle, PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
-import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import {
+  enforcePreparedRoutedContextOrchestrationBypass,
+  resolvePreparedTurnMode,
+  type PreparedAgentChatTurn,
+} from "./chat-turn-prep-service.js";
 import type { HooksService } from "./hooks-service.js";
 import { enqueueAgentEndHook, observeBeforeAssistantMessageWrite } from "./chat-turn-stream-events.js";
 import type {
@@ -84,11 +92,31 @@ type ChatTurnStreamStorage = Pick<
   | "chatDelegationRuns"
   | "chatSessionProjects"
   | "chatTurnTraces"
+  | "chatTurnCapabilityProfiles"
+  | "capabilityCatalogSnapshots"
 >;
 
 type ChatSendMessageRequestWithPolicyContext = ChatSendMessageRequest & {
   policyContext?: ToolPolicyActorContext;
 };
+
+type PreparedRoutedContextUsageAttribution = Readonly<
+  NonNullable<ChatTurnAgentRunnerInput["serverContextUsageAttribution"]>
+>;
+
+function buildPreparedRoutedContextUsageAttribution(
+  prepared: Pick<PreparedAgentChatTurn, "routedContextSnapshot">,
+): PreparedRoutedContextUsageAttribution | undefined {
+  const snapshot = prepared.routedContextSnapshot;
+  if (!snapshot) {
+    return undefined;
+  }
+  return Object.freeze({
+    contextSnapshotId: snapshot.snapshotId,
+    contextIntentHash: snapshot.sourceRequestHash,
+    contextResolutionHash: snapshot.snapshotHash,
+  });
+}
 
 const LOCAL_BUSINESS_RESEARCH_TOOL_NAME = "local_business.research";
 const LOCAL_BUSINESS_CONTACT_TASK_PATTERN =
@@ -109,7 +137,11 @@ export interface ChatTurnStreamHost
   resolvePreparedTurnOrchestration(
     prepared: PreparedAgentChatTurn,
   ): Promise<PreparedChatExecutionPlanResolution | undefined>;
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution?: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
+  executeChatModelCouncil?(prepared: PreparedAgentChatTurn, signal?: AbortSignal): Promise<ModelCouncilExecutionResult>;
   recordDevDiagnostic(input: {
     level: "info" | "warn";
     category: string;
@@ -241,6 +273,9 @@ function recordRuntimeDecision(
   try {
     canonicalWriteFence(() => host.recordRuntimeDecision?.(input));
   } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     if (isDurableControlError(error)) {
       throw error;
     }
@@ -248,7 +283,8 @@ function recordRuntimeDecision(
   }
 }
 
-function recordStepRuntimeDecisions(
+/** Exported for focused effect-truth trace tests. */
+export function recordStepRuntimeDecisions(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
   input: {
@@ -284,11 +320,40 @@ function recordStepRuntimeDecisions(
           { source: "capability", key: "tool_name", value: toolRun.toolName, weight: "strong" },
           { source: "tool_result", key: "tool_status", value: toolRun.status, weight: "strong" },
           { source: "tool_result", key: "reused", value: Boolean(toolRun.reused), weight: "informational" },
+          {
+            source: "capability",
+            key: "effect_potential",
+            value: toolRun.effectPotential ?? null,
+            weight: "strong",
+          },
+          {
+            source: "tool_result",
+            key: "effect_disposition",
+            value: toolRun.effectDisposition ?? null,
+            weight: toolRun.effectDisposition === "unknown" ? "blocking" : "strong",
+          },
+          {
+            source: "tool_result",
+            key: "effect_outcome_kind",
+            value: toolRun.effectOutcomeKind ?? null,
+            weight: toolRun.effectOutcomeKind === "uncertain" ? "blocking" : "strong",
+          },
+          {
+            source: "tool_result",
+            key: "effect_evidence_reason",
+            value: toolRun.effectEvidence?.reason ?? null,
+            weight: "informational",
+          },
           { source: "approval", key: "approval_id", value: toolRun.approvalId ?? null },
         ],
         evidenceRefs: [
           { refType: "tool_run", refId: toolRun.toolRunId },
           ...(toolRun.approvalId ? [{ refType: "approval" as const, refId: toolRun.approvalId }] : []),
+          ...(toolRun.effectEvidence?.refs.map((ref) => ({
+            refType: "event" as const,
+            refId: ref.refId,
+            label: `tool_effect:${ref.owner}`,
+          })) ?? []),
         ],
       },
       canonicalWriteFence,
@@ -364,6 +429,11 @@ export async function executePreparedModeOrchestration(
     executionPlanId: string;
   }
 > {
+  if (enforcePreparedRoutedContextOrchestrationBypass(prepared)) {
+    throw new Error(
+      "Routed-context turns cannot execute mode orchestration outside their frozen provider/model budget.",
+    );
+  }
   const orchestration = resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared));
   if (!orchestration) {
     throw new Error("Prepared chat turn is not eligible for orchestration");
@@ -610,11 +680,14 @@ export async function executePreparedModeOrchestration(
     };
   }
 
+  let orchestrationCompletionIndex = 0;
   const result = await executeOrchestrationPlan({
     task: orchestration.routerInput.task,
     plan: orchestration.orchestrationPlan,
     callbacks: {
-      createChatCompletion: async (request) => {
+      createChatCompletion: async (request, attribution = {}) => {
+        const completionIndex = orchestrationCompletionIndex;
+        orchestrationCompletionIndex += 1;
         const orchestrationDrainedSteers = host.steerService.drainPending({
           sessionId: prepared.session.sessionId,
           turnId: prepared.turnId,
@@ -657,10 +730,26 @@ export async function executePreparedModeOrchestration(
                 ],
               }
             : request;
-        return host.createChatCompletion({
-          ...composed,
-          signal,
-        });
+        const logicalOperationId = attribution.operationId ?? `orchestration-call-${completionIndex}`;
+        const logicalDispatchGeneration = attribution.dispatchGeneration ?? `${logicalOperationId}:generation-1`;
+        return host.createChatCompletion(
+          {
+            ...composed,
+            signal,
+          },
+          {
+            ...attribution,
+            operationId: `chat-turn:${prepared.turnId}:${logicalOperationId}`,
+            dispatchGeneration: `chat-turn:${prepared.turnId}:${logicalDispatchGeneration}`,
+            workspaceId: prepared.workspaceId,
+            sessionId: prepared.session.sessionId,
+            turnId: prepared.turnId,
+            durableRunId: runId,
+            taskId: `chat-orchestration:${prepared.turnId}`,
+            agentId: attribution.agentId ?? "goatherder",
+            attemptIndex: attribution.attemptIndex ?? 0,
+          },
+        );
       },
       executeDelegatedStep: async ({ task, plan, priorSteps, step, stepIndex }) => {
         const orchestrationMode = orchestration.routerInput.task.mode;
@@ -1184,6 +1273,9 @@ export async function executeDelegatedPlanStep(
       childTurnId: response.turnId,
     };
   } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     if (isDurableControlError(error)) {
       throw error;
     }
@@ -1360,6 +1452,9 @@ async function driveTerminalDelegatedStream(
       }
     }
   } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     if (deltaCount === 0) {
       // No token reached the parent yet: re-run buffered so behavior is
       // byte-identical to the non-streaming path on any pre-token failure.
@@ -1613,6 +1708,33 @@ function shouldPreferLocalBusinessResearchTool(input: {
   return LOCAL_BUSINESS_CONTACT_TASK_PATTERN.test(text) && LOCAL_BUSINESS_LOCATION_PATTERN.test(text);
 }
 
+export async function* streamChatModelCouncil(
+  host: ChatTurnStreamHost,
+  prepared: PreparedAgentChatTurn,
+  signal?: AbortSignal,
+): AsyncGenerator<ChatStreamChunkDraft> {
+  if (!host.executeChatModelCouncil) {
+    throw new Error("Model council runtime collaborator is unavailable.");
+  }
+  const result = await host.executeChatModelCouncil(prepared, signal);
+  if (result.usage || result.modelUsageEventIds.length > 0) {
+    yield {
+      type: "usage",
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      usage: result.usage ?? {},
+      ...(result.modelUsageEventIds.length > 0 ? { modelUsageEventIds: result.modelUsageEventIds } : {}),
+    };
+  }
+  yield {
+    type: "message_done",
+    sessionId: prepared.session.sessionId,
+    turnId: prepared.turnId,
+    messageId: prepared.assistantMessageId,
+    content: result.answer,
+  };
+}
+
 export async function* streamPreparedAgentChatTurn(
   host: ChatTurnStreamHost,
   sessionId: string,
@@ -1660,7 +1782,11 @@ export async function* streamPreparedAgentChatTurn(
       };
     }
 
-    const modeOrchestration = resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared));
+    const routedContextOrchestrationBypassed = enforcePreparedRoutedContextOrchestrationBypass(prepared);
+    const modeOrchestration =
+      routedContextOrchestrationBypassed || input.modelCouncil?.enabled
+        ? undefined
+        : (resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared)));
     if (modeOrchestration) {
       const mode = resolvePreparedTurnMode(prepared);
       const initialTrace = canonicalWriteFence(() =>
@@ -1960,7 +2086,7 @@ export async function* streamPreparedAgentChatTurn(
       const specialistCandidateSuggestions = canonicalWriteFence(() =>
         host.collectSpecialistCandidateSuggestions({
           sessionId,
-          mode: resolvePreparedTurnMode(prepared),
+          mode: prepared.capabilityProfile?.selection.mode ?? resolvePreparedTurnMode(prepared),
           content: prepared.content,
           capabilitySuggestions: capabilityUpgradeSuggestions,
           trace: hydratedTrace,
@@ -2078,6 +2204,7 @@ export async function* streamPreparedAgentChatTurn(
 
     let finalText = "";
     let assistantUsage: ChatStreamUsageRecord | undefined;
+    let assistantModelUsageEventIds: string[] | undefined;
     let hasStreamedDelta = false;
     let streamLayerRepaired = false;
     let streamLayerRepair:
@@ -2159,55 +2286,93 @@ export async function* streamPreparedAgentChatTurn(
         throw new Error(`Chat turn ${turnId} steer ingest skipped its canonical write fence.`);
       }
     }
-    for await (const chunk of runDirectTurnStreamWithSubagentFanout(
-      host,
-      prepared,
-      {
-        signal: controller.signal,
-        operatorId: input.operatorId,
-        authActorId: input.authActorId,
-        authActorSource: input.authActorSource,
-        permissionProfileId: effectivePermissionProfileId,
-        localOperatorOverrideId: input.localOperatorOverrideId,
-        policyContext: inputPolicyContext,
-        fullWebAccess: input.fullWebAccess,
-        canonicalWriteFence,
-      },
-      () =>
-        host.turnRuntime.runStream({
-          sessionId,
-          turnId,
-          userMessageId: prepared.userEventId,
-          parentTurnId: prepared.parentTurnId,
-          branchKind: prepared.branchKind,
-          sourceTurnId: prepared.sourceTurnId,
-          outputMessageId: assistantMessageId,
-          content: prepared.content,
-          mode: resolvePreparedTurnMode(prepared),
-          providerId: input.providerId ?? prepared.prefs.providerId,
-          model: input.model ?? prepared.prefs.model,
-          webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-          memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-          thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-          speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
-          subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
-          normalizationProfile: prepared.normalized.normalizationProfile,
-          toolAutonomy: prepared.effectiveToolAutonomy,
-          operatorId: input.operatorId,
-          authActorId: input.authActorId,
-          authActorSource: input.authActorSource,
-          permissionProfileId: effectivePermissionProfileId,
-          policyContext: inputPolicyContext,
-          localOperatorOverrideId: input.localOperatorOverrideId,
-          policyRunId: input.policyRunId,
-          policyTaskId: input.policyTaskId,
-          fullWebAccess: input.fullWebAccess,
-          historyMessages: historyWithSteers,
-          modelRouter: prepared.modelRouterDecision,
-          signal: controller.signal,
-          canonicalWriteFence,
-        }),
-    )) {
+    const serverContextUsageAttribution = buildPreparedRoutedContextUsageAttribution(prepared);
+    const directStream = input.modelCouncil?.enabled
+      ? streamChatModelCouncil(host, prepared, controller.signal)
+      : runDirectTurnStreamWithSubagentFanout(
+          host,
+          prepared,
+          {
+            signal: controller.signal,
+            operatorId: input.operatorId,
+            authActorId: input.authActorId,
+            authActorSource: input.authActorSource,
+            permissionProfileId: effectivePermissionProfileId,
+            localOperatorOverrideId: input.localOperatorOverrideId,
+            policyContext: inputPolicyContext,
+            fullWebAccess: input.fullWebAccess,
+            canonicalWriteFence,
+          },
+          () => {
+            const runnerInput: ChatTurnAgentRunnerInput = {
+              sessionId,
+              turnId,
+              userMessageId: prepared.userEventId,
+              ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
+              parentTurnId: prepared.parentTurnId,
+              branchKind: prepared.branchKind,
+              sourceTurnId: prepared.sourceTurnId,
+              outputMessageId: assistantMessageId,
+              content: prepared.content,
+              mode: resolvePreparedTurnMode(prepared),
+              providerId:
+                prepared.capabilityProfile?.selection.effectiveProviderId ??
+                input.providerId ??
+                prepared.prefs.providerId,
+              model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+              webMode:
+                prepared.capabilityProfile?.selection.webMode ?? prepared.normalized.webMode ?? prepared.prefs.webMode,
+              memoryMode:
+                prepared.capabilityProfile?.selection.memory.mode ??
+                prepared.normalized.memoryMode ??
+                prepared.prefs.memoryMode,
+              retrievalMode:
+                prepared.capabilityProfile?.selection.memory.retrievalMode ?? prepared.autonomy.retrievalMode,
+              thinkingLevel:
+                prepared.capabilityProfile?.selection.thinkingLevel ??
+                prepared.normalized.thinkingLevel ??
+                prepared.prefs.thinkingLevel,
+              speedMode:
+                prepared.capabilityProfile?.selection.speedMode ??
+                prepared.normalized.speedMode ??
+                prepared.prefs.speedMode,
+              subagentPolicy:
+                prepared.capabilityProfile?.selection.subagentPolicy ??
+                prepared.normalized.subagentPolicy ??
+                prepared.prefs.subagentPolicy,
+              normalizationProfile: prepared.normalized.normalizationProfile,
+              toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
+              operatorId: prepared.capabilityProfile
+                ? prepared.capabilityProfile.identity.operatorId
+                : input.operatorId,
+              authActorId: prepared.capabilityProfile
+                ? prepared.capabilityProfile.identity.authActorId
+                : input.authActorId,
+              authActorSource: prepared.capabilityProfile
+                ? prepared.capabilityProfile.identity.authActorSource
+                : input.authActorSource,
+              permissionProfileId:
+                prepared.capabilityProfile?.governance.permission.profileId ?? effectivePermissionProfileId,
+              policyContext: inputPolicyContext,
+              localOperatorOverrideId: prepared.capabilityProfile
+                ? prepared.capabilityProfile.governance.permission.localOperatorOverrideId
+                : input.localOperatorOverrideId,
+              policyRunId: input.policyRunId,
+              policyTaskId: input.policyTaskId,
+              fullWebAccess: input.fullWebAccess,
+              historyMessages: historyWithSteers,
+              modelRouter: prepared.modelRouterDecision,
+              signal: controller.signal,
+              canonicalWriteFence,
+              capabilityProfile: prepared.capabilityProfile,
+              capabilityProfileContent: prepared.capabilityProfileContent,
+              compactionDimensionHash: prepared.compactionDimensionHash,
+              ...(serverContextUsageAttribution ? { serverContextUsageAttribution } : {}),
+            };
+            return host.turnRuntime.runStream(runnerInput);
+          },
+        );
+    for await (const chunk of directStream) {
       if (chunk.type === "message_done" && chunk.content) {
         finalText = chunk.content;
       }
@@ -2228,6 +2393,7 @@ export async function* streamPreparedAgentChatTurn(
       }
       if (chunk.type === "usage") {
         assistantUsage = chunk.usage;
+        assistantModelUsageEventIds = chunk.modelUsageEventIds;
         yield chunk;
       }
       if (chunk.type === "thinking_delta") {
@@ -2255,6 +2421,7 @@ export async function* streamPreparedAgentChatTurn(
       }
       if (
         chunk.type === "tool_start" ||
+        chunk.type === "tool_activity" ||
         chunk.type === "tool_result" ||
         chunk.type === "trace_update" ||
         chunk.type === "error"
@@ -2531,7 +2698,23 @@ export async function* streamPreparedAgentChatTurn(
             role: "assistant",
             content: finalText,
           },
-          usage: assistantUsage,
+          usage:
+            assistantUsage || (assistantModelUsageEventIds?.length ?? 0) > 0
+              ? {
+                  ...assistantUsage,
+                  ...(assistantModelUsageEventIds?.length
+                    ? {
+                        canonicalUsageEventIds: assistantModelUsageEventIds,
+                        canonicalUsageOwner: {
+                          workspaceId: prepared.workspaceId,
+                          sessionId,
+                          turnId,
+                          ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
+                        },
+                      }
+                    : {}),
+                }
+              : undefined,
         },
         {
           onCommit: () => {
@@ -2707,6 +2890,9 @@ export async function* streamPreparedAgentChatTurn(
       };
     }
   } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     const durableControlReason = readDurableControlReason(controller.signal, error);
     if (durableControlReason) {
       throw durableControlReason;

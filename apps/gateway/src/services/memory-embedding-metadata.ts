@@ -1,5 +1,11 @@
-import type { MemoryEmbeddingProfileRequest } from "@goatcitadel/contracts";
-import { generateEmbedding } from "@goatcitadel/policy-engine";
+import { ConflictError, type MemoryEmbeddingProfileRequest } from "@goatcitadel/contracts";
+import {
+  EmbeddingUsageSettlementError,
+  generateEmbedding,
+  type EmbeddingRuntimeOptions,
+} from "@goatcitadel/policy-engine";
+
+export type MemoryEmbeddingRuntimeOptions = Omit<EmbeddingRuntimeOptions, "purpose">;
 
 /**
  * Metadata fragment merged into a memory item / structured-memory record so the
@@ -11,6 +17,7 @@ import { generateEmbedding } from "@goatcitadel/policy-engine";
 export interface MemoryEmbeddingMetadataFragment extends Record<string, unknown> {
   embedding: number[];
   embeddingMetadata: Record<string, unknown>;
+  modelUsageEventIds?: string[];
 }
 
 /**
@@ -22,21 +29,34 @@ export interface MemoryEmbeddingMetadataFragment extends Record<string, unknown>
 export async function buildMemoryEmbeddingMetadata(
   content: string,
   request?: MemoryEmbeddingProfileRequest,
+  runtimeOptions?: MemoryEmbeddingRuntimeOptions,
 ): Promise<MemoryEmbeddingMetadataFragment | undefined> {
   const trimmed = content.trim();
   if (!trimmed) {
     return undefined;
   }
   try {
-    const generated = await generateEmbedding(trimmed, undefined, request);
+    const generated = await generateEmbedding(trimmed, undefined, request, {
+      ...runtimeOptions,
+      purpose: "memory_write",
+    });
     if (!generated.embedding.length) {
       return undefined;
     }
     return {
       embedding: generated.embedding,
       embeddingMetadata: { ...generated.metadata },
+      ...(generated.modelUsageEventIds ? { modelUsageEventIds: [...generated.modelUsageEventIds] } : {}),
     };
-  } catch {
+  } catch (error) {
+    if (runtimeOptions?.signal?.aborted) {
+      throw runtimeOptions.signal.reason instanceof Error
+        ? runtimeOptions.signal.reason
+        : new Error("memory embedding generation aborted");
+    }
+    if (error instanceof ConflictError || error instanceof EmbeddingUsageSettlementError) {
+      throw error;
+    }
     return undefined;
   }
 }
@@ -51,8 +71,9 @@ export async function withMemoryEmbeddingMetadata(
   metadata: Record<string, unknown>,
   content: string,
   request?: MemoryEmbeddingProfileRequest,
+  runtimeOptions?: MemoryEmbeddingRuntimeOptions,
 ): Promise<Record<string, unknown>> {
-  const fragment = await buildMemoryEmbeddingMetadata(content, request);
+  const fragment = await buildMemoryEmbeddingMetadata(content, request, runtimeOptions);
   if (!fragment) {
     return { ...metadata };
   }

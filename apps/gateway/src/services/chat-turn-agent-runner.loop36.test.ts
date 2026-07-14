@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
+import type { ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
 import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
   createMockStorage,
   createToolCatalog,
   namedToolCallCompletion,

@@ -58,6 +58,7 @@ import {
   type ChatTurnEntryHost,
 } from "./chat-turn-entry-service.js";
 import { ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
+import { routeWithModelRouter } from "./model-router-decision-service.js";
 
 function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   const userMessage: ChatMessageRecord = {
@@ -413,6 +414,39 @@ describe("agentSendChatMessage", () => {
     );
     expect(host.turnRuntime.run).not.toHaveBeenCalled();
     expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
+  });
+
+  it("never resolves mode orchestration before durable admission for a routed-context turn", async () => {
+    const host = createHost({});
+    host.prepareAgentChatTurn = vi.fn(async () =>
+      createPreparedTurn({
+        modelRouterDecision: routeWithModelRouter({ prompt: "compare the selected context" }),
+        routedContextSnapshot: {
+          snapshotId: "routed-snapshot-1",
+          sourceRequestHash: "1".repeat(64),
+          snapshotHash: "2".repeat(64),
+          contextText: "Routed context snapshot (immutable).\nExact admitted bytes.",
+        },
+      }),
+    );
+    dispatchMocks.shouldUseDurableExecution.mockReturnValue(true);
+
+    await agentSendChatMessage(host, "session-1", {
+      content: "compare the selected context",
+      mode: "chat",
+      contextRefs: [{ kind: "memory_item", ref: "memory-1" }],
+    });
+
+    expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
+    expect(dispatchMocks.consumePreparedAgentChatTurn).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.objectContaining({ contextRefs: [{ kind: "memory_item", ref: "memory-1" }] }),
+      expect.objectContaining({ routedContextSnapshot: expect.objectContaining({ snapshotId: "routed-snapshot-1" }) }),
+      "chat_thread_turn_appended",
+      undefined,
+      expect.any(Object),
+    );
   });
 
   it("fails a policy-linked deterministic child closed when its session binding is no longer LLM", async () => {
@@ -794,6 +828,10 @@ describe("agentSendChatMessage", () => {
       parentDelegationStepId: "run-1:step-1",
     });
 
+    expect(host.turnRuntime.run).toHaveBeenCalledWith(
+      expect.objectContaining({ parentDelegationStepId: "run-1:step-1" }),
+    );
+
     expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
       expect.objectContaining({ turnId: "turn-1", delegatedChild: true }),
     );
@@ -965,6 +1003,7 @@ describe("agentSendChatMessage", () => {
       providerId: "backup",
       model: "backup-model",
       webMode: "on",
+      contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
     });
 
     expect(host.requireChatTurnContext).toHaveBeenCalledWith("session-1", "turn-original");
@@ -976,6 +1015,7 @@ describe("agentSendChatMessage", () => {
         providerId: "backup",
         model: "backup-model",
         webMode: "on",
+        contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
       }),
       expect.objectContaining({
         branchKind: "retry",
@@ -987,7 +1027,10 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.consumePreparedAgentChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
-      expect.objectContaining({ content: "original prompt" }),
+      expect.objectContaining({
+        content: "original prompt",
+        contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
+      }),
       expect.objectContaining({ turnId: "turn-1" }),
       "chat_thread_turn_retried",
     );
@@ -1209,13 +1252,30 @@ describe("agentSendChatMessage", () => {
   it("streams retry and edit turns through persisted turn events after launching prepared execution", async () => {
     const host = createHost({});
 
-    const retryChunks = await collectChunks(retryChatTurnStream(host, "session-1", "turn-original", { mode: "chat" }));
+    const retryChunks = await collectChunks(
+      retryChatTurnStream(host, "session-1", "turn-original", {
+        mode: "chat",
+        contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
+      }),
+    );
     const editChunks = await collectChunks(editChatTurnStream(host, "session-1", "turn-original", { content: "edit" }));
+
+    expect(host.prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        content: "original prompt",
+        contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
+      }),
+      expect.objectContaining({ branchKind: "retry", sourceTurnId: "turn-original", ingestUserMessage: false }),
+    );
 
     expect(dispatchMocks.launchPreparedAgentChatTurnStream).toHaveBeenCalledWith(
       host,
       "session-1",
-      expect.objectContaining({ content: "original prompt" }),
+      expect.objectContaining({
+        content: "original prompt",
+        contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
+      }),
       expect.objectContaining({ turnId: "turn-1" }),
       "chat_thread_turn_retried",
     );

@@ -5,6 +5,7 @@ const shouldWarnMock = vi.fn();
 const resolveWarnMock = vi.fn();
 const resolveAllowMock = vi.fn();
 const startA2AGrpcServerMock = vi.fn();
+const performShutdownMock = vi.fn();
 
 vi.mock("./app.js", () => ({
   buildApp: buildAppMock,
@@ -20,6 +21,23 @@ vi.mock("./services/a2a-grpc-server.js", () => ({
   startA2AGrpcServer: startA2AGrpcServerMock,
 }));
 
+vi.mock("./shutdown.js", () => ({
+  performShutdown: performShutdownMock,
+}));
+
+function createSharedHostLifecycleMock() {
+  return {
+    tryReserve: vi.fn(() => ({
+      admitted: true as const,
+      state: "accepting" as const,
+      reservation: {
+        signal: new AbortController().signal,
+        release: vi.fn(),
+      },
+    })),
+  };
+}
+
 describe("gateway main entrypoint coverage", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -28,6 +46,9 @@ describe("gateway main entrypoint coverage", () => {
     resolveWarnMock.mockReset();
     resolveAllowMock.mockReset();
     startA2AGrpcServerMock.mockReset();
+    performShutdownMock.mockReset();
+    performShutdownMock.mockResolvedValue({ reached: "closed" });
+    process.exitCode = undefined;
     startA2AGrpcServerMock.mockResolvedValue({
       close: vi.fn().mockResolvedValue(undefined),
       enabled: false,
@@ -37,6 +58,7 @@ describe("gateway main entrypoint coverage", () => {
   });
 
   afterEach(() => {
+    process.exitCode = undefined;
     vi.restoreAllMocks();
   });
 
@@ -63,6 +85,7 @@ describe("gateway main entrypoint coverage", () => {
       services: {
         a2a: {},
       },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     });
     shouldWarnMock.mockReturnValue(false);
     resolveWarnMock.mockReturnValue(true);
@@ -99,6 +122,7 @@ describe("gateway main entrypoint coverage", () => {
       services: {
         a2a: {},
       },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     });
     shouldWarnMock.mockReturnValue(true);
     resolveWarnMock.mockReturnValue(true);
@@ -118,8 +142,6 @@ describe("gateway main entrypoint coverage", () => {
     const infoMock = vi.fn();
     const warnMock = vi.fn();
     const errorMock = vi.fn();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-
     buildAppMock.mockResolvedValue({
       gatewayConfig: {
         assistant: {
@@ -136,6 +158,7 @@ describe("gateway main entrypoint coverage", () => {
       services: {
         a2a: {},
       },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     });
     shouldWarnMock.mockReturnValue(true);
     resolveWarnMock.mockReturnValue(true);
@@ -145,7 +168,8 @@ describe("gateway main entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(errorMock).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(process.exitCode).toBe(1);
+    expect(performShutdownMock).toHaveBeenCalledTimes(1);
     expect(listenMock).not.toHaveBeenCalled();
   });
 
@@ -155,8 +179,6 @@ describe("gateway main entrypoint coverage", () => {
     const infoMock = vi.fn();
     const warnMock = vi.fn();
     const errorMock = vi.fn();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-
     buildAppMock.mockResolvedValue({
       gatewayConfig: {
         assistant: {
@@ -173,6 +195,7 @@ describe("gateway main entrypoint coverage", () => {
       services: {
         a2a: {},
       },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     });
     shouldWarnMock.mockReturnValue(false);
     resolveWarnMock.mockReturnValue(true);
@@ -182,6 +205,7 @@ describe("gateway main entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(errorMock).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(process.exitCode).toBe(1);
+    expect(performShutdownMock).toHaveBeenCalledTimes(1);
   });
 });

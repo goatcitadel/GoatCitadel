@@ -4,11 +4,9 @@ import {
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
 } from "../services/nextcloud-talk-webhook.js";
-import { resolveNextcloudTalkSecret } from "./integration-webhooks-shared.js";
+import { createWebhookRouteOptions, resolveNextcloudTalkSecret } from "./integration-webhooks-shared.js";
 import {
-  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
-  createWebhookPreParsing,
   createWebhookHandler,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -20,14 +18,16 @@ type NextcloudTalkDispatchPayload = Exclude<
 >;
 
 export function registerNextcloudTalkWebhookRoutes(fastify: FastifyInstance): void {
+  const routeOptions = createWebhookRouteOptions("nextcloudTalkRawBody");
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/nextcloud-talk/webhook",
     {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("nextcloudTalkRawBody"),
+      ...routeOptions,
       config: {
+        ...routeOptions.config,
         rateLimit: {
-          max: 500,
+          ...routeOptions.config.rateLimit,
+          max: routeOptions.config.rateLimit.max,
         },
       },
     },

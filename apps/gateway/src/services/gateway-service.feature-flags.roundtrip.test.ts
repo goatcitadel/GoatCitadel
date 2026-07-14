@@ -42,6 +42,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {
   const settings = new Map<string, { value: unknown }>();
+  const syncSignalLegacySettings = vi.fn();
   if (input.stored) {
     settings.set("feature_flags_v1", { value: input.stored });
   }
@@ -55,9 +56,11 @@ function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?:
       },
     },
     config: { assistant: { features: input.configFeatures } },
+    signalInboundRuntimeService: { sync: syncSignalLegacySettings },
     // updateFeatureFlags reads the current set through this.readFeatureFlags.
     readFeatureFlags: GatewayService.prototype.readFeatureFlags,
     settings,
+    syncSignalLegacySettings,
   };
 }
 
@@ -108,6 +111,19 @@ describe("GatewayService feature-flag round-trip", () => {
     });
     expect(after.streamIdleWatchdogV1Disabled).toBe(true);
     expect(after.plannerFastPathV1Disabled).toBe(true);
+  });
+
+  it("reconciles a deprecated Signal inbound flag change through the outbound-only diagnostic facade", () => {
+    const harness = createFlagHarness({
+      configFeatures: { ...ALL_FLAGS_SET, signalInboundV1Enabled: false },
+    });
+
+    const next = GatewayService.prototype.updateFeatureFlags.call(harness as never, {
+      signalInboundV1Enabled: true,
+    });
+
+    expect(next.signalInboundV1Enabled).toBe(true);
+    expect(harness.syncSignalLegacySettings).toHaveBeenCalledTimes(1);
   });
 
   it("memoizes resolved flags within the TTL: one settings read across many reads (Finding 6)", () => {

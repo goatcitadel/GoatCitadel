@@ -5,19 +5,17 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCronJobsFromConfig, type CronJobConfigHost } from "./cron-job-config-helpers.js";
 
-function buildHost(rootDir: string, upsert: ReturnType<typeof vi.fn>): CronJobConfigHost {
-  const txn = (fn: () => void) => fn();
+function buildHost(rootDir: string, reconcileSpec: ReturnType<typeof vi.fn>): CronJobConfigHost {
   return {
     config: { rootDir },
     storage: {
       cronJobs: {
         get: () => undefined,
-        upsertIfChanged: upsert,
-        list: () => [],
       } as never,
-      runImmediateTransaction: txn,
     } as never,
-    persistUnifiedConfig: () => undefined,
+    cronConfigGenerationOwner: {
+      reconcileSpec,
+    },
   };
 }
 
@@ -111,7 +109,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
-  it("recomputes nextRunAt when persisted value is stale relative to schedule", async () => {
+  it("drops stale legacy nextRunAt telemetry from the canonical spec", async () => {
     const rootDir = mkdtempSync(path.join(tmpdir(), "cron-stale-"));
     // schedule = every day at 09:00 UTC; persisted nextRunAt is far in the past.
     const stale = {
@@ -129,14 +127,10 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
     await loadCronJobsFromConfig(host);
 
     expect(upsert).toHaveBeenCalledTimes(1);
-    const persistedNext = upsert.mock.calls[0]?.[0]?.nextRunAt as string | undefined;
-    expect(persistedNext).toBeDefined();
-    const parsed = Date.parse(persistedNext!);
-    expect(Number.isFinite(parsed)).toBe(true);
-    expect(parsed).toBeGreaterThan(Date.now() - 1000);
+    expect(upsert.mock.calls[0]?.[0]).not.toHaveProperty("nextRunAt");
   });
 
-  it("recomputes nextRunAt when persisted value is unparseable", async () => {
+  it("drops unparseable legacy nextRunAt telemetry from the canonical spec", async () => {
     const rootDir = mkdtempSync(path.join(tmpdir(), "cron-bad-next-"));
     const job = {
       jobId: "daily-bad-next",
@@ -153,12 +147,10 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
     await loadCronJobsFromConfig(host);
 
     expect(upsert).toHaveBeenCalledTimes(1);
-    const persistedNext = upsert.mock.calls[0]?.[0]?.nextRunAt as string | undefined;
-    expect(persistedNext).toBeDefined();
-    expect(Number.isFinite(Date.parse(persistedNext!))).toBe(true);
+    expect(upsert.mock.calls[0]?.[0]).not.toHaveProperty("nextRunAt");
   });
 
-  it("preserves nextRunAt when persisted value is in the future", async () => {
+  it("drops future legacy nextRunAt telemetry from the canonical spec", async () => {
     const rootDir = mkdtempSync(path.join(tmpdir(), "cron-future-"));
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const job = {
@@ -176,10 +168,10 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
     await loadCronJobsFromConfig(host);
 
     expect(upsert).toHaveBeenCalledTimes(1);
-    expect(upsert.mock.calls[0]?.[0]?.nextRunAt).toBe(future);
+    expect(upsert.mock.calls[0]?.[0]).not.toHaveProperty("nextRunAt");
   });
 
-  it("repairs nextRunAt for timezone-aware schedules", async () => {
+  it("keeps timezone-aware schedules while dropping their legacy nextRunAt telemetry", async () => {
     const rootDir = mkdtempSync(path.join(tmpdir(), "cron-tz-"));
     // Mirrors PRIVATE_BETA_BACKUP_SCHEDULE_LABEL shape.
     const job = {
@@ -197,8 +189,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
     await loadCronJobsFromConfig(host);
 
     expect(upsert).toHaveBeenCalledTimes(1);
-    const persistedNext = upsert.mock.calls[0]?.[0]?.nextRunAt as string | undefined;
-    expect(persistedNext).toBeDefined();
-    expect(Date.parse(persistedNext!)).toBeGreaterThan(Date.now() - 1000);
+    expect(upsert.mock.calls[0]?.[0]).toMatchObject({ schedule: "30 2 * * * America/Los_Angeles" });
+    expect(upsert.mock.calls[0]?.[0]).not.toHaveProperty("nextRunAt");
   });
 });

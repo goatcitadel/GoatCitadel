@@ -24,6 +24,7 @@ import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
+import { recoverLastGoodConfigGeneration } from "./services/config-generation-service.js";
 import { DEFAULT_LLAMACPP_ALIAS } from "./services/llama-cpp-runtime-service.js";
 
 const configLog = logger.child("config");
@@ -112,10 +113,9 @@ export interface FeatureFlagsConfig {
    */
   channelVoiceInboundV1Enabled?: boolean;
   /**
-   * Signal inbound poller (competitive-gap phase B1b): gates the governed poll
-   * loop against the local signal-cli bridge. Absent/false (default) ⇒ the
-   * poller never starts and Signal stays outbound-only — byte-identical to
-   * today. `true` allows connections with `inboundEnabled: true` to poll.
+   * Deprecated compatibility input. Signal is outbound-only because the
+   * current bridge receive endpoint has no acknowledgement/replay contract.
+   * A legacy true value emits a blocked-posture diagnostic and never polls.
    */
   signalInboundV1Enabled?: boolean;
   /**
@@ -472,6 +472,7 @@ function configMtimesEqual(a: Record<string, number>, b: Record<string, number>)
 }
 
 export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntimeConfig> {
+  await recoverLastGoodConfigGeneration(rootDir);
   const syncResult = await syncUnifiedConfig(rootDir, { createUnifiedIfMissing: true });
   if (syncResult.createdUnified || syncResult.materializedExamples.length > 0 || syncResult.syncedSections.length > 0) {
     const changes = [
@@ -1308,9 +1309,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
       // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,
-      // Signal inbound poller: default OFF. `?? false` means the gateway never
-      // starts a bridge poll loop unless an operator opts in — with this flag
-      // left at its default, runtime behavior is byte-identical to today.
+      // Deprecated compatibility value. Even true never starts Signal receive;
+      // it is retained only so the runtime can report blocked legacy posture.
       signalInboundV1Enabled: featuresInput.signalInboundV1Enabled ?? false,
       // Round-3 kill switches: planner triviality-skip + speed-model drafting,
       // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,

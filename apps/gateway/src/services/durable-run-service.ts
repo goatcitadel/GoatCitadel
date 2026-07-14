@@ -2,6 +2,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ChatTurnTraceRecord,
+  DurableChildWatcherCatchUpResult,
+  DurableChildWatcherCreateRequest,
+  DurableChildWatcherRecord,
+  DurableBackgroundTaskControlRequest,
+  DurableBackgroundTaskControlResponse,
+  DurableBackgroundTaskRailResponse,
   DurableCheckpointRecord,
   ContinuationGateDecision,
   DurableDeadLetterRecord,
@@ -19,12 +25,18 @@ import {
   isChatTurnTerminalStatus,
   isDurableRunTerminal,
   NotFoundError,
+  redactStructuredSecrets,
+  assertDurableChildWatcherCreateRequestBounds,
+  assertDurableChildWatcherIdBounds,
+  assertDurableChildWatcherRunIdBounds,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
+import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
+import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
 import {
   AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
   GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS,
@@ -256,6 +268,16 @@ function assertDurableChatCancellationTraceLink(
   }
 }
 
+function normalizeDurableCancellationReason(reason: string | undefined): string | undefined {
+  const trimmed = reason?.trim();
+  if (!trimmed) return undefined;
+  if (Buffer.byteLength(trimmed, "utf8") > 240) {
+    throw new Error("Durable cancellation reason exceeds 240 bytes.");
+  }
+  const redacted = redactStructuredSecrets(trimmed).value.trim();
+  return redacted || undefined;
+}
+
 const LINKED_FINALIZATION_CLAIM_TTL_MS = 30_000;
 const LINKED_FINALIZATION_TIMEOUT_MS = 60_000;
 const AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS = 30_000;
@@ -433,6 +455,7 @@ export class DurableRunService {
       taskLifecycle?: {
         autoBlockOnIncompleteExit(taskId: string, runId: string): unknown;
       };
+      sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
     },
   ) {}
 
@@ -490,6 +513,172 @@ export class DurableRunService {
     return this.ctx.storage.durableRunEvents.listByRun(runId, limit);
   }
 
+  watchDurableChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    const parentRunId = input.parentRunId.trim();
+    const childRunId = input.childRunId.trim();
+    if (!parentRunId || !childRunId) {
+      throw new Error("Both parentRunId and childRunId are required for a durable child watcher");
+    }
+    if (parentRunId === childRunId) {
+      throw new Error("A durable run cannot watch itself");
+    }
+    const watcherId =
+      input.watcherId?.trim() ||
+      `durable-child-watcher-${createHash("sha256")
+        .update(`${parentRunId}\u0000${childRunId}`)
+        .digest("hex")
+        .slice(0, 32)}`;
+    const source = input.source?.trim() || undefined;
+    const boundedInput: DurableChildWatcherCreateRequest = {
+      parentRunId,
+      childRunId,
+      watcherId,
+      source,
+      metadata: input.metadata ?? {},
+    };
+    assertDurableChildWatcherCreateRequestBounds(boundedInput);
+    this.ctx.storage.durableRuns.getRun(parentRunId);
+    this.ctx.storage.durableRuns.getRun(childRunId);
+    const metadata = redactStructuredSecrets(redactRawRemoteApprovalBearers(boundedInput.metadata ?? {})).value;
+    assertDurableChildWatcherCreateRequestBounds({ ...boundedInput, metadata });
+    let watcher!: DurableChildWatcherRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const created = this.ctx.storage.durableChildWatchers.create({
+        watcherId,
+        parentRunId,
+        childRunId,
+        source,
+        metadata,
+      });
+      watcher = this.ctx.storage.durableChildWatchers.catchUpWatcher(created.watcherId, 100).watcher;
+    });
+    return watcher;
+  }
+
+  listDurableChildWatchers(parentRunId: string, limit = 200): DurableChildWatcherRecord[] {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherRunIdBounds(parentRunId);
+    this.ctx.storage.durableRuns.getRun(parentRunId);
+    return this.ctx.storage.durableChildWatchers.listByParent(parentRunId, limit);
+  }
+
+  detachDurableChildWatcher(watcherId: string): DurableChildWatcherRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherIdBounds(watcherId);
+    return this.ctx.storage.durableChildWatchers.detach(watcherId);
+  }
+
+  reattachDurableChildWatcher(watcherId: string): DurableChildWatcherCatchUpResult {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherIdBounds(watcherId);
+    let result!: DurableChildWatcherCatchUpResult;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const watcher = this.ctx.storage.durableChildWatchers.reattach(watcherId);
+      result = this.ctx.storage.durableChildWatchers.catchUpWatcher(watcher.watcherId, 100);
+    });
+    return result;
+  }
+
+  closeDurableChildWatcher(watcherId: string): DurableChildWatcherRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherIdBounds(watcherId);
+    return this.ctx.storage.durableChildWatchers.close(watcherId);
+  }
+
+  getDurableBackgroundTaskRail(
+    parentRunId: string,
+    input: { workspaceId: string; sessionId: string },
+  ): DurableBackgroundTaskRailResponse {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherRunIdBounds(parentRunId);
+    return projectDurableBackgroundTaskRail(this.ctx.storage, { parentRunId, ...input });
+  }
+
+  controlDurableBackgroundTask(
+    parentRunId: string,
+    watcherId: string,
+    input: DurableBackgroundTaskControlRequest,
+    actorId = "operator",
+  ): DurableBackgroundTaskControlResponse {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherRunIdBounds(parentRunId);
+    assertDurableChildWatcherIdBounds(watcherId);
+    assertNoRawRemoteApprovalBearer(actorId);
+
+    const before = this.getDurableBackgroundTaskRail(parentRunId, input);
+    const task = before.tasks.find((candidate) => candidate.watcherId === watcherId);
+    if (!task) {
+      throw new NotFoundError({ entity: "Durable background task", id: watcherId });
+    }
+    const alreadyConverged =
+      (input.action === "detach" && task.watcherState === "detached") ||
+      (input.action === "reattach" && task.watcherState === "attached") ||
+      (input.action === "cancel" && task.canonicalStatus === "cancelled");
+    if (!alreadyConverged && task.watcherRevision !== input.expectedWatcherRevision) {
+      throw new Error(`Durable child watcher ${watcherId} changed before ${input.action} could be applied.`);
+    }
+
+    let outcome: DurableBackgroundTaskControlResponse["outcome"] = alreadyConverged ? "converged" : "applied";
+    if (input.action === "detach") {
+      if (!alreadyConverged) {
+        if (!task.controls.detach.enabled) {
+          throw new Error(task.controls.detach.reason ?? `Durable child watcher ${watcherId} cannot be detached.`);
+        }
+        const transition = this.ctx.storage.runImmediateTransaction(() =>
+          this.ctx.storage.durableChildWatchers.detachIfRevision(watcherId, parentRunId, input.expectedWatcherRevision),
+        );
+        outcome = transition.outcome;
+      }
+    } else if (input.action === "reattach") {
+      if (!alreadyConverged) {
+        if (!task.controls.reattach.enabled) {
+          throw new Error(task.controls.reattach.reason ?? `Durable child watcher ${watcherId} cannot be reattached.`);
+        }
+        const transition = this.ctx.storage.runImmediateTransaction(() => {
+          const result = this.ctx.storage.durableChildWatchers.reattachIfRevision(
+            watcherId,
+            parentRunId,
+            input.expectedWatcherRevision,
+          );
+          this.ctx.storage.durableChildWatchers.catchUpWatcher(watcherId, 100);
+          return result;
+        });
+        outcome = transition.outcome;
+      }
+    } else {
+      if (!alreadyConverged) {
+        if (!task.controls.cancel.enabled || task.childVersion === undefined) {
+          throw new Error(task.controls.cancel.reason ?? `Durable child run ${task.childRunId} cannot be cancelled.`);
+        }
+        if (input.expectedChildVersion === undefined) {
+          throw new Error("expectedChildVersion is required to cancel a background task.");
+        }
+        const cancelled = this.cancelDurableRun(task.childRunId, `background-task-rail:${actorId}`, {
+          expectedVersion: input.expectedChildVersion,
+          reason: input.reason,
+          assertLockedPrecondition: () => {
+            this.ctx.storage.durableChildWatchers.claimControlRevision(
+              watcherId,
+              parentRunId,
+              input.expectedWatcherRevision,
+            );
+          },
+        });
+        if (cancelled.version !== input.expectedChildVersion + 1) outcome = "converged";
+      }
+    }
+
+    return {
+      version: "durable.background_task_control.v1",
+      action: input.action,
+      watcherId,
+      childRunId: task.childRunId,
+      outcome,
+      rail: this.getDurableBackgroundTaskRail(parentRunId, input),
+    };
+  }
+
   startWorker(): void {
     if (!this.isDurableFoundationEnabled() || !this.deps) {
       return;
@@ -502,20 +691,24 @@ export class DurableRunService {
     this.workerRequested = true;
     this.workerActive = true;
     const backgroundTasks = this.deps.backgroundTasks;
-    const bootTask = Promise.resolve().then(async () => {
-      try {
-        await this.performBootRecovery();
-      } catch (error) {
-        this.reportWorkerBackgroundFailure("boot_recovery", error);
-      }
-      try {
-        await this.runWorkerProcessingLoop();
-      } catch (error) {
-        this.reportWorkerBackgroundFailure("run_processing", error);
-      } finally {
+    const bootTask = Promise.resolve()
+      .then(() =>
+        this.runWithSharedHostWorkerAdmission(async () => {
+          try {
+            await this.performBootRecovery();
+          } catch (error) {
+            this.reportWorkerBackgroundFailure("boot_recovery", error);
+          }
+          try {
+            await this.runWorkerProcessingLoop();
+          } catch (error) {
+            this.reportWorkerBackgroundFailure("run_processing", error);
+          }
+        }),
+      )
+      .finally(() => {
         this.workerActive = false;
-      }
-    });
+      });
     backgroundTasks.add(bootTask);
     void bootTask.finally(() => {
       backgroundTasks.delete(bootTask);
@@ -640,6 +833,16 @@ export class DurableRunService {
     this.activeRunAbortControllers.clear();
   }
 
+  /** Stop future claims without interrupting the currently admitted execution. */
+  stopAdmission(): void {
+    this.workerStopped = true;
+    this.workerRequested = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+  }
+
   requestRunProcessing(_runId?: string): void {
     if (!this.isDurableFoundationEnabled() || !this.deps || this.workerStopped) {
       return;
@@ -651,7 +854,7 @@ export class DurableRunService {
     this.workerActive = true;
     const backgroundTasks = this.deps.backgroundTasks;
     const task = Promise.resolve()
-      .then(() => this.runWorkerProcessingLoop())
+      .then(() => this.runWithSharedHostWorkerAdmission(() => this.runWorkerProcessingLoop()))
       .catch((error) => {
         this.reportWorkerBackgroundFailure("run_processing", error);
       })
@@ -660,6 +863,23 @@ export class DurableRunService {
         backgroundTasks.delete(task);
       });
     backgroundTasks.add(task);
+  }
+
+  private async runWithSharedHostWorkerAdmission(work: () => Promise<void>): Promise<void> {
+    const admission = this.deps?.sharedHostLifecycle?.tryReserve(
+      "worker",
+      `durable-worker:${this.workerId}:${randomUUID()}`,
+    );
+    if (admission && !admission.admitted) return;
+    const reservation = admission?.admitted ? admission.reservation : undefined;
+    const stopOnForceDrain = () => this.stopWorker();
+    reservation?.signal.addEventListener("abort", stopOnForceDrain, { once: true });
+    try {
+      await work();
+    } finally {
+      reservation?.signal.removeEventListener("abort", stopOnForceDrain);
+      reservation?.release();
+    }
   }
 
   private async runWorkerProcessingLoop(): Promise<void> {
@@ -1487,12 +1707,22 @@ export class DurableRunService {
     return next;
   }
 
-  cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
+  cancelDurableRun(
+    runId: string,
+    actorId = "operator",
+    options?: { expectedVersion?: number; reason?: string; assertLockedPrecondition?: () => void },
+  ): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(actorId);
+    const cancellationReason = normalizeDurableCancellationReason(options?.reason);
     const current = this.ctx.storage.durableRuns.getRun(runId);
     if (current.status === "cancelled") {
       return current;
+    }
+    if (options?.expectedVersion !== undefined && current.version !== options.expectedVersion) {
+      throw new Error(
+        `Durable run ${runId} changed from version ${options.expectedVersion} to ${current.version} before cancellation.`,
+      );
     }
     if (current.status === "completed" || current.status === "failed" || current.status === "dead_lettered") {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
@@ -1506,6 +1736,12 @@ export class DurableRunService {
       if (lockedCurrent.status === "cancelled") {
         next = lockedCurrent;
         return;
+      }
+      options?.assertLockedPrecondition?.();
+      if (options?.expectedVersion !== undefined && lockedCurrent.version !== options.expectedVersion) {
+        throw new Error(
+          `Durable run ${runId} changed from version ${options.expectedVersion} to ${lockedCurrent.version} before cancellation.`,
+        );
       }
       if (
         lockedCurrent.status === "completed" ||
@@ -1574,12 +1810,14 @@ export class DurableRunService {
         state: {
           actorId,
           previousStatus: lockedCurrent.status,
+          ...(cancellationReason ? { reason: cancellationReason } : {}),
           ...(chatLink ? { sessionId: chatLink.sessionId, turnId: chatLink.turnId } : {}),
         },
       });
       this.recordDurableTimelineEvent(runId, "run_cancelled", {
         actorId,
         previousStatus: lockedCurrent.status,
+        ...(cancellationReason ? { reason: cancellationReason } : {}),
       });
       transitioned = true;
     });
@@ -2020,7 +2258,7 @@ export class DurableRunService {
     payload?: Record<string, unknown>,
     stepKey?: string,
   ): DurableRunTimelineEvent {
-    const event: DurableRunTimelineEvent = {
+    const event: Omit<DurableRunTimelineEvent, "sequence"> = {
       eventId: randomUUID(),
       runId,
       eventType,
@@ -2028,7 +2266,25 @@ export class DurableRunService {
       payload: redactRawRemoteApprovalBearers(payload ?? {}),
       createdAt: new Date().toISOString(),
     };
-    return this.ctx.storage.durableRunEvents.append(event);
+    const appended = this.ctx.storage.durableRunEvents.append(event);
+    try {
+      this.ctx.storage.durableChildWatchers.catchUpAttachedByChild(runId, {
+        watcherLimit: 100,
+        eventLimitPerWatcher: 100,
+      });
+    } catch (error) {
+      // Child state is canonical and must not be rolled back because an
+      // observational projection is temporarily unavailable. Startup and the
+      // normal durable maintenance loop resume from the persisted watermark.
+      this.resolveLogger().warn(
+        {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "durable child watcher projection deferred to reconciliation",
+      );
+    }
+    return appended;
   }
 
   private recordDurableTimelineEventSafely(
@@ -2060,6 +2316,7 @@ export class DurableRunService {
     if (!this.deps) {
       return 0;
     }
+    this.reconcileDurableChildWatchers();
     let reclaimedCount = 0;
     const recoveryObservedAt = new Date().toISOString();
     const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
@@ -2113,6 +2370,22 @@ export class DurableRunService {
     await this.reconcilePendingGeneralChatPostCommits();
     await this.reconcilePendingAutonomousChatPostCommits();
     return reclaimedCount;
+  }
+
+  private reconcileDurableChildWatchers(): void {
+    try {
+      this.ctx.storage.durableChildWatchers.catchUpAttached({
+        watcherLimit: 100,
+        eventLimitPerWatcher: 100,
+      });
+    } catch (error) {
+      this.resolveLogger().warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "durable child watcher reconciliation deferred",
+      );
+    }
   }
 
   private async transitionExpiredRunToPendingFinalization(

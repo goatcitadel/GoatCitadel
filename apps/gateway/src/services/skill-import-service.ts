@@ -19,7 +19,19 @@ import {
   parseSkillBundleManifest,
   validateSkillBundleManifestDirectory,
 } from "./skill-bundle-manifest.js";
+import {
+  SKILL_CONTENT_INTEGRITY_LIMITS,
+  SkillContentIntegrityLimitError,
+  assertSkillSourceManifestSize,
+  captureSkillContentIntegrity,
+  preflightSkillContentTree,
+  readBoundedSkillTextFile,
+  readBoundedSkillSourceManifestSync,
+  shouldIncludeSkillContentPath,
+  skillContentIntegrityMatches,
+} from "./skill-content-integrity.js";
 import type {
+  SkillContentIntegrityManifest,
   SkillImportCandidate,
   SkillImportCompatibility,
   SkillImportCompatibilitySource,
@@ -41,6 +53,7 @@ import type { SystemSettingsRepository } from "@goatcitadel/storage";
 
 const IMPORT_HISTORY_KEY = "skill_import_history_v1";
 const MAX_IMPORT_HISTORY = 300;
+const MAX_SKILL_SCAN_FILES = 80;
 const TEMP_CLEANUP_OPTIONS = {
   recursive: true,
   force: true,
@@ -48,6 +61,17 @@ const TEMP_CLEANUP_OPTIONS = {
   retryDelay: 100,
 } as const;
 const execFileAsync = promisify(execFile);
+
+const HARDENED_GIT_CONFIG = [
+  "protocol.allow=never",
+  "protocol.https.allow=always",
+  "http.followRedirects=false",
+] as const;
+const GIT_MATERIALIZATION_TIMEOUT_MS = 60_000;
+const GIT_COMMAND_TIMEOUT_MS = 15_000;
+const GIT_TREE_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
+const GIT_METADATA_MAX_BYTES = 16 * 1024 * 1024;
+const GIT_METADATA_MAX_ENTRIES = 2_048;
 
 interface MaterializedSkillSource {
   sourceDir: string;
@@ -57,10 +81,23 @@ interface MaterializedSkillSource {
   cleanup?: () => Promise<void>;
 }
 
-interface SkillImportInput {
+export interface SkillImportInput {
   sourceRef: string;
   sourceType?: SkillImportSourceType;
   sourceProvider?: SkillSourceProvider;
+}
+
+/**
+ * Ephemeral production-review view. The callback is awaited before any
+ * materialized temporary source is removed; its paths must never be retained
+ * as runtime authority.
+ */
+export interface MaterializedSkillReviewContext {
+  skillDir: string;
+  validation: SkillImportValidationResult;
+  declaredVersion?: string;
+  resolvedGitCommit?: string;
+  validateExactDirectory: (skillDir: string) => Promise<SkillImportValidationResult>;
 }
 
 interface SkillInstallInput extends SkillImportInput {
@@ -786,6 +823,65 @@ export class SkillImportService {
     private readonly systemSettings: SystemSettingsRepository,
   ) {}
 
+  /**
+   * Materialize and validate a source for a bounded caller-owned operation.
+   * Cleanup always completes before the returned promise settles, including
+   * when validation or the callback fails.
+   */
+  public async withMaterializedValidation<T>(
+    input: SkillImportInput,
+    callback: (context: MaterializedSkillReviewContext) => Promise<T> | T,
+  ): Promise<T> {
+    let materialized: MaterializedSkillSource | undefined;
+    try {
+      materialized = await this.materializeSkillSource(input);
+      const validation = await this.validateMaterialized(materialized);
+      let declaredVersion: string | undefined;
+      try {
+        const raw = await readBoundedSkillTextFile(
+          materialized.skillFilePath,
+          SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes,
+          "Imported SKILL.md",
+        );
+        const value = parseSkillMarkdown(raw).frontmatter.metadata?.version;
+        declaredVersion = typeof value === "string" && value.trim() ? value.normalize("NFKC").trim() : undefined;
+      } catch {
+        declaredVersion = undefined;
+      }
+      const resolvedGitCommit =
+        validation.candidate.sourceType === "git_url"
+          ? await resolveGitHeadRevision(materialized.sourceDir)
+          : undefined;
+      if (validation.candidate.sourceType === "git_url" && !/^[a-f0-9]{40}$/u.test(resolvedGitCommit ?? "")) {
+        throw new Error("Resolved Git source revision is not an exact commit SHA.");
+      }
+      if (resolvedGitCommit && validation.provenance) {
+        validation.provenance = { ...validation.provenance, commitSha: resolvedGitCommit };
+        validation.candidate = { ...validation.candidate, provenance: validation.provenance };
+      }
+      return await callback({
+        skillDir: materialized.skillDir,
+        validation,
+        declaredVersion,
+        resolvedGitCommit,
+        validateExactDirectory: async (skillDir) => {
+          const exactSkillDir = path.resolve(skillDir);
+          return this.validateMaterialized({
+            sourceDir: exactSkillDir,
+            skillDir: exactSkillDir,
+            skillFilePath: path.join(exactSkillDir, "SKILL.md"),
+            candidate: {
+              ...materialized!.candidate,
+              skillRootPath: exactSkillDir,
+            },
+          });
+        },
+      });
+    } finally {
+      await materialized?.cleanup?.().catch(() => undefined);
+    }
+  }
+
   public async listSources(query?: string, limit = 25): Promise<SkillSourceListResponse> {
     const normalizedQuery = query?.trim().toLowerCase() || undefined;
     const { providers, items } = await this.collectSourceCatalog(Math.max(50, limit * 4));
@@ -916,9 +1012,31 @@ export class SkillImportService {
   }> {
     const importId = randomUUID();
     let materialized: MaterializedSkillSource | undefined;
+    let stagingPath: string | undefined;
     try {
       materialized = await this.materializeSkillSource(input);
-      const validation = await this.validateMaterialized(materialized);
+      const sourceSkillDir = materialized.skillDir;
+      const skillsRoot = path.resolve(this.rootDir, "skills");
+      const skillsExtraRoot = path.resolve(skillsRoot, "extra");
+      const stagingRoot = path.resolve(skillsRoot, ".import-staging");
+      stagingPath = path.resolve(stagingRoot, importId);
+      assertWritePathInJail(stagingPath, [stagingRoot]);
+      await preflightSkillContentTree(sourceSkillDir);
+      await fs.mkdir(stagingRoot, { recursive: true });
+      await fs.rm(stagingPath, { recursive: true, force: true });
+      await fs.cp(sourceSkillDir, stagingPath, {
+        recursive: true,
+        force: false,
+        filter: (sourcePath) =>
+          shouldIncludeSkillContentPath(path.relative(sourceSkillDir, sourcePath).replaceAll("\\", "/")),
+      });
+      const stagedMaterialized: MaterializedSkillSource = {
+        sourceDir: stagingPath,
+        skillDir: stagingPath,
+        skillFilePath: path.join(stagingPath, "SKILL.md"),
+        candidate: materialized.candidate,
+      };
+      const validation = await this.validateMaterialized(stagedMaterialized);
       if (!validation.valid) {
         this.appendHistory({
           importId,
@@ -969,19 +1087,19 @@ export class SkillImportService {
       }
 
       const inferredId = validation.inferredSkillId || `import-${Date.now()}`;
-      const skillsExtraRoot = path.resolve(this.rootDir, "skills", "extra");
       const installedPath = path.resolve(skillsExtraRoot, inferredId);
       assertWritePathInJail(installedPath, [skillsExtraRoot]);
       const targetExists = fsSync.existsSync(installedPath);
       if (targetExists && !input.force) {
         throw new Error(`Skill install target already exists: ${installedPath}`);
       }
-      if (targetExists && input.force) {
-        await fs.rm(installedPath, { recursive: true, force: true });
+      const expectedIntegrity = validation.provenance?.contentIntegrity;
+      if (!expectedIntegrity) {
+        throw new Error("Skill import validation did not produce exact-byte payload provenance.");
       }
-      await fs.mkdir(path.dirname(installedPath), { recursive: true });
-      await fs.cp(materialized.skillDir, installedPath, { recursive: true, force: Boolean(input.force) });
+      await fs.mkdir(skillsExtraRoot, { recursive: true });
 
+      const stagedSourceManifestPath = path.join(stagingPath, "source.json");
       const sourceManifestPath = path.join(installedPath, "source.json");
       const installedAt = new Date().toISOString();
       const duplicateFamily = deriveReviewPolicy({
@@ -997,43 +1115,46 @@ export class SkillImportService {
         validation.candidate.sourceType === "git_url"
           ? await resolveGitHeadRevision(materialized.sourceDir).catch(() => undefined)
           : undefined;
-      await fs.writeFile(
-        sourceManifestPath,
-        JSON.stringify(
-          {
-            manifestVersion: 2,
-            installedAt,
-            lastReviewedAt: installedAt,
-            lastCheckedAt: installedAt,
-            duplicateFamily,
-            reviewDisposition,
-            marketplaceListingUrl:
-              curatedEntry?.sourceProvider === "clawhub" ||
-              curatedEntry?.sourceProvider === "skillsmp" ||
-              curatedEntry?.sourceProvider === "agentskill"
-                ? curatedEntry.sourceUrl
-                : undefined,
-            resolvedUpstream: {
-              url:
-                validation.candidate.repositoryUrl ?? validation.candidate.sourceUrl ?? validation.candidate.sourceRef,
-              ref: validation.candidate.sourceType === "git_url" ? "HEAD" : undefined,
-              version: resolvedUpstreamVersion,
-            },
-            candidate: validation.candidate,
-            riskLevel: validation.riskLevel,
-            warnings: validation.warnings,
-            checks: validation.checks,
-            provenance: validation.provenance,
-            externalToolMappings: validation.externalToolMappings,
-            scriptDisposition: validation.scriptDisposition,
-            bundleManifest: validation.bundleManifest,
-            compatibility: validation.compatibility,
+      const sourceManifestJson = JSON.stringify(
+        {
+          manifestVersion: 3,
+          installedAt,
+          lastReviewedAt: installedAt,
+          lastCheckedAt: installedAt,
+          duplicateFamily,
+          reviewDisposition,
+          marketplaceListingUrl:
+            curatedEntry?.sourceProvider === "clawhub" ||
+            curatedEntry?.sourceProvider === "skillsmp" ||
+            curatedEntry?.sourceProvider === "agentskill"
+              ? curatedEntry.sourceUrl
+              : undefined,
+          resolvedUpstream: {
+            url: validation.candidate.repositoryUrl ?? validation.candidate.sourceUrl ?? validation.candidate.sourceRef,
+            ref: validation.candidate.sourceType === "git_url" ? "HEAD" : undefined,
+            version: resolvedUpstreamVersion,
           },
-          null,
-          2,
-        ),
-        "utf8",
+          candidate: validation.candidate,
+          riskLevel: validation.riskLevel,
+          warnings: validation.warnings,
+          checks: validation.checks,
+          provenance: validation.provenance,
+          externalToolMappings: validation.externalToolMappings,
+          scriptDisposition: validation.scriptDisposition,
+          bundleManifest: validation.bundleManifest,
+          compatibility: validation.compatibility,
+        },
+        null,
+        2,
       );
+      assertSkillSourceManifestSize(sourceManifestJson);
+      await fs.writeFile(stagedSourceManifestPath, sourceManifestJson, "utf8");
+      await assertSkillSourceIntegrity(stagingPath, expectedIntegrity, "Staged skill payload changed after validation");
+      const publication = await publishStagedSkill(stagingPath, installedPath, Boolean(input.force), importId);
+      stagingPath = undefined;
+      if (publication.replacementCleanupWarning) {
+        validation.warnings.push(publication.replacementCleanupWarning);
+      }
 
       this.appendHistory({
         importId,
@@ -1053,6 +1174,7 @@ export class SkillImportService {
           scriptDisposition: validation.scriptDisposition,
           bundleManifest: validation.bundleManifest,
           compatibility: validation.compatibility,
+          replacementCleanupWarning: publication.replacementCleanupWarning,
         },
         createdAt: new Date().toISOString(),
       });
@@ -1084,6 +1206,9 @@ export class SkillImportService {
       });
       throw error;
     } finally {
+      if (stagingPath) {
+        await fs.rm(stagingPath, TEMP_CLEANUP_OPTIONS).catch(() => undefined);
+      }
       await materialized?.cleanup?.().catch(() => undefined);
     }
   }
@@ -1128,7 +1253,7 @@ export class SkillImportService {
         continue;
       }
       try {
-        const parsed = JSON.parse(fsSync.readFileSync(sourceManifestPath, "utf8")) as {
+        const parsed = readBoundedSkillSourceManifestSync(sourceManifestPath) as {
           candidate?: { canonicalKey?: string; sourceRef?: string; repositoryUrl?: string; sourceUrl?: string };
         };
         const candidate = parsed.candidate;
@@ -1169,7 +1294,7 @@ export class SkillImportService {
           continue;
         }
         try {
-          const parsed = JSON.parse(fsSync.readFileSync(sourceManifestPath, "utf8")) as InstalledSkillSourceManifest;
+          const parsed = readBoundedSkillSourceManifestSync(sourceManifestPath) as InstalledSkillSourceManifest;
           const manifestFamily =
             parsed.duplicateFamily ??
             deriveReviewPolicy({
@@ -1328,28 +1453,33 @@ export class SkillImportService {
       }
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-skill-zip-"));
       const extracted = path.join(tempRoot, "extracted");
-      await fs.mkdir(extracted, { recursive: true });
-      await extractZip(zipPath, extracted);
-      const skillDir = await resolveSkillDir(extracted);
-      return {
-        sourceDir: extracted,
-        skillDir,
-        skillFilePath: path.join(skillDir, "SKILL.md"),
-        candidate: {
-          sourceProvider,
-          sourceType,
-          sourceRef,
-          canonicalKey: buildCanonicalKey({
+      try {
+        await fs.mkdir(extracted, { recursive: true });
+        await extractZip(zipPath, extracted);
+        const skillDir = await resolveSkillDir(extracted);
+        return {
+          sourceDir: extracted,
+          skillDir,
+          skillFilePath: path.join(skillDir, "SKILL.md"),
+          candidate: {
             sourceProvider,
             sourceType,
             sourceRef,
-          }),
-          skillRootPath: skillDir,
-        },
-        cleanup: async () => {
-          await removeTempRoot(tempRoot);
-        },
-      };
+            canonicalKey: buildCanonicalKey({
+              sourceProvider,
+              sourceType,
+              sourceRef,
+            }),
+            skillRootPath: skillDir,
+          },
+          cleanup: async () => {
+            await removeTempRoot(tempRoot);
+          },
+        };
+      } catch (error) {
+        await removeTempRoot(tempRoot).catch(() => undefined);
+        throw error;
+      }
     }
 
     if (sourceType === "remote_bundle") {
@@ -1388,14 +1518,35 @@ export class SkillImportService {
     const safeSourceRef = assertSafeGitPositionalArg(sourceRef, "Git source ref");
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-skill-git-"));
     const cloneDir = path.join(tempRoot, "repo");
+    const materializationController = new AbortController();
+    const materializationTimeout = setTimeout(
+      () => materializationController.abort(new Error("Git skill materialization timed out.")),
+      GIT_MATERIALIZATION_TIMEOUT_MS,
+    );
     try {
-      await execFileAsync("git", ["clone", "--depth", "1", "--", safeSourceRef, cloneDir], {
+      await execFileAsync("git", buildHardenedGitCloneArgs(safeSourceRef, cloneDir), {
         windowsHide: true,
+        env: buildSanitizedSkillImportGitEnvironment(),
+        signal: materializationController.signal,
+        timeout: GIT_MATERIALIZATION_TIMEOUT_MS,
+        maxBuffer: GIT_TREE_OUTPUT_MAX_BYTES,
       });
+      await assertBoundedGitMetadata(cloneDir);
+      await materializeBoundedGitTree(cloneDir, materializationController.signal);
+      await preflightSkillContentTree(cloneDir);
     } catch (error) {
+      await removeTempRoot(tempRoot).catch(() => undefined);
       throw new Error(`Failed to clone git source: ${(error as Error).message}`, { cause: error });
+    } finally {
+      clearTimeout(materializationTimeout);
     }
-    const skillDir = await resolveSkillDir(cloneDir);
+    let skillDir: string;
+    try {
+      skillDir = await resolveSkillDir(cloneDir);
+    } catch (error) {
+      await removeTempRoot(tempRoot).catch(() => undefined);
+      throw error;
+    }
     return {
       sourceDir: cloneDir,
       skillDir,
@@ -1421,6 +1572,7 @@ export class SkillImportService {
   private async validateMaterialized(source: MaterializedSkillSource): Promise<SkillImportValidationResult> {
     const errors: string[] = [];
     const warnings: string[] = [];
+    let initialContentIntegrity: SkillContentIntegrityManifest | undefined;
     let inferredSkillName: string | undefined;
     let inferredSkillId: string | undefined;
     let declaredTools: string[] = [];
@@ -1430,7 +1582,17 @@ export class SkillImportService {
     let descriptionQuality = false;
 
     try {
-      const rawSkill = await fs.readFile(source.skillFilePath, "utf8");
+      initialContentIntegrity = await captureSkillContentIntegrity(source.skillDir);
+    } catch (error) {
+      errors.push(`Skill payload fingerprint failed: ${(error as Error).message}`);
+    }
+
+    try {
+      const rawSkill = await readBoundedSkillTextFile(
+        source.skillFilePath,
+        SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes,
+        "Imported SKILL.md",
+      );
       const parsed = parseSkillMarkdown(rawSkill);
       frontmatterValid = true;
       inferredSkillName = parsed.frontmatter.name.trim();
@@ -1453,7 +1615,6 @@ export class SkillImportService {
     const networkIndicators = scan.networkSignals.length > 0;
     const licenseDetected = scan.licenseFiles.length > 0;
     const scanIncomplete = scan.skippedLargeFiles.length > 0 || scan.truncated;
-    const provenance = buildSkillImportProvenance(source.candidate);
     const externalToolMappings = mapImportedSkillTools(declaredTools);
     const scriptDisposition = buildScriptDisposition(scan.scriptFiles, scan.suspiciousSignals);
     const bundleManifest = await validateSkillBundleManifestDirectory(source.skillDir);
@@ -1522,6 +1683,20 @@ export class SkillImportService {
         warnings.push(warning);
       }
     }
+    let contentIntegrity: SkillContentIntegrityManifest | undefined;
+    if (initialContentIntegrity) {
+      try {
+        const finalContentIntegrity = await captureSkillContentIntegrity(source.skillDir);
+        if (!skillContentIntegrityMatches(initialContentIntegrity, finalContentIntegrity)) {
+          errors.push("Skill source changed during validation; retry against a stable source snapshot.");
+        } else {
+          contentIntegrity = finalContentIntegrity;
+        }
+      } catch (error) {
+        errors.push(`Skill payload recheck failed: ${(error as Error).message}`);
+      }
+    }
+    const provenance = buildSkillImportProvenance(source.candidate, contentIntegrity);
     const riskLevel = deriveRiskLevel({
       suspiciousScripts,
       networkIndicators,
@@ -1567,6 +1742,57 @@ export class SkillImportService {
       compatibility,
       provenance,
       nativeOverlaps,
+    };
+  }
+}
+
+async function assertSkillSourceIntegrity(
+  skillDir: string,
+  expected: SkillContentIntegrityManifest,
+  message: string,
+): Promise<void> {
+  const actual = await captureSkillContentIntegrity(skillDir);
+  if (!skillContentIntegrityMatches(expected, actual)) {
+    throw new Error(`${message}: expected ${expected.treeSha256}, observed ${actual.treeSha256}.`);
+  }
+}
+
+async function publishStagedSkill(
+  stagingPath: string,
+  installedPath: string,
+  force: boolean,
+  importId: string,
+): Promise<{ replacementCleanupWarning?: string }> {
+  if (!fsSync.existsSync(installedPath)) {
+    await fs.rename(stagingPath, installedPath);
+    return {};
+  }
+  if (!force) {
+    throw new Error(`Skill install target already exists: ${installedPath}`);
+  }
+
+  const backupPath = path.join(path.dirname(stagingPath), `replaced-${importId}`);
+  await fs.rename(installedPath, backupPath);
+  try {
+    await fs.rename(stagingPath, installedPath);
+  } catch (error) {
+    try {
+      await fs.rename(backupPath, installedPath);
+    } catch (restoreError) {
+      throw new Error(
+        `Failed to publish verified skill payload and restore the previous install: ${(restoreError as Error).message}`,
+        { cause: restoreError },
+      );
+    }
+    throw error;
+  }
+  try {
+    await fs.rm(backupPath, TEMP_CLEANUP_OPTIONS);
+    return {};
+  } catch (error) {
+    const relativeBackupPath = path.relative(path.dirname(path.dirname(stagingPath)), backupPath).replaceAll("\\", "/");
+    return {
+      replacementCleanupWarning: `Previous install cleanup was incomplete; a non-loadable quarantined backup may remain at ${relativeBackupPath}: ${(error as Error).message}`,
     };
   }
 }
@@ -2277,12 +2503,260 @@ function buildNativeOverlapRecords(duplicateFamily?: string) {
 }
 
 async function resolveGitHeadRevision(repoDir: string): Promise<string | undefined> {
-  const result = await execFileAsync("git", ["rev-parse", "HEAD"], {
+  const result = await execFileAsync("git", [...hardenedGitConfigArgs(), "rev-parse", "HEAD"], {
     cwd: repoDir,
     windowsHide: true,
+    env: buildSanitizedSkillImportGitEnvironment(),
+    timeout: GIT_COMMAND_TIMEOUT_MS,
+    maxBuffer: 4_096,
   });
   const stdout = String(result.stdout ?? "").trim();
   return stdout || undefined;
+}
+
+function hardenedGitConfigArgs(): string[] {
+  return HARDENED_GIT_CONFIG.flatMap((entry) => ["-c", entry]);
+}
+
+function buildHardenedGitCloneArgs(sourceRef: string, cloneDir: string): string[] {
+  return [
+    ...hardenedGitConfigArgs(),
+    "clone",
+    "--quiet",
+    "--depth",
+    "1",
+    "--single-branch",
+    "--no-tags",
+    "--no-checkout",
+    `--filter=blob:limit=${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1}`,
+    "--",
+    sourceRef,
+    cloneDir,
+  ];
+}
+
+interface MaterializedGitTreeFile {
+  objectId: string;
+  relativePath: string;
+  bytes: number;
+}
+
+async function materializeBoundedGitTree(repoDir: string, signal: AbortSignal): Promise<void> {
+  const listing = await runBoundedGit(repoDir, ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
+    signal,
+    encoding: "utf8",
+    maxBuffer: GIT_TREE_OUTPUT_MAX_BYTES,
+  });
+  const files = parseBoundedGitTree(String(listing.stdout ?? ""));
+  let totalBytes = 0;
+  for (const file of files) {
+    const sizeResult = await runBoundedGit(repoDir, ["cat-file", "-s", file.objectId], {
+      signal,
+      encoding: "utf8",
+      maxBuffer: 4_096,
+    });
+    const rawSize = String(sizeResult.stdout ?? "").trim();
+    if (!/^(?:0|[1-9]\d*)$/u.test(rawSize)) {
+      throw new SkillContentIntegrityLimitError(
+        `Git skill blob ${file.relativePath} is unavailable inside the bounded partial clone.`,
+      );
+    }
+    const bytes = Number(rawSize);
+    if (!Number.isSafeInteger(bytes) || bytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes) {
+      throw new SkillContentIntegrityLimitError(
+        `Git skill blob ${file.relativePath} exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes} bytes.`,
+      );
+    }
+    totalBytes += bytes;
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes) {
+      throw new SkillContentIntegrityLimitError(
+        `Git skill tree exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes} total bytes.`,
+      );
+    }
+    file.bytes = bytes;
+  }
+
+  for (const file of files) {
+    const blob = await runBoundedGit(repoDir, ["cat-file", "blob", file.objectId], {
+      signal,
+      encoding: "buffer",
+      maxBuffer: SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1_024,
+    });
+    const content = Buffer.isBuffer(blob.stdout) ? blob.stdout : Buffer.from(blob.stdout ?? "");
+    if (content.byteLength !== file.bytes) {
+      throw new Error(`Git skill blob ${file.relativePath} changed during bounded materialization.`);
+    }
+    const destination = path.resolve(repoDir, ...file.relativePath.split("/"));
+    assertWritePathInJail(destination, [repoDir]);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(destination, content, { flag: "wx" });
+  }
+}
+
+function parseBoundedGitTree(output: string): MaterializedGitTreeFile[] {
+  const records = output ? output.split("\0") : [];
+  if (records.at(-1) === "") records.pop();
+  if (records.length > SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles) {
+    throw new SkillContentIntegrityLimitError(
+      `Git skill tree exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles} files.`,
+    );
+  }
+  const files: MaterializedGitTreeFile[] = [];
+  const portablePaths = new Set<string>();
+  const directories = new Set<string>();
+  for (const record of records) {
+    const separator = record.indexOf("\t");
+    if (separator <= 0) throw new Error("Git skill tree returned malformed metadata.");
+    const metadata = record.slice(0, separator).split(" ");
+    const relativePath = record.slice(separator + 1);
+    const [mode, objectType, objectId] = metadata;
+    if (mode !== "100644" || objectType !== "blob" || !/^[a-f0-9]{40}$/u.test(objectId ?? "")) {
+      throw new Error(`Git skill tree contains a symlink, submodule, or unsupported object at ${relativePath}.`);
+    }
+    assertPortableGitTreePath(relativePath);
+    const collisionKey = relativePath.toLowerCase();
+    if (portablePaths.has(collisionKey) || directories.has(collisionKey)) {
+      throw new Error(`Git skill tree contains a case-colliding path: ${relativePath}.`);
+    }
+    portablePaths.add(collisionKey);
+    const segments = relativePath.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      const directory = segments.slice(0, index).join("/").toLowerCase();
+      if (portablePaths.has(directory)) {
+        throw new Error(`Git skill tree contains a file-directory collision: ${relativePath}.`);
+      }
+      directories.add(directory);
+    }
+    if (directories.size + portablePaths.size > SKILL_CONTENT_INTEGRITY_LIMITS.maxEntries) {
+      throw new SkillContentIntegrityLimitError(
+        `Git skill tree exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxEntries} filesystem entries.`,
+      );
+    }
+    files.push({ objectId: objectId!, relativePath, bytes: 0 });
+  }
+  return files;
+}
+
+function assertPortableGitTreePath(relativePath: string): void {
+  const segments = relativePath.split("/");
+  if (
+    !relativePath ||
+    relativePath.length > 4_096 ||
+    relativePath !== relativePath.normalize("NFKC") ||
+    relativePath.includes("\\") ||
+    relativePath.includes("\uFFFD") ||
+    path.posix.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    segments.some(
+      (segment) =>
+        !segment ||
+        segment === "." ||
+        segment === ".." ||
+        segment.length > 255 ||
+        containsAsciiControlCharacter(segment) ||
+        segment.includes(":") ||
+        /[. ]$/u.test(segment) ||
+        segment.toLowerCase() === ".git" ||
+        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment),
+    )
+  ) {
+    throw new Error(`Git skill tree contains a non-portable path: ${relativePath}.`);
+  }
+}
+
+function containsAsciiControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
+  }
+  return false;
+}
+
+async function assertBoundedGitMetadata(repoDir: string): Promise<void> {
+  const objectsDir = path.join(repoDir, ".git", "objects");
+  const queue = [objectsDir];
+  let entries = 0;
+  let bytes = 0;
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    const children = await fs.readdir(current, { withFileTypes: true });
+    for (const child of children) {
+      entries += 1;
+      if (entries > GIT_METADATA_MAX_ENTRIES) {
+        throw new SkillContentIntegrityLimitError(
+          `Git partial-clone metadata exceeds ${GIT_METADATA_MAX_ENTRIES} entries.`,
+        );
+      }
+      const childPath = path.join(current, child.name);
+      const stat = await fs.lstat(childPath);
+      if (stat.isSymbolicLink()) throw new Error("Git partial-clone metadata contains a symbolic link.");
+      if (stat.isDirectory()) {
+        queue.push(childPath);
+      } else if (stat.isFile()) {
+        bytes += stat.size;
+        if (!Number.isSafeInteger(bytes) || bytes > GIT_METADATA_MAX_BYTES) {
+          throw new SkillContentIntegrityLimitError(
+            `Git partial-clone metadata exceeds ${GIT_METADATA_MAX_BYTES} bytes.`,
+          );
+        }
+      } else {
+        throw new Error("Git partial-clone metadata contains an unsupported filesystem entry.");
+      }
+    }
+  }
+}
+
+function runBoundedGit(
+  cwd: string,
+  args: string[],
+  options: { signal: AbortSignal; encoding: "utf8" | "buffer"; maxBuffer: number },
+) {
+  return execFileAsync("git", [...hardenedGitConfigArgs(), ...args], {
+    cwd,
+    windowsHide: true,
+    env: buildSanitizedSkillImportGitEnvironment(),
+    signal: options.signal,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
+    maxBuffer: options.maxBuffer,
+    encoding: options.encoding === "buffer" ? null : "utf8",
+  });
+}
+
+function buildSanitizedSkillImportGitEnvironment(): NodeJS.ProcessEnv {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
+  ) as NodeJS.ProcessEnv;
+  return {
+    ...env,
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+// Test-only projection for the production Git trust boundary. It exposes no
+// subprocess primitive and keeps environment assertions deterministic.
+export function __skillImportGitSecurityForTests(): {
+  args: string[];
+  cloneArgs: string[];
+  env: NodeJS.ProcessEnv;
+} {
+  return {
+    args: hardenedGitConfigArgs(),
+    cloneArgs: buildHardenedGitCloneArgs("https://github.com/example/repo.git", "C:/bounded/repo"),
+    env: buildSanitizedSkillImportGitEnvironment(),
+  };
+}
+
+export function __parseSkillImportGitTreeForTests(output: string): MaterializedGitTreeFile[] {
+  return parseBoundedGitTree(output);
 }
 
 // SECURITY (codex finding #14): The marketplace allowlist is the security
@@ -2422,6 +2896,14 @@ async function materializeHostedSkillBundleManifestAssets(baseUrl: URL, targetDi
     return;
   }
   const manifest = parseSkillBundleManifest(manifestRaw);
+  if (manifest.assets.length > SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles) {
+    throw new SkillContentIntegrityLimitError(
+      `Hosted skill bundle exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles} declared files.`,
+    );
+  }
+  const initialPayload = await captureSkillContentIntegrity(targetDir);
+  let materializedFiles = initialPayload.fileCount;
+  let materializedBytes = initialPayload.totalBytes;
   for (const asset of manifest.assets) {
     const normalized = normalizeSkillBundleAssetPath(asset.path);
     if (!isSkillBundleAssetLocationAllowed(normalized, asset.kind)) {
@@ -2429,6 +2911,11 @@ async function materializeHostedSkillBundleManifestAssets(baseUrl: URL, targetDi
     }
     if (fsSync.existsSync(path.join(targetDir, ...normalized.split("/")))) {
       continue;
+    }
+    if (materializedFiles + 1 > SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles) {
+      throw new SkillContentIntegrityLimitError(
+        `Hosted skill bundle exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles} materialized files.`,
+      );
     }
     const assetUrl = new URL(toHostedBundleRemotePath(normalized), baseUrl);
     const response = await fetchHostedSkillBundleFile(assetUrl.toString());
@@ -2442,9 +2929,16 @@ async function materializeHostedSkillBundleManifestAssets(baseUrl: URL, targetDi
         label: `Hosted skill bundle asset ${normalized}`,
       }),
     );
+    if (materializedBytes + content.byteLength > SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes) {
+      throw new SkillContentIntegrityLimitError(
+        `Hosted skill bundle exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes} total bytes.`,
+      );
+    }
     const targetPath = path.join(targetDir, ...normalized.split("/"));
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, content);
+    materializedFiles += 1;
+    materializedBytes += content.byteLength;
   }
 }
 
@@ -2540,72 +3034,91 @@ function toAbsoluteMarketplaceUrl(provider: "agentskill" | "skillsmp", href: str
 }
 
 async function resolveSkillDir(rootDir: string): Promise<string> {
-  const direct = path.join(rootDir, "SKILL.md");
-  if (fsSync.existsSync(direct)) {
-    return rootDir;
-  }
-
   const queue = [rootDir];
   let scannedDirs = 0;
+  const candidates: string[] = [];
   while (queue.length > 0 && scannedDirs < 250) {
     const current = queue.shift();
     if (!current) {
       continue;
     }
     scannedDirs += 1;
-    const entries = await (async (): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>> => {
-      try {
-        return await fs.readdir(current, { withFileTypes: true });
-      } catch {
-        return [];
-      }
-    })();
+    const entries = await fs.readdir(current, { withFileTypes: true });
 
     const hasSkill = entries.some((entry) => entry.isFile() && entry.name === "SKILL.md");
     if (hasSkill) {
-      return current;
+      candidates.push(current);
+      if (candidates.length > 1) {
+        throw new Error("Skill source is ambiguous because it contains multiple SKILL.md files.");
+      }
     }
     for (const entry of entries) {
       if (!entry.isDirectory()) {
         continue;
       }
-      if (entry.name.startsWith(".git")) {
+      if (entry.name === ".git") {
         continue;
       }
       queue.push(path.join(current, entry.name));
     }
   }
 
+  if (queue.length > 0) {
+    throw new Error("Skill source directory scan exceeded its bounded limit.");
+  }
+  if (candidates.length === 1) return candidates[0]!;
+
   throw new Error("Unable to locate SKILL.md in the provided source.");
 }
 
 async function extractZip(zipPath: string, targetDir: string): Promise<void> {
-  try {
-    await execFileAsync("tar", ["-xf", zipPath, "-C", targetDir], { windowsHide: true });
-    return;
-  } catch {
-    // continue to fallback
-  }
-
-  try {
-    await extractZipWithAdmZip(zipPath, targetDir);
-    return;
-  } catch {
-    // continue to platform fallback
-  }
-
-  if (process.platform === "win32") {
-    const command = `Expand-Archive -Path "${zipPath.replaceAll('"', '""')}" -DestinationPath "${targetDir.replaceAll('"', '""')}" -Force`;
-    await execFileAsync("powershell", ["-NoProfile", "-Command", command], { windowsHide: true });
-    return;
-  }
-
-  throw new Error("Unable to extract zip file in this runtime. Extract locally and use sourceType=local_path.");
+  await extractZipWithAdmZip(zipPath, targetDir);
 }
 
 async function extractZipWithAdmZip(zipPath: string, targetDir: string): Promise<void> {
+  const archiveStat = await fs.stat(zipPath);
+  if (archiveStat.size > SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes) {
+    throw new SkillContentIntegrityLimitError(
+      `Skill zip exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes} compressed bytes.`,
+    );
+  }
   const zip = new AdmZip(zipPath);
-  for (const entry of zip.getEntries()) {
+  const entries = zip.getEntries();
+  if (entries.length > SKILL_CONTENT_INTEGRITY_LIMITS.maxEntries) {
+    throw new SkillContentIntegrityLimitError(
+      `Skill zip exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxEntries} entries.`,
+    );
+  }
+  let declaredFiles = 0;
+  let declaredBytes = 0;
+  for (const entry of entries) {
+    normalizeZipEntryPath(entry.entryName);
+    if (entry.isDirectory) {
+      continue;
+    }
+    declaredFiles += 1;
+    if (declaredFiles > SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles) {
+      throw new SkillContentIntegrityLimitError(`Skill zip exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles} files.`);
+    }
+    if (
+      !Number.isSafeInteger(entry.header.size) ||
+      entry.header.size < 0 ||
+      entry.header.size > SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes
+    ) {
+      throw new SkillContentIntegrityLimitError(
+        `Skill zip entry ${entry.entryName} exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes} bytes.`,
+      );
+    }
+    declaredBytes += entry.header.size;
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes) {
+      throw new SkillContentIntegrityLimitError(
+        `Skill zip exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes} uncompressed bytes.`,
+      );
+    }
+  }
+
+  let extractedBytes = 0;
+  for (const entry of entries) {
     const relativePath = normalizeZipEntryPath(entry.entryName);
     const destination = path.resolve(targetDir, ...relativePath.split("/"));
     assertWritePathInJail(destination, [targetDir]);
@@ -2613,14 +3126,38 @@ async function extractZipWithAdmZip(zipPath: string, targetDir: string): Promise
       await fs.mkdir(destination, { recursive: true });
       continue;
     }
+    const content = entry.getData();
+    if (content.byteLength !== entry.header.size || content.byteLength > SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes) {
+      throw new SkillContentIntegrityLimitError(
+        `Skill zip entry ${entry.entryName} expanded beyond its declared bounds.`,
+      );
+    }
+    extractedBytes += content.byteLength;
+    if (extractedBytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes) {
+      throw new SkillContentIntegrityLimitError(
+        `Skill zip exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes} extracted bytes.`,
+      );
+    }
     await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.writeFile(destination, entry.getData());
+    await fs.writeFile(destination, content);
   }
 }
 
 function normalizeZipEntryPath(entryName: string): string {
-  const normalized = path.posix.normalize(entryName.replace(/\\/g, "/"));
+  const portable = entryName.replace(/\\/g, "/");
+  const segments = portable.split("/").filter(Boolean);
+  const normalized = path.posix.normalize(portable);
   if (
+    entryName.includes("\0") ||
+    entryName !== entryName.normalize("NFKC") ||
+    segments.some(
+      (segment) =>
+        segment === "." ||
+        segment === ".." ||
+        segment.includes(":") ||
+        /[. ]$/u.test(segment) ||
+        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment),
+    ) ||
     normalized === "." ||
     normalized === ".." ||
     normalized.startsWith("../") ||
@@ -2649,7 +3186,7 @@ async function scanSkillDirectory(dir: string): Promise<{
   let scannedFiles = 0;
   let truncated = false;
 
-  while (queue.length > 0 && scannedFiles < 220) {
+  while (queue.length > 0 && scannedFiles < MAX_SKILL_SCAN_FILES) {
     const current = queue.shift();
     if (!current) {
       continue;
@@ -2665,7 +3202,7 @@ async function scanSkillDirectory(dir: string): Promise<{
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (!entry.name.startsWith(".git")) {
+        if (entry.name !== ".git") {
           queue.push(fullPath);
         }
         continue;
@@ -2680,7 +3217,7 @@ async function scanSkillDirectory(dir: string): Promise<{
       if (/\.(ps1|bat|cmd|sh|bash|zsh|py|js|mjs|cjs|ts)$/i.test(entry.name)) {
         scriptFiles.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
       }
-      if (scannedFiles > 220) {
+      if (scannedFiles > MAX_SKILL_SCAN_FILES) {
         truncated = true;
         break;
       }
@@ -2714,7 +3251,10 @@ async function scanSkillDirectory(dir: string): Promise<{
   };
 }
 
-function buildSkillImportProvenance(candidate: SkillImportCandidate): SkillImportProvenance {
+function buildSkillImportProvenance(
+  candidate: SkillImportCandidate,
+  contentIntegrity?: SkillContentIntegrityManifest,
+): SkillImportProvenance {
   return {
     sourceProvider: candidate.sourceProvider,
     sourceRef: candidate.sourceRef,
@@ -2722,6 +3262,7 @@ function buildSkillImportProvenance(candidate: SkillImportCandidate): SkillImpor
     sourceUrl: candidate.sourceUrl,
     repositoryUrl: candidate.repositoryUrl,
     capturedAt: new Date().toISOString(),
+    contentIntegrity,
     nonCallableUntilActivated: true,
   };
 }
@@ -2790,9 +3331,12 @@ async function tryReadFileText(filePath: string): Promise<{ text: string; skippe
     if (stat.size > 220_000) {
       return { text: "", skippedLargeFile: true };
     }
-    const content = await fs.readFile(filePath, "utf8");
+    const content = await readBoundedSkillTextFile(filePath, 220_000, "Imported skill scan file");
     return { text: content, skippedLargeFile: false };
-  } catch {
+  } catch (error) {
+    if (error instanceof SkillContentIntegrityLimitError) {
+      return { text: "", skippedLargeFile: true };
+    }
     return { text: "", skippedLargeFile: false };
   }
 }

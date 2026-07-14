@@ -9,6 +9,7 @@ import {
 function buildAgentTurnJob(overrides: Partial<CronJobRecord> = {}): CronJobRecord {
   return {
     jobId: "agent-turn-job",
+    revision: 1,
     name: "Agent turn job",
     action: "agent_turn",
     schedule: "0 12 * * * UTC",
@@ -100,37 +101,67 @@ describe("normalizeAgentTurnCronActionConfig", () => {
 });
 
 describe("runAgentTurnCronJob", () => {
-  it("records success, computes next run, and emits the enqueued realtime event", async () => {
+  it("passes the execution token, attaches exact child linkage, and emits a non-terminal admitted event", async () => {
     const job = buildAgentTurnJob();
-    const upsertCronJob = vi.fn((next: CronJobRecord) => next);
+    const cronRun = { runId: "run-1", jobId: job.jobId, executionGeneration: 4 };
+    const attachDeterministicChild = vi.fn((_token, linkage) => ({
+      ...cronRun,
+      admissionKey: "manual:run-1",
+      trigger: "manual" as const,
+      jobRevision: 1,
+      action: "agent_turn" as const,
+      actionSnapshot: {},
+      scheduledFor: "2026-05-14T12:00:00.000Z",
+      status: "admitted" as const,
+      phase: "chat_execution" as const,
+      ...linkage,
+      createdAt: "2026-05-14T12:00:00.000Z",
+      updatedAt: "2026-05-14T12:00:00.000Z",
+    }));
     const publishRealtime = vi.fn();
     const runHandler: AgentTurnCronRunHandler = vi.fn(async () => ({
       mode: "agent_turn" as const,
       durableRunId: "durable-1",
       sessionId: "sess_cron",
       turnId: "turn-1",
+      userMessageId: "message-user-1",
+      assistantMessageId: "message-assistant-1",
     }));
 
     const summary = await runAgentTurnCronJob({
       job,
       normalizedJobId: job.jobId,
       runId: "run-1",
+      cronRun,
       runHandler,
-      upsertCronJob,
-      persistCronJobsConfig: () => {},
+      attachDeterministicChild,
       publishRealtime,
-      computeNextCronRunAt: () => "2026-05-15T12:00:00.000Z",
     });
 
-    expect(runHandler).toHaveBeenCalledWith({ job, runId: "run-1", config: job.actionConfig?.agentTurn });
-    const savedRecord = upsertCronJob.mock.calls[0]?.[0];
-    expect(savedRecord).toMatchObject({ lastRunStatus: "ok", lastRunId: "run-1", failureCount: 0 });
+    expect(runHandler).toHaveBeenCalledWith({
+      job,
+      runId: "run-1",
+      config: job.actionConfig?.agentTurn,
+      cronRun,
+    });
+    expect(attachDeterministicChild).toHaveBeenCalledWith(
+      cronRun,
+      {
+        childSessionId: "sess_cron",
+        childMessageId: "message-user-1",
+        childTurnId: "turn-1",
+        childAssistantMessageId: "message-assistant-1",
+        childDurableRunId: "durable-1",
+      },
+      expect.any(String),
+    );
     expect(publishRealtime).toHaveBeenCalledWith(
       "cron_job_run",
       "cron",
       expect.objectContaining({
-        type: "cron_agent_turn_enqueued",
+        type: "cron_agent_turn_admitted",
         jobId: job.jobId,
+        executionGeneration: 4,
         durableRunId: "durable-1",
         sessionId: "sess_cron",
         turnId: "turn-1",
@@ -141,8 +172,8 @@ describe("runAgentTurnCronJob", () => {
       action: "agent_turn",
       runId: "run-1",
       mode: "agent_turn",
+      status: "admitted",
       durableRunId: "durable-1",
-      nextRunAt: "2026-05-15T12:00:00.000Z",
     });
   });
 
@@ -153,6 +184,8 @@ describe("runAgentTurnCronJob", () => {
       },
     });
     const publishRealtime = vi.fn();
+    const cronRun = { runId: "run-2", jobId: job.jobId, executionGeneration: 1 };
+    const attachDeterministicChild = vi.fn();
     const runHandler: AgentTurnCronRunHandler = vi.fn(async () => ({
       mode: "inbox" as const,
       taskId: "task-1",
@@ -162,19 +195,80 @@ describe("runAgentTurnCronJob", () => {
       job,
       normalizedJobId: job.jobId,
       runId: "run-2",
+      cronRun,
       runHandler,
-      upsertCronJob: (next) => next,
-      persistCronJobsConfig: () => {},
+      attachDeterministicChild,
       publishRealtime,
-      computeNextCronRunAt: () => undefined,
     });
 
+    expect(attachDeterministicChild).not.toHaveBeenCalled();
     expect(publishRealtime).toHaveBeenCalledWith(
       "cron_job_run",
       "cron",
       expect.objectContaining({ type: "scheduled_task_created", taskId: "task-1" }),
     );
-    expect(summary).toMatchObject({ mode: "inbox", taskId: "task-1" });
+    expect(summary).toMatchObject({ mode: "inbox", status: "inbox_created", taskId: "task-1" });
+  });
+
+  it("fails closed when the deterministic child omits canonical linkage", async () => {
+    const job = buildAgentTurnJob();
+    const cronRun = { runId: "run-missing", jobId: job.jobId, executionGeneration: 2 };
+    await expect(
+      runAgentTurnCronJob({
+        job,
+        normalizedJobId: job.jobId,
+        runId: cronRun.runId,
+        cronRun,
+        runHandler: vi.fn(async () => ({
+          mode: "agent_turn" as const,
+          durableRunId: "durable-missing",
+          sessionId: "session-missing",
+          turnId: "turn-missing",
+        })),
+        attachDeterministicChild: vi.fn(),
+        publishRealtime: vi.fn(),
+      }),
+    ).rejects.toThrow("missing required linkage");
+  });
+
+  it("fails closed when exact-generation child attachment loses ownership", async () => {
+    const job = buildAgentTurnJob();
+    const cronRun = { runId: "run-stale", jobId: job.jobId, executionGeneration: 2 };
+    await expect(
+      runAgentTurnCronJob({
+        job,
+        normalizedJobId: job.jobId,
+        runId: cronRun.runId,
+        cronRun,
+        runHandler: vi.fn(async () => ({
+          mode: "agent_turn" as const,
+          durableRunId: "durable-stale",
+          sessionId: "session-stale",
+          turnId: "turn-stale",
+          userMessageId: "message-user-stale",
+          assistantMessageId: "message-assistant-stale",
+        })),
+        attachDeterministicChild: vi.fn(() => undefined),
+        publishRealtime: vi.fn(),
+      }),
+    ).rejects.toThrow("lost execution ownership");
+  });
+
+  it("rejects an execution token that does not own the invoked job/run", async () => {
+    const job = buildAgentTurnJob();
+    const runHandler = vi.fn();
+    await expect(
+      runAgentTurnCronJob({
+        job,
+        normalizedJobId: job.jobId,
+        runId: "run-owned",
+        cronRun: { runId: "run-other", jobId: job.jobId, executionGeneration: 1 },
+        runHandler,
+        attachDeterministicChild: vi.fn(),
+        publishRealtime: vi.fn(),
+      }),
+    ).rejects.toThrow("does not own");
+    expect(runHandler).not.toHaveBeenCalled();
   });
 
   it("throws when the job is missing an agent_turn prompt", async () => {
@@ -184,11 +278,10 @@ describe("runAgentTurnCronJob", () => {
         job,
         normalizedJobId: job.jobId,
         runId: "run-3",
+        cronRun: { runId: "run-3", jobId: job.jobId, executionGeneration: 1 },
         runHandler: vi.fn(),
-        upsertCronJob: (next) => next,
-        persistCronJobsConfig: () => {},
+        attachDeterministicChild: vi.fn(),
         publishRealtime: vi.fn(),
-        computeNextCronRunAt: () => undefined,
       }),
     ).rejects.toThrow("agent_turn cron job missing prompt");
   });

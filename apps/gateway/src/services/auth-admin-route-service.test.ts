@@ -105,9 +105,9 @@ describe("AuthAdminRouteService", () => {
       method: "verifyBackup",
       args: [{ filePath: "backup.zip" }],
     });
-    expect(service.runDatabaseCutover({ execute: false })).toEqual({
+    expect(service.runDatabaseCutover({ profile: "local", execute: false })).toEqual({
       method: "runDatabaseCutover",
-      args: [{ execute: false }],
+      args: [{ profile: "local", execute: false }],
     });
     expect(service.verifyDatabaseCutover({ source: "sqlite" })).toEqual({
       method: "verifyDatabaseCutover",

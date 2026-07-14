@@ -17,6 +17,8 @@ export type CapabilitiesRoutePort = Pick<
   | "listCatalog"
   | "listCodeModeExecutionBackends"
   | "listCodeModeRuns"
+  | "listCodeModeRunVerificationEvidence"
+  | "verifyCodeModeRun"
   | "compareCodeModeRuns"
   | "createAutonomousActivationGrant"
   | "listProposals"
@@ -89,16 +91,16 @@ export class CapabilitiesRouteService {
     return this.capabilities.getCandidateDetail(candidateId);
   }
 
-  public promoteCapabilityCandidate(candidateId: string, versionId?: string) {
-    return this.capabilities.promoteCandidate(candidateId, versionId);
+  public promoteCapabilityCandidate(candidateId: string, expectedRevision: number, versionId?: string) {
+    return this.capabilities.promoteCandidate(candidateId, expectedRevision, versionId);
   }
 
-  public revokeCapabilityCandidate(candidateId: string, versionId?: string) {
-    return this.capabilities.revokeCandidate(candidateId, versionId);
+  public revokeCapabilityCandidate(candidateId: string, expectedRevision: number, versionId?: string) {
+    return this.capabilities.revokeCandidate(candidateId, expectedRevision, versionId);
   }
 
-  public rollbackCapabilityCandidate(candidateId: string, targetVersionId: string) {
-    return this.capabilities.rollbackCandidate(candidateId, targetVersionId);
+  public rollbackCapabilityCandidate(candidateId: string, targetVersionId: string, expectedRevision: number) {
+    return this.capabilities.rollbackCandidate(candidateId, targetVersionId, expectedRevision);
   }
 
   public listCodeModeRuns(input: Parameters<CapabilitiesRoutePort["listCodeModeRuns"]>[0] = 100) {
@@ -135,5 +137,22 @@ export class CapabilitiesRouteService {
 
   public createCodeModeRun(input: Parameters<CapabilitiesRoutePort["createCodeModeRun"]>[0]) {
     return this.capabilities.createCodeModeRun(input);
+  }
+
+  public verifyCodeModeRun(
+    runId: string,
+    input: Parameters<CapabilitiesRoutePort["verifyCodeModeRun"]>[1],
+    scope: Parameters<CapabilitiesRoutePort["verifyCodeModeRun"]>[2],
+    operatorId?: string,
+  ) {
+    return this.capabilities.verifyCodeModeRun(runId, input, scope, operatorId);
+  }
+
+  public listCodeModeRunVerificationEvidence(
+    runId: string,
+    scope: Parameters<CapabilitiesRoutePort["listCodeModeRunVerificationEvidence"]>[1],
+    limit?: number,
+  ) {
+    return this.capabilities.listCodeModeRunVerificationEvidence(runId, scope, limit);
   }
 }

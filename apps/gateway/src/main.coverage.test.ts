@@ -20,11 +20,30 @@ interface MockGatewayApp {
   services: {
     a2a: unknown;
   };
+  server: {
+    close: ReturnType<typeof vi.fn>;
+    listening: boolean;
+  };
+  sharedHostLifecycle: ReturnType<typeof createSharedHostLifecycleMock>;
 }
 
 interface MockA2AGrpcServer {
   close: ReturnType<typeof vi.fn>;
   enabled: boolean;
+}
+
+function createSharedHostLifecycleMock() {
+  return {
+    markClosed: vi.fn(),
+    tryReserve: vi.fn(() => ({
+      admitted: true as const,
+      state: "accepting" as const,
+      reservation: {
+        signal: new AbortController().signal,
+        release: vi.fn(),
+      },
+    })),
+  };
 }
 
 const importMainWithMocks = async (
@@ -70,6 +89,11 @@ const importMainWithMocks = async (
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp);
   const setGoatcitadelTerminalTitle = vi.fn();
   const grpcServer =
@@ -133,6 +157,7 @@ describe("gateway main entrypoint", () => {
       a2a: app.services.a2a,
       config: app.gatewayConfig,
       logger: app.log,
+      sharedHostLifecycle: app.sharedHostLifecycle,
     });
 
     handlers.get("warning")?.[0]?.(
@@ -180,6 +205,11 @@ describe("gateway main entrypoint", () => {
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp;
     const { handlers, setGoatcitadelTerminalTitle } = await importMainWithMocks({
       app,
@@ -189,6 +219,7 @@ describe("gateway main entrypoint", () => {
     expect(setGoatcitadelTerminalTitle).toHaveBeenCalledWith("Gateway");
     handlers.get("SIGINT")?.[0]?.();
     handlers.get("SIGINT")?.[0]?.();
+    await vi.advanceTimersByTimeAsync(0);
     expect(app.close).toHaveBeenCalledTimes(1);
 
     expect(() => vi.advanceTimersByTime(10_000)).toThrow("process.exit:1");
@@ -218,6 +249,11 @@ describe("gateway main entrypoint", () => {
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp;
     const { handlers } = await importMainWithMocks({ app });
 
@@ -227,9 +263,7 @@ describe("gateway main entrypoint", () => {
   });
 
   it("logs startup failures and exits with failure code", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
-      throw new Error(`process.exit:${code}`);
-    });
+    const exitSpy = vi.spyOn(process, "exit");
     const app = {
       close: vi.fn(async () => undefined),
       gatewayConfig: {
@@ -250,12 +284,17 @@ describe("gateway main entrypoint", () => {
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp;
 
-    await expect(importMainWithMocks({ app })).rejects.toThrow("process.exit:1");
+    await importMainWithMocks({ app });
 
     expect(app.log.error).toHaveBeenCalledWith(expect.objectContaining({ message: "port already in use" }));
     expect(process.exitCode).toBe(1);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 });

@@ -145,8 +145,8 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
   });
 
   it("surfaces approval when the safe write fallback path also requires approval", async () => {
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+    const invokeToolWithEffectTruth = vi
+      .fn<NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>>()
       .mockResolvedValueOnce({
         outcome: "blocked",
         policyReason: "outside write jail",
@@ -160,7 +160,12 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
         approvalId: "approval-safe-write-fallback-1",
         expiresAt: "2026-03-22T12:30:00.000Z",
       });
-    const executeToolCall = createExecuteToolCall({ invokeTool });
+    const executeToolCall = createExecuteToolCall({
+      invokeTool: vi.fn(async () => {
+        throw new Error("legacy invocation seam must not run when effect truth is supported");
+      }),
+      invokeToolWithEffectTruth,
+    });
 
     const result = await executeToolCall({
       input: turnInput({
@@ -183,8 +188,8 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
   });
 
   it("keeps the original write blocked when fallback write also fails", async () => {
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+    const invokeToolWithEffectTruth = vi
+      .fn<NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>>()
       .mockResolvedValueOnce({
         outcome: "blocked",
         policyReason: "outside write jail",
@@ -197,7 +202,12 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
         auditEventId: "audit-write-fallback-denied",
         result: { denied: true },
       });
-    const executeToolCall = createExecuteToolCall({ invokeTool });
+    const executeToolCall = createExecuteToolCall({
+      invokeTool: vi.fn(async () => {
+        throw new Error("legacy invocation seam must not run when effect truth is supported");
+      }),
+      invokeToolWithEffectTruth,
+    });
 
     const result = await executeToolCall({
       input: turnInput({
@@ -273,10 +283,12 @@ describe("ChatTurnAgentRunner runtime recovery coverage", () => {
 
 function createExecuteToolCall(input: {
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+  invokeToolWithEffectTruth?: NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>;
   persistToolArtifact?: NonNullable<ChatTurnAgentRunnerDeps["persistToolArtifact"]>;
 }) {
   return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
+    invokeToolWithEffectTruth: input.invokeToolWithEffectTruth,
     toolNames: ["browser.search", "browser.interact", "code.search_files", "fs.write", "time.now"],
     persistToolArtifact: input.persistToolArtifact,
   });

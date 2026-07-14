@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentCommitmentKind,
   AgentCommitmentRecord,
@@ -6,9 +6,13 @@ import type {
   ChatCompletionResponse,
   CommitmentClassification,
   LlmApiStyle,
+  ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
 import { COMMITMENT_CONFIDENCE_THRESHOLD } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { createUtilityModelUsageAttribution } from "../utility-model-usage-attribution.js";
+import { runBoundedUtilityModelCall } from "../utility-model-call.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 /**
  * Post-turn commitment classifier (P1-F3).
@@ -38,6 +42,8 @@ export interface CommitmentClassifierModelDefaults {
 export interface CommitmentClassifierTurnInput {
   sessionId: string;
   workspaceId: string;
+  /** Server-owned completed turn identity, when the caller has retained it. */
+  sourceTurnId?: string;
   userText: string;
   assistantText: string;
   /** Abort signal so a slow classify never outlives its turn. */
@@ -60,7 +66,10 @@ export interface RecordTurnCommitmentsInput extends CommitmentClassifierTurnInpu
 export interface CommitmentClassifierServiceDeps {
   readonly storage: Pick<Storage, "agentCommitments">;
   /** Cheap, read-only model call (the judge/explainer chokepoint). */
-  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   /** Cheap-model defaults (mirrors the explainer judge-model resolution). */
   resolveModelDefaults(): CommitmentClassifierModelDefaults;
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
@@ -104,12 +113,29 @@ export class CommitmentClassifierService {
 
     let response: ChatCompletionResponse;
     try {
-      response = await withTimeout(
-        this.deps.createChatCompletion(request),
-        this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        "commitment classifier timed out",
-      );
-    } catch {
+      const attribution = createUtilityModelUsageAttribution({
+        operationId: buildCommitmentClassifierOperationId(input, transcript),
+        utilityKind: "commitment_classification",
+        requestedProviderId: defaults.providerId,
+        requestedModelId: defaults.model,
+        lineage: {
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          turnId: input.sourceTurnId,
+          agentId: "commitment-classifier",
+          parentOperationId: input.sourceTurnId ? `chat-turn:${encodeURIComponent(input.sourceTurnId)}` : undefined,
+        },
+      });
+      response = await runBoundedUtilityModelCall({
+        timeoutMs: this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMessage: "commitment classifier timed out",
+        parentSignal: input.signal,
+        start: (boundedSignal) => this.deps.createChatCompletion({ ...request, signal: boundedSignal }, attribution),
+      });
+    } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       // Hidden best-effort pass: never surface classifier failure to the turn.
       return [];
     }
@@ -197,6 +223,13 @@ export class CommitmentClassifierService {
 }
 
 // ── pure helpers ─────────────────────────────────────────────────────
+
+function buildCommitmentClassifierOperationId(input: CommitmentClassifierTurnInput, transcript: string): string {
+  const stableRef = input.sourceTurnId
+    ? encodeURIComponent(input.sourceTurnId)
+    : createHash("sha256").update(`${input.sessionId}\n${transcript}`).digest("hex").slice(0, 32);
+  return `commitment-classifier:${stableRef}`;
+}
 
 function buildSystemPrompt(): string {
   return (
@@ -389,20 +422,6 @@ function extractMessageContent(response: ChatCompletionResponse): string {
       .join("\n");
   }
   return "";
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
 }
 
 function truncate(value: string, maxLength: number): string {

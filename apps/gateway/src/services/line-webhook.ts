@@ -66,19 +66,55 @@ export function deriveLineWebhookIdempotencyKey(connectionId: string, payload: u
   return `line:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
+/**
+ * Derive the identity for one normalized event in a LINE webhook batch. LINE
+ * can deliver several events in one signed callback, so using the first event
+ * from the raw body for every row would collapse otherwise-distinct messages.
+ */
+export function deriveLineWebhookEventIdempotencyKey(
+  connectionId: string,
+  event: Extract<LineWebhookNormalization, { kind: "message" }>,
+): string {
+  const webhookEventId = asString(event.metadata.webhookEventId);
+  return `line:${connectionId}:${webhookEventId ?? event.eventId}`;
+}
+
 export function normalizeLineWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
 }): LineWebhookNormalization {
-  const root = asRecord(input.payload);
-  const event = firstRecord(asArray(root.events));
-  if (!event) {
-    return {
+  return (
+    normalizeLineWebhookPayloads(input)[0] ?? {
       kind: "ignore",
       reason: "No LINE webhook events were present",
-    };
+    }
+  );
+}
+
+/** Normalize every event in a signed LINE callback, preserving wire order. */
+export function normalizeLineWebhookPayloads(input: {
+  connectionId: string;
+  payload: unknown;
+}): LineWebhookNormalization[] {
+  const root = asRecord(input.payload);
+  const events = records(asArray(root.events));
+  if (events.length === 0) {
+    return [
+      {
+        kind: "ignore",
+        reason: "No LINE webhook events were present",
+      },
+    ];
   }
 
+  return events.map((event) => normalizeLineWebhookEvent(input.connectionId, root, event));
+}
+
+function normalizeLineWebhookEvent(
+  connectionId: string,
+  root: JsonRecord,
+  event: JsonRecord,
+): LineWebhookNormalization {
   const eventType = asString(event.type);
   if (eventType !== "message") {
     return {
@@ -110,7 +146,7 @@ export function normalizeLineWebhookPayload(input: {
     kind: "message",
     eventType: "message",
     eventId,
-    account: input.connectionId,
+    account: connectionId,
     actorId,
     actorType: "user",
     content,
@@ -118,10 +154,11 @@ export function normalizeLineWebhookPayload(input: {
     peer,
     deliveryReplyToMessageId: eventId,
     metadata: compactRecord({
+      // LINE replyToken is an ephemeral bearer credential. Outbound delivery
+      // does not use it, so it must not cross the durable intake boundary.
       destination: asString(root.destination),
       isRedelivery: asBoolean(asRecord(event.deliveryContext).isRedelivery),
       mode: asString(event.mode),
-      replyToken: asString(event.replyToken),
       sourceType,
       webhookEventId: asString(event.webhookEventId),
     }),
@@ -156,6 +193,10 @@ function asArray(value: unknown): unknown[] {
 function firstRecord(value: unknown[]): JsonRecord | undefined {
   const first = value.find((item) => item && typeof item === "object" && !Array.isArray(item));
   return first ? (first as JsonRecord) : undefined;
+}
+
+function records(value: unknown[]): JsonRecord[] {
+  return value.filter((item): item is JsonRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item));
 }
 
 function asBoolean(value: unknown): boolean | undefined {

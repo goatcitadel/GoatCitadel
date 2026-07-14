@@ -1,11 +1,13 @@
-import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
+import type { DatabaseCutoverRequest, LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
 import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import type { ReviewReadinessService } from "./review-readiness-service.js";
+import type { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 
 type GatewayLogger = {
   debug: (...args: unknown[]) => void;
@@ -18,13 +20,15 @@ export interface GatewayRuntimePort {
   readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   readonly mutationIdempotencyStore: MutationIdempotencyStore;
   readonly reviewReadinessService: ReviewReadinessService;
+  readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
   readonly routeServices: GatewayRouteServices;
   attachDevDiagnosticsLogger(logger: GatewayLogger): void;
   init(): Promise<void>;
   initCritical(): Promise<void>;
-  startDeferredInit(): Promise<void>;
+  startDeferredInit(signal?: AbortSignal): Promise<void>;
   recordDevDiagnostic(input: unknown): void;
   getOnboardingStartupState(): { completed?: boolean };
+  stopExternalAdmission?(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -47,13 +51,14 @@ export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidat
   getRetentionPolicy(): unknown;
   listBackups(limit?: number): Promise<unknown>;
   pruneRetention(input: { dryRun?: boolean }): Promise<unknown>;
+  readSettingsRevision(): number;
   resolveGatewayInstallToken(input: {
     token?: string;
     generateWhenMissing?: boolean;
     persistToEnv?: boolean;
   }): Promise<unknown>;
-  runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }>;
-  runDatabaseCutover(input: { profile: "local" | "hosted"; execute: boolean; confirm?: boolean }): Promise<unknown>;
+  runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" | "pending" }>;
+  runDatabaseCutover(input: DatabaseCutoverRequest): Promise<unknown>;
   updateRetentionPolicy(input: {
     realtimeEventsDays?: number;
     backupsKeep?: number;
@@ -63,8 +68,15 @@ export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidat
   verifyDatabaseCutover(input: { source: string; target?: string }): Promise<unknown>;
 }
 
-export function createGatewayRuntime(config: GatewayRuntimeConfig): GatewayRuntimeInstance {
-  return createGatewayRuntimeFacade(new GatewayService(config));
+export interface GatewayRuntimeFactoryOptions {
+  sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
+}
+
+export function createGatewayRuntime(
+  config: GatewayRuntimeConfig,
+  options: GatewayRuntimeFactoryOptions = {},
+): GatewayRuntimeInstance {
+  return createGatewayRuntimeFacade(new GatewayService(config, options));
 }
 
 export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): GatewayAdminPort {
@@ -78,6 +90,7 @@ export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): Gateway
     getRetentionPolicy: () => gateway.getRetentionPolicy(),
     listBackups: (limit) => gateway.listBackups(limit),
     pruneRetention: (input) => gateway.pruneRetention(input),
+    readSettingsRevision: () => gateway.readSettingsRevision(),
     resolveGatewayInstallToken: (input) => gateway.resolveGatewayInstallToken(input),
     runCronJobNow: (jobId) => gateway.cronAutomationService.runCronJobNow(jobId),
     runDatabaseCutover: (input) => gateway.runDatabaseCutover(input),
@@ -97,6 +110,9 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     get reviewReadinessService() {
       return gateway.reviewReadinessService;
     },
+    get runtimeAuthorityProjectionService() {
+      return gateway.runtimeAuthorityProjectionService;
+    },
     get routeServices() {
       return gateway.routeServices;
     },
@@ -107,7 +123,8 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     initCritical: () => gateway.initCritical(),
     recordDevDiagnostic: (input) =>
       gateway.recordDevDiagnostic(input as Parameters<GatewayService["recordDevDiagnostic"]>[0]),
-    startDeferredInit: () => gateway.startDeferredInit(),
+    stopExternalAdmission: () => gateway.stopExternalAdmission(),
+    startDeferredInit: (signal) => gateway.startDeferredInit(signal),
     validateCompanionAccessToken: (token) => gateway.validateCompanionAccessToken(token),
     validateDeviceAccessToken: (token) => gateway.validateDeviceAccessToken(token),
     verifyCompanionRequestSignature: (input) =>

@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   BackupCreateResponse,
   DatabaseCutoverProfile,
+  DatabaseCutoverRequest,
   DatabaseCutoverResponse,
   DatabaseCutoverStatus,
   DatabaseCutoverStepRecord,
@@ -12,6 +13,7 @@ import type {
   DatabaseVerifyIssue,
   DatabaseVerifyResponse,
 } from "@goatcitadel/contracts";
+import { ConflictError, isGoatError, ValidationError } from "@goatcitadel/contracts";
 import { PostgresDatabaseClient, runPostgresMigrations } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
@@ -20,7 +22,13 @@ import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "
 export interface DatabaseCutoverServiceDeps {
   readonly config: GatewayRuntimeConfig;
   readonly createBackup: (input?: { name?: string; outputPath?: string }) => Promise<BackupCreateResponse>;
-  readonly persistAssistantConfig?: () => void;
+  /** Revision-fenced public settings read used before any execute side effect. */
+  readonly readSettingsRevision: () => number;
+  /** Persists the next-start driver through the Gateway config-generation owner. */
+  readonly commitDatabaseDriver?: (input: {
+    driver: "postgres";
+    expectedRevision: number;
+  }) => Promise<{ revision: number }>;
 }
 
 /** @internal */
@@ -72,21 +80,42 @@ const CUTOVER_IMPORT_BATCH_SIZE = 1000;
 const SQLITE_IMPORT_EXCLUDED_TABLES = new Set(["schema_migrations"]);
 
 export class DatabaseCutoverService {
-  public constructor(private readonly deps: DatabaseCutoverServiceDeps) {}
+  private readonly activeStorageDriver: "sqlite" | "postgres";
 
-  public async runCutover(input: {
-    profile: DatabaseCutoverProfile;
-    execute: boolean;
-    confirm?: boolean;
-  }): Promise<DatabaseCutoverResponse> {
+  public constructor(private readonly deps: DatabaseCutoverServiceDeps) {
+    // Storage is constructed before this service and is not hot-swapped by a
+    // cutover. Capture that process truth before canonical config is changed.
+    this.activeStorageDriver = deps.config.assistant.database.driver;
+  }
+
+  public async runCutover(input: DatabaseCutoverRequest): Promise<DatabaseCutoverResponse> {
     if (input.execute && !input.confirm) {
-      throw new Error("Database cutover execution requires confirm=true.");
+      throw new ValidationError({ message: "Database cutover execution requires confirm=true." });
+    }
+
+    const initialRevision = this.deps.readSettingsRevision();
+    if (input.execute) {
+      if (!Number.isInteger(input.expectedRevision) || (input.expectedRevision ?? 0) <= 0) {
+        throw new ValidationError({ message: "expectedRevision is required for database cutover execution." });
+      }
+      if (input.expectedRevision !== initialRevision) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: "Settings changed after this database cutover client loaded them.",
+          details: {
+            expectedRevision: input.expectedRevision,
+            currentRevision: initialRevision,
+          },
+        });
+      }
     }
 
     if (input.execute && this.deps.config.assistant.database.driver === "postgres") {
-      throw new Error(
-        "Database cutover already applied; runtime driver is postgres. Use the verify command to check parity instead of re-running cutover.",
-      );
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message:
+          "Database cutover already applied; configured driver is postgres. Use the verify command to check parity instead of re-running cutover.",
+      });
     }
 
     const cutoverId = randomUUID();
@@ -96,7 +125,7 @@ export class DatabaseCutoverService {
       { id: "migrate", label: "Run Postgres migrations", status: "pending" },
       { id: "import", label: "Import SQLite runtime data and event history", status: "pending" },
       { id: "verify", label: "Verify source vs target parity", status: "pending" },
-      { id: "flip", label: "Flip runtime to Postgres", status: "pending" },
+      { id: "flip", label: "Persist next-start Postgres driver", status: "pending" },
     ];
 
     let backup: BackupCreateResponse | undefined;
@@ -104,6 +133,7 @@ export class DatabaseCutoverService {
     let targetTranscriptEvents = 0;
     let targetAuditEvents = 0;
     let status: DatabaseCutoverStatus;
+    let revision = initialRevision;
     let runtimeFlipReady = false;
     let runtimeFlipBlockedReason: string | undefined;
 
@@ -174,14 +204,21 @@ export class DatabaseCutoverService {
           skipStep(steps, "flip", "Skipped because verification failed.");
         } else if (!input.execute) {
           skipStep(steps, "flip", "Dry-run completed; rerun with --execute --confirm to persist the Postgres runtime.");
-        } else if (!this.deps.persistAssistantConfig) {
+        } else if (!this.deps.commitDatabaseDriver) {
           status = "blocked";
-          runtimeFlipBlockedReason = "Gateway service cannot persist assistant.config.json after cutover.";
+          runtimeFlipBlockedReason = "Gateway config-generation commit is unavailable after cutover.";
           blockStep(steps, "flip", runtimeFlipBlockedReason);
         } else {
-          this.deps.config.assistant.database.driver = "postgres";
-          this.deps.persistAssistantConfig();
-          completeStep(steps, "flip", "Persisted assistant.database.driver=postgres to the runtime config.");
+          const committed = await this.deps.commitDatabaseDriver({
+            driver: "postgres",
+            expectedRevision: input.expectedRevision!,
+          });
+          revision = committed.revision;
+          completeStep(
+            steps,
+            "flip",
+            "Persisted assistant.database.driver=postgres for the next Gateway start; the active Storage instance remains unchanged until restart.",
+          );
         }
 
         await recordCutoverRun(postgres, {
@@ -208,19 +245,34 @@ export class DatabaseCutoverService {
         await bundledRuntime?.stop();
       }
     } catch (error) {
+      if (isGoatError(error)) {
+        throw error;
+      }
       status = "failed";
       const message = error instanceof Error ? error.message : String(error);
       const firstPending = steps.find((step) => step.status === "pending");
       if (firstPending) {
         failStep(steps, firstPending.id, message);
       }
+      try {
+        revision = this.deps.readSettingsRevision();
+      } catch {
+        // Preserve the last confirmed revision when another generation is
+        // actively fenced; the failure response must not force an unsafe read.
+      }
     }
+
+    const configuredDriver = this.deps.config.assistant.database.driver;
 
     return {
       cutoverId,
       profile: input.profile,
       mode: input.execute ? "execute" : "dry_run",
       status,
+      revision,
+      configuredDriver,
+      activeStorageDriver: this.activeStorageDriver,
+      restartRequired: configuredDriver !== this.activeStorageDriver,
       startedAt,
       finishedAt: new Date().toISOString(),
       backup,
@@ -262,19 +314,62 @@ export class DatabaseCutoverService {
   }
 
   public async getHealthSnapshot(): Promise<DatabaseHealthSnapshot> {
-    const driver = this.deps.config.assistant.database.driver;
+    // Health describes the already-created Storage owner, not merely the
+    // next-start driver persisted by a completed cutover.
+    const driver = this.activeStorageDriver;
     if (driver === "sqlite") {
-      const issues: string[] = [];
+      const startedAt = Date.now();
+      const databasePath = this.deps.config.dbPath.trim();
+      if (!databasePath) {
+        return {
+          driver,
+          configured: false,
+          reachable: false,
+          latencyMs: Date.now() - startedAt,
+          issues: ["SQLite database is not configured."],
+        };
+      }
+
+      let database: DatabaseSync | undefined;
+      let migrationVersion: number | undefined;
+      let issue: string | undefined;
       try {
-        await fs.access(this.deps.config.dbPath);
+        database = new DatabaseSync(databasePath, { readOnly: true });
+        const probe = database.prepare("SELECT 1 AS ok").get() as { ok?: unknown } | undefined;
+        if (probe?.ok !== 1) {
+          throw new Error("SQLite readiness probe returned an unexpected result");
+        }
+        const migrationTable = database
+          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations' LIMIT 1")
+          .get();
+        if (migrationTable) {
+          const row = database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
+            | { version?: number | bigint | null }
+            | undefined;
+          if (row?.version !== null && row?.version !== undefined) {
+            const normalizedVersion = Number(row.version);
+            if (!Number.isSafeInteger(normalizedVersion) || normalizedVersion < 0) {
+              throw new Error("SQLite migration version is invalid");
+            }
+            migrationVersion = normalizedVersion;
+          }
+        }
       } catch {
-        issues.push(`SQLite database is missing at ${this.deps.config.dbPath}`);
+        issue = "SQLite database readiness probe failed.";
+      } finally {
+        try {
+          database?.close();
+        } catch {
+          issue = "SQLite database readiness probe failed.";
+        }
       }
       return {
         driver,
         configured: true,
-        reachable: issues.length === 0,
-        issues,
+        reachable: issue === undefined,
+        migrationVersion,
+        latencyMs: Date.now() - startedAt,
+        issues: issue ? [issue] : [],
       };
     }
 

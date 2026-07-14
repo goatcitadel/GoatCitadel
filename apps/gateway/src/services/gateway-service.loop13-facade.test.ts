@@ -174,6 +174,12 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     // read/write behavior assertions keep flowing through systemSettingsStore.
     mcpServerStore: new McpServerStore({ systemSettings }),
     closing: false,
+    configGenerationService: {
+      assertRuntimeReadsReady: vi.fn(),
+      isRuntimeOwnerReconciliationPending: vi.fn(() => false),
+    },
+    inboundChannelEventService: { close: vi.fn() },
+    orchestrationWorktreeService: { close: vi.fn() },
     config: {
       rootDir: "F:/code/personal-ai",
       assistant: {
@@ -407,6 +413,7 @@ describe("GatewayService Loop 13 chat facade forwarding", () => {
         chatToolArtifacts: {},
         chatToolRuns: {},
         durableRuns: { getRun: vi.fn(), updateRun: vi.fn() },
+        routedContextSnapshots: {},
       },
       chatTurnRuntime: { agentSendChatMessage: vi.fn(async () => ({ turnId: "turn-runtime" })) },
     });
@@ -470,6 +477,11 @@ describe("GatewayService Loop 13 chat facade forwarding", () => {
         "chat_thread_turn_appended",
       ),
     ).toMatchObject({ runId: "durable-turn-1" });
+    expect(vi.mocked(chatDurableRunService.beginDurableChatRun).mock.calls.at(-1)?.[0]).toMatchObject({
+      routedContextSnapshots: gateway.storage.routedContextSnapshots,
+      chatTurnTraces: gateway.storage.chatTurnTraces,
+      runImmediateTransaction: expect.any(Function),
+    });
     GatewayService.prototype.finalizeDurableChatRun.call(
       gateway,
       "run-1",
@@ -492,7 +504,7 @@ describe("GatewayService Loop 13 chat facade forwarding", () => {
       { content: "hello" },
       { branchKind: "append" },
     );
-    expect(llmCompletionService.createChatCompletion).toHaveBeenCalledWith(gateway, { messages: [] });
+    expect(llmCompletionService.createChatCompletion).toHaveBeenCalledWith(gateway, { messages: [] }, {});
   });
 });
 
@@ -542,7 +554,17 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     await expect(
       GatewayService.prototype.invokeTool.call(gateway, { toolName: "browser.search" } as never),
     ).resolves.toMatchObject({ outcome: "executed" });
-    expect(GatewayService.prototype.listToolCatalog.call(gateway)).toEqual([{ toolName: "browser.search" }]);
+    expect(GatewayService.prototype.listToolCatalog.call(gateway)).toEqual([
+      {
+        toolName: "browser.search",
+        effectPotential: {
+          version: "goatcitadel.tool-effect.v1",
+          potential: "unknown",
+          sourceKind: "browser",
+          reason: "browser_runtime_may_cross_boundary",
+        },
+      },
+    ]);
     expect(
       GatewayService.prototype.evaluateToolAccess.call(gateway, { sessionId: "session-1" } as never),
     ).toMatchObject({
@@ -686,6 +708,34 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
       "tools",
       expect.objectContaining({ type: "internal_tool_grant_created", toolName: "browser.search" }),
     );
+  });
+
+  it("bootstraps bounded session.history as callable while preserving deny-wins", () => {
+    const { gateway } = createGatewayHarness();
+    const createToolGrant = vi.fn();
+    gateway.createToolGrant = createToolGrant;
+    gateway.storage = { chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) } };
+    gateway.listActiveToolGrants = vi.fn(() => []);
+
+    GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
+    expect(createToolGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "session.history",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        createdBy: "system-chat-agent-bootstrap",
+      }),
+    );
+
+    createToolGrant.mockClear();
+    gateway.listActiveToolGrants = vi.fn((scope: string) =>
+      scope === "global"
+        ? [{ decision: "deny", toolPattern: "session.history", scope: "global", scopeRef: "global" }]
+        : [],
+    );
+    GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
+    expect(createToolGrant).not.toHaveBeenCalledWith(expect.objectContaining({ toolPattern: "session.history" }));
   });
 
   it("does not resolve local operator overrides in remote hardened deployments", () => {
@@ -888,8 +938,16 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       },
       skillStateService: {
         ensureSkillStates: vi.fn(),
-        getActivationPolicy: vi.fn(() => ({ guardedAutoThreshold: 0.72, requireFirstUseConfirmation: true })),
-        updateActivationPolicy: vi.fn(() => ({ guardedAutoThreshold: 1, requireFirstUseConfirmation: false })),
+        getActivationPolicy: vi.fn(() => ({
+          revision: 3,
+          guardedAutoThreshold: 0.72,
+          requireFirstUseConfirmation: true,
+        })),
+        updateActivationPolicy: vi.fn(() => ({
+          revision: 4,
+          guardedAutoThreshold: 1,
+          requireFirstUseConfirmation: false,
+        })),
       },
       guidanceService: { resolveRuntimeGuidance: vi.fn(async (workspaceId: string) => ({ workspaceId })) },
       memoryLifecycleService: {
@@ -925,13 +983,12 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       { input: { namespace: "project" } },
     ]);
     expect(GatewayService.prototype.getSettings.call(gateway)).toMatchObject({ runtime: "settings" });
-    expect(
-      GatewayService.prototype.updateSettings.call(gateway, { deploymentProfile: "trusted_local" } as never),
-    ).toMatchObject({ runtime: "updated" });
     expect(GatewayService.prototype.getAuthRuntimeSettings.call(gateway)).toMatchObject({ mode: "token" });
-    expect(GatewayService.prototype.updateAuthSettings.call(gateway, { mode: "token" } as never)).toMatchObject({
-      mode: "token",
-    });
+    gateway.updateSettings = vi.fn(async () => ({ auth: { mode: "token" } }));
+    await expect(
+      GatewayService.prototype.updateAuthSettings.call(gateway, { expectedRevision: 3, mode: "token" }),
+    ).resolves.toMatchObject({ mode: "token" });
+    expect(gateway.updateSettings).toHaveBeenCalledWith({ expectedRevision: 3, auth: { mode: "token" } });
     expect(GatewayService.prototype.getAuthCredentialPlan.call(gateway)).toEqual({ required: true });
     expect(GatewayService.prototype.getOnboardingStartupState.call(gateway)).toMatchObject({ ready: true });
     expect(GatewayService.prototype.validateDeviceAccessToken.call(gateway, "device-token")).toEqual({
@@ -971,19 +1028,27 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
     // SkillStateService (B4) and is asserted in skill-state-service.test.ts;
     // the facade only forwards.
     expect(GatewayService.prototype.getSkillActivationPolicy.call(gateway)).toEqual({
+      revision: 3,
       guardedAutoThreshold: 0.72,
       requireFirstUseConfirmation: true,
     });
     expect(
-      GatewayService.prototype.updateSkillActivationPolicy.call(gateway, {
+      GatewayService.prototype.updateSkillActivationPolicy.call(
+        gateway,
+        {
+          guardedAutoThreshold: 2,
+          requireFirstUseConfirmation: false,
+        },
+        3,
+      ),
+    ).toEqual({ revision: 4, guardedAutoThreshold: 1, requireFirstUseConfirmation: false });
+    expect(gateway.skillStateService.updateActivationPolicy).toHaveBeenCalledWith(
+      {
         guardedAutoThreshold: 2,
         requireFirstUseConfirmation: false,
-      }),
-    ).toEqual({ guardedAutoThreshold: 1, requireFirstUseConfirmation: false });
-    expect(gateway.skillStateService.updateActivationPolicy).toHaveBeenCalledWith({
-      guardedAutoThreshold: 2,
-      requireFirstUseConfirmation: false,
-    });
+      },
+      3,
+    );
     await expect(GatewayService.prototype.resolveRuntimeGuidance.call(gateway, "workspace-a")).resolves.toEqual({
       workspaceId: "workspace-a",
     });
@@ -1334,6 +1399,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       loadOnboardingMarker: vi.fn(async () => undefined),
       npuSidecar: { close: vi.fn(async () => undefined) },
       recordDevDiagnostic: vi.fn(),
+      runtimeReleaseTrustService: { close: vi.fn(async () => undefined), start: vi.fn() },
       runDeferredInit: vi.fn(() => deferred),
       skillsService: { reload: vi.fn(async () => [{ skillId: "skill-1" }]) },
       skillStateService: { ensureSkillStates: vi.fn() },
@@ -1576,6 +1642,52 @@ describe("GatewayService Loop 13 workspace and runtime helpers", () => {
         workflowKey: "orchestration.plan.execute",
       } as never),
     ).toBe("orchestration-workspace");
+    expect(
+      GatewayService.prototype.resolveDurableRunHookWorkspaceId.call(gateway, { workflowKey: "unknown" } as never),
+    ).toBe("default");
+    expect(
+      GatewayService.prototype.resolveDurableRunAuthorityWorkspaceId.call(gateway, {
+        workflowKey: "memory.maintenance",
+      } as never),
+    ).toBe("memory-workspace");
+    expect(
+      GatewayService.prototype.resolveDurableRunAuthorityWorkspaceId.call(gateway, {
+        workflowKey: "approval.wait",
+      } as never),
+    ).toBe("approval-workspace");
+    expect(
+      GatewayService.prototype.resolveDurableRunAuthorityWorkspaceId.call(gateway, {
+        workflowKey: "unknown",
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("keeps missing, failed, deleted, and malformed workspace evidence out of the authority resolver", () => {
+    const { gateway } = createGatewayHarness({
+      parseApprovalWaitWorkflowPayload: vi.fn(() => ({ approvalId: "approval-missing" })),
+      parseConnectorDeliveryWorkflowPayload: vi.fn(() => ({ payload: { approvalId: "approval-missing" } })),
+      parseDurableChatTurnPayload: vi.fn(() => ({ sessionId: "session-deleted" })),
+      parseMemoryMaintenanceWorkflowPayload: vi.fn(() => ({ workspaceId: "../malformed" })),
+    });
+    gateway.storage.approvals = {
+      get: vi.fn(() => {
+        throw new Error("approval missing");
+      }),
+    };
+    gateway.storage.chatSessionMeta = { get: vi.fn(() => undefined) };
+
+    for (const workflowKey of [
+      "approval.wait",
+      "connector.delivery",
+      "chat.turn.execute",
+      "memory.maintenance",
+      "unknown",
+    ]) {
+      expect(
+        GatewayService.prototype.resolveDurableRunAuthorityWorkspaceId.call(gateway, { workflowKey } as never),
+        workflowKey,
+      ).toBeUndefined();
+    }
     expect(
       GatewayService.prototype.resolveDurableRunHookWorkspaceId.call(gateway, { workflowKey: "unknown" } as never),
     ).toBe("default");

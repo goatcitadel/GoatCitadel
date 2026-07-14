@@ -28,6 +28,7 @@ import type {
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { chatModeRequiresProjectBinding, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import type { ChildTimeoutLateSettleEvent } from "./subagent-budget-enforcer.js";
 import {
@@ -383,6 +384,13 @@ export interface ChatDelegationServiceHost {
     source: { role: "user" | "assistant"; sourceRef: string },
   ): void;
   scheduleChatMemoryContextPrewarm(input: { sessionId: string; prompt: string; relationScope: "peer" }): void;
+  watchDurableChildRun?(input: {
+    parentRunId: string;
+    childRunId: string;
+    watcherId: string;
+    source: string;
+    metadata: Record<string, unknown>;
+  }): void;
   /**
    * Runtime budgets enforced on every child delegation step. When omitted the
    * service falls back to `{ childTimeoutSeconds: 600, maxDepth: 4 }`.
@@ -1012,6 +1020,15 @@ export class ChatDelegationService {
             if (!waitingStep) {
               return undefined;
             }
+            attachDelegationChildWatcher(deps, {
+              parentRunId: input.policyRunId,
+              childRunId: response.trace?.durable?.runId,
+              watcherId: `delegation-child:${step.stepId}`,
+              delegationRunId: runId,
+              stepId: step.stepId,
+              childSessionId: agentSessionId,
+              childTurnId: responseTurnId,
+            });
             const releasedStep = deps.storage.chatDelegationSteps.releaseOwnedWaitingDispatch({
               stepId: step.stepId,
               expectedDispatchToken: dispatchLease.dispatchMarker,
@@ -1078,6 +1095,15 @@ export class ChatDelegationService {
             if (!terminalStep) {
               return undefined;
             }
+            attachDelegationChildWatcher(deps, {
+              parentRunId: input.policyRunId,
+              childRunId: response.trace?.durable?.runId,
+              watcherId: `delegation-child:${step.stepId}`,
+              delegationRunId: runId,
+              stepId: step.stepId,
+              childSessionId: agentSessionId,
+              childTurnId: responseTurnId,
+            });
             const subagentProjection = deps.taskLifecycleService.persistDelegationSubagentProjection(
               agentSessionId,
               subagentPatch,
@@ -1140,6 +1166,18 @@ export class ChatDelegationService {
           completed: !incomplete && !waiting,
         };
       } catch (error) {
+        if (isAuthoritativeModelUsageAccountingError(error)) {
+          const authoritativeTimeout = error instanceof SubagentBudgetError && error.code === "timeout_exceeded";
+          timeoutFailureFenceState = authoritativeTimeout ? "won" : "lost";
+          if (authoritativeTimeout && bufferedLateSettle) {
+            const lateSettle = bufferedLateSettle;
+            bufferedLateSettle = undefined;
+            scheduleLateSettleRecord?.(lateSettle);
+          } else if (!authoritativeTimeout) {
+            bufferedLateSettle = undefined;
+          }
+          throw error;
+        }
         if (error instanceof DelegationDispatchOwnershipError) {
           const current = deps.storage.chatDelegationSteps.get(step.stepId);
           return {
@@ -2509,6 +2547,37 @@ function findStableParentDelegationRun(
     );
   }
   return existing;
+}
+
+function attachDelegationChildWatcher(
+  deps: ChatDelegationServiceHost,
+  input: {
+    parentRunId?: string;
+    childRunId?: string;
+    watcherId: string;
+    delegationRunId: string;
+    stepId: string;
+    childSessionId: string;
+    childTurnId: string;
+  },
+): void {
+  const parentRunId = input.parentRunId?.trim();
+  const childRunId = input.childRunId?.trim();
+  if (!deps.watchDurableChildRun || !parentRunId || !childRunId) {
+    return;
+  }
+  deps.watchDurableChildRun({
+    parentRunId,
+    childRunId,
+    watcherId: input.watcherId,
+    source: "chat_delegation",
+    metadata: {
+      delegationRunId: input.delegationRunId,
+      stepId: input.stepId,
+      childSessionId: input.childSessionId,
+      childTurnId: input.childTurnId,
+    },
+  });
 }
 
 function rebuildResumableDelegationPlan(

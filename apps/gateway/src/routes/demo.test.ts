@@ -248,6 +248,7 @@ describe("demo routes", () => {
     const services = createDemoServices();
     services.__state.workspaces.push({
       workspaceId: "workspace-archived",
+      revision: 4,
       name: "GoatCitadel Demo",
       slug: "goatcitadel-demo",
       lifecycleStatus: "archived",
@@ -265,7 +266,7 @@ describe("demo routes", () => {
 
     const bootstrap = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
     expect(bootstrap.statusCode).toBe(200);
-    expect(services.workspaces.restoreWorkspace).toHaveBeenCalledWith("workspace-archived");
+    expect(services.workspaces.restoreWorkspace).toHaveBeenCalledWith("workspace-archived", 4);
     expect(bootstrap.json()).toMatchObject({
       status: "ready",
       workspace: { workspaceId: "workspace-archived" },
@@ -333,6 +334,7 @@ function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean; nor
       createWorkspace: vi.fn((input: Record<string, unknown>) => {
         const workspace = {
           workspaceId: `workspace-${state.workspaces.length + 1}`,
+          revision: 1,
           lifecycleStatus: "active",
           createdAt: "2026-05-10T00:00:00.000Z",
           updatedAt: "2026-05-10T00:00:00.000Z",
@@ -341,10 +343,11 @@ function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean; nor
         state.workspaces.push(workspace);
         return workspace;
       }),
-      restoreWorkspace: vi.fn((workspaceId: string) => {
+      restoreWorkspace: vi.fn((workspaceId: string, expectedRevision: number) => {
         const workspace = state.workspaces.find((item) => item.workspaceId === workspaceId);
-        if (workspace) {
+        if (workspace && workspace.revision === expectedRevision) {
           workspace.lifecycleStatus = "active";
+          workspace.revision = expectedRevision + 1;
         }
         return workspace;
       }),

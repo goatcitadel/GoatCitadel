@@ -47,16 +47,18 @@ describe("handleChatGoalSetRequest", () => {
   it("persists goal and returns status", async () => {
     const meta = {
       ensure: vi.fn(() => ({
+        revision: 4,
         pinnedGoal: undefined,
         goalTurnBudget: undefined,
         goalTurnsUsed: 0,
         goalSetAt: undefined,
       })),
-      patch: vi.fn(
+      patchWithRevision: vi.fn(
         (
           _id: string,
           p: { pinnedGoal?: string | null; goalTurnBudget?: number | null; goalSetAt?: string | null },
         ) => ({
+          revision: 5,
           pinnedGoal: p.pinnedGoal ?? undefined,
           goalTurnBudget: p.goalTurnBudget ?? undefined,
           goalTurnsUsed: 0,
@@ -72,11 +74,16 @@ describe("handleChatGoalSetRequest", () => {
     });
     expect(result.goal).toBe("ship kanban");
     expect(result.turnBudget).toBe(10);
-    expect(meta.patch).toHaveBeenCalledWith("s-1", {
-      pinnedGoal: "ship kanban",
-      goalTurnBudget: 10,
-      goalSetAt: "2026-05-15T10:00:00Z",
-    });
+    expect(meta.patchWithRevision).toHaveBeenCalledWith(
+      "s-1",
+      {
+        pinnedGoal: "ship kanban",
+        goalTurnBudget: 10,
+        goalSetAt: "2026-05-15T10:00:00Z",
+      },
+      4,
+    );
+    expect(result.revision).toBe(5);
   });
 
   it("throws on empty goal", async () => {
@@ -95,6 +102,7 @@ describe("handleChatGoalStatusRequest", () => {
   it("returns current goal status", async () => {
     const meta = {
       ensure: vi.fn(() => ({
+        revision: 6,
         pinnedGoal: "ship kanban",
         goalTurnBudget: 10,
         goalTurnsUsed: 3,
@@ -114,8 +122,9 @@ describe("handleChatGoalStatusRequest", () => {
 describe("handleChatGoalClearRequest", () => {
   it("clears and returns null goal", async () => {
     const meta = {
-      ensure: vi.fn(),
-      patch: vi.fn(() => ({
+      ensure: vi.fn(() => ({ revision: 8 })),
+      patchWithRevision: vi.fn(() => ({
+        revision: 9,
         pinnedGoal: undefined,
         goalTurnBudget: undefined,
         goalTurnsUsed: 0,
@@ -127,10 +136,11 @@ describe("handleChatGoalClearRequest", () => {
       chatSessionMeta: meta as never,
     });
     expect(result.goal).toBeNull();
-    expect(meta.patch).toHaveBeenCalledWith("s-1", {
-      pinnedGoal: null,
-      goalTurnBudget: null,
-      goalSetAt: null,
-    });
+    expect(meta.patchWithRevision).toHaveBeenCalledWith(
+      "s-1",
+      { pinnedGoal: null, goalTurnBudget: null, goalSetAt: null },
+      8,
+    );
+    expect(result.revision).toBe(9);
   });
 });

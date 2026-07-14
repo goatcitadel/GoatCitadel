@@ -2542,6 +2542,12 @@ describe("approval-resolution-effects-service", () => {
 
       expect(storage.chatToolRuns.listByTurn(turnId)[0]).toMatchObject({
         status: "failed",
+        approvalId,
+        effectPotential: "unknown",
+        effectDisposition: "unknown",
+        effectOutcomeKind: "uncertain",
+        effectEvidence: { reason: "dispatch_may_have_occurred", refs: [] },
+        failureGuidance: expect.stringContaining("Inspect external or runtime state before retry"),
         error: "The remote outcome is unknown after dispatch.",
         result: expect.objectContaining({ manualReconciliationRequired: true }),
       });
@@ -4139,7 +4145,7 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("keeps pending Code Mode effects recoverable when execution is already claimed", async () => {
+  it("reschedules already-claimed Code Mode effects without terminalizing them when diagnostics fail", async () => {
     let effectState = createEffect({
       effectKind: "pending_action_execute",
       targetKind: "pending_action",
@@ -4149,8 +4155,27 @@ describe("approval-resolution-effects-service", () => {
     const completeEffect = vi.fn(() => ({ status: "completed" as const }));
     const failEffect = vi.fn();
     const skipEffect = vi.fn();
+    const deferEffectForRetry = vi.fn(
+      (
+        _effectId: string,
+        _workerId: string,
+        _version: number,
+        input: { lastError: string; retryAt: string; result: Record<string, unknown> },
+      ) => {
+        effectState = {
+          ...effectState,
+          version: effectState.version + 1,
+          lastError: input.lastError,
+          leaseExpiresAt: input.retryAt,
+          result: input.result,
+        };
+        return effectState;
+      },
+    );
     const markResolved = vi.fn();
-    const publishRealtime = vi.fn();
+    const publishRealtime = vi.fn(() => {
+      throw new Error("retained stream unavailable");
+    });
     const service = new ApprovalEffectsService(
       {
         storage: {
@@ -4159,6 +4184,7 @@ describe("approval-resolution-effects-service", () => {
             completeEffect,
             failEffect,
             skipEffect,
+            deferEffectForRetry,
           },
           pendingApprovalActions: {
             find: vi.fn(() => ({
@@ -4205,6 +4231,27 @@ describe("approval-resolution-effects-service", () => {
     expect(failEffect).not.toHaveBeenCalled();
     expect(completeEffect).not.toHaveBeenCalled();
     expect(skipEffect).not.toHaveBeenCalled();
+    expect(deferEffectForRetry).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        lastError: expect.stringContaining("claim is still active"),
+        retryAt: expect.any(String),
+        result: expect.objectContaining({
+          actionType: "code_mode.run",
+          approvalId: "approval-1",
+          runId: "code-run-1",
+          reason: "code_mode_run_already_claimed",
+          retryDelayMs: 1_000,
+        }),
+      }),
+    );
+    expect(effectState).toMatchObject({
+      status: "running",
+      version: 2,
+      lastError: expect.stringContaining("claim is still active"),
+    });
     expect(publishRealtime).toHaveBeenCalledWith(
       "approval_effect_deferred",
       "approvals",
@@ -4221,6 +4268,95 @@ describe("approval-resolution-effects-service", () => {
         },
       }),
     );
+  });
+
+  it("lets a restarted worker reclaim and complete a deferred Code Mode effect after the retry lease", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const approval = storage.approvals.create({
+      kind: "code_mode.run",
+      riskLevel: "danger",
+      payload: { runId: "code-run-restart-1" },
+      preview: {},
+    });
+    storage.pendingApprovalActions.upsertPending({
+      approvalId: approval.approvalId,
+      actionType: "code_mode.run",
+      request: { runId: "code-run-restart-1" },
+    });
+    const effect = storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: approval.approvalId,
+      payload: { actionType: "code_mode.run" },
+    });
+    const firstExecution = vi.fn(async () => undefined);
+    const firstWorker = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+      ...createApprovalEffectDeps(),
+      executeCodeModePendingApproval: firstExecution,
+    });
+
+    try {
+      await (
+        firstWorker as unknown as {
+          drainPendingEffects(): Promise<void>;
+        }
+      ).drainPendingEffects();
+
+      const deferred = storage.approvalEffects.get(effect.effectId);
+      expect(firstExecution).toHaveBeenCalledOnce();
+      expect(deferred).toMatchObject({
+        status: "running",
+        attemptCount: 1,
+        claimedBy: expect.any(String),
+        lastError: expect.stringContaining("claim is still active"),
+        result: expect.objectContaining({
+          reason: "code_mode_run_already_claimed",
+          retryDelayMs: 1_000,
+        }),
+      });
+      expect(storage.pendingApprovalActions.get(approval.approvalId).resolutionStatus).toBe("pending");
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_100));
+
+      const restartedExecution = vi.fn(async () => ({
+        outcome: "executed" as const,
+        policyReason: "code_mode_run:completed",
+        auditEventId: "audit-code-mode-restart-1",
+        result: { runId: "code-run-restart-1", status: "completed" },
+      }));
+      const restartedWorker = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          executeCodeModePendingApproval: restartedExecution,
+        },
+      );
+
+      await (
+        restartedWorker as unknown as {
+          drainPendingEffects(): Promise<void>;
+        }
+      ).drainPendingEffects();
+
+      expect(restartedExecution).toHaveBeenCalledOnce();
+      expect(storage.pendingApprovalActions.get(approval.approvalId)).toMatchObject({
+        resolutionStatus: "executed",
+        result: expect.objectContaining({
+          outcome: "executed",
+          result: expect.objectContaining({ status: "completed" }),
+        }),
+      });
+      expect(storage.approvalEffects.get(effect.effectId)).toMatchObject({
+        status: "completed",
+        attemptCount: 2,
+        claimedBy: undefined,
+        leaseExpiresAt: undefined,
+      });
+    } finally {
+      firstWorker.stopWorker();
+      storage.close();
+    }
   });
 
   it.each([
@@ -4422,6 +4558,84 @@ describe("approval-resolution-effects-service", () => {
     );
     expect(completeEffect).toHaveBeenCalledOnce();
     expect(skipEffect).not.toHaveBeenCalled();
+  });
+
+  it("preserves manual reconciliation when resuming a stored interrupted Code Mode outcome", async () => {
+    const effect = createEffect({
+      approvalId: "approval-stored-code-mode-interruption",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-stored-code-mode-interruption",
+      status: "running",
+    });
+    const pendingAction: PendingApprovalAction = {
+      approvalId: effect.approvalId,
+      actionType: "code_mode.run",
+      request: { runId: "code-run-interrupted-1" },
+      createdAt: "2026-04-11T00:00:00.000Z",
+      resolutionStatus: "failed",
+      result: {
+        outcome: "failed",
+        runId: "code-run-interrupted-1",
+        error: "Gateway restarted after the execution boundary.",
+        manualReconciliationRequired: true,
+        executionRecovery: {
+          generation: 1,
+          phase: "terminal",
+          disposition: "manual_reconciliation",
+        },
+      },
+    };
+    const completeEffect = vi.fn(() => ({ status: "completed" as const }));
+    let claimedEffect = effect;
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            get: vi.fn(() => claimedEffect),
+            completeEffect,
+            failEffect: vi.fn(),
+            skipEffect: vi.fn(),
+          },
+          pendingApprovalActions: {
+            find: vi.fn(() => pendingAction),
+            markResolved: vi.fn(),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
+    );
+    claimedEffect = { ...effect, claimedBy: (service as unknown as { workerId: string }).workerId };
+    const materializeFailed = vi
+      .spyOn(
+        service as unknown as {
+          materializeFailedChatApprovalOrDefer: (...args: unknown[]) => boolean;
+        },
+        "materializeFailedChatApprovalOrDefer",
+      )
+      .mockImplementation(() => {
+        completeEffect(effect.effectId, "worker", effect.version, { result: {} });
+        return true;
+      });
+
+    await (
+      service as unknown as {
+        handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handlePendingActionExecute(claimedEffect);
+
+    expect(materializeFailed).toHaveBeenCalledWith(
+      claimedEffect,
+      pendingAction,
+      pendingAction.result,
+      expect.objectContaining({
+        message: "Gateway restarted after the execution boundary.",
+        kind: "manual_reconciliation",
+        manualReconciliationRequired: true,
+      }),
+    );
+    expect(completeEffect).toHaveBeenCalledOnce();
   });
 
   it("reclassifies the policy-engine executed receipt before materializing a domain failure", async () => {
@@ -4863,6 +5077,14 @@ describe("approval-resolution-effects-service", () => {
       "tool-run-1",
       expect.objectContaining({
         status: "executed",
+        effectPotential: "unknown",
+        effectDisposition: "unknown",
+        effectOutcomeKind: "uncertain",
+        effectEvidence: expect.objectContaining({
+          reason: "completed_without_canonical_effect_receipt",
+          refs: [],
+        }),
+        failureGuidance: expect.stringContaining("Inspect external or runtime state"),
         result: expect.objectContaining({ format: "pptx" }),
       }),
     );

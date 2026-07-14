@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { registerChatProjectRoutes } from "./chat.projects.js";
 
 describe("chat project routes", () => {
@@ -17,9 +18,9 @@ describe("chat project routes", () => {
     const services = {
       listChatProjects: vi.fn(() => [{ projectId: "project-1" }]),
       createChatProject: vi.fn(() => ({ projectId: "project-2", name: "New project" })),
-      updateChatProject: vi.fn(() => ({ projectId: "project-2", name: "Renamed" })),
-      archiveChatProject: vi.fn(() => ({ projectId: "project-2", lifecycleStatus: "archived" })),
-      restoreChatProject: vi.fn(() => ({ projectId: "project-2", lifecycleStatus: "active" })),
+      updateChatProject: vi.fn(() => ({ projectId: "project-2", revision: 4, name: "Renamed" })),
+      archiveChatProject: vi.fn(() => ({ projectId: "project-2", revision: 5, lifecycleStatus: "archived" })),
+      restoreChatProject: vi.fn(() => ({ projectId: "project-2", revision: 6, lifecycleStatus: "active" })),
       hardDeleteChatProject: vi.fn(() => true),
     };
     app = buildApp(services);
@@ -61,30 +62,37 @@ describe("chat project routes", () => {
     const updated = await app.inject({
       method: "PATCH",
       url: "/api/v1/chat/projects/project-2",
-      payload: { name: "Renamed", color: "#112233" },
+      payload: { expectedRevision: 3, name: "Renamed", color: "#112233" },
     });
     expect(updated.statusCode).toBe(200);
-    expect(services.updateChatProject).toHaveBeenCalledWith("project-2", {
-      name: "Renamed",
-      color: "#112233",
-    });
+    expect(services.updateChatProject).toHaveBeenCalledWith(
+      "project-2",
+      {
+        name: "Renamed",
+        color: "#112233",
+      },
+      3,
+    );
 
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/projects/project-2/archive" })).resolves.toMatchObject(
-      {
-        statusCode: 200,
-      },
-    );
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/projects/project-2/restore" })).resolves.toMatchObject(
-      {
-        statusCode: 200,
-      },
-    );
-    const deleted = await app.inject({ method: "DELETE", url: "/api/v1/chat/projects/project-2" });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/projects/project-2/archive", payload: { expectedRevision: 4 } }),
+    ).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/projects/project-2/restore", payload: { expectedRevision: 5 } }),
+    ).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/chat/projects/project-2?mode=hard&expectedRevision=6",
+    });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json()).toEqual({ deleted: true, projectId: "project-2", mode: "hard" });
   });
 
-  it("validates import modes and maps service errors to 400 without changing the contract", async () => {
+  it("validates import modes and does not expose untyped service failures", async () => {
     const importChatProject = vi
       .fn()
       .mockResolvedValueOnce({ projectId: "import-local", sourceType: "local_folder" })
@@ -133,8 +141,8 @@ describe("chat project routes", () => {
         repoUrl: "https://github.com/example/repo.git",
       },
     });
-    expect(failed.statusCode).toBe(400);
-    expect(failed.json()).toEqual({ error: "clone failed" });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toEqual({ error: "Internal server error" });
   });
 
   it("returns validation and service errors for project mutations", async () => {
@@ -171,21 +179,97 @@ describe("chat project routes", () => {
       app.inject({ method: "PATCH", url: "/api/v1/chat/projects/project-1", payload: { name: "" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
-      app.inject({ method: "PATCH", url: "/api/v1/chat/projects/project-1", payload: { name: "New" } }),
-    ).resolves.toMatchObject({ statusCode: 400 });
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/projects/project-1/archive" })).resolves.toMatchObject(
-      {
-        statusCode: 400,
-      },
-    );
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/projects/project-1/restore" })).resolves.toMatchObject(
-      {
-        statusCode: 400,
-      },
-    );
-    const softDelete = await app.inject({ method: "DELETE", url: "/api/v1/chat/projects/project-1?mode=soft" });
+      app.inject({
+        method: "PATCH",
+        url: "/api/v1/chat/projects/project-1",
+        payload: { expectedRevision: 1, name: "New" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 500 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/projects/project-1/archive", payload: { expectedRevision: 1 } }),
+    ).resolves.toMatchObject({
+      statusCode: 500,
+    });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/projects/project-1/restore", payload: { expectedRevision: 1 } }),
+    ).resolves.toMatchObject({
+      statusCode: 500,
+    });
+    const softDelete = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/chat/projects/project-1?mode=soft&expectedRevision=1",
+    });
     expect(softDelete.statusCode).toBe(400);
     expect(softDelete.json()).toEqual({ error: "Only hard delete is supported for chat projects." });
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/chat/projects/project-1?expectedRevision=1" }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/chat/projects/project-1?mode=hard" }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+  });
+
+  it("returns structured 409 details for stale project mutations", async () => {
+    const conflict = new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: "chat project changed",
+      details: {
+        resourceKind: "chat_project",
+        resourceId: "project-1",
+        expectedRevision: 5,
+        currentRevision: 6,
+      },
+    });
+    const fail = vi.fn(() => {
+      throw conflict;
+    });
+    app = buildApp({
+      importChatProject: fail,
+      updateChatProject: fail,
+      archiveChatProject: fail,
+      restoreChatProject: fail,
+      hardDeleteChatProject: fail,
+    });
+
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/projects/import",
+        payload: { sourceType: "local_folder", sourcePath: "F:/code/example" },
+      }),
+      app.inject({
+        method: "PATCH",
+        url: "/api/v1/chat/projects/project-1",
+        payload: { expectedRevision: 5, name: "Draft" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/projects/project-1/archive",
+        payload: { expectedRevision: 5 },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/projects/project-1/restore",
+        payload: { expectedRevision: 5 },
+      }),
+      app.inject({
+        method: "DELETE",
+        url: "/api/v1/chat/projects/project-1?mode=hard&expectedRevision=5",
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "WRITE_CONFLICT",
+        details: {
+          resourceKind: "chat_project",
+          resourceId: "project-1",
+          expectedRevision: 5,
+          currentRevision: 6,
+        },
+      });
+    }
   });
 });
 

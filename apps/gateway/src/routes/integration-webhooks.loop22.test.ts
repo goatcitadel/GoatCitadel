@@ -85,23 +85,63 @@ describe("integration webhook route tails", () => {
     );
   });
 
-  it("covers Telegram secret checks, ignored events, callbacks, commands, and active-run replies", async () => {
+  it("covers Telegram secret checks, ignored events, callbacks, commands, and busy-session durable acceptance", async () => {
     let connection = createTelegramConnection({ telegramAllowAllUsers: true });
     const updateIntegrationConnection = vi.fn((connectionId: string, patch: unknown) => ({
       connectionId,
       ...connection,
       ...(patch as Record<string, unknown>),
     }));
-    const resolveApprovalWithRemoteToken = vi.fn(async (input: { token: string; decision: "approve" | "reject" }) => ({
-      approval: {
-        approvalId: input.decision === "approve" ? "approval-approved" : "approval-rejected",
-        status: input.decision === "approve" ? "approved" : "rejected",
-      },
-    }));
+    const acceptedInputs = new Map<
+      string,
+      {
+        eventType: string;
+        message: { content: string; eventId: string; metadata?: Record<string, unknown> };
+      }
+    >();
+    const resolveApprovalWithRemoteToken = vi.fn();
     const hasRunningTurn = vi.fn(() => false);
+    const acceptInboundChannelEvent = vi.fn(
+      async (input: {
+        eventType: string;
+        message: { content: string; eventId: string; metadata?: Record<string, unknown> };
+      }) => {
+        const inboundEventId = `inbound:${input.message.eventId}`;
+        acceptedInputs.set(inboundEventId, input);
+        return {
+          accepted: true as const,
+          durableAccepted: true as const,
+          deduped: false,
+          replied: false as const,
+          queued: true,
+          eventType: input.eventType,
+          inboundEventId,
+        };
+      },
+    );
+    const awaitInboundChannelCommandResult = vi.fn(async (eventId: string) => {
+      const input = acceptedInputs.get(eventId);
+      const decision = input?.message.metadata?.approvalDecision;
+      return {
+        status: "completed" as const,
+        resultText:
+          decision === "approve"
+            ? "Approved approval-approved."
+            : decision === "reject"
+              ? "Rejected approval-rejected."
+              : input?.message.content === "/new"
+                ? "New Telegram channel session started."
+                : "Command completed.",
+      };
+    });
     const services = createWebhookServices({
+      acceptInboundChannelEvent,
       getIntegrationConnection: vi.fn(() => connection),
       hasRunningTurn,
+      awaitInboundChannelCommandResult,
+      findRemoteActionTokenId: vi.fn((token: string) =>
+        token.endsWith("approve") ? "approval-action-approved" : "approval-action-rejected",
+      ),
       resolveApprovalWithRemoteToken,
       updateIntegrationConnection,
     });
@@ -152,25 +192,18 @@ describe("integration webhook route tails", () => {
       method: "answerCallbackQuery",
       callback_query_id: "callback-approve",
       text: "Approved approval-approved.",
+      show_alert: false,
     });
     const rejectedCallback = await postTelegram(callbackPayload("callback-reject", "gca:token-reject:r"));
     expect(rejectedCallback.json()).toEqual({
       method: "answerCallbackQuery",
       callback_query_id: "callback-reject",
       text: "Rejected approval-rejected.",
+      show_alert: false,
     });
-    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
-      token: "token-approve",
-      decision: "approve",
-      resolvedBy: "telegram:777",
-      connectorId: `integration:${CONNECTION_ID}`,
-    });
-    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
-      token: "token-reject",
-      decision: "reject",
-      resolvedBy: "telegram:777",
-      connectorId: `integration:${CONNECTION_ID}`,
-    });
+    expect(resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+    expect(JSON.stringify(acceptInboundChannelEvent.mock.calls)).not.toContain("token-approve");
+    expect(JSON.stringify(acceptInboundChannelEvent.mock.calls)).not.toContain("token-reject");
 
     connection = createTelegramConnection({});
     const unauthorizedCallback = await postTelegram(callbackPayload("callback-pair", "gca:token-pair:r"));
@@ -197,23 +230,37 @@ describe("integration webhook route tails", () => {
       method: "sendMessage",
       chat_id: "-1001234567890",
     });
-    expect(updateIntegrationConnection).toHaveBeenCalledWith(
-      CONNECTION_ID,
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: expect.objectContaining({
-          telegramChannelSessions: expect.any(Object),
-        }),
-        lastError: null,
+        dispatchKind: "command",
+        eventType: "telegram-channel-command",
+        message: expect.objectContaining({ content: "/new" }),
       }),
     );
 
     hasRunningTurn.mockReturnValue(true);
     const active = await postTelegram(messagePayload("please start another long run"));
-    expect(active.json()).toEqual({
-      method: "sendMessage",
-      chat_id: "-1001234567890",
-      text: "A GoatCitadel run is already active for this chat. Use /status to inspect it or /stop to cancel it before starting another request.",
+    expect(active.json()).toMatchObject({
+      accepted: true,
+      durableAccepted: true,
+      replied: false,
+      queued: true,
     });
+    const agentTurnCalls = acceptInboundChannelEvent.mock.calls.filter(
+      ([input]) => (input as { dispatchKind?: string }).dispatchKind === "agent_turn",
+    );
+    expect(agentTurnCalls).toHaveLength(1);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        connectionId: CONNECTION_ID,
+        dispatchKind: "agent_turn",
+        bindingTarget: "-1001234567890",
+        message: expect.objectContaining({ content: "please start another long run" }),
+      }),
+    );
+    expect(services.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(services.respondToExistingChatMessage).not.toHaveBeenCalled();
   });
 
   async function expectStatus(method: "GET" | "POST", url: string, statusCode: number): Promise<void> {

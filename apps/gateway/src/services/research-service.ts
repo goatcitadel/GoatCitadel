@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ModelUsageAttributionContext,
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
@@ -10,11 +11,15 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 interface ResearchServiceDeps {
   storage: Storage;
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
-  createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
+  createChatCompletion: (
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ) => Promise<ChatCompletionResponse>;
   resolveToolPolicyContext?: (input: {
     operatorId?: string;
     authActorId?: string;
@@ -115,7 +120,17 @@ export class ResearchService {
         .filter((item) => item.url.length > 0);
 
       const persistedSources = this.deps.storage.researchSources.replaceForRun(runId, sources);
-      const summary = await this.summarize(input, persistedSources);
+      const summary = await this.summarize(
+        {
+          ...input,
+          runId,
+          trustedWorkspaceId:
+            policyContext?.workspaceId ?? this.deps.storage.chatSessionMeta.get(input.sessionId)?.workspaceId,
+          trustedTaskId: policyContext?.taskId,
+          trustedRunId: policyContext?.runId,
+        },
+        persistedSources,
+      );
       const finishedAt = new Date().toISOString();
       this.deps.storage.researchRuns.patch(runId, {
         status: "completed",
@@ -160,8 +175,13 @@ export class ResearchService {
     input: {
       query: string;
       mode: "quick" | "deep";
+      sessionId: string;
+      runId: string;
       providerId?: string;
       model?: string;
+      trustedWorkspaceId?: string;
+      trustedTaskId?: string;
+      trustedRunId?: string;
     },
     sources: ResearchSourceRecord[],
   ): Promise<string> {
@@ -177,26 +197,42 @@ export class ResearchService {
       })
       .join("\n\n");
 
-    const response = await this.deps.createChatCompletion({
-      providerId: input.providerId,
-      model: input.model,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a concise research analyst. Summarize the findings in plain English and cite by source number.",
+    const response = await this.deps.createChatCompletion(
+      {
+        providerId: input.providerId,
+        model: input.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a concise research analyst. Summarize the findings in plain English and cite by source number.",
+          },
+          {
+            role: "user",
+            content: `Research query: ${input.query}\nMode: ${input.mode}\n\nSources:\n${sourceLines}`,
+          },
+        ],
+        memory: {
+          enabled: false,
+          mode: "off",
         },
-        {
-          role: "user",
-          content: `Research query: ${input.query}\nMode: ${input.mode}\n\nSources:\n${sourceLines}`,
-        },
-      ],
-      memory: {
-        enabled: false,
-        mode: "off",
+        stream: false,
       },
-      stream: false,
-    });
+      createUtilityModelUsageAttribution({
+        operationId: `research:${encodeURIComponent(input.runId)}:summary`,
+        utilityKind: "research_summary",
+        requestedProviderId: input.providerId,
+        requestedModelId: input.model,
+        lineage: {
+          workspaceId: input.trustedWorkspaceId,
+          sessionId: input.sessionId,
+          durableRunId: input.trustedRunId,
+          taskId: input.trustedTaskId,
+          agentId: "research",
+          parentOperationId: `research:${encodeURIComponent(input.runId)}`,
+        },
+      }),
+    );
 
     const content = extractAssistantText(response);
     return content || "Research completed, but no summary text was generated.";

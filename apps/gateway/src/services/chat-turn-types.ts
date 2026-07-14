@@ -70,6 +70,11 @@ export interface DurableChatTurnExecutionPayload {
   turnId: string;
   userMessageId: string;
   assistantMessageId: string;
+  capabilityProfileId?: string;
+  capabilityProfileHash?: string;
+  /** Durable replay binding placeholder; replay loading is owned by the durable runtime. */
+  routedContextSnapshotId?: string;
+  routedContextSnapshotHash?: string;
   branchKind: ChatTurnBranchKind;
   parentTurnId?: string;
   sourceTurnId?: string;

@@ -824,6 +824,32 @@ describe("ChatDelegationService loop 20 coverage", () => {
     });
   });
 
+  it("binds a canonical durable child watcher when a delegated turn commits", async () => {
+    const { deps, service } = createHarness();
+    deps.watchDurableChildRun = vi.fn();
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Implement and verify the durable watcher slice",
+      roles: ["coder"],
+      policyRunId: "parent-durable-run",
+    });
+
+    const step = result.steps[0]!;
+    expect(deps.watchDurableChildRun).toHaveBeenCalledTimes(1);
+    expect(deps.watchDurableChildRun).toHaveBeenCalledWith({
+      parentRunId: "parent-durable-run",
+      childRunId: step.durableRunId,
+      watcherId: `delegation-child:${step.stepId}`,
+      source: "chat_delegation",
+      metadata: {
+        delegationRunId: result.runId,
+        stepId: step.stepId,
+        childSessionId: step.childSessionId,
+        childTurnId: step.childTurnId,
+      },
+    });
+  });
+
   it("marks the run and task failed when inherited policy resolution fails before dispatch", async () => {
     const { deps, service } = createHarness();
     deps.resolveToolPolicyContext = vi.fn(() => {
