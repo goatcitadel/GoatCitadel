@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Outbound chat execution coordinates streaming, retries, attachments, and effect settlement in one hook. */
 import type {
   ChatMessageRecord,
   ChatMode,
@@ -34,7 +35,7 @@ import { shouldApplyFetchedMessagesAfterStream, shouldExecuteLocalChatCommand } 
 import type { ChatErrorSource } from "./chat-error-copy";
 import { useChatOperatorPrompts } from "./useChatOperatorPrompts";
 import { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
-import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+import type { OutboundQueueItem, OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
 import type { ActiveChatStreamState, UseChatOutboundExecutionInput } from "./useChatOutboundExecution.types";
 export type {
   ActiveChatStreamState,
@@ -76,7 +77,12 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
   stream.controller.abort();
 }
 
-export function resolveOutboundExecutionPrefs(prefs: ChatSessionPrefsRecord | null | undefined) {
+type OutboundExecutionPrefsSource = Pick<
+  ChatSessionPrefsRecord,
+  "memoryMode" | "webMode" | "thinkingLevel" | "speedMode" | "subagentPolicy"
+>;
+
+export function resolveOutboundExecutionPrefs(prefs: OutboundExecutionPrefsSource | null | undefined) {
   const memoryMode = prefs?.memoryMode ?? "auto";
   return {
     useMemory: memoryMode !== "off",
@@ -86,6 +92,26 @@ export function resolveOutboundExecutionPrefs(prefs: ChatSessionPrefsRecord | nu
     speedMode: prefs?.speedMode ?? "standard",
     subagentPolicy: prefs?.subagentPolicy ?? "ask_when_useful",
   };
+}
+
+export function captureOutboundRequestPrefsSnapshot(input: {
+  prefs: ChatSessionPrefsRecord | null | undefined;
+  selectedProviderId?: string;
+  selectedModel?: string;
+  fullWebAccess?: boolean;
+}): OutboundRequestPrefsSnapshot {
+  const executionPrefs = resolveOutboundExecutionPrefs(input.prefs);
+  return Object.freeze({
+    mode: "chat",
+    providerId: input.prefs?.providerId ?? input.selectedProviderId,
+    model: input.prefs?.model ?? input.selectedModel,
+    webMode: executionPrefs.webMode,
+    memoryMode: executionPrefs.memoryMode,
+    thinkingLevel: executionPrefs.thinkingLevel,
+    speedMode: executionPrefs.speedMode,
+    subagentPolicy: executionPrefs.subagentPolicy,
+    fullWebAccess: Boolean(input.fullWebAccess),
+  });
 }
 
 export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
@@ -379,11 +405,20 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       const currentPrefs = prefsRef.current;
-      const effectiveMode: ChatMode = "chat";
+      const requestPrefs =
+        item.requestPrefs ??
+        captureOutboundRequestPrefsSnapshot({
+          prefs: currentPrefs,
+          selectedProviderId,
+          selectedModel,
+          fullWebAccess,
+        });
+      const effectiveMode: ChatMode = requestPrefs.mode;
       const shouldAutoRoute = false;
-      const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
-      const executionModel = currentPrefs?.model ?? selectedModel;
-      const outboundPrefs = resolveOutboundExecutionPrefs(currentPrefs);
+      const executionProviderId = requestPrefs.providerId;
+      const executionModel = requestPrefs.model;
+      const outboundPrefs = resolveOutboundExecutionPrefs(requestPrefs);
+      const councilOptIn = item.modelCouncil ? { modelCouncil: item.modelCouncil } : {};
       const optimisticPrefs =
         currentPrefs && (executionProviderId || executionModel)
           ? {
@@ -391,6 +426,11 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
               mode: effectiveMode,
               providerId: executionProviderId,
               model: executionModel,
+              webMode: requestPrefs.webMode,
+              memoryMode: requestPrefs.memoryMode,
+              thinkingLevel: requestPrefs.thinkingLevel,
+              speedMode: requestPrefs.speedMode,
+              subagentPolicy: requestPrefs.subagentPolicy,
             }
           : currentPrefs;
       const localAttachments = attachmentsSnapshot.map((entry) => ({
@@ -475,6 +515,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           sessionId: session.sessionId,
           action: item.action,
           turnId: item.targetTurnId,
+          content: trimmedContent,
+          requestPrefs,
           force: true,
         });
         if (routePreflight?.blockedReason) {
@@ -771,12 +813,13 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
                     mode: effectiveMode,
-                    webMode: currentPrefs?.webMode,
-                    memoryMode: currentPrefs?.memoryMode,
-                    thinkingLevel: currentPrefs?.thinkingLevel,
-                    speedMode: currentPrefs?.speedMode,
-                    subagentPolicy: currentPrefs?.subagentPolicy,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    webMode: requestPrefs.webMode,
+                    memoryMode: requestPrefs.memoryMode,
+                    thinkingLevel: requestPrefs.thinkingLevel,
+                    speedMode: requestPrefs.speedMode,
+                    subagentPolicy: requestPrefs.subagentPolicy,
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -793,7 +836,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -810,7 +854,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -852,12 +897,13 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
                     mode: effectiveMode,
-                    webMode: currentPrefs?.webMode,
-                    memoryMode: currentPrefs?.memoryMode,
-                    thinkingLevel: currentPrefs?.thinkingLevel,
-                    speedMode: currentPrefs?.speedMode,
-                    subagentPolicy: currentPrefs?.subagentPolicy,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    webMode: requestPrefs.webMode,
+                    memoryMode: requestPrefs.memoryMode,
+                    thinkingLevel: requestPrefs.thinkingLevel,
+                    speedMode: requestPrefs.speedMode,
+                    subagentPolicy: requestPrefs.subagentPolicy,
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   { originSurface: effectiveMode },
                 )
@@ -873,7 +919,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                      ...councilOptIn,
+                      ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   )
@@ -888,7 +935,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                      ...councilOptIn,
+                      ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   );

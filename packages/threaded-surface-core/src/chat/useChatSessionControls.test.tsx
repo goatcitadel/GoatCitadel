@@ -8,6 +8,13 @@ import { useChatSessionControls } from "./useChatSessionControls";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const apiMocks = vi.hoisted(() => ({
+  ApiRequestError: class ApiRequestError extends Error {
+    public readonly status?: number;
+    public constructor(message: string, options: { status?: number }) {
+      super(message);
+      this.status = options.status;
+    }
+  },
   archiveChatSession: vi.fn(),
   archiveWorkspaceChatSessions: vi.fn(),
   assignChatSessionProject: vi.fn(),
@@ -23,6 +30,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  ApiRequestError: apiMocks.ApiRequestError,
   archiveChatSession: apiMocks.archiveChatSession,
   archiveWorkspaceChatSessions: apiMocks.archiveWorkspaceChatSessions,
   assignChatSessionProject: apiMocks.assignChatSessionProject,
@@ -39,6 +47,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 
 const selectedSession = {
   sessionId: "session-1",
+  revision: 7,
   sessionKey: "session-1",
   workspaceId: "workspace-1",
   scope: "mission",
@@ -77,6 +86,8 @@ function Harness(props: {
   selectedSessionId?: string | null;
   historyView?: "active" | "archived";
   selectedProjectId?: string;
+  refreshSessionAggregate?: (sessionId: string) => Promise<void>;
+  setSessionMetadataConflictDraft?: Parameters<typeof useChatSessionControls>[0]["setSessionMetadataConflictDraft"];
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState(props.selectedProjectId ?? "all");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
@@ -118,6 +129,8 @@ function Harness(props: {
       setThreadCleared(value === null);
     },
     loadSidebar: loadSidebar.current,
+    refreshSessionAggregate: props.refreshSessionAggregate,
+    setSessionMetadataConflictDraft: props.setSessionMetadataConflictDraft,
     setBinding,
   });
 
@@ -141,7 +154,11 @@ function Harness(props: {
 describe("useChatSessionControls", () => {
   beforeEach(() => {
     latest = null;
-    Object.values(apiMocks).forEach((mock) => mock.mockReset());
+    Object.values(apiMocks).forEach((mock) => {
+      if ("mockReset" in mock) {
+        mock.mockReset();
+      }
+    });
     apiMocks.createChatSession.mockResolvedValue({ ...selectedSession, sessionId: "session-new" });
     apiMocks.createChatProject.mockResolvedValue({ projectId: "project-new", name: "Project" });
     apiMocks.importChatProject.mockResolvedValue({ project: { projectId: "project-imported", name: "Imported" } });
@@ -250,12 +267,16 @@ describe("useChatSessionControls", () => {
       await latest!.controls.handleSaveOrganization();
       await latest!.controls.handleAssignProject("none");
     });
-    expect(apiMocks.updateChatSession).toHaveBeenCalledWith("session-1", { title: "Renamed session" });
     expect(apiMocks.updateChatSession).toHaveBeenCalledWith("session-1", {
+      expectedRevision: 7,
+      title: "Renamed session",
+    });
+    expect(apiMocks.updateChatSession).toHaveBeenCalledWith("session-1", {
+      expectedRevision: 7,
       folderName: "Focus",
       tags: ["alpha", "beta"],
     });
-    expect(apiMocks.assignChatSessionProject).toHaveBeenCalledWith("session-1", undefined);
+    expect(apiMocks.assignChatSessionProject).toHaveBeenCalledWith("session-1", undefined, 7);
   });
 
   it("pins, archives, deletes, imports code projects, and saves external bindings", async () => {
@@ -267,7 +288,7 @@ describe("useChatSessionControls", () => {
     await act(async () => {
       await latest!.controls.handleTogglePinSession();
     });
-    expect(apiMocks.pinChatSession).toHaveBeenCalledWith("session-1");
+    expect(apiMocks.pinChatSession).toHaveBeenCalledWith("session-1", 7);
 
     await act(async () => {
       renderer.update(<Harness session={{ ...selectedSession, pinned: true }} />);
@@ -275,12 +296,12 @@ describe("useChatSessionControls", () => {
     await act(async () => {
       await latest!.controls.handleTogglePinSession();
     });
-    expect(apiMocks.unpinChatSession).toHaveBeenCalledWith("session-1");
+    expect(apiMocks.unpinChatSession).toHaveBeenCalledWith("session-1", 7);
 
     await act(async () => {
       await latest!.controls.handleToggleArchiveSession();
     });
-    expect(apiMocks.archiveChatSession).toHaveBeenCalledWith("session-1");
+    expect(apiMocks.archiveChatSession).toHaveBeenCalledWith("session-1", 7);
     expect(latest!.snapshot().queuedOutbound).toEqual([]);
     expect(latest!.snapshot().threadCleared).toBe(true);
 
@@ -290,16 +311,20 @@ describe("useChatSessionControls", () => {
     await act(async () => {
       await latest!.controls.handleToggleArchiveSession();
     });
-    expect(apiMocks.restoreChatSession).toHaveBeenCalledWith("session-1");
+    expect(apiMocks.restoreChatSession).toHaveBeenCalledWith("session-1", 7);
 
     act(() => {
       latest!.controls.handleDeleteSession("Launch Room");
     });
-    expect(latest!.controls.sessionDeleteConfirm).toEqual({ sessionId: "session-1", label: "Launch Room" });
+    expect(latest!.controls.sessionDeleteConfirm).toEqual({
+      sessionId: "session-1",
+      revision: 7,
+      label: "Launch Room",
+    });
     await act(async () => {
       await latest!.controls.confirmDeleteSession();
     });
-    expect(apiMocks.deleteChatSession).toHaveBeenCalledWith("session-1");
+    expect(apiMocks.deleteChatSession).toHaveBeenCalledWith("session-1", 7);
 
     await act(async () => {
       await expect(
@@ -310,7 +335,7 @@ describe("useChatSessionControls", () => {
         }),
       ).resolves.toEqual({ projectId: "project-imported", name: "Imported" });
     });
-    expect(apiMocks.assignChatSessionProject).toHaveBeenCalledWith("session-1", "project-imported");
+    expect(apiMocks.assignChatSessionProject).toHaveBeenCalledWith("session-1", "project-imported", 7);
 
     await act(async () => {
       latest!.controls.setIntegrationConnectionId(" discord ");
@@ -441,5 +466,63 @@ describe("useChatSessionControls", () => {
       await latest!.controls.handleAssignProject("project-2");
       await latest!.controls.handleSaveExternalBinding();
     });
+  });
+
+  it("refreshes actual 409 conflicts, preserves editable drafts, and does not replay non-draft actions", async () => {
+    const refreshSessionAggregate = vi.fn(async () => undefined);
+    const setSessionMetadataConflictDraft = vi.fn();
+    await act(async () => {
+      create(
+        <Harness
+          session={selectedSession}
+          refreshSessionAggregate={refreshSessionAggregate}
+          setSessionMetadataConflictDraft={setSessionMetadataConflictDraft}
+        />,
+      );
+    });
+
+    apiMocks.updateChatSession.mockRejectedValueOnce(new apiMocks.ApiRequestError("stale rename", { status: 409 }));
+    await act(async () => {
+      await latest!.controls.handleRenameSession();
+    });
+    expect(refreshSessionAggregate).toHaveBeenCalledWith("session-1");
+    expect(setSessionMetadataConflictDraft).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      kind: "rename",
+      renameTitle: "  Renamed session  ",
+    });
+    expect(setSessionMetadataConflictDraft.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshSessionAggregate.mock.invocationCallOrder[0]!,
+    );
+    expect(apiMocks.updateChatSession).toHaveBeenCalledTimes(1);
+    expect(latest!.setError).toHaveBeenCalledWith(
+      "This chat changed elsewhere. Your rename draft is preserved; review it and retry.",
+    );
+
+    apiMocks.updateChatSession.mockRejectedValueOnce(
+      new apiMocks.ApiRequestError("stale organization", { status: 409 }),
+    );
+    await act(async () => {
+      await latest!.controls.handleSaveOrganization();
+    });
+    expect(setSessionMetadataConflictDraft).toHaveBeenLastCalledWith({
+      sessionId: "session-1",
+      kind: "organization",
+      folderName: "  Focus  ",
+      tagsValue: " alpha, beta, , ",
+    });
+    expect(setSessionMetadataConflictDraft.mock.invocationCallOrder[1]).toBeLessThan(
+      refreshSessionAggregate.mock.invocationCallOrder[1]!,
+    );
+
+    apiMocks.pinChatSession.mockRejectedValueOnce(new apiMocks.ApiRequestError("stale pin", { status: 409 }));
+    await act(async () => {
+      await latest!.controls.handleTogglePinSession();
+    });
+    expect(refreshSessionAggregate).toHaveBeenCalledTimes(3);
+    expect(apiMocks.pinChatSession).toHaveBeenCalledTimes(1);
+    expect(latest!.setError).toHaveBeenCalledWith(
+      "This chat changed elsewhere. Review the latest state, then click pin again.",
+    );
   });
 });

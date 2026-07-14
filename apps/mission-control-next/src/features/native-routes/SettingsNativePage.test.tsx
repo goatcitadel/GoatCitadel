@@ -7,6 +7,7 @@ import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 
 const mocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(async () => ({
+    revision: 41,
     auth: {
       mode: "none",
       allowLoopbackBypass: true,
@@ -328,11 +329,13 @@ const mocks = vi.hoisted(() => ({
   deletePersonality: vi.fn(async () => ({ defaultPersonalityId: "default", items: [] })),
   setDefaultPersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
   saveProviderSecret: vi.fn(async () => ({
+    revision: 44,
     providerId: "openai",
     hasSecret: true,
     source: "keychain",
   })),
   deleteProviderSecret: vi.fn(async () => ({
+    revision: 44,
     providerId: "openai",
     hasSecret: false,
     source: "none",
@@ -957,6 +960,7 @@ const mocks = vi.hoisted(() => ({
   reload: vi.fn(async () => undefined),
   providerCatalogState: {
     config: {
+      revision: 43,
       activeProviderId: "openai",
       activeModel: "gpt-5.4-mini",
       providers: [],
@@ -1171,6 +1175,7 @@ function findLoopbackCheckbox(root: ReactTestInstance): ReactTestInstance {
 
 function mockSettingsLoopback(allowLoopbackBypass: boolean) {
   mocks.fetchSettings.mockResolvedValueOnce({
+    revision: 41,
     auth: {
       mode: "none",
       allowLoopbackBypass,
@@ -1191,6 +1196,7 @@ const OAUTH_STORAGE_KEY = "goatcitadel:openai-codex:oauth-flow";
 function setCodexProviderCatalogState(overrides: Record<string, unknown> = {}) {
   mocks.providerCatalogState = {
     config: {
+      revision: 43,
       activeProviderId: "openai-codex",
       activeModel: "openai-codex/gpt-5.5",
       providers: [],
@@ -1296,6 +1302,7 @@ function installBrowserStorageMock(
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.fetchSettings.mockResolvedValue({
+    revision: 41,
     auth: {
       mode: "none",
       allowLoopbackBypass: true,
@@ -1572,6 +1579,7 @@ beforeEach(async () => {
   mocks.reload = vi.fn(async () => undefined);
   mocks.providerCatalogState = {
     config: {
+      revision: 43,
       activeProviderId: "openai",
       activeModel: "gpt-5.4-mini",
       providers: [],
@@ -2153,6 +2161,7 @@ describe("SettingsNativePage permissions", () => {
 
   it("keeps skip-routine custom profiles unavailable in Remote Hardened mode", async () => {
     mocks.fetchSettings.mockResolvedValueOnce({
+      revision: 41,
       auth: {
         mode: "token",
         allowLoopbackBypass: false,
@@ -2418,6 +2427,7 @@ describe("SettingsNativePage permissions", () => {
 describe("SettingsNativePage tools", () => {
   it("keeps approval bypass unavailable in Remote Hardened mode", async () => {
     mocks.fetchSettings.mockResolvedValueOnce({
+      revision: 41,
       auth: {
         mode: "token",
         allowLoopbackBypass: false,
@@ -2457,7 +2467,10 @@ describe("SettingsNativePage tools", () => {
     await flushAsyncUpdates();
 
     expect(mocks.patchSettings).not.toHaveBeenCalledWith(expect.objectContaining({ toolApprovalMode: "bypass" }));
-    expect(mocks.patchSettings).toHaveBeenCalledWith({ toolApprovalMode: "approve_risky" });
+    expect(mocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 41,
+      toolApprovalMode: "approve_risky",
+    });
   });
 
   it("keeps approval bypass unavailable when settings cannot be loaded", async () => {
@@ -2705,6 +2718,7 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Apply defaults").props.onClick();
     });
     expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
+      expectedRevision: 41,
       defaultToolProfile: "standard",
       toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
@@ -2739,7 +2753,7 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Save budget mode").props.onClick();
     });
     await flushAsyncUpdates();
-    expect(mocks.patchSettings).toHaveBeenCalledWith({ budgetMode: "power" });
+    expect(mocks.patchSettings).toHaveBeenCalledWith({ expectedRevision: 41, budgetMode: "power" });
 
     await act(async () => {
       renderer = renderPage("not-real");
@@ -2967,8 +2981,36 @@ describe("SettingsNativePage providers", () => {
     await flushAsyncUpdates();
   });
 
+  it("preserves the local budget draft when a stale revision is rejected", async () => {
+    mocks.patchSettings.mockRejectedValueOnce(
+      new Error("Settings changed after this client loaded them. Refresh before retrying."),
+    );
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("budget");
+    });
+    await flushAsyncUpdates();
+
+    const budgetSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.className === "mc-next-settings-input",
+    )[0]!;
+    await act(async () => {
+      budgetSelect.props.onChange({ target: { value: "power" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save budget mode").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.patchSettings).toHaveBeenCalledWith({ expectedRevision: 41, budgetMode: "power" });
+    expect(budgetSelect.props.value).toBe("power");
+    expect(collectText(renderer!.root)).toContain("Settings changed after this client loaded them.");
+  });
+
   it("keeps prompt-skipping first-run defaults unavailable in Remote Hardened mode", async () => {
     mocks.fetchSettings.mockResolvedValueOnce({
+      revision: 41,
       auth: {
         mode: "token",
         allowLoopbackBypass: false,
@@ -3128,6 +3170,7 @@ describe("SettingsNativePage providers", () => {
     });
 
     expect(mocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 43,
       llm: {
         upsertProvider: {
           providerId: "local-gateway",
@@ -3154,6 +3197,7 @@ describe("SettingsNativePage providers", () => {
     });
 
     expect(mocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 43,
       llm: {
         upsertProvider: {
           providerId: "openai-codex",
@@ -3210,6 +3254,7 @@ describe("SettingsNativePage providers", () => {
       });
 
       mocks.saveProviderSecret.mockResolvedValueOnce({
+        revision: 44,
         providerId: "openai",
         hasSecret: true,
         source: "env",
@@ -3218,7 +3263,7 @@ describe("SettingsNativePage providers", () => {
         findButton(renderer!.root, "Save secret").props.onClick();
       });
 
-      expect(mocks.saveProviderSecret).toHaveBeenCalledWith("openai", "sk-test-secret");
+      expect(mocks.saveProviderSecret).toHaveBeenCalledWith("openai", "sk-test-secret", 43);
       expect(collectText(renderer!.root)).toContain("Provider secret saved. Stored in local .env fallback.");
 
       await act(async () => {
@@ -3230,7 +3275,7 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         await deleteSecretModal?.props.onConfirm();
       });
-      expect(mocks.deleteProviderSecret).toHaveBeenCalledWith("openai");
+      expect(mocks.deleteProviderSecret).toHaveBeenCalledWith("openai", 43);
       expect(collectText(renderer!.root)).toContain("Provider secret removed. No key remains on file.");
     } finally {
       Object.assign(globalThis, { window: previousWindow });
@@ -3240,6 +3285,7 @@ describe("SettingsNativePage providers", () => {
   it("shows configured versus execution API style and cautious model-probe truth", async () => {
     mocks.providerCatalogState = {
       config: {
+        revision: 43,
         activeProviderId: "custom",
         activeModel: "custom-model",
         providers: [],
@@ -3295,6 +3341,7 @@ describe("SettingsNativePage providers", () => {
     } as any);
     mocks.providerCatalogState = {
       config: {
+        revision: 43,
         activeProviderId: "openai-codex",
         activeModel: "openai-codex/gpt-5.5",
         providers: [],
@@ -3602,6 +3649,7 @@ describe("SettingsNativePage providers", () => {
     });
     mocks.providerCatalogState = {
       config: {
+        revision: 43,
         activeProviderId: "openai-codex",
         activeModel: "openai-codex/gpt-5.5",
         providers: [],
@@ -3857,7 +3905,6 @@ describe("SettingsNativePage providers", () => {
       loading: false,
       error: null,
     };
-    mocks.patchSettings.mockRejectedValueOnce(new Error("provider save failed"));
     mocks.loadModelsForProvider.mockRejectedValueOnce(new Error("probe failed"));
 
     let renderer: ReactTestRenderer | null = null;
@@ -3896,7 +3943,8 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Save provider").props.onClick();
     });
     await flushAsyncUpdates();
-    expect(collectText(renderer!.root)).toContain("provider save failed");
+    expect(collectText(renderer!.root)).toContain("Reload provider settings before saving this provider.");
+    expect(mocks.patchSettings).not.toHaveBeenCalled();
 
     await act(async () => {
       findButton(renderer!.root, "Probe from editor").props.onClick();
@@ -4060,6 +4108,7 @@ describe("SettingsNativePage access", () => {
       await flushAsyncUpdates();
 
       expect(mocks.patchSettings).toHaveBeenCalledWith({
+        expectedRevision: 41,
         auth: {
           mode: "basic",
           allowLoopbackBypass: false,

@@ -21,6 +21,7 @@ import {
   useChatSurfaceOrchestration,
   type OutboundContextBlock,
   type OutboundQueueItem,
+  type OutboundRequestPrefsSnapshot,
 } from "./useChatSurfaceOrchestration";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,6 +31,7 @@ interface HarnessSnapshot {
   editingTurnId: string | null;
   draft: string;
   pendingAttachments: unknown[];
+  councilArmed: boolean;
 }
 
 interface HarnessApi {
@@ -49,7 +51,22 @@ interface HarnessApi {
     turnId?: string;
     controller: AbortController;
   } | null>;
+  armCouncil: () => void;
+  setDraft: (value: string) => void;
+  setRequestPrefs: (value: OutboundRequestPrefsSnapshot) => void;
 }
+
+const DEFAULT_REQUEST_PREFS: OutboundRequestPrefsSnapshot = {
+  mode: "chat",
+  providerId: "openai-codex",
+  model: "gpt-5.5",
+  webMode: "auto",
+  memoryMode: "auto",
+  thinkingLevel: "standard",
+  speedMode: "standard",
+  subagentPolicy: "ask_when_useful",
+  fullWebAccess: false,
+};
 
 let latest: HarnessApi | null = null;
 
@@ -62,9 +79,13 @@ function Harness(props: {
   sending?: boolean;
   canBegin?: boolean;
   activeStream?: { sessionId: string; streamToken: string; turnId?: string; controller: AbortController } | null;
+  initialCouncilArmed?: boolean;
+  initialRequestPrefs?: OutboundRequestPrefsSnapshot;
 }) {
   const [draft, setDraft] = useState(props.initialDraft ?? "");
   const [pendingAttachments, setPendingAttachments] = useState<unknown[]>(props.initialAttachments ?? []);
+  const [councilArmed, setCouncilArmed] = useState(Boolean(props.initialCouncilArmed));
+  const [requestPrefs, setRequestPrefs] = useState(props.initialRequestPrefs ?? DEFAULT_REQUEST_PREFS);
   const tryBegin = useRef(vi.fn(() => props.canBegin ?? true));
   tryBegin.current.mockImplementation(() => props.canBegin ?? true);
   const executeOutbound = useRef(vi.fn(async (_item: OutboundQueueItem) => undefined));
@@ -100,6 +121,12 @@ function Harness(props: {
     setPendingApproval: setPendingApproval.current,
     setError: setError.current,
     onOutboundContextConsumed: props.onOutboundContextConsumed,
+    consumeModelCouncilArming: () => {
+      if (!councilArmed) return undefined;
+      setCouncilArmed(false);
+      return { enabled: true };
+    },
+    captureOutboundRequestPrefs: () => requestPrefs,
     loadSessionCoreStateRef: loadSessionCoreState,
     abortActiveChatStream: abortActiveChatStream.current,
   });
@@ -111,6 +138,7 @@ function Harness(props: {
       editingTurnId: controller.editingTurnId,
       draft,
       pendingAttachments,
+      councilArmed,
     }),
     executeOutbound: executeOutbound.current,
     tryBegin: tryBegin.current,
@@ -121,6 +149,9 @@ function Harness(props: {
     loadSessionCoreState: loadSessionCoreState.current,
     composerFocus: composerFocus.current,
     activeStreamRef,
+    armCouncil: () => setCouncilArmed(true),
+    setDraft,
+    setRequestPrefs,
   };
   return null;
 }
@@ -210,6 +241,142 @@ describe("useChatSurfaceOrchestration", () => {
     });
     expect(latest!.snapshot().queuedOutbound[0]).not.toHaveProperty("paused");
     expect(latest!.pushNotice).toHaveBeenCalledWith("Message queued while the current turn finishes.");
+  });
+
+  it("captures Council as an immutable one-shot on immediate and queued items", async () => {
+    mountHarness({ initialDraft: "Immediate council", initialCouncilArmed: true });
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+    expect(latest!.executeOutbound.mock.calls[0]?.[0]).toMatchObject({
+      content: "Immediate council",
+      modelCouncil: { enabled: true },
+    });
+    expect(latest!.snapshot().councilArmed).toBe(false);
+
+    await act(async () => {
+      latest!.setDraft("Ordinary next turn");
+    });
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+    expect(latest!.executeOutbound.mock.calls[1]?.[0]).not.toHaveProperty("modelCouncil");
+
+    mountHarness({ initialDraft: "Queued council", initialCouncilArmed: true, canBegin: false, sending: true });
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+    expect(latest!.snapshot().queuedOutbound[0]).toMatchObject({
+      content: "Queued council",
+      modelCouncil: { enabled: true },
+    });
+    expect(latest!.snapshot().councilArmed).toBe(false);
+  });
+
+  it("captures bounded request prefs once for immediate, queued, edit, retry, and external queue items", async () => {
+    mountHarness({ initialDraft: "Immediate prefs" });
+    await act(async () => latest!.controller.handleSend());
+    expect(latest!.executeOutbound.mock.calls[0]?.[0]).toMatchObject({ requestPrefs: DEFAULT_REQUEST_PREFS });
+
+    const anthropicPrefs: OutboundRequestPrefsSnapshot = {
+      ...DEFAULT_REQUEST_PREFS,
+      providerId: "anthropic",
+      model: "claude-next",
+      thinkingLevel: "deep",
+      speedMode: "fast",
+      fullWebAccess: true,
+    };
+    mountHarness({ initialDraft: "Queued prefs", initialRequestPrefs: DEFAULT_REQUEST_PREFS, canBegin: false });
+    await act(async () => latest!.controller.handleSend());
+    act(() => latest!.setRequestPrefs(anthropicPrefs));
+    expect(latest!.snapshot().queuedOutbound[0]).toMatchObject({ requestPrefs: DEFAULT_REQUEST_PREFS });
+
+    act(() => latest!.controller.handleBeginEditTurn("turn-1"));
+    await act(async () => latest!.controller.handleSend());
+    expect(latest!.snapshot().queuedOutbound[1]).toMatchObject({
+      action: "edit",
+      requestPrefs: anthropicPrefs,
+    });
+
+    const localPrefs: OutboundRequestPrefsSnapshot = {
+      ...anthropicPrefs,
+      providerId: "ollama",
+      model: "qwen-local",
+      thinkingLevel: "standard",
+      fullWebAccess: false,
+    };
+    act(() => latest!.setRequestPrefs(localPrefs));
+    await act(async () => latest!.controller.handleRetryTurn("turn-1"));
+    expect(latest!.snapshot().queuedOutbound[2]).toMatchObject({
+      action: "retry",
+      requestPrefs: localPrefs,
+    });
+
+    act(() =>
+      latest!.controller.setQueuedOutbound((current) => [
+        ...current,
+        {
+          id: "external-retry",
+          action: "retry",
+          targetTurnId: "turn-1",
+          content: "",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        },
+      ]),
+    );
+    expect(latest!.snapshot().queuedOutbound[3]).toMatchObject({ requestPrefs: localPrefs });
+  });
+
+  it("keeps the hydration setter stable across rerenders while binding external items to the latest prefs", () => {
+    const renderer = mountHarness({ initialRequestPrefs: DEFAULT_REQUEST_PREFS, canBegin: false });
+    const initialSetter = latest!.controller.setQueuedOutbound;
+    const laterPrefs: OutboundRequestPrefsSnapshot = {
+      ...DEFAULT_REQUEST_PREFS,
+      providerId: "fireworks",
+      model: "accounts/fireworks/models/deepseek-v3",
+      thinkingLevel: "deep",
+      fullWebAccess: true,
+    };
+
+    act(() => latest!.setRequestPrefs(laterPrefs));
+    expect(latest!.controller.setQueuedOutbound).toBe(initialSetter);
+
+    act(() =>
+      latest!.controller.setQueuedOutbound([
+        {
+          id: "hydrated-legacy-item",
+          action: "send",
+          content: "Hydrated work",
+          attachments: [],
+          createdAt: "2026-07-13T20:00:00.000Z",
+          paused: true,
+        },
+      ]),
+    );
+    expect(latest!.snapshot().queuedOutbound[0]).toMatchObject({ requestPrefs: laterPrefs });
+    act(() => renderer.unmount());
+  });
+
+  it("requires fresh Council arming for every retry and edit", async () => {
+    mountHarness({ initialDraft: "", initialCouncilArmed: true, canBegin: false });
+    act(() => latest!.controller.handleBeginEditTurn("turn-1"));
+    await act(async () => latest!.controller.handleSend());
+    expect(latest!.snapshot().queuedOutbound[0]).toMatchObject({
+      action: "edit",
+      modelCouncil: { enabled: true },
+    });
+
+    await act(async () => latest!.controller.handleRetryTurn("turn-1"));
+    expect(latest!.snapshot().queuedOutbound[1]).not.toHaveProperty("modelCouncil");
+
+    act(() => latest!.armCouncil());
+    await act(async () => latest!.controller.handleRetryTurn("turn-1"));
+    expect(latest!.snapshot().queuedOutbound[2]).toMatchObject({
+      action: "retry",
+      modelCouncil: { enabled: true },
+    });
+    expect(latest!.snapshot().councilArmed).toBe(false);
   });
 
   it("supports edit and retry queue flows", async () => {

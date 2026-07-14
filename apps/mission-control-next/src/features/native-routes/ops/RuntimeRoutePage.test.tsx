@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReviewReadinessSummary } from "@goatcitadel/contracts";
 import {
   buildNeedsAttentionItems,
   buildOpsHeadMetrics,
@@ -11,6 +12,7 @@ import {
   describeQmdImpact,
   descriptionForOpsSection,
   formatBytes,
+  formatCostMetric,
   formatDateTime,
   formatDuration,
   formatHumanSessionTitle,
@@ -19,6 +21,7 @@ import {
   formatTokenDelta,
   formatUsd,
   labelForOpsSection,
+  readProviderSpendRows,
   RuntimeRoutePage,
   sourceFailed,
 } from "./RuntimeRoutePage";
@@ -47,14 +50,40 @@ const reviewReadinessApiMocks = vi.hoisted(() => ({
       ],
       openFindings: 1,
       linkedTasks: [],
-    }),
+      runtimeIdentity: {
+        schemaVersion: 1,
+        kind: "source",
+        version: "1.0.0",
+        buildSha: "a".repeat(40),
+        shortSha: "a".repeat(8),
+        integrity: "clean",
+        identitySource: "git_checkout",
+        release: {
+          verified: false,
+          certificateState: "absent",
+          requiredProof: { total: 0, passed: 0, missing: 0, failed: 0, stale: 0 },
+          acceptedFailureCount: 0,
+          acceptedFailures: [],
+          certificateAttestation: { status: "missing" },
+          runtimePayloadIntegrity: { status: "unverified" },
+          reasonCodes: ["certificate_absent"],
+          reasons: ["No release certificate is available to the running Gateway."],
+        },
+      },
+    } as ReviewReadinessSummary),
   ),
+  refreshRuntimeReleaseTrust: vi.fn(),
 }));
 
+reviewReadinessApiMocks.refreshRuntimeReleaseTrust.mockImplementation(() =>
+  reviewReadinessApiMocks.fetchReviewReadiness(),
+);
+
 const runtimeSnapshotOverrides = vi.hoisted(() => ({
-  sourceStatus: null as null | Record<string, { status: "ok" | "error"; error?: string }>,
+  sourceStatus: null as null | Record<string, { status: "ok" | "error"; error?: string; message?: string }>,
   daemon: undefined as unknown,
   health: undefined as unknown,
+  llamaCpp: undefined as unknown,
   data: undefined as unknown,
   daemonBusy: null as null | "start" | "restart" | "stop",
   notice: undefined as unknown,
@@ -73,6 +102,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
   fetchReviewReadiness: reviewReadinessApiMocks.fetchReviewReadiness,
+  refreshRuntimeReleaseTrust: reviewReadinessApiMocks.refreshRuntimeReleaseTrust,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
@@ -202,7 +232,17 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                         from: "",
                         to: "",
                         items: [],
-                        usageAvailability: { trackedEvents: 12, unknownEvents: 1, totalAgentEvents: 13 },
+                        usageAvailability: {
+                          trackedEvents: 12,
+                          unknownEvents: 1,
+                          totalAgentEvents: 13,
+                          metricAvailability: {
+                            inputTokens: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                            outputTokens: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                            cachedInputTokens: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                            costUsd: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                          },
+                        },
                       },
                       qmd: {
                         totalRuns: 8,
@@ -219,7 +259,17 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
               scope: "day",
               from: "",
               to: "",
-              usageAvailability: { trackedEvents: 12, unknownEvents: 1, totalAgentEvents: 13 },
+              usageAvailability: {
+                trackedEvents: 12,
+                unknownEvents: 1,
+                totalAgentEvents: 13,
+                metricAvailability: {
+                  inputTokens: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                  outputTokens: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                  cachedInputTokens: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                  costUsd: { knownAttemptCount: 13, unknownAttemptCount: 0, complete: true },
+                },
+              },
               dailySeries: [
                 {
                   isoDate: "2026-04-20",
@@ -280,6 +330,33 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                     ],
                   }
                 : runtimeSnapshotOverrides.daemon,
+            llamaCpp:
+              runtimeSnapshotOverrides.llamaCpp === undefined
+                ? {
+                    enabled: true,
+                    desiredState: "running",
+                    processState: "running",
+                    baseUrl: "http://127.0.0.1:8080/v1",
+                    healthy: true,
+                    updatedAt: "2026-04-22T00:00:00.000Z",
+                    leaseDiagnostics: {
+                      state: "active",
+                      activeLeaseCount: 2,
+                      ownership: "owned",
+                      purposes: [{ purpose: "chat_completion", count: 2 }],
+                      persistentDemand: { manual: false, api: false, autostart: false },
+                      evidence: {
+                        lastProbe: { at: "2026-04-22T00:00:00.000Z", healthy: true },
+                        lastExit: {
+                          at: "2026-04-21T23:50:00.000Z",
+                          unexpected: false,
+                          code: 0,
+                        },
+                        lastRestart: { at: "2026-04-21T23:51:00.000Z", outcome: "ready" },
+                      },
+                    },
+                  }
+                : runtimeSnapshotOverrides.llamaCpp,
             backups: [],
             sessions: [
               {
@@ -348,6 +425,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
               health: { status: "ok" },
               cost: { status: "ok" },
               daemon: { status: "ok" },
+              llamaCpp: { status: "ok" },
               backups: { status: "ok" },
               sessions: { status: "ok" },
               mcpServers: { status: "ok" },
@@ -358,6 +436,20 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
             },
           }
         : runtimeSnapshotOverrides.data,
+  }),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/hooks/useRuntimeAuthorityProjection", () => ({
+  useRuntimeAuthorityProjection: () => ({
+    data: {
+      schemaVersion: 1,
+      generatedAt: "2026-07-13T20:00:00.000Z",
+      workspaceId: "default",
+      items: [],
+    },
+    loading: false,
+    error: null,
+    reload: vi.fn(),
   }),
 }));
 
@@ -415,6 +507,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.sourceStatus = null;
     runtimeSnapshotOverrides.daemon = undefined;
     runtimeSnapshotOverrides.health = undefined;
+    runtimeSnapshotOverrides.llamaCpp = undefined;
     runtimeSnapshotOverrides.data = undefined;
     runtimeSnapshotOverrides.daemonBusy = null;
     runtimeSnapshotOverrides.notice = undefined;
@@ -425,6 +518,7 @@ describe("RuntimeRoutePage", () => {
     runtimeApiMocks.exportActivepiecesWorkflowTemplate.mockReset();
     runtimeApiMocks.exportN8nWorkflowTemplate.mockReset();
     reviewReadinessApiMocks.fetchReviewReadiness.mockClear();
+    reviewReadinessApiMocks.refreshRuntimeReleaseTrust.mockClear();
     runtimeSnapshotOverrides.reload.mockClear();
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
   });
@@ -442,6 +536,7 @@ describe("RuntimeRoutePage", () => {
     );
 
     expect(markup).toContain("Runtime posture");
+    expect(markup).toContain("Runtime authority map");
     expect(markup).toContain("Daemon running");
     expect(markup).toContain("Start daemon");
     expect(markup).toContain("Restart daemon");
@@ -451,6 +546,145 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("LLM runtime efficiency");
     expect(markup).toContain("Local engine fit");
     expect(markup).toContain("Eval evidence");
+    expect(markup).toContain("llama.cpp service lifecycle");
+    expect(markup).toContain("Gateway owned");
+    expect(markup).toContain("Active leases");
+    expect(markup).toContain("Chat completion ×2");
+    expect(markup).toContain("Latest probe · Healthy");
+    expect(markup).toContain("Latest exit · Expected");
+    expect(markup).toContain("Latest restart · Ready");
+    expect(markup).toContain('aria-label="llama.cpp runtime truth"');
+    expect(markup).toContain('aria-label="Active llama.cpp lease purposes"');
+    expect(markup).toContain('class="mc-next-settings-metric-grid"');
+
+    const diagnosticsMarkup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "diagnostics", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={2}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+    expect(diagnosticsMarkup).not.toContain("Runtime authority map");
+  });
+
+  it("renders external idle-pending llama.cpp ownership without implying process control", () => {
+    runtimeSnapshotOverrides.llamaCpp = {
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      updatedAt: "2026-04-22T00:00:00.000Z",
+      leaseDiagnostics: {
+        state: "idle_pending",
+        activeLeaseCount: 0,
+        ownership: "external",
+        idleDeadline: "2026-04-22T00:05:00.000Z",
+        purposes: [],
+        persistentDemand: { manual: true, api: false, autostart: false },
+        evidence: {},
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Idle pending");
+    expect(markup).toContain("External process");
+    expect(markup).toContain("Observed; never terminated by leases");
+    expect(markup).toContain("Reacquire cancels shutdown");
+    expect(markup).toContain("Manual");
+  });
+
+  it("surfaces terminal llama.cpp restart exhaustion as operator-visible error truth", () => {
+    runtimeSnapshotOverrides.llamaCpp = {
+      enabled: true,
+      desiredState: "running",
+      processState: "error",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: false,
+      lastError: "llama.cpp restart budget exhausted",
+      updatedAt: "2026-04-22T00:00:00.000Z",
+      leaseDiagnostics: {
+        state: "active",
+        activeLeaseCount: 1,
+        ownership: "none",
+        purposes: [{ purpose: "embedding", count: 1 }],
+        persistentDemand: { manual: false, api: false, autostart: false },
+        evidence: {
+          lastProbe: { at: "2026-04-22T00:00:00.000Z", healthy: false },
+          lastRestart: { at: "2026-04-22T00:00:00.000Z", outcome: "exhausted" },
+        },
+      },
+    };
+
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Restart budget exhausted");
+    expect(markup).toContain("Latest restart · Exhausted");
+    expect(markup).toContain("operator attention is required");
+    expect(markup).toContain("Latest probe · Failed");
+  });
+
+  it("distinguishes llama.cpp source failure from older Gateway diagnostics absence", () => {
+    runtimeSnapshotOverrides.llamaCpp = null;
+    runtimeSnapshotOverrides.sourceStatus = {
+      llamaCpp: { status: "error", message: "status route failed" },
+    };
+    const failedMarkup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+    expect(failedMarkup).toContain('role="alert"');
+    expect(failedMarkup).toContain("llama.cpp runtime truth unavailable: status route failed");
+
+    runtimeSnapshotOverrides.sourceStatus = null;
+    runtimeSnapshotOverrides.llamaCpp = {
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      updatedAt: "2026-04-22T00:00:00.000Z",
+    };
+    const compatibilityMarkup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+    expect(compatibilityMarkup).toContain("Lease lifecycle diagnostics are unavailable from this Gateway version");
+    expect(compatibilityMarkup).toContain('role="status"');
   });
 
   it("surfaces stale runtime data with a refresh action", () => {
@@ -1459,6 +1693,10 @@ describe("RuntimeRoutePage", () => {
 
     expect(promptPacksButton).toBeDefined();
     expect(collectText(renderer!.root)).toContain("Release proof dashboard");
+    expect(collectText(renderer!.root)).toContain("Source / build identity");
+    expect(collectText(renderer!.root)).toContain("Packaged / release proof");
+    expect(collectText(renderer!.root)).toContain("Certificate absent");
+    expect(collectText(renderer!.root)).toContain("No release certificate is available to the running Gateway.");
     expect(collectText(renderer!.root)).toContain("Route coverage");
     expect(collectText(renderer!.root)).toContain("Screenshot freshness");
     expect(collectText(renderer!.root)).toContain("Code/Ops review readiness");
@@ -1474,6 +1712,141 @@ describe("RuntimeRoutePage", () => {
       theme: "ops",
     });
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("space");
+  });
+
+  it("separates exact source identity from disqualifying release-certificate caveats", async () => {
+    reviewReadinessApiMocks.fetchReviewReadiness.mockResolvedValueOnce({
+      branch: "main",
+      sha: "a".repeat(40),
+      generatedAt: "2026-07-13T12:00:00.000Z",
+      lanes: [],
+      openFindings: 0,
+      linkedTasks: [],
+      runtimeIdentity: {
+        schemaVersion: 1,
+        kind: "packaged",
+        version: "1.0.0",
+        buildSha: "a".repeat(40),
+        shortSha: "a".repeat(8),
+        integrity: "clean",
+        identitySource: "packaged_manifest",
+        release: {
+          // Deliberately contradictory wire value: the purpose-built view must
+          // recompute its fail-closed display invariant from the proof details.
+          verified: true,
+          certificateState: "parsed",
+          certificateCommit: "a".repeat(40),
+          certificateVersion: "1.0.0",
+          generatedAt: "2026-07-13T12:00:00.000Z",
+          requiredProof: { total: 1, passed: 1, missing: 0, failed: 0, stale: 0 },
+          acceptedFailureCount: 1,
+          acceptedFailures: ["Unsigned installer accepted for local smoke only."],
+          certificateAttestation: {
+            status: "verified",
+            verifiedAt: "2026-07-13T12:01:00.000Z",
+            issuer: "https://token.actions.githubusercontent.com",
+            identity: "release-installers.yml",
+          },
+          runtimePayloadIntegrity: {
+            status: "verified",
+            verifiedAt: "2026-07-13T12:02:00.000Z",
+            target: "app/bin",
+            manifestSha256: "b".repeat(64),
+            fileCount: 3,
+            totalBytes: 1_024,
+          },
+          reasonCodes: ["accepted_failures_present"],
+          reasons: ["The certificate records accepted failures, so public release trust is not green."],
+        },
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "diagnostics", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Packaged · aaaaaaaa");
+    expect(text).toContain("Release not verified");
+    expect(text).toContain("accepted failures present");
+    expect(text).toContain("Unsigned installer accepted for local smoke only.");
+    expect(text).not.toContain('{"schemaVersion"');
+  });
+
+  it("forces a fresh payload scan from the release-proof action and surfaces its time", async () => {
+    const initial = await reviewReadinessApiMocks.fetchReviewReadiness();
+    reviewReadinessApiMocks.fetchReviewReadiness.mockClear();
+    const refreshed = structuredClone(initial) as ReviewReadinessSummary;
+    refreshed.runtimeIdentity = {
+      schemaVersion: 1,
+      kind: "packaged",
+      version: "1.0.0",
+      buildSha: "a".repeat(40),
+      shortSha: "a".repeat(8),
+      integrity: "clean",
+      identitySource: "packaged_manifest",
+      release: {
+        verified: true,
+        certificateState: "parsed",
+        certificateCommit: "a".repeat(40),
+        certificateVersion: "1.0.0",
+        generatedAt: "2026-07-13T12:00:00.000Z",
+        requiredProof: { total: 1, passed: 1, missing: 0, failed: 0, stale: 0 },
+        acceptedFailureCount: 0,
+        acceptedFailures: [],
+        certificateAttestation: {
+          status: "verified",
+          verifiedAt: "2026-07-13T12:01:00.000Z",
+          issuer: "https://token.actions.githubusercontent.com",
+          identity: "release-installers.yml",
+        },
+        runtimePayloadIntegrity: {
+          status: "verified",
+          verifiedAt: "2026-07-13T12:02:00.000Z",
+          target: "app/bin",
+          manifestSha256: "b".repeat(64),
+          fileCount: 3,
+          totalBytes: 1_024,
+        },
+        reasonCodes: [],
+        reasons: [],
+      },
+    };
+    reviewReadinessApiMocks.refreshRuntimeReleaseTrust.mockResolvedValueOnce(refreshed);
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "diagnostics", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Refresh proof").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reviewReadinessApiMocks.refreshRuntimeReleaseTrust).toHaveBeenCalledOnce();
+    expect(collectText(renderer!.root)).toContain("Installed payload verified");
+    expect(collectText(renderer!.root)).toContain("not an external hostile-process guarantee");
+    expect(collectText(renderer!.root)).toContain("Last complete installed-payload scan:");
   });
 
   it("renders unavailable state instead of false runtime measurements when sources fail", () => {
@@ -1540,6 +1913,190 @@ describe("RuntimeRoutePage", () => {
     );
 
     expect(markup).not.toContain("Live runtime data is degraded");
+  });
+
+  it("renders token-known cost-unknown usage as incomplete truth instead of a zero-dollar artifact", () => {
+    runtimeSnapshotOverrides.data = {
+      dashboard: {
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 0,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      },
+      timeline: null,
+      health: null,
+      cost: {
+        scope: "day",
+        from: "2026-04-22T00:00:00.000Z",
+        to: "2026-04-22T23:59:59.999Z",
+        usageAvailability: {
+          trackedEvents: 1,
+          unknownEvents: 0,
+          totalAgentEvents: 1,
+          metricAvailability: {
+            inputTokens: { knownAttemptCount: 1, unknownAttemptCount: 0, complete: true },
+            outputTokens: { knownAttemptCount: 1, unknownAttemptCount: 0, complete: true },
+            cachedInputTokens: { knownAttemptCount: 0, unknownAttemptCount: 1, complete: false },
+            costUsd: { knownAttemptCount: 0, unknownAttemptCount: 1, complete: false },
+          },
+        },
+        items: [
+          {
+            key: "2026-04-22",
+            tokenInput: 12,
+            tokenOutput: 3,
+            tokenCachedInput: 0,
+            tokenTotal: 15,
+            costUsd: 0,
+            metricAvailability: {
+              inputTokensComplete: true,
+              outputTokensComplete: true,
+              cachedInputTokensComplete: false,
+              costUsdComplete: false,
+            },
+          },
+        ],
+        dailySeries: [
+          {
+            isoDate: "2026-04-22",
+            shortLabel: "Wed",
+            tokenInput: 12,
+            tokenOutput: 3,
+            tokenCachedInput: 0,
+            tokenTotal: 15,
+            costUsd: 0,
+            metricAvailability: {
+              inputTokensComplete: true,
+              outputTokensComplete: true,
+              cachedInputTokensComplete: false,
+              costUsdComplete: false,
+            },
+            segments: [
+              {
+                providerKey: "openai",
+                label: "OpenAI",
+                tokenInput: 12,
+                tokenOutput: 3,
+                tokenCachedInput: 0,
+                tokenTotal: 15,
+                costUsd: 0,
+                models: ["gpt-partial"],
+                metricAvailability: {
+                  inputTokensComplete: true,
+                  outputTokensComplete: true,
+                  cachedInputTokensComplete: false,
+                  costUsdComplete: false,
+                },
+              },
+            ],
+          },
+        ],
+      },
+      daemon: null,
+      llamaCpp: null,
+      backups: [],
+      sessions: [],
+      mcpServers: [],
+      runtimeMeasurements: [],
+      localEngines: [],
+      evalProofRuns: [],
+      sourceStatus: {
+        dashboard: { status: "ok" },
+        timeline: { status: "ok" },
+        health: { status: "ok" },
+        cost: { status: "ok" },
+        daemon: { status: "ok" },
+        llamaCpp: { status: "ok" },
+        backups: { status: "ok" },
+        sessions: { status: "ok" },
+        mcpServers: { status: "ok" },
+        runtimeMeasurements: { status: "ok" },
+        localEngines: { status: "ok" },
+        evalProofRuns: { status: "ok" },
+      },
+    } as any;
+
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "costs", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={0}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Spend total unavailable");
+    expect(markup).toContain("Known spend is a lower bound");
+    expect(markup).toContain("1 unknown");
+    expect(markup).toContain("0/1 provider attempts have trustworthy cost");
+    expect(markup).toContain(">15<");
+    expect(markup).toContain(">Unknown<");
+    expect(markup).not.toContain("$0.00");
+    expect(formatCostMetric(2.5, false)).toBe("$2.50+");
+    expect(formatCostMetric(0, true)).toBe("$0.00");
+    expect(formatCostMetric(0, undefined)).toBe("Unverified");
+  });
+
+  it("aggregates provider spend across days and preserves incomplete cost evidence", () => {
+    const rows = readProviderSpendRows({
+      cost: {
+        dailySeries: [
+          {
+            isoDate: "2026-07-12",
+            segments: [
+              {
+                providerKey: "openai",
+                label: "OpenAI",
+                tokenTotal: 10,
+                costUsd: 1,
+                metricAvailability: { costUsdComplete: true },
+              },
+            ],
+          },
+          {
+            isoDate: "2026-07-13",
+            segments: [
+              {
+                providerKey: "openai",
+                label: "OpenAI",
+                tokenTotal: 5,
+                costUsd: 2,
+                metricAvailability: { costUsdComplete: false },
+              },
+              {
+                providerKey: "anthropic",
+                label: "Anthropic",
+                tokenTotal: 7,
+                costUsd: 0.5,
+                metricAvailability: { costUsdComplete: true },
+              },
+            ],
+          },
+        ],
+      },
+    } as any);
+
+    expect(rows).toEqual([
+      {
+        providerKey: "openai",
+        label: "OpenAI",
+        tokenTotal: 15,
+        costUsd: 3,
+        costUsdComplete: false,
+      },
+      {
+        providerKey: "anthropic",
+        label: "Anthropic",
+        tokenTotal: 7,
+        costUsd: 0.5,
+        costUsdComplete: true,
+      },
+    ]);
   });
 
   it("uses health daemon status when daemon controls are unavailable", () => {

@@ -1,7 +1,7 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
+import type { ChatAttachmentRecord, ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
 import {
   MissionThreadedControllerHost,
   formatFallbackSummary,
@@ -10,6 +10,9 @@ import {
   formatThreadedRunStateLabel,
   formatThreadedRunStateSummary,
   reconcilePendingAttachmentModes,
+  mergeHydratedOutboundQueue,
+  parseHydratedChatAttachments,
+  parseHydratedOutboundQueue,
   requiresBoundaryAcknowledgment,
   resolveExecutionRoutePrefs,
   runWithSelectedSession,
@@ -25,6 +28,11 @@ const createChatSideChatMock = vi.fn();
 const createChatSessionMock = vi.fn();
 const fetchAgentsMock = vi.fn();
 const fetchChatGeneratedArtifactMock = vi.fn();
+const fetchChatSessionGoalMock = vi.fn();
+const setChatSessionGoalMock = vi.fn();
+const clearChatSessionGoalMock = vi.fn();
+const steerChatSessionMock = vi.fn();
+const fetchChatSessionPrefsMock = vi.fn();
 const fetchChatSideChatMock = vi.fn();
 const fetchChatThreadMock = vi.fn();
 const fetchMcpServersMock = vi.fn();
@@ -40,6 +48,16 @@ const fetchAgenticRunsMock = vi.fn();
 const fetchAgenticRunTreeMock = vi.fn();
 const controlAgenticRunMock = vi.fn();
 const createCodeModeRunMock = vi.fn();
+const ApiRequestErrorMock = vi.hoisted(
+  () =>
+    class ApiRequestError extends Error {
+      public readonly status?: number;
+      public constructor(message: string, options: { status?: number }) {
+        super(message);
+        this.status = options.status;
+      }
+    },
+);
 
 const setDevDiagnosticsActiveChatSessionMock = vi.fn();
 const setDevDiagnosticsLatestTraceSummaryMock = vi.fn();
@@ -75,6 +93,7 @@ const mountedRenderers: ReactTestRenderer[] = [];
 
 const selectedSession = {
   sessionId: "session-1",
+  revision: 7,
   sessionKey: "session-1",
   workspaceId: "workspace-1",
   title: "Launch plan",
@@ -145,6 +164,7 @@ const thread = {
 
 const prefs = {
   sessionId: "session-1",
+  revision: 7,
   mode: "chat",
   webMode: "auto",
   memoryMode: "auto",
@@ -156,6 +176,36 @@ const prefs = {
   toolAutonomy: "safe_auto",
   planningMode: "off",
 };
+
+const outboundRequestPrefs = {
+  mode: "chat",
+  providerId: "openai",
+  model: "gpt-5.5",
+  webMode: "auto",
+  memoryMode: "auto",
+  thinkingLevel: "standard",
+  speedMode: "standard",
+  subagentPolicy: "ask_when_useful",
+  fullWebAccess: false,
+} as const;
+
+function createStoredAttachment(overrides: Partial<ChatAttachmentRecord> = {}): ChatAttachmentRecord {
+  const attachmentId = overrides.attachmentId ?? "attachment-1";
+  return {
+    attachmentId,
+    sessionId: "session-1",
+    workspaceId: "workspace-1",
+    fileName: `${attachmentId}.txt`,
+    mimeType: "text/plain",
+    mediaType: "text",
+    sizeBytes: 12,
+    sha256: "a".repeat(64),
+    storageRelPath: `chat/default/attachments/${attachmentId}.txt`,
+    extractStatus: "ready",
+    createdAt: "2026-05-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 const generatedArtifact = {
   artifactId: "artifact-1",
@@ -169,12 +219,18 @@ const generatedArtifact = {
 };
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  ApiRequestError: ApiRequestErrorMock,
   attachThreadKnowledgeAttachment: (...args: unknown[]) => attachThreadKnowledgeAttachmentMock(...args),
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
   createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
   createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
   fetchAgents: (...args: unknown[]) => fetchAgentsMock(...args),
   fetchChatGeneratedArtifact: (...args: unknown[]) => fetchChatGeneratedArtifactMock(...args),
+  fetchChatSessionGoal: (...args: unknown[]) => fetchChatSessionGoalMock(...args),
+  setChatSessionGoal: (...args: unknown[]) => setChatSessionGoalMock(...args),
+  clearChatSessionGoal: (...args: unknown[]) => clearChatSessionGoalMock(...args),
+  steerChatSession: (...args: unknown[]) => steerChatSessionMock(...args),
+  fetchChatSessionPrefs: (...args: unknown[]) => fetchChatSessionPrefsMock(...args),
   fetchChatSideChat: (...args: unknown[]) => fetchChatSideChatMock(...args),
   fetchChatThread: (...args: unknown[]) => fetchChatThreadMock(...args),
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
@@ -292,6 +348,22 @@ vi.mock("./chat/useChatContextActions", () => ({
 
 vi.mock("./chat/useChatOutboundExecution", () => ({
   abortActiveChatStream: vi.fn(),
+  captureOutboundRequestPrefsSnapshot: (input: {
+    prefs?: Record<string, unknown> | null;
+    selectedProviderId?: string;
+    selectedModel?: string;
+    fullWebAccess?: boolean;
+  }) => ({
+    mode: "chat",
+    providerId: input.prefs?.providerId ?? input.selectedProviderId,
+    model: input.prefs?.model ?? input.selectedModel,
+    webMode: input.prefs?.webMode ?? "auto",
+    memoryMode: input.prefs?.memoryMode ?? "auto",
+    thinkingLevel: input.prefs?.thinkingLevel ?? "standard",
+    speedMode: input.prefs?.speedMode ?? "standard",
+    subagentPolicy: input.prefs?.subagentPolicy ?? "ask_when_useful",
+    fullWebAccess: Boolean(input.fullWebAccess),
+  }),
   useChatOutboundExecution: (...args: unknown[]) => useChatOutboundExecutionMock(...args),
 }));
 
@@ -417,6 +489,7 @@ function setupMocks() {
   fetchAgenticRunsMock.mockResolvedValue({ items: [{ runId: "agentic-run-1" }] });
   fetchAgenticRunTreeMock.mockResolvedValue({
     runId: "agentic-run-1",
+    taskRevision: 12,
     status: "running",
     generatedAt: "2026-05-01T00:00:00.000Z",
     nodes: [],
@@ -466,7 +539,36 @@ function setupMocks() {
     sessionKey: "session-new",
     title: "Trail from Launch plan",
   });
-  updateChatSessionPrefsMock.mockImplementation(async (_sessionId, patch) => ({ ...prefs, ...patch }));
+  fetchChatSessionGoalMock.mockResolvedValue({
+    sessionId: "session-1",
+    revision: 7,
+    goal: null,
+    turnBudget: null,
+    turnsUsed: 0,
+    setAt: null,
+  });
+  setChatSessionGoalMock.mockResolvedValue({
+    sessionId: "session-1",
+    revision: 8,
+    goal: "Ship safely",
+    turnBudget: 4,
+    turnsUsed: 0,
+    setAt: "2026-05-01T00:00:00.000Z",
+  });
+  clearChatSessionGoalMock.mockResolvedValue({ ok: true });
+  steerChatSessionMock.mockResolvedValue({ accepted: true });
+  fetchChatSessionPrefsMock.mockImplementation(async (sessionId: string) => ({ ...prefs, sessionId }));
+  updateChatSessionPrefsMock.mockImplementation(
+    async (sessionId: string, patch: Record<string, unknown> & { expectedRevision?: number }) => {
+      const { expectedRevision, ...acceptedPatch } = patch;
+      return {
+        ...prefs,
+        ...acceptedPatch,
+        sessionId,
+        revision: (expectedRevision ?? prefs.revision) + 1,
+      };
+    },
+  );
   fetchSkillsMock.mockResolvedValue({ items: [{ skillId: "skill-1", name: "Skill", state: "enabled" }] });
   fetchMcpServersMock.mockResolvedValue({ items: [{ serverId: "server-1", label: "Server", status: "connected" }] });
   fetchMcpTemplatesMock.mockResolvedValue({
@@ -513,7 +615,16 @@ function setupMocks() {
     isRefreshing: false,
     messagesLoading: false,
     secondaryLoading: false,
+    historicalWindow: null,
+    historicalWindowLoading: false,
+    historicalWindowError: null,
+    historicalWindowTarget: null,
+    historicalContinuationLoading: null,
+    historicalContinuationError: null,
     loadSidebar: vi.fn(async () => undefined),
+    openHistoricalWindow: vi.fn(async () => undefined),
+    returnToLatest: vi.fn(),
+    loadHistoricalContinuation: vi.fn(async () => undefined),
     loadRuntimeCatalog: vi.fn(async () => undefined),
     loadSessionCoreState: vi.fn(async () => undefined),
     loadSessionSecondaryState: vi.fn(async () => undefined),
@@ -686,6 +797,7 @@ function setupMocks() {
     createWorkbenchWorktree: vi.fn(async () => undefined),
     openWorkbenchFile: vi.fn(async () => undefined),
     saveWorkbenchFile: vi.fn(async () => undefined),
+    runWorkbenchFileOperation: vi.fn(async () => true),
     discardWorkbenchDraft: vi.fn(),
     runWorkbenchValidationCommand: vi.fn(async () => undefined),
     applyWorkbenchPatch: vi.fn(async () => undefined),
@@ -729,6 +841,12 @@ function setupMocks() {
   useChatMultimodalControlsMock.mockReturnValue({
     audioInputRef: { current: null },
     voiceBusy: false,
+    liveVoiceActive: false,
+    liveVoiceAvailable: true,
+    liveVoiceMuted: false,
+    liveVoiceState: "idle",
+    liveVoiceStatusLabel: "Live voice ready",
+    liveVoiceUnavailableReason: null,
     voiceInputAvailable: true,
     voiceOutputAvailable: true,
     voiceTalkActive: false,
@@ -745,6 +863,8 @@ function setupMocks() {
     selectedImageProviderId: "openai",
     selectedImageModel: "gpt-image-2",
     imageRouteLabel: "OpenAI image",
+    handleToggleLiveVoice: vi.fn(async () => undefined),
+    handleToggleLiveVoiceMute: vi.fn(),
     handleToggleVoiceTalk: vi.fn(async () => undefined),
     handleOpenAudioTranscribe: vi.fn(),
     handleAudioFileSelected: vi.fn(async () => undefined),
@@ -828,10 +948,487 @@ describe("MissionThreadedControllerHost", () => {
     await cleanupRenderedHosts();
   });
 
+  it("hydrates only bounded session-bound queue envelopes and canonical request preferences", () => {
+    const validPersistedItem = {
+      id: "queue-valid",
+      action: "send",
+      sessionId: "session-1",
+      content: "Ship the review",
+      attachments: [createStoredAttachment()],
+      createdAt: "2026-05-01T00:00:00.000Z",
+      paused: false,
+      modelCouncil: { enabled: true },
+      requestPrefs: outboundRequestPrefs,
+    };
+    const parsed = parseHydratedOutboundQueue(JSON.stringify([validPersistedItem]), {
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
+
+    expect(parsed).toEqual([
+      expect.objectContaining({
+        id: "queue-valid",
+        paused: true,
+        modelCouncil: { enabled: true },
+        requestPrefs: outboundRequestPrefs,
+      }),
+    ]);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed[0]?.requestPrefs)).toBe(true);
+
+    const maliciousCandidates = [
+      { ...validPersistedItem, unexpectedDispatchOverride: "foreign" },
+      { ...validPersistedItem, id: " queue-with-whitespace" },
+      { ...validPersistedItem, sessionId: "session-foreign" },
+      { ...validPersistedItem, modelCouncil: { enabled: true, participants: ["attacker"] } },
+      {
+        ...validPersistedItem,
+        requestPrefs: { ...outboundRequestPrefs, providerId: "openai\nforeign" },
+      },
+      {
+        ...validPersistedItem,
+        requestPrefs: { ...outboundRequestPrefs, fullWebAccess: "true" },
+      },
+      {
+        ...validPersistedItem,
+        requestPrefs: { ...outboundRequestPrefs, providerId: undefined },
+      },
+    ];
+    for (const candidate of maliciousCandidates) {
+      expect(
+        parseHydratedOutboundQueue(JSON.stringify([candidate]), {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+        }),
+      ).toEqual([]);
+    }
+
+    const { requestPrefs: _discardedRequestPrefs, ...legacyItemWithoutFrozenPrefs } = validPersistedItem;
+    expect(
+      parseHydratedOutboundQueue(JSON.stringify([legacyItemWithoutFrozenPrefs]), {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual([]);
+
+    expect(
+      parseHydratedOutboundQueue(
+        JSON.stringify(
+          Array.from({ length: 65 }, (_, index) => ({
+            ...validPersistedItem,
+            id: `queue-${index}`,
+          })),
+        ),
+        {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+        },
+      ),
+    ).toEqual([]);
+    expect(
+      parseHydratedOutboundQueue(`[{"content":"${"x".repeat(256 * 1024)}"}]`, {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects malformed, foreign, traversing, duplicate, and oversized hydrated attachment references", () => {
+    const attachment = createStoredAttachment();
+    expect(
+      parseHydratedChatAttachments(JSON.stringify([attachment]), {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual([attachment]);
+
+    const malformedCandidates = [
+      { ...attachment, sessionId: "session-foreign" },
+      { ...attachment, workspaceId: "workspace-foreign" },
+      { ...attachment, storageRelPath: "../foreign.txt" },
+      { ...attachment, storageRelPath: "chat/default/attachments/file.txt:secret" },
+      { ...attachment, storageRelPath: "chat/default/attachments/CON.txt" },
+      { ...attachment, storageRelPath: "chat/default/attachments/file.txt. " },
+      { ...attachment, storageRelPath: "chat\\default\\attachments\\file.txt" },
+      { ...attachment, sha256: "not-a-digest" },
+      { ...attachment, sha256: "A".repeat(64) },
+      { ...attachment, attachmentId: " attachment-with-whitespace" },
+      { ...attachment, injected: true },
+    ];
+    for (const candidate of malformedCandidates) {
+      expect(
+        parseHydratedChatAttachments(JSON.stringify([candidate]), {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+        }),
+      ).toEqual([]);
+    }
+    expect(
+      parseHydratedChatAttachments(JSON.stringify([attachment, attachment]), {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual([]);
+    expect(
+      parseHydratedChatAttachments(
+        JSON.stringify(
+          Array.from({ length: 17 }, (_, index) => createStoredAttachment({ attachmentId: `attachment-${index}` })),
+        ),
+        {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+        },
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not drain a legacy hydrated item under newly selected request preferences", () => {
+    const legacyItemWithoutFrozenPrefs = {
+      id: "queue-legacy",
+      action: "send",
+      sessionId: "session-1",
+      content: "Do not silently reroute me",
+      attachments: [],
+      createdAt: "2026-05-01T00:00:00.000Z",
+    };
+    const newlySelectedPrefs = {
+      ...outboundRequestPrefs,
+      providerId: "anthropic",
+      model: "claude-new-selection",
+    } as const;
+
+    expect(newlySelectedPrefs.providerId).toBe("anthropic");
+    expect(
+      parseHydratedOutboundQueue(JSON.stringify([legacyItemWithoutFrozenPrefs]), {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual([]);
+  });
+
+  it("merges session hydration without clobbering items queued after the session transition", () => {
+    const queueItem = (id: string, sessionId = "session-1") => ({
+      id,
+      action: "send" as const,
+      sessionId,
+      content: id,
+      attachments: [],
+      createdAt: "2026-05-01T00:00:00.000Z",
+      requestPrefs: outboundRequestPrefs,
+    });
+    const newlyQueued = queueItem("queue-new");
+    const merged = mergeHydratedOutboundQueue({
+      hydrated: [queueItem("queue-hydrated"), queueItem("queue-new")],
+      current: [queueItem("queue-old"), newlyQueued, queueItem("queue-foreign", "session-foreign")],
+      baselineIds: new Set(["queue-old"]),
+      sessionId: "session-1",
+    });
+
+    expect(merged.map((item) => item.id)).toEqual(["queue-hydrated", "queue-new"]);
+    expect(merged[1]).toBe(newlyQueued);
+  });
+
   it("keeps compact session ownership aligned with the 1180px surface breakpoint", async () => {
     await renderHost();
 
     expect(useMediaQueryMock).toHaveBeenCalledWith("(width < 1180px)");
+  });
+
+  it("fails closed across direct mutation callbacks while an exact historical window is active", async () => {
+    const baseSessionData = useChatSessionDataMock();
+    useChatSessionDataMock.mockReturnValue({
+      ...baseSessionData,
+      historicalWindowTarget: { workspaceId: "workspace-1", sessionId: "session-1" },
+      historicalWindow: {
+        anchor: {
+          state: "found",
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          messageId: "message-user",
+          sequence: 1,
+        },
+        items: [
+          {
+            sequence: 1,
+            isAnchor: true,
+            message: {
+              messageId: "message-user",
+              sessionId: "session-1",
+              role: "user",
+              content: "Build the launch plan",
+              timestamp: "2026-05-01T00:00:00.000Z",
+            },
+          },
+        ],
+        snapshotMaxSequence: 2,
+        snapshotMessageCount: 2,
+        hasOlder: false,
+        hasNewer: true,
+        newerCursor: { messageId: "message-user", sequence: 1, snapshotMaxSequence: 2 },
+        truncated: false,
+        droppedItems: 0,
+        byteLength: 256,
+      },
+    });
+
+    await renderHost();
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-1", {
+        searchHit: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          messageId: "message-user",
+          sequence: 1,
+          excerpt: "Build the launch plan",
+          score: 10,
+        },
+      });
+      await flushEffects(8);
+    });
+
+    const surface = latestSurfaceInput?.activeSessionSurfaceProps;
+    const dock = latestSurfaceInput?.contextDockProps;
+    const sessionControls = useChatSessionControlsMock.mock.results.at(-1)?.value as any;
+    const orchestration = useChatSurfaceOrchestrationMock.mock.results.at(-1)?.value as any;
+    const contextActions = useChatContextActionsMock.mock.results.at(-1)?.value as any;
+    const outbound = useChatOutboundExecutionMock.mock.results.at(-1)?.value as any;
+    const composer = useChatComposerInteractionsMock.mock.results.at(-1)?.value as any;
+    const multimodal = useChatMultimodalControlsMock.mock.results.at(-1)?.value as any;
+    const rail = latestSurfaceInput?.sessionRail;
+    const dropTarget = latestSurfaceInput?.dropTargetProps;
+    vi.clearAllMocks();
+
+    expect(surface?.historicalReadOnly).toBe(true);
+    expect(surface?.canSend).toBe(false);
+
+    await act(async () => {
+      // Conversation and approval mutations.
+      surface?.onSend();
+      surface?.onRetryTurn("turn-1");
+      surface?.onSwitchBranch("turn-1");
+      surface?.onEditTurn("turn-1");
+      surface?.onStartNewThreadFromTurn("turn-1");
+      surface?.onRequestProviderChange("anthropic");
+      surface?.onRequestModelChange("claude-4");
+      surface?.onToggleArchiveSession();
+      surface?.onApprovePending("once");
+      surface?.onDenyPending();
+      surface?.onSubmitUserInput({ kind: "text", text: "continue" });
+      surface?.onResumeAll();
+      surface?.onRemoveQueuedItem("queue-1");
+      surface?.onCreateGeneratedArtifact("turn-1");
+      surface?.onCreateGeneratedArtifactVersion("turn-1");
+      await surface?.onAcceptDelegation();
+
+      // Composer, upload, knowledge, planning, and research mutations.
+      surface?.onComposerKeyDown({ preventDefault: vi.fn() } as any);
+      surface?.onComposerPaste({ preventDefault: vi.fn() } as any);
+      surface?.onDrop({ preventDefault: vi.fn() } as any);
+      surface?.onTogglePlanningMode();
+      surface?.onToggleResearchMode();
+      surface?.onToggleReviewMode();
+      surface?.onSetDeepMode();
+      surface?.onSetThinkingLevel("deep");
+      surface?.onSetSpeedMode("fast");
+      surface?.onSetSubagentPolicy("auto_when_useful");
+      surface?.onApplyDraftCommand("/plan on");
+      surface?.onSetAttachmentMode?.("knowledge-1", "full_text");
+      surface?.onRemoveThreadKnowledgeAttachment?.("knowledge-1");
+      surface?.onAttachKnowledgeUrl?.();
+      surface?.onRemoveAttachment("attachment-1");
+      surface?.onUploadFiles(null);
+      dropTarget?.onUploadFiles(null);
+      surface?.onRunQuickResearch();
+
+      // Voice, image, goal, and steering mutations.
+      surface?.onRequestImageProviderChange?.("openai");
+      surface?.onRequestImageModelChange?.("gpt-image-2");
+      surface?.onToggleLiveVoice?.();
+      surface?.onToggleLiveVoiceMute?.();
+      surface?.onToggleVoiceTalk?.();
+      surface?.onOpenAudioTranscribe?.();
+      surface?.onAudioFileSelected?.(null);
+      surface?.onToggleSpeakResponses?.();
+      surface?.onGenerateImage?.();
+      surface?.onEditImage?.();
+      await surface?.onSteerMidTurn?.("continue safely");
+      await surface?.onSetGoal?.("Ship safely", 4);
+      await surface?.onClearGoal?.();
+
+      // Drawer preferences, orchestration, memory, and session organization.
+      await dock?.onPrefPatch({ model: "claude-4" });
+      await dock?.onSuggestDelegation();
+      await dock?.onTriggerProactive();
+      await dock?.onProactivePolicyPatch({ mode: "suggest" } as any);
+      await dock?.onRunCodeDelegation("implement");
+      dock?.onCapabilitySuggestionAction(dock.capabilitySuggestions[0]);
+      await dock?.onCreateSpecialistDraft(dock.specialistSuggestions[0]);
+      await dock?.onActivateCatalogSpecialist(dock.specialistSuggestions[0]);
+      await dock?.onSpecialistCandidatePatch("candidate-1", { title: "Blocked" }, "blocked");
+      await dock?.onAcceptDelegation();
+      await dock?.onRebuildLearnedMemory();
+      await dock?.onUpdateMemoryStatus("memory-1", "disabled");
+      await dock?.onRenameSession();
+      await dock?.onSaveOrganization();
+      await dock?.onTogglePinSession();
+      await dock?.onToggleArchiveSession();
+      dock?.onDeleteSession();
+      await dock?.onAssignProject("project-2");
+      await dock?.onSaveExternalBinding();
+
+      // Rail-level creation and archive entry points are also locked.
+      rail?.onCreateSession();
+      rail?.onCreateProject();
+      rail?.onArchiveWorkspace();
+      await rail?.onConfirmArchiveWorkspace();
+
+      // Stop and cancel are the only safety exceptions while reading history.
+      surface?.onStopActiveTurn();
+      surface?.onCoworkStopRun?.({ action: "pause", enabled: true, label: "Pause" } as any);
+      surface?.onCoworkStopRun?.({ action: "cancel", enabled: true, label: "Cancel" } as any);
+      await flushEffects(8);
+    });
+
+    expect(handleSendMock).not.toHaveBeenCalled();
+    expect(sessionControls.handleCreateProject).not.toHaveBeenCalled();
+    expect(sessionControls.handleToggleArchiveSession).not.toHaveBeenCalled();
+    expect(sessionControls.handleRenameSession).not.toHaveBeenCalled();
+    expect(sessionControls.handleSaveOrganization).not.toHaveBeenCalled();
+    expect(sessionControls.handleTogglePinSession).not.toHaveBeenCalled();
+    expect(sessionControls.handleDeleteSession).not.toHaveBeenCalled();
+    expect(sessionControls.handleAssignProject).not.toHaveBeenCalled();
+    expect(sessionControls.handleSaveExternalBinding).not.toHaveBeenCalled();
+    expect(orchestration.handleRetryTurn).not.toHaveBeenCalled();
+    expect(orchestration.handleBeginEditTurn).not.toHaveBeenCalled();
+    expect(orchestration.handleResumeQueue).not.toHaveBeenCalled();
+    expect(orchestration.handleRemoveQueuedItem).not.toHaveBeenCalled();
+    expect(contextActions.handleAcceptDelegation).not.toHaveBeenCalled();
+    expect(contextActions.handleRunQuickResearch).not.toHaveBeenCalled();
+    expect(contextActions.handleSuggestDelegation).not.toHaveBeenCalled();
+    expect(contextActions.handleTriggerProactive).not.toHaveBeenCalled();
+    expect(contextActions.handleProactivePolicyPatch).not.toHaveBeenCalled();
+    expect(contextActions.handleRunCodeDelegation).not.toHaveBeenCalled();
+    expect(contextActions.handleCreateSpecialistDraft).not.toHaveBeenCalled();
+    expect(contextActions.handleActivateCatalogSpecialist).not.toHaveBeenCalled();
+    expect(contextActions.handleSpecialistCandidatePatch).not.toHaveBeenCalled();
+    expect(contextActions.handleRebuildLearnedMemory).not.toHaveBeenCalled();
+    expect(contextActions.handleMemoryStatusUpdate).not.toHaveBeenCalled();
+    expect(outbound.handleSelectBranchTurn).not.toHaveBeenCalled();
+    expect(outbound.handleApprovePending).not.toHaveBeenCalled();
+    expect(outbound.handleDenyPending).not.toHaveBeenCalled();
+    expect(outbound.handleSubmitUserInput).not.toHaveBeenCalled();
+    expect(composer.handleCreateCurrentModeSession).not.toHaveBeenCalled();
+    expect(composer.handleArchiveWorkspace).not.toHaveBeenCalled();
+    expect(composer.handleConfirmArchiveWorkspace).not.toHaveBeenCalled();
+    expect(composer.handleComposerKeyDown).not.toHaveBeenCalled();
+    expect(composer.handleComposerPaste).not.toHaveBeenCalled();
+    expect(composer.handleDrop).not.toHaveBeenCalled();
+    expect(composer.handleSetDeepMode).not.toHaveBeenCalled();
+    expect(composer.handleApplyDraftCommand).not.toHaveBeenCalled();
+    expect(composer.handleRemoveAttachment).not.toHaveBeenCalled();
+    expect(composer.handleUploadFiles).not.toHaveBeenCalled();
+    expect(multimodal.handleToggleLiveVoice).not.toHaveBeenCalled();
+    expect(multimodal.handleToggleLiveVoiceMute).not.toHaveBeenCalled();
+    expect(multimodal.handleToggleVoiceTalk).not.toHaveBeenCalled();
+    expect(multimodal.handleOpenAudioTranscribe).not.toHaveBeenCalled();
+    expect(multimodal.handleAudioFileSelected).not.toHaveBeenCalled();
+    expect(multimodal.setSpeakResponsesEnabled).not.toHaveBeenCalled();
+    expect(multimodal.handleGenerateImage).not.toHaveBeenCalled();
+    expect(multimodal.handleEditImage).not.toHaveBeenCalled();
+    expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
+    expect(createChatSessionMock).not.toHaveBeenCalled();
+    expect(createChatGeneratedArtifactMock).not.toHaveBeenCalled();
+    expect(attachThreadKnowledgeAttachmentMock).not.toHaveBeenCalled();
+    expect(removeThreadKnowledgeAttachmentMock).not.toHaveBeenCalled();
+    expect(setChatSessionGoalMock).not.toHaveBeenCalled();
+    expect(clearChatSessionGoalMock).not.toHaveBeenCalled();
+    expect(steerChatSessionMock).not.toHaveBeenCalled();
+    expect(loadModelsForProviderMock).not.toHaveBeenCalled();
+    expect(orchestration.handleStopActiveTurn).toHaveBeenCalledTimes(1);
+    expect(controlAgenticRunMock).toHaveBeenCalledTimes(1);
+    expect(controlAgenticRunMock).toHaveBeenCalledWith(
+      "agentic-run-1",
+      expect.objectContaining({ action: "cancel", expectedRevision: 12 }),
+      { workspaceId: "workspace-1" },
+    );
+  });
+
+  it("fails closed across code-workbench mutation callbacks while historical context is active", async () => {
+    mockSurfaceMode = "code";
+    const baseSessionData = useChatSessionDataMock();
+    useChatSessionDataMock.mockReturnValue({
+      ...baseSessionData,
+      historicalWindowTarget: { workspaceId: "workspace-1", sessionId: "session-1" },
+      historicalWindow: {
+        anchor: {
+          state: "found",
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          messageId: "message-user",
+          sequence: 1,
+        },
+        items: [],
+        snapshotMaxSequence: 2,
+        snapshotMessageCount: 2,
+        hasOlder: false,
+        hasNewer: false,
+        truncated: false,
+        droppedItems: 0,
+        byteLength: 2,
+      },
+    });
+
+    await renderHost({ lockSurface: true, surface: "code" });
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-1", {
+        searchHit: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          messageId: "message-user",
+          sequence: 1,
+          excerpt: "Build the launch plan",
+          score: 10,
+        },
+      });
+      await flushEffects(8);
+    });
+
+    const panel = latestSurfaceInput?.workflowPanel?.kind === "code" ? latestSurfaceInput.workflowPanel.props : null;
+    const sessionControls = useChatSessionControlsMock.mock.results.at(-1)?.value as any;
+    const workbench = useChatDockWorkbenchControllerMock.mock.results.at(-1)?.value as any;
+    vi.clearAllMocks();
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.historicalReadOnly).toBe(true);
+    expect(panel).not.toBeNull();
+
+    await act(async () => {
+      await panel?.onBindExistingProject?.("project-2");
+      await panel?.onImportProjectSource?.({ sourceType: "local_folder", sourcePath: "F:/repo" } as any);
+      panel?.onCreateWorktree?.();
+      panel?.onDraftChange?.("export const blocked = true;");
+      panel?.onDiscardDraft?.();
+      panel?.onSaveFile?.();
+      await panel?.onFileOperation?.({ operation: "create_file", path: "src/blocked.ts" });
+      panel?.onRunValidationCommand?.({ command: "pnpm", args: ["test"] } as any);
+      panel?.onApplyPatch?.("diff --git a/a b/a");
+      panel?.onRevertFile?.("src/index.ts");
+      panel?.onRevertAll?.();
+      panel?.onRunHelperSnippet?.("typescript", "export const blocked = true;");
+      await flushEffects(8);
+    });
+
+    expect(sessionControls.handleAssignProject).not.toHaveBeenCalled();
+    expect(sessionControls.handleImportCodeProject).not.toHaveBeenCalled();
+    expect(workbench.createWorkbenchWorktree).not.toHaveBeenCalled();
+    expect(workbench.setWorkbenchDraftContent).not.toHaveBeenCalled();
+    expect(workbench.discardWorkbenchDraft).not.toHaveBeenCalled();
+    expect(workbench.saveWorkbenchFile).not.toHaveBeenCalled();
+    expect(workbench.runWorkbenchFileOperation).not.toHaveBeenCalled();
+    expect(workbench.runWorkbenchValidationCommand).not.toHaveBeenCalled();
+    expect(workbench.applyWorkbenchPatch).not.toHaveBeenCalled();
+    expect(workbench.revertWorkbenchFile).not.toHaveBeenCalled();
+    expect(workbench.revertWorkbenchAll).not.toHaveBeenCalled();
+    expect(createCodeModeRunMock).not.toHaveBeenCalled();
   });
 
   it("covers package-local host helpers", () => {
@@ -1287,7 +1884,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(fetchAgenticRunTreeMock).toHaveBeenCalledWith("agentic-run-1", { workspaceId: "workspace-1" });
     expect(controlAgenticRunMock).toHaveBeenCalledWith(
       "agentic-run-1",
-      expect.objectContaining({ action: "pause", reason: "Mission Control operator action." }),
+      expect.objectContaining({ action: "pause", expectedRevision: 12, reason: "Mission Control operator action." }),
       { workspaceId: "workspace-1" },
     );
   });
@@ -1619,27 +2216,29 @@ describe("MissionThreadedControllerHost", () => {
 
   it("prepares document attachments as thread knowledge before sending", async () => {
     const attachments = [
-      {
+      createStoredAttachment({
         attachmentId: "doc-ready",
         fileName: "notes.txt",
         mediaType: "text",
         mimeType: "text/plain",
         extractStatus: "ready",
         extractPreview: "Operator notes",
-      },
-      {
+      }),
+      createStoredAttachment({
         attachmentId: "doc-pending",
         fileName: "paper.pdf",
-        mediaType: "file",
+        mediaType: "binary",
         mimeType: "application/pdf",
-        extractStatus: "pending",
-      },
-      {
+        extractStatus: "unsupported",
+        analysisStatus: "pending",
+      }),
+      createStoredAttachment({
         attachmentId: "image-1",
         fileName: "image.png",
         mediaType: "image",
         mimeType: "image/png",
-      },
+        extractStatus: "unsupported",
+      }),
     ];
     window.localStorage.setItem("goatcitadel.chat.attachments.workspace-1.session-1", JSON.stringify(attachments));
 
@@ -1916,28 +2515,70 @@ describe("MissionThreadedControllerHost", () => {
 
   it("covers document attachment classifiers, duplicate knowledge sources, and send preparation failures", async () => {
     const documentAttachments = [
-      { attachmentId: "doc-json", fileName: "data.json", mediaType: "file", mimeType: "application/json" },
-      { attachmentId: "doc-xml", fileName: "data.xml", mediaType: "file", mimeType: "application/xml" },
-      { attachmentId: "doc-yaml", fileName: "data.yaml", mediaType: "file", mimeType: "application/x-yaml" },
-      { attachmentId: "doc-csv", fileName: "data.csv", mediaType: "file", mimeType: "text/csv" },
-      { attachmentId: "doc-md", fileName: "notes.md", mediaType: "file", mimeType: "text/markdown" },
-      {
+      createStoredAttachment({
+        attachmentId: "doc-json",
+        fileName: "data.json",
+        mediaType: "binary",
+        mimeType: "application/json",
+      }),
+      createStoredAttachment({
+        attachmentId: "doc-xml",
+        fileName: "data.xml",
+        mediaType: "binary",
+        mimeType: "application/xml",
+      }),
+      createStoredAttachment({
+        attachmentId: "doc-yaml",
+        fileName: "data.yaml",
+        mediaType: "binary",
+        mimeType: "application/x-yaml",
+      }),
+      createStoredAttachment({
+        attachmentId: "doc-csv",
+        fileName: "data.csv",
+        mediaType: "binary",
+        mimeType: "text/csv",
+      }),
+      createStoredAttachment({
+        attachmentId: "doc-md",
+        fileName: "notes.md",
+        mediaType: "binary",
+        mimeType: "text/markdown",
+      }),
+      createStoredAttachment({
         attachmentId: "doc-preview",
         fileName: "preview.bin",
-        mediaType: "file",
+        mediaType: "binary",
         mimeType: "application/octet-stream",
         extractPreview: "preview",
-      },
-      { attachmentId: "doc-ocr", fileName: "scan.png", mediaType: "file", mimeType: "image/png", ocrText: "ocr" },
-      {
+      }),
+      createStoredAttachment({
+        attachmentId: "doc-ocr",
+        fileName: "scan.png",
+        mediaType: "binary",
+        mimeType: "image/png",
+        ocrText: "ocr",
+      }),
+      createStoredAttachment({
         attachmentId: "doc-transcript",
         fileName: "call.mp3",
-        mediaType: "file",
+        mediaType: "binary",
         mimeType: "audio/mpeg",
         transcriptText: "transcript",
-      },
-      { attachmentId: "doc-message", fileName: "message.txt", mediaType: "text", mimeType: "text/plain" },
-      { attachmentId: "image-ignored", fileName: "image.png", mediaType: "image", mimeType: "image/png" },
+      }),
+      createStoredAttachment({
+        attachmentId: "doc-message",
+        fileName: "message.txt",
+        mediaType: "text",
+        mimeType: "text/plain",
+      }),
+      createStoredAttachment({
+        attachmentId: "image-ignored",
+        fileName: "image.png",
+        mediaType: "image",
+        mimeType: "image/png",
+        extractStatus: "unsupported",
+      }),
     ];
     window.localStorage.setItem(
       "goatcitadel.chat.attachments.workspace-1.session-1",
@@ -1985,7 +2626,7 @@ describe("MissionThreadedControllerHost", () => {
     attachThreadKnowledgeAttachmentMock.mockRejectedValueOnce(new Error("knowledge attach failed"));
     window.localStorage.setItem(
       "goatcitadel.chat.attachments.workspace-1.session-1",
-      JSON.stringify([{ attachmentId: "doc-error", fileName: "error.txt", mediaType: "text", mimeType: "text/plain" }]),
+      JSON.stringify([createStoredAttachment({ attachmentId: "doc-error", fileName: "error.txt" })]),
     );
     await renderHost();
     await selectDefaultSession();
@@ -2150,6 +2791,91 @@ describe("MissionThreadedControllerHost", () => {
       sourceLabel: "Launch plan",
       sessionId: "session-new",
       turnIds: ["turn-1"],
+    });
+  });
+
+  it("hydrates server metadata without overwriting conflicting rename and organization drafts", async () => {
+    const { renderer, renderSurface } = await renderHost();
+    await selectDefaultSession();
+
+    await act(async () => {
+      latestSurfaceInput?.contextDockProps?.onRenameTitleChange("Local title draft");
+      await flushEffects(4);
+    });
+    const renameControlsInput = useChatSessionControlsMock.mock.calls.at(-1)?.[0] as any;
+    renameControlsInput.setSessionMetadataConflictDraft({
+      sessionId: "session-1",
+      kind: "rename",
+      renameTitle: "Local title draft",
+    });
+    const firstServerSession = {
+      ...selectedSession,
+      revision: 8,
+      title: "Server title",
+      folderName: "Server folder",
+      tags: ["server"],
+    };
+    useChatThreadControllerMock.mockReturnValue({
+      ...useChatThreadControllerMock(),
+      selectedSession: firstServerSession,
+      missionSessions: [firstServerSession],
+    });
+    await act(async () => {
+      renderer.update(
+        <MissionThreadedControllerHost
+          workspaceId="workspace-1"
+          workspaceName="Mission Workspace"
+          approvalsCount={2}
+          renderSurface={renderSurface}
+        />,
+      );
+      await flushEffects(8);
+    });
+    expect(latestSurfaceInput?.contextDockProps).toMatchObject({
+      renameTitle: "Local title draft",
+      folderName: "Server folder",
+      tagsValue: "server",
+    });
+
+    await act(async () => {
+      latestSurfaceInput?.contextDockProps?.onFolderNameChange("Local folder draft");
+      latestSurfaceInput?.contextDockProps?.onTagsValueChange("local, draft");
+      await flushEffects(4);
+    });
+    const organizationControlsInput = useChatSessionControlsMock.mock.calls.at(-1)?.[0] as any;
+    organizationControlsInput.setSessionMetadataConflictDraft({
+      sessionId: "session-1",
+      kind: "organization",
+      folderName: "Local folder draft",
+      tagsValue: "local, draft",
+    });
+    const secondServerSession = {
+      ...firstServerSession,
+      revision: 9,
+      title: "Newest server title",
+      folderName: "Newest server folder",
+      tags: ["newest-server"],
+    };
+    useChatThreadControllerMock.mockReturnValue({
+      ...useChatThreadControllerMock(),
+      selectedSession: secondServerSession,
+      missionSessions: [secondServerSession],
+    });
+    await act(async () => {
+      renderer.update(
+        <MissionThreadedControllerHost
+          workspaceId="workspace-1"
+          workspaceName="Mission Workspace"
+          approvalsCount={2}
+          renderSurface={renderSurface}
+        />,
+      );
+      await flushEffects(8);
+    });
+    expect(latestSurfaceInput?.contextDockProps).toMatchObject({
+      renameTitle: "Newest server title",
+      folderName: "Local folder draft",
+      tagsValue: "local, draft",
     });
   });
 
@@ -2682,6 +3408,56 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(4);
     });
     expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps refreshed preference truth canonical after a 409 and retries the explicit draft", async () => {
+    const setPrefs = vi.fn();
+    const prefsRef = { current: prefs };
+    const latestPrefs = {
+      ...prefs,
+      revision: 8,
+      thinkingLevel: "standard" as const,
+      model: "gpt-5.5-server",
+    };
+    useChatSessionDataMock.mockReturnValue({
+      ...useChatSessionDataMock(),
+      prefs,
+      setPrefs,
+    });
+    useChatOutboundExecutionMock.mockReturnValue({
+      ...useChatOutboundExecutionMock(),
+      prefsRef,
+    });
+    fetchChatSessionPrefsMock.mockResolvedValue(latestPrefs);
+    updateChatSessionPrefsMock.mockRejectedValueOnce(new ApiRequestErrorMock("stale preferences", { status: 409 }));
+
+    await renderHost();
+    await selectDefaultSession();
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSetThinkingLevel("deep");
+      await flushEffects(12);
+    });
+
+    expect(prefsRef.current).toEqual(latestPrefs);
+    expect(setPrefs).toHaveBeenLastCalledWith(latestPrefs);
+    expect(latestSurfaceInput?.contextDockProps?.preferenceConflictDraft).toEqual({ thinkingLevel: "deep" });
+
+    updateChatSessionPrefsMock.mockResolvedValueOnce({
+      ...latestPrefs,
+      revision: 9,
+      thinkingLevel: "deep",
+    });
+    await act(async () => {
+      await latestSurfaceInput?.contextDockProps?.onRetryPreferenceConflictDraft();
+      await flushEffects(8);
+    });
+
+    expect(updateChatSessionPrefsMock).toHaveBeenLastCalledWith("session-1", {
+      expectedRevision: 8,
+      thinkingLevel: "deep",
+    });
+    expect(prefsRef.current).toMatchObject({ revision: 9, thinkingLevel: "deep" });
+    expect(latestSurfaceInput?.contextDockProps?.preferenceConflictDraft).toBeNull();
   });
 
   it("covers host rail, empty-state, attach, and modal cancel callbacks", async () => {

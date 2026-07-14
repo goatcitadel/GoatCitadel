@@ -17,6 +17,7 @@ function skill(overrides: Partial<SkillListItem>): SkillListItem {
     callable: true,
     trustLabel: "trusted",
     ...overrides,
+    revision: overrides.revision ?? 1,
   };
 }
 

@@ -1,6 +1,12 @@
 import type {
   ApprovalRequest,
   ChatStreamUsageRecord,
+  DurableChildWatcherCatchUpResult,
+  DurableChildWatcherCreateRequest,
+  DurableChildWatcherRecord,
+  DurableBackgroundTaskControlRequest,
+  DurableBackgroundTaskControlResponse,
+  DurableBackgroundTaskRailResponse,
   DurableCheckpointRecord,
   ExternalSideEffectReplayWorkflowPayload,
   DurableRunCreateRequest,
@@ -13,6 +19,10 @@ import type {
   RuntimeLifecycleToolRunSummary,
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
+import {
+  parseDurableBackgroundTaskControlResponse,
+  parseDurableBackgroundTaskRail,
+} from "./durable-background-task-validation.js";
 
 export type RunTraceAvailabilityState = "available" | "not_available" | "unknown";
 
@@ -200,6 +210,80 @@ export async function fetchDurableRunTimeline(
   return request<{ items: DurableRunTimelineEvent[] }>(
     `/api/v1/durable/runs/${encodeURIComponent(runId)}/timeline?limit=${Math.max(1, Math.min(limit, 2000))}`,
   );
+}
+
+export async function watchDurableChildRun(
+  parentRunId: string,
+  childRunId: string,
+  input: Omit<DurableChildWatcherCreateRequest, "parentRunId" | "childRunId"> = {},
+): Promise<DurableChildWatcherRecord> {
+  return request<DurableChildWatcherRecord>(
+    `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/children/${encodeURIComponent(childRunId)}/watch`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function fetchDurableChildWatchers(
+  parentRunId: string,
+  limit = 200,
+): Promise<{ items: DurableChildWatcherRecord[] }> {
+  return request<{ items: DurableChildWatcherRecord[] }>(
+    `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/child-watchers?limit=${Math.max(1, Math.min(limit, 500))}`,
+  );
+}
+
+export async function fetchDurableBackgroundTaskRail(
+  parentRunId: string,
+  input: { workspaceId: string; sessionId: string },
+): Promise<DurableBackgroundTaskRailResponse> {
+  const query = new URLSearchParams({ workspaceId: input.workspaceId, sessionId: input.sessionId });
+  const payload = await request<unknown>(
+    `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks?${query.toString()}`,
+    { cache: "no-store" },
+  );
+  return parseDurableBackgroundTaskRail(payload, { parentRunId, ...input });
+}
+
+export async function controlDurableBackgroundTask(
+  parentRunId: string,
+  watcherId: string,
+  input: DurableBackgroundTaskControlRequest,
+): Promise<DurableBackgroundTaskControlResponse> {
+  const payload = await request<unknown>(
+    `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks/${encodeURIComponent(watcherId)}/control`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+  return parseDurableBackgroundTaskControlResponse(payload, {
+    parentRunId,
+    watcherId,
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    action: input.action,
+  });
+}
+
+export async function detachDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
+  return request<DurableChildWatcherRecord>(`/api/v1/durable/child-watchers/${encodeURIComponent(watcherId)}/detach`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function reattachDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherCatchUpResult> {
+  return request<DurableChildWatcherCatchUpResult>(
+    `/api/v1/durable/child-watchers/${encodeURIComponent(watcherId)}/reattach`,
+    { method: "POST", body: "{}" },
+  );
+}
+
+export async function closeDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
+  return request<DurableChildWatcherRecord>(`/api/v1/durable/child-watchers/${encodeURIComponent(watcherId)}/close`, {
+    method: "POST",
+    body: "{}",
+  });
 }
 
 export async function pauseDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord> {

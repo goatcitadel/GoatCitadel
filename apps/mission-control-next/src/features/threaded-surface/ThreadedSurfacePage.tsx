@@ -30,7 +30,7 @@ import {
   Terminal,
   Workflow,
 } from "lucide-react";
-import type { ChatMode, ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ChatMode, ChatSessionRecord, ChatSessionSearchHitRecord } from "@goatcitadel/contracts";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
   MissionThreadedDropTargetProps,
@@ -55,6 +55,7 @@ import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { ThreadedTimeline } from "./ThreadedTimeline";
+import { DurableBackgroundTaskRail } from "./DurableBackgroundTaskRail";
 import { shortId } from "./workflow/format";
 import "./styles/rail.css";
 import "./styles/header.css";
@@ -68,6 +69,8 @@ import "./styles/mobile.css";
 import "./styles/btw-side-chat.css";
 import "./styles/generated-artifact.css";
 import "./styles/conversation-workspace.css";
+import "./styles/capability-profile.css";
+import "./styles/background-task-rail.css";
 
 const LazyThreadedWorkflowPanel = lazy(async () => {
   const module = await import("./ThreadedWorkflowPanel");
@@ -751,8 +754,10 @@ export function ThreadedSurfacePage({
                 activeProps={activeProps}
                 contextDockProps={input.contextDockProps}
                 onClose={() => handleDockOpenChange(false)}
+                onOpenUniversalRunDetail={onOpenUniversalRunDetail}
                 onOpenTasks={input.emptyStateProps?.onOpenTasks}
                 onSelectPanel={setActiveUtilityPanel}
+                onSelectSession={input.sessionRail.onSelectSession}
                 surface={activeMode}
                 workflowPanel={workflowPanel}
               />
@@ -962,10 +967,30 @@ function ThreadConversationSurface({
       </header>
 
       <section className="mc-next-threaded-conversation">
+        {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
+          <section className="mc-next-threaded-history-banner" aria-live="polite">
+            <div>
+              <strong>Viewing history around search result</strong>
+              <span>Sending is paused until you return to the latest conversation.</span>
+            </div>
+            <button type="button" className="mc-next-threaded-secondary" onClick={props.onReturnToLatest}>
+              Return to latest
+            </button>
+          </section>
+        ) : null}
         <div className="mc-next-threaded-thread-card">
-          <ThreadedTimeline props={props} onOpenUniversalRunDetail={onOpenUniversalRunDetail} />
+          {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
+            <HistoricalConversationView props={props} />
+          ) : (
+            <ThreadedTimeline props={props} onOpenUniversalRunDetail={onOpenUniversalRunDetail} />
+          )}
         </div>
         <div className="mc-next-threaded-composer-card">
+          {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
+            <p className="mc-next-threaded-history-send-lock" role="status">
+              Return to latest before sending or editing this conversation.
+            </p>
+          ) : null}
           <ThreadedComposer props={props} />
         </div>
       </section>
@@ -988,13 +1013,87 @@ function ThreadConversationSurface({
   );
 }
 
+function HistoricalConversationView({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  if (props.historicalWindowLoading) {
+    return <div className="mc-next-threaded-history-state">Loading the exact historical message…</div>;
+  }
+  if (props.historicalWindowError) {
+    return (
+      <div className="mc-next-threaded-history-state error" role="alert">
+        Historical message could not be loaded. {props.historicalWindowError}
+      </div>
+    );
+  }
+  const window = props.historicalWindow;
+  if (!window) return null;
+  if (window.anchor.state === "unavailable") {
+    return (
+      <div className="mc-next-threaded-history-state" role="status">
+        This result is no longer available because the message was deleted or compacted.
+      </div>
+    );
+  }
+  if (window.anchor.state === "identity_mismatch") {
+    return (
+      <div className="mc-next-threaded-history-state error" role="alert">
+        The result identity no longer matches this conversation. No newer message was substituted.
+      </div>
+    );
+  }
+  return (
+    <div className="mc-next-threaded-history-list" aria-label="Historical conversation window">
+      {window.hasOlder && window.olderCursor ? (
+        <button
+          type="button"
+          className="mc-next-threaded-history-page-button"
+          disabled={props.historicalContinuationLoading !== null}
+          onClick={() => props.onLoadHistoricalContinuation("older")}
+        >
+          {props.historicalContinuationLoading === "older" ? "Loading older…" : "Load older messages"}
+        </button>
+      ) : null}
+      {props.historicalContinuationError ? (
+        <p className="mc-next-threaded-history-page-error" role="alert">
+          {props.historicalContinuationError}
+        </p>
+      ) : null}
+      {window.items.map((entry) => (
+        <article
+          key={`${entry.message.messageId}:${entry.sequence}`}
+          className={`mc-next-threaded-history-message role-${entry.message.role}${entry.isAnchor ? " anchor" : ""}`}
+          aria-current={entry.isAnchor ? "true" : undefined}
+          aria-label={entry.isAnchor ? "Exact search result" : `${entry.message.role} historical message`}
+        >
+          <header>
+            <strong>
+              {entry.message.role === "assistant" ? "Assistant" : entry.message.role === "user" ? "You" : "System"}
+            </strong>
+            <time dateTime={entry.message.timestamp}>{formatRelativeTime(entry.message.timestamp)}</time>
+          </header>
+          {entry.isAnchor ? <span className="mc-next-threaded-history-anchor-label">Exact search result</span> : null}
+          <p>{entry.message.content}</p>
+        </article>
+      ))}
+      {window.hasNewer && window.newerCursor ? (
+        <button
+          type="button"
+          className="mc-next-threaded-history-page-button"
+          disabled={props.historicalContinuationLoading !== null}
+          onClick={() => props.onLoadHistoricalContinuation("newer")}
+        >
+          {props.historicalContinuationLoading === "newer" ? "Loading newer…" : "Load newer messages"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function getArchiveActionLabel(lifecycleStatus: string, pending: boolean) {
   if (pending) return lifecycleStatus === "archived" ? "Restoring..." : "Archiving...";
   return lifecycleStatus === "archived" ? "Restore" : "Archive";
 }
 
 type CodeWorkflowPanel = Extract<NonNullable<MissionThreadedRenderSurfaceInput["workflowPanel"]>, { kind: "code" }>;
-type CoworkWorkflowPanel = Extract<NonNullable<MissionThreadedRenderSurfaceInput["workflowPanel"]>, { kind: "cowork" }>;
 
 function clampPaneWidth(value: number, minWidth: number, maxWidth: number): number {
   return Math.min(maxWidth, Math.max(minWidth, Math.round(value)));
@@ -1236,8 +1335,10 @@ function ThreadedUtilityPanel({
   activeProps,
   contextDockProps,
   onClose,
+  onOpenUniversalRunDetail,
   onOpenTasks,
   onSelectPanel,
+  onSelectSession,
   surface,
   workflowPanel,
 }: {
@@ -1245,8 +1346,10 @@ function ThreadedUtilityPanel({
   activeProps: MissionThreadedActiveSessionSurfaceProps;
   contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
   onClose: () => void;
+  onOpenUniversalRunDetail?: (runId: string) => void;
   onOpenTasks?: () => void;
   onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
+  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
   surface: ChatMode;
   workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
 }) {
@@ -1291,8 +1394,9 @@ function ThreadedUtilityPanel({
       ) : activePanel === "background" ? (
         <UtilityBackgroundTasksPanel
           activeProps={activeProps}
+          onOpenUniversalRunDetail={onOpenUniversalRunDetail}
           onOpenTasks={onOpenTasks}
-          workflowPanel={workflowPanel}
+          onSelectSession={onSelectSession}
         />
       ) : (
         <UtilityPlanPanel activeProps={activeProps} contextDockProps={contextDockProps} />
@@ -1580,44 +1684,44 @@ function UtilityFilesPanel({ workflowPanel }: { workflowPanel: MissionThreadedRe
 
 function UtilityBackgroundTasksPanel({
   activeProps,
+  onOpenUniversalRunDetail,
   onOpenTasks,
-  workflowPanel,
+  onSelectSession,
 }: {
   activeProps: MissionThreadedActiveSessionSurfaceProps;
+  onOpenUniversalRunDetail?: (runId: string) => void;
   onOpenTasks?: () => void;
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
+  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
 }) {
-  const coworkPanel = getCoworkWorkflowPanel(workflowPanel);
-  const blockers = coworkPanel?.props.viewModel.blockers ?? [];
-
   return (
-    <section className="mc-next-utility-card">
-      <h4>Background work</h4>
-      <div className="mc-next-utility-chip-row">
-        <StatusChip tone={activeProps.queuedCount > 0 ? "warning" : "muted"}>
-          {activeProps.queuedCount} queued
-        </StatusChip>
-        <StatusChip tone={activeProps.streamStatus === "streaming" ? "success" : "muted"}>
-          {activeProps.streamStatus}
-        </StatusChip>
-        {blockers.length > 0 ? <StatusChip tone="warning">{blockers.length} blockers</StatusChip> : null}
-      </div>
-      {activeProps.queueItems.length > 0 ? (
-        <ul className="mc-next-utility-list">
-          {activeProps.queueItems.slice(0, 8).map((item) => (
-            <li key={item.id}>{item.label}</li>
-          ))}
-        </ul>
-      ) : (
-        <p>No queued background work is waiting on this thread.</p>
-      )}
-      {coworkPanel?.props.viewModel.runMap.objective ? <p>{coworkPanel.props.viewModel.runMap.objective}</p> : null}
-      {onOpenTasks ? (
-        <button type="button" className="mc-next-panel-button" onClick={onOpenTasks}>
-          Open task board
-        </button>
-      ) : null}
-    </section>
+    <DurableBackgroundTaskRail
+      parentRunId={activeProps.selectedTurn?.trace.durable?.runId}
+      workspaceId={activeProps.workspaceId}
+      sessionId={activeProps.selectedSessionId}
+      queuedCount={activeProps.queuedCount}
+      streamStatus={activeProps.streamStatus}
+      queueLabels={activeProps.queueItems.map((item) => item.label)}
+      onOpenApprovals={activeProps.onOpenApprovals}
+      onOpenTasks={onOpenTasks}
+      onOpenSemanticLink={(link, relatedLinks) => {
+        if (link.kind === "durable_run") {
+          onOpenUniversalRunDetail?.(link.id);
+          return;
+        }
+        if (link.kind === "chat_session") {
+          onSelectSession(link.id);
+          return;
+        }
+        if (link.kind === "chat_turn") {
+          const childSession = relatedLinks.find((candidate) => candidate.kind === "chat_session");
+          if (childSession) onSelectSession(childSession.id, { turnId: link.id });
+          else activeProps.onOpenRunDetails(link.id);
+          return;
+        }
+        if (link.kind === "approval") activeProps.onOpenApprovals();
+        if (link.kind === "task") onOpenTasks?.();
+      }}
+    />
   );
 }
 
@@ -1661,12 +1765,6 @@ function getCodeWorkflowPanel(
   workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"],
 ): CodeWorkflowPanel | null {
   return workflowPanel?.kind === "code" ? workflowPanel : null;
-}
-
-function getCoworkWorkflowPanel(
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"],
-): CoworkWorkflowPanel | null {
-  return workflowPanel?.kind === "cowork" ? workflowPanel : null;
 }
 
 function formatUtilitySnippet(value?: string | null, maxLength = 1200): string {
@@ -1781,6 +1879,7 @@ type SessionGroupItem = {
   pinnedGoal?: string;
   generatedArtifacts?: ChatSessionRecord["generatedArtifacts"];
   delegationParent?: ChatSessionRecord["delegationParent"];
+  searchHits?: ChatSessionSearchHitRecord[];
 };
 
 function SessionGroup({
@@ -1798,7 +1897,10 @@ function SessionGroup({
   items: SessionGroupItem[];
   count?: number;
   selectedSessionId: string | null;
-  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
+  onSelectSession: (
+    sessionId: string,
+    options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord },
+  ) => void;
   renderSessionLabel: (sessionId: string) => string;
   nestedChildrenByParentId?: Record<string, SessionGroupItem[]>;
   orphanDelegatedItems?: SessionGroupItem[];
@@ -1922,7 +2024,10 @@ function SessionRow({
 }: {
   item: SessionGroupItem;
   selectedSessionId: string | null;
-  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
+  onSelectSession: (
+    sessionId: string,
+    options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord },
+  ) => void;
   renderSessionLabel: (sessionId: string) => string;
   childCount?: number;
   collapsed?: boolean;
@@ -1970,6 +2075,22 @@ function SessionRow({
           </div>
         </div>
       </button>
+      {item.searchHits && item.searchHits.length > 0 ? (
+        <div className="mc-next-threaded-search-hits" aria-label={`Search results in ${label}`}>
+          {item.searchHits.map((hit) => (
+            <button
+              key={`${hit.messageId}:${hit.sequence}`}
+              type="button"
+              className="mc-next-threaded-search-hit"
+              onClick={() => onSelectSession(item.sessionId, { searchHit: hit })}
+              aria-label="Open exact search result"
+            >
+              <span>Message match</span>
+              <mark>{hit.excerpt}</mark>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {onToggleChildren ? (
         <button
           type="button"

@@ -18,6 +18,9 @@ import type {
   CodeModeRunListOptions,
   CodeModeRunRecord,
   CodeModeRunRequest,
+  CodeModeRunVerificationRequest,
+  CodeModeRunVerificationResponse,
+  CodeModeVerificationEvidenceRecord,
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
@@ -93,31 +96,34 @@ export async function fetchCapabilityCandidate(candidateId: string): Promise<Can
 
 export async function promoteCapabilityCandidate(
   candidateId: string,
+  expectedRevision: number,
   versionId?: string,
 ): Promise<CandidateLifecycleActionResult> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`, {
     method: "POST",
-    body: JSON.stringify(versionId ? { versionId } : {}),
+    body: JSON.stringify({ expectedRevision, ...(versionId ? { versionId } : {}) }),
   });
 }
 
 export async function revokeCapabilityCandidate(
   candidateId: string,
+  expectedRevision: number,
   versionId?: string,
 ): Promise<CandidateLifecycleActionResult> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`, {
     method: "POST",
-    body: JSON.stringify(versionId ? { versionId } : {}),
+    body: JSON.stringify({ expectedRevision, ...(versionId ? { versionId } : {}) }),
   });
 }
 
 export async function rollbackCapabilityCandidate(
   candidateId: string,
   targetVersionId: string,
+  expectedRevision: number,
 ): Promise<CandidateLifecycleActionResult> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/rollback`, {
     method: "POST",
-    body: JSON.stringify({ targetVersionId }),
+    body: JSON.stringify({ expectedRevision, targetVersionId }),
   });
 }
 
@@ -166,6 +172,37 @@ export async function fetchCodeModeRun(
   }
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}${suffix}`);
+}
+
+export async function fetchCodeModeRunVerificationEvidence(
+  runId: string,
+  input?: {
+    sessionId?: string;
+    turnId?: string;
+    workspaceId?: string;
+    limit?: number;
+  },
+): Promise<{ items: CodeModeVerificationEvidenceRecord[] }> {
+  const params = codeModeRunScopeParams(input);
+  params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 50, 200))));
+  return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}/verification/evidence?${params.toString()}`);
+}
+
+export async function verifyCodeModeRun(
+  runId: string,
+  input: CodeModeRunVerificationRequest,
+  scope?: {
+    sessionId?: string;
+    turnId?: string;
+    workspaceId?: string;
+  },
+): Promise<CodeModeRunVerificationResponse> {
+  const params = codeModeRunScopeParams(scope);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}/verification${suffix}`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function fetchCodeModeRunArtifact(
@@ -225,4 +262,22 @@ export async function createCodeModeRun(input: CodeModeRunRequest): Promise<Code
     headers: input.originSurface ? { "x-goatcitadel-origin-surface": "chat" } : undefined,
     body: JSON.stringify(requestBody),
   });
+}
+
+function codeModeRunScopeParams(input?: {
+  sessionId?: string;
+  turnId?: string;
+  workspaceId?: string;
+}): URLSearchParams {
+  const params = new URLSearchParams();
+  if (input?.sessionId) {
+    params.set("sessionId", input.sessionId);
+  }
+  if (input?.turnId) {
+    params.set("turnId", input.turnId);
+  }
+  if (input?.workspaceId) {
+    params.set("workspaceId", input.workspaceId);
+  }
+  return params;
 }

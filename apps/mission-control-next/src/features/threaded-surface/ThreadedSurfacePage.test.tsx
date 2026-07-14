@@ -191,6 +191,14 @@ function buildActiveSessionProps(overrides: Partial<any> = {}) {
     onRequestProviderChange: noop,
     onRequestModelChange: noop,
     loading: false,
+    historicalWindow: null,
+    historicalWindowLoading: false,
+    historicalWindowError: null,
+    onReturnToLatest: noop,
+    historicalContinuationLoading: null,
+    historicalContinuationError: null,
+    onLoadHistoricalContinuation: noop,
+    historicalReadOnly: false,
     thread: { sessionId: "session-1", turns: [] },
     selectedTurnId: null,
     selectedContextTurnIds: [],
@@ -944,6 +952,92 @@ describe("ThreadedSurfacePage", () => {
     expect(emptyInput.dropTargetProps.onAttachFiles).toHaveBeenCalledTimes(1);
     expect(emptyInput.emptyStateProps.onOpenCowork).not.toHaveBeenCalled();
     expect(emptyInput.emptyStateProps.onOpenCode).not.toHaveBeenCalled();
+  });
+
+  it("opens exact rail hits and renders an anchored, send-locked historical window", async () => {
+    vi.stubGlobal("HTMLElement", class HTMLElement {});
+    const input = buildInput() as any;
+    const hit = {
+      workspaceId: "default",
+      sessionId: "parent-1",
+      messageId: "history-anchor",
+      sequence: 7,
+      excerpt: "the exact deployment decision",
+      score: 1,
+    };
+    input.sessionRail.missionSessions[0].searchHits = [hit];
+    const onReturnToLatest = vi.fn();
+    input.activeSessionSurfaceProps = buildActiveSessionProps({
+      canSend: false,
+      historicalReadOnly: true,
+      draft: "must not send from history",
+      onReturnToLatest,
+      historicalWindow: {
+        anchor: { ...hit, state: "found" },
+        items: [
+          {
+            sequence: 6,
+            isAnchor: false,
+            message: {
+              messageId: "history-before",
+              sessionId: "parent-1",
+              role: "user",
+              actorType: "user",
+              actorId: "operator",
+              content: "Before the decision",
+              timestamp: "2026-05-03T15:59:00.000Z",
+            },
+          },
+          {
+            sequence: 7,
+            isAnchor: true,
+            message: {
+              messageId: "history-anchor",
+              sessionId: "parent-1",
+              role: "assistant",
+              actorType: "agent",
+              actorId: "assistant",
+              content: "The exact deployment decision",
+              timestamp: "2026-05-03T16:00:00.000Z",
+            },
+          },
+        ],
+        snapshotMaxSequence: 9,
+        hasOlder: true,
+        hasNewer: true,
+        olderCursor: { messageId: "history-before", sequence: 6, snapshotMaxSequence: 9 },
+        newerCursor: { messageId: "history-anchor", sequence: 7, snapshotMaxSequence: 9 },
+        truncated: false,
+        droppedItems: 0,
+        byteLength: 512,
+      },
+    });
+    input.emptyStateProps = null;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Open exact search result" }).props.onClick();
+    });
+    expect(input.sessionRail.onSelectSession).toHaveBeenCalledWith("parent-1", { searchHit: hit });
+    expect(normalizeText(collectText(renderer!.root))).toContain("Viewing history around search result");
+    expect(normalizeText(collectText(renderer!.root))).toContain("The exact deployment decision");
+    expect(renderer!.root.findByProps({ "aria-current": "true" }).props["aria-label"]).toBe("Exact search result");
+    expect(findExactButton(renderer!.root, "Send").props.disabled).toBe(true);
+    expect(renderer!.root.findByProps({ "aria-label": "Message composer" }).props.disabled).toBe(true);
+    await act(async () => {
+      findExactButton(renderer!.root, "Load older messages").props.onClick();
+      findExactButton(renderer!.root, "Load newer messages").props.onClick();
+    });
+    expect(input.activeSessionSurfaceProps.onLoadHistoricalContinuation).toHaveBeenNthCalledWith(1, "older");
+    expect(input.activeSessionSurfaceProps.onLoadHistoricalContinuation).toHaveBeenNthCalledWith(2, "newer");
+    await act(async () => {
+      findExactButton(renderer!.root, "Return to latest").props.onClick();
+    });
+    expect(onReturnToLatest).toHaveBeenCalledTimes(1);
   });
 
   it("opens the session rail from mobile while keeping legacy routes in Chat", async () => {

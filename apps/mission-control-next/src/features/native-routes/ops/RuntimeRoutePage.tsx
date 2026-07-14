@@ -4,6 +4,8 @@ import { RefreshCw } from "lucide-react";
 import type {
   AutomationRecipeDraftResponse,
   CronReviewItem,
+  LlamaCppRuntimeLeaseDiagnostics,
+  LlamaCppRuntimeStatus,
   ReviewReadinessSummary,
   WorkflowRecipeActivepiecesTemplateExportResponse,
   WorkflowRecipeN8nTemplateExportResponse,
@@ -14,7 +16,10 @@ import {
   exportActivepiecesWorkflowTemplate,
   exportN8nWorkflowTemplate,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
+import {
+  fetchReviewReadiness,
+  refreshRuntimeReleaseTrust,
+} from "@goatcitadel/mission-control-shared/api/review-readiness";
 import {
   EmptyState,
   ErrorState,
@@ -33,6 +38,7 @@ import {
   type RuntimeSnapshotSourceStatus,
 } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type {
+  CostMetricCoverage,
   DaemonControlHandoff,
   DaemonRepairAction,
   DaemonRuntimeDiagnostic,
@@ -44,6 +50,7 @@ import {
   type AppRoute,
   type RouteReleaseScope,
 } from "@next/app/route-model";
+import { isRuntimeReleaseVerified } from "@next/app/runtime-build-identity";
 import {
   NativeCard,
   NativeGrid,
@@ -55,6 +62,7 @@ import {
 import { recordRouteAction } from "../route-diagnostics";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { RuntimeSpendChart, type SpendDay } from "./RuntimeSpendChart";
+import { RuntimeAuthorityPanel } from "./RuntimeAuthorityPanel";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -69,6 +77,13 @@ const CRON_ACTION_OPTIONS = [
 ] as const;
 type CronActionOption = (typeof CRON_ACTION_OPTIONS)[number];
 type OpsRuntimeData = NonNullable<ReturnType<typeof useOpsRuntimeSnapshot>["data"]>;
+type ProviderSpendRow = {
+  providerKey: string;
+  label: string;
+  tokenTotal: number;
+  costUsd: number;
+  costUsdComplete?: boolean;
+};
 
 type OpsAttentionItem = {
   id: string;
@@ -121,25 +136,32 @@ export function RuntimeRoutePage({
   const [reviewReadinessError, setReviewReadinessError] = useState<string | null>(null);
   const isMounted = useIsMounted();
 
-  const loadReviewReadiness = useCallback(async () => {
-    setReviewReadinessLoading(true);
-    try {
-      const summary = await fetchReviewReadiness();
-      if (!isMounted()) {
-        return;
+  const loadReviewReadiness = useCallback(
+    async (forceRuntimeReleaseRefresh = false) => {
+      setReviewReadinessLoading(true);
+      try {
+        const summary = forceRuntimeReleaseRefresh ? await refreshRuntimeReleaseTrust() : await fetchReviewReadiness();
+        if (!isMounted()) {
+          return;
+        }
+        setReviewReadiness(summary);
+        setReviewReadinessError(null);
+      } catch (error) {
+        if (isMounted()) {
+          setReviewReadinessError(error instanceof Error ? error.message : "Could not load review readiness.");
+        }
+      } finally {
+        if (isMounted()) {
+          setReviewReadinessLoading(false);
+        }
       }
-      setReviewReadiness(summary);
-      setReviewReadinessError(null);
-    } catch (error) {
-      if (isMounted()) {
-        setReviewReadinessError(error instanceof Error ? error.message : "Could not load review readiness.");
-      }
-    } finally {
-      if (isMounted()) {
-        setReviewReadinessLoading(false);
-      }
-    }
-  }, [isMounted]);
+    },
+    [isMounted],
+  );
+
+  const refreshReleaseProof = useCallback(async () => {
+    await loadReviewReadiness(true);
+  }, [loadReviewReadiness]);
 
   useEffect(() => {
     if (section === "diagnostics") {
@@ -771,6 +793,10 @@ export function RuntimeRoutePage({
         );
       case "costs": {
         const spendDays = readSpendDays(data);
+        const providerSpendRows = readProviderSpendRows(data);
+        const costCoverage = data.cost?.usageAvailability?.metricAvailability?.costUsd;
+        const costProjectionIncomplete = hasIncompleteCostProjection(data);
+        const daySpendCompleteness = readCurrentDayCostCompleteness(data);
         return (
           <NativeGrid>
             <NativeCard
@@ -782,53 +808,75 @@ export function RuntimeRoutePage({
                 { label: "Days", value: String(spendDays.length) },
               ]}
             >
-              <RuntimeSpendChart days={spendDays} />
+              <RuntimeSpendChart
+                days={spendDays}
+                ariaLabelOverride={costProjectionIncomplete ? describeIncompleteSpendChart(costCoverage) : undefined}
+                emptyTitle={costProjectionIncomplete ? "Spend total unavailable" : undefined}
+                emptyDescription={
+                  costProjectionIncomplete
+                    ? "Token usage is present, but one or more provider attempts have no trustworthy cost. Zero-valued rows are not shown as free usage."
+                    : undefined
+                }
+              />
+              {costProjectionIncomplete ? (
+                <NoticeBanner tone="warning" message={describeCostCoverageGap(costCoverage)} />
+              ) : null}
             </NativeCard>
             <NativeCard
               title="Spend summary"
               subtitle="Tracked usage, coverage, and current spend leaders."
               stats={[
                 { label: "Scope", value: data.cost?.scope ?? "day" },
-                { label: "Tracked", value: String(data.cost?.usageAvailability?.trackedEvents ?? 0) },
+                { label: "Tracked", value: formatAvailabilityCount(data.cost?.usageAvailability?.trackedEvents) },
               ]}
             >
               <MetricGrid
                 items={[
                   {
                     label: "Tracked events",
-                    value: String(data.cost?.usageAvailability?.trackedEvents ?? 0),
-                    meta: "Events with spend metadata",
+                    value: formatAvailabilityCount(data.cost?.usageAvailability?.trackedEvents),
+                    meta: "Events with at least one tracked usage metric",
                   },
                   {
                     label: "Unknown events",
-                    value: String(data.cost?.usageAvailability?.unknownEvents ?? 0),
-                    meta: "Signals missing usage data",
+                    value: formatAvailabilityCount(data.cost?.usageAvailability?.unknownEvents),
+                    meta: "Events with no tracked usage metrics",
+                  },
+                  {
+                    label: "Cost coverage",
+                    value: formatCostCoverage(costCoverage),
+                    meta: describeCostCoverage(costCoverage),
                   },
                   {
                     label: "Day spend",
-                    value: formatUsd(data.dashboard?.dailyCostUsd ?? 0),
+                    value: formatCostMetric(data.dashboard?.dailyCostUsd, daySpendCompleteness),
                     meta: "Dashboard daily total",
                   },
                 ]}
               />
               <NativeTable
                 ariaLabel="Provider spend breakdown"
-                rows={(data.cost?.items ?? []).slice(0, 10)}
-                getRowKey={(item) => item.key}
+                rows={providerSpendRows.slice(0, 10)}
+                getRowKey={(item) => item.providerKey}
                 emptyLabel="No spend breakdown available."
                 columns={[
-                  { key: "provider", header: "Provider", cell: (item) => item.key },
+                  { key: "provider", header: "Provider", cell: (item) => item.label },
                   {
                     key: "tokens",
                     header: "Tokens",
                     numeric: true,
                     cell: (item) => item.tokenTotal.toLocaleString(),
                   },
-                  { key: "cost", header: "Cost", numeric: true, cell: (item) => formatUsd(item.costUsd) },
+                  {
+                    key: "cost",
+                    header: "Cost",
+                    numeric: true,
+                    cell: (item) => formatCostMetric(item.costUsd, item.costUsdComplete),
+                  },
                 ]}
               />
-              {(data.cost?.items ?? []).length > 10 ? (
-                <ResultCount shown={10} total={(data.cost?.items ?? []).length} noun="providers" />
+              {providerSpendRows.length > 10 ? (
+                <ResultCount shown={10} total={providerSpendRows.length} noun="providers" />
               ) : null}
             </NativeCard>
             <NativeCard
@@ -861,6 +909,7 @@ export function RuntimeRoutePage({
       case "runtime":
         return (
           <NativeGrid>
+            <RuntimeAuthorityPanel workspaceId={activeWorkspaceId} theme={route.theme} navigate={navigate} />
             <NativeCard
               title="Runtime posture"
               subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."
@@ -963,6 +1012,7 @@ export function RuntimeRoutePage({
                 </NativeButton>
               </div>
             </NativeCard>
+            <LlamaCppRuntimeTruthCard status={data.llamaCpp} sourceStatus={data.sourceStatus.llamaCpp} />
             <NativeCard
               title="LLM runtime efficiency"
               subtitle="Live and cached model-call measurements from gateway runtime paths."
@@ -1195,7 +1245,7 @@ export function RuntimeRoutePage({
               summary={reviewReadiness}
               loading={reviewReadinessLoading}
               error={reviewReadinessError}
-              onRefresh={loadReviewReadiness}
+              onRefresh={refreshReleaseProof}
             />
             <ReviewReadinessPanel
               summary={reviewReadiness}
@@ -1358,6 +1408,7 @@ export function RuntimeRoutePage({
         );
     }
   }, [
+    activeWorkspaceId,
     activeWorkspaceName,
     activityFilter,
     automationBusy,
@@ -1380,6 +1431,7 @@ export function RuntimeRoutePage({
     reviewReadinessError,
     reviewReadinessLoading,
     loadReviewReadiness,
+    refreshReleaseProof,
     runtime,
     scheduleCreating,
     scheduleDraft,
@@ -1481,7 +1533,7 @@ function RuntimeHeroLead({ data, pendingApprovals }: { data: OpsRuntimeData; pen
     : (data.daemon?.state ?? data.health?.daemonStatus?.state ?? "unknown");
   const mcpCount = data.mcpServers.length;
   const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
-  const daySpend = formatUsd(data.dashboard?.dailyCostUsd ?? 0);
+  const daySpend = formatCostMetric(data.dashboard?.dailyCostUsd, readCurrentDayCostCompleteness(data));
 
   const readinessLine = daemonRuntimeUnavailable
     ? "Runtime control truth is unavailable — inspect the daemon and health sources."
@@ -1540,26 +1592,45 @@ function ReleaseProofDashboardPanel({
   const lanes = summary?.lanes ?? [];
   const currentLanes = lanes.filter((lane) => lane.status === "current").length;
   const missingOrStaleLanes = lanes.length - currentLanes;
-  const certificateTone = summary ? (missingOrStaleLanes === 0 ? "success" : "warning") : "muted";
-  const certificateLabel = summary
-    ? missingOrStaleLanes === 0
-      ? "Proof current"
-      : "Proof needs rerun"
-    : "No proof loaded";
-  const sourceLabel = summary ? `${summary.branch}@${summary.sha.slice(0, 8)}` : "Load readiness";
+  const identity = summary?.runtimeIdentity;
+  const release = identity?.release;
+  const releaseVerified = isRuntimeReleaseVerified(identity);
+  const payloadVerifiedAt = release?.runtimePayloadIntegrity?.verifiedAt;
+  const certificateTone = releaseVerified
+    ? "success"
+    : release?.certificateState === "malformed"
+      ? "critical"
+      : release
+        ? "warning"
+        : "muted";
+  const certificateLabel = releaseVerified
+    ? "Installed payload verified"
+    : release?.certificateState === "malformed"
+      ? "Certificate invalid"
+      : release?.certificateState === "parsed"
+        ? "Release not verified"
+        : release
+          ? "Certificate absent"
+          : "No identity loaded";
+  const sourceLabel = identity
+    ? `${formatBuildKind(identity.kind)} · ${identity.shortSha ?? "SHA unknown"}`
+    : "Load identity";
   const docsProofCount = routeStats.docsCheckRoutes;
   const visualProofCount = routeStats.visualRoutes;
 
   return (
     <NativeCard
       title="Release proof dashboard"
-      subtitle="In-app release certificate for route scope, verification lanes, docs alignment, screenshots, and accepted debt."
+      subtitle="Server-owned source/build identity and fail-closed release-certificate proof, separated from route readiness evidence."
       density="compact"
       className="mc-next-release-proof-dashboard"
       stats={[
-        { label: "Certificate", value: certificateLabel },
-        { label: "Routes", value: `${routeStats.ship}/${routeStats.total} ship` },
-        { label: "Lanes", value: lanes.length ? `${currentLanes}/${lanes.length} current` : "not loaded" },
+        { label: "Release proof", value: certificateLabel },
+        { label: "Running identity", value: sourceLabel },
+        {
+          label: "Required proof",
+          value: release ? `${release.requiredProof.passed}/${release.requiredProof.total} exact` : "not loaded",
+        },
       ]}
       actions={
         <NativeButton variant="outline" className="subtle" disabled={loading} onClick={() => void onRefresh()}>
@@ -1570,6 +1641,9 @@ function ReleaseProofDashboardPanel({
     >
       <div className="mc-next-release-proof-status-row">
         <StatusChip tone={certificateTone}>{certificateLabel}</StatusChip>
+        <StatusChip tone={identity?.integrity === "clean" ? "success" : identity ? "warning" : "muted"}>
+          {identity ? `${formatBuildKind(identity.kind)} · ${identity.integrity}` : "Identity unavailable"}
+        </StatusChip>
         <StatusChip tone={routeStats.experimental > 0 ? "warning" : "success"}>
           {routeStats.experimental} experimental
         </StatusChip>
@@ -1580,14 +1654,32 @@ function ReleaseProofDashboardPanel({
       {error ? <NoticeBanner tone="error" message={error} /> : null}
       <div className="mc-next-release-proof-grid">
         <ReleaseProofCard
-          label="Build identity"
+          label="Source / build identity"
           value={sourceLabel}
           body={
-            summary
-              ? `Generated ${formatDateTime(summary.generatedAt)} with ${summary.openFindings} open finding${summary.openFindings === 1 ? "" : "s"}.`
-              : "Diagnostics has not loaded review-readiness proof for the current checkout yet."
+            identity
+              ? `${identity.version === "unknown" ? "Version unknown" : `Version ${identity.version}`} · ${
+                  identity.buildSha ?? "full SHA unavailable"
+                } · ${formatBuildIdentitySource(identity.identitySource)}. Source integrity is ${identity.integrity}.`
+              : "Diagnostics has not loaded the server-owned running identity yet."
           }
-          tone={summary ? "info" : "warning"}
+          tone={identity?.integrity === "clean" ? "success" : "warning"}
+        />
+        <ReleaseProofCard
+          label="Packaged / release proof"
+          value={certificateLabel}
+          body={
+            release
+              ? releaseVerified
+                ? `Certificate ${release.certificateVersion ?? "version unknown"} matches ${
+                    release.certificateCommit ?? "the running SHA"
+                  }; all required proof is exact and no accepted failures are recorded. The Gateway verified the installed app/bin payload in-process; this is not an external hostile-process guarantee. Last complete installed-payload scan: ${
+                    payloadVerifiedAt ? formatDateTime(payloadVerifiedAt) : "time unavailable"
+                  }.`
+                : (release.reasons[0] ?? "Release proof is not verified.")
+              : "No server-owned release proof result is loaded."
+          }
+          tone={releaseVerified ? "success" : "warning"}
         />
         <ReleaseProofCard
           label="Route coverage"
@@ -1596,7 +1688,7 @@ function ReleaseProofDashboardPanel({
           tone={routeStats.polish || routeStats.hidden ? "warning" : "success"}
         />
         <ReleaseProofCard
-          label="Verification lanes"
+          label="Checkout verification lanes"
           value={lanes.length ? `${currentLanes}/${lanes.length} current` : "Not loaded"}
           body={
             lanes.length
@@ -1624,6 +1716,28 @@ function ReleaseProofDashboardPanel({
           tone={routeStats.experimental + routeStats.polish > 0 ? "warning" : "success"}
         />
       </div>
+      <NativeList
+        items={(release?.reasons ?? []).map((reason, index) => ({
+          title: release?.reasonCodes[index]?.replaceAll("_", " ") ?? "Release proof blocker",
+          meta: "Release not verified",
+          body: reason,
+        }))}
+        emptyLabel={releaseVerified ? "No release-proof blockers." : "Release-proof blockers are unavailable."}
+        density="compact"
+        maxHeight="min(24vh, 12rem)"
+        ariaLabel="Release proof blockers"
+      />
+      <NativeList
+        items={(release?.acceptedFailures ?? []).map((failure, index) => ({
+          title: `Accepted failure ${index + 1}`,
+          meta: "Disqualifies release verification",
+          body: failure,
+        }))}
+        emptyLabel="No accepted release failures are exposed by the certificate."
+        density="compact"
+        maxHeight="min(20vh, 10rem)"
+        ariaLabel="Accepted release failures"
+      />
       <NativeList
         items={ROUTE_RELEASE_SCOPE.slice(0, 8).map((scope) => ({
           title: `${scope.area}/${scope.section}`,
@@ -1670,6 +1784,20 @@ function ReleaseProofCard({
       <p>{body}</p>
     </article>
   );
+}
+
+function formatBuildKind(kind: ReviewReadinessSummary["runtimeIdentity"]["kind"]): string {
+  return kind === "development" ? "Development" : kind === "packaged" ? "Packaged" : "Source";
+}
+
+function formatBuildIdentitySource(source: ReviewReadinessSummary["runtimeIdentity"]["identitySource"]): string {
+  if (source === "git_checkout") {
+    return "Resolved from the current Git checkout";
+  }
+  if (source === "packaged_manifest") {
+    return "Resolved from the packaged release manifest";
+  }
+  return "Build identity source unavailable";
 }
 
 function summarizeReleaseScope(scopes: readonly RouteReleaseScope[]) {
@@ -1951,6 +2079,180 @@ function DaemonRecoveryPanel({
   );
 }
 
+function LlamaCppRuntimeTruthCard({
+  status,
+  sourceStatus,
+}: {
+  status: OpsRuntimeData["llamaCpp"] | undefined;
+  sourceStatus?: RuntimeSnapshotSourceStatus;
+}) {
+  const sourceError = sourceStatus?.status === "error" ? readRuntimeSourceMessage(sourceStatus) : null;
+  const diagnostics = status?.leaseDiagnostics;
+  const restartExhausted = diagnostics?.evidence.lastRestart?.outcome === "exhausted";
+
+  return (
+    <NativeCard
+      title="llama.cpp service lifecycle"
+      subtitle="Lease demand, process ownership, and bounded recovery evidence from the Gateway runtime owner."
+      density="compact"
+      stats={[
+        { label: "Process", value: status?.processState ?? "unavailable" },
+        { label: "Health", value: status ? (status.healthy ? "healthy" : "needs attention") : "unavailable" },
+      ]}
+    >
+      <section aria-label="llama.cpp runtime truth" aria-live="polite">
+        {sourceError ? (
+          <NoticeBanner tone="error" message={`llama.cpp runtime truth unavailable: ${sourceError}`} />
+        ) : !status ? (
+          <EmptyState size="compact" title="llama.cpp runtime status is unavailable." />
+        ) : !diagnostics ? (
+          <NoticeBanner
+            tone="info"
+            message="Lease lifecycle diagnostics are unavailable from this Gateway version. Process health remains visible."
+          />
+        ) : (
+          <>
+            <div className="mc-next-runtime-chip-row" aria-label="llama.cpp lifecycle summary">
+              <StatusChip tone={toneForLlamaCppLifecycle(status.processState, status.healthy, diagnostics.state)}>
+                {formatRuntimeLifecycleLabel(diagnostics.state)}
+              </StatusChip>
+              <StatusChip tone={diagnostics.ownership === "external" ? "muted" : "default"}>
+                {diagnostics.ownership === "external"
+                  ? "External process"
+                  : diagnostics.ownership === "owned"
+                    ? "Gateway owned"
+                    : "No process owner"}
+              </StatusChip>
+              {restartExhausted ? <StatusChip tone="critical">Restart budget exhausted</StatusChip> : null}
+            </div>
+            <MetricGrid
+              items={[
+                {
+                  label: "Lifecycle",
+                  value: formatRuntimeLifecycleLabel(diagnostics.state),
+                  meta: `${status.processState} · ${status.healthy ? "healthy" : "not healthy"}`,
+                },
+                {
+                  label: "Ownership",
+                  value: formatRuntimeLifecycleLabel(diagnostics.ownership),
+                  meta: diagnostics.ownership === "external" ? "Observed; never terminated by leases" : "Process owner",
+                },
+                {
+                  label: "Active leases",
+                  value: String(diagnostics.activeLeaseCount),
+                  meta: formatLlamaCppLeasePurposes(diagnostics),
+                },
+                {
+                  label: "Persistent demand",
+                  value: formatLlamaCppPersistentDemand(diagnostics),
+                  meta: "Manual, API, and autostart demand",
+                },
+                {
+                  label: "Idle deadline",
+                  value: diagnostics.idleDeadline ? formatDateTime(diagnostics.idleDeadline) : "Not scheduled",
+                  meta: diagnostics.state === "idle_pending" ? "Reacquire cancels shutdown" : "No pending idle stop",
+                },
+              ]}
+            />
+            <NativeList
+              items={diagnostics.purposes.slice(0, 8).map((item) => ({
+                title: formatRuntimeLifecycleLabel(item.purpose),
+                meta: `${item.count} lease${item.count === 1 ? "" : "s"}`,
+                body: "Active runtime consumer purpose",
+              }))}
+              emptyLabel="No active lease purposes."
+              density="compact"
+              maxHeight="min(22vh, 11rem)"
+              ariaLabel="Active llama.cpp lease purposes"
+            />
+            <NativeList
+              items={buildLlamaCppRuntimeEvidence(diagnostics)}
+              emptyLabel="No probe, exit, or restart evidence recorded yet."
+              density="compact"
+              maxHeight="min(28vh, 14rem)"
+              ariaLabel="Latest llama.cpp runtime evidence"
+            />
+          </>
+        )}
+      </section>
+    </NativeCard>
+  );
+}
+
+function buildLlamaCppRuntimeEvidence(diagnostics: LlamaCppRuntimeLeaseDiagnostics) {
+  const evidence = diagnostics.evidence;
+  return [
+    evidence.lastProbe
+      ? {
+          title: `Latest probe · ${evidence.lastProbe.healthy ? "Healthy" : "Failed"}`,
+          meta: formatDateTime(evidence.lastProbe.at),
+          body: evidence.lastProbe.healthy ? "Configured endpoint responded." : "Configured endpoint did not respond.",
+        }
+      : null,
+    evidence.lastExit
+      ? {
+          title: `Latest exit · ${evidence.lastExit.unexpected ? "Unexpected" : "Expected"}`,
+          meta: formatDateTime(evidence.lastExit.at),
+          body:
+            [
+              typeof evidence.lastExit.code === "number" ? `code ${evidence.lastExit.code}` : null,
+              evidence.lastExit.signal ? `signal ${evidence.lastExit.signal}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "No exit code or signal recorded.",
+        }
+      : null,
+    evidence.lastRestart
+      ? {
+          title: `Latest restart · ${formatRuntimeLifecycleLabel(evidence.lastRestart.outcome)}`,
+          meta: formatDateTime(evidence.lastRestart.at),
+          body:
+            evidence.lastRestart.outcome === "exhausted"
+              ? "Automatic restart budget is exhausted; operator attention is required."
+              : "Most recent owned-process recovery outcome.",
+        }
+      : null,
+  ].filter((item): item is NonNullable<typeof item> => item !== null);
+}
+
+function formatLlamaCppLeasePurposes(diagnostics: LlamaCppRuntimeLeaseDiagnostics): string {
+  return diagnostics.purposes.length > 0
+    ? diagnostics.purposes
+        .slice(0, 8)
+        .map((item) => `${formatRuntimeLifecycleLabel(item.purpose)} ×${item.count}`)
+        .join(", ")
+    : "No active purposes";
+}
+
+function formatLlamaCppPersistentDemand(diagnostics: LlamaCppRuntimeLeaseDiagnostics): string {
+  const sources = Object.entries(diagnostics.persistentDemand)
+    .filter(([, enabled]) => enabled)
+    .map(([source]) => formatRuntimeLifecycleLabel(source));
+  return sources.length > 0 ? sources.join(", ") : "None";
+}
+
+function formatRuntimeLifecycleLabel(value: string): string {
+  const normalized = value.replaceAll("_", " ");
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function toneForLlamaCppLifecycle(
+  processState: LlamaCppRuntimeStatus["processState"],
+  healthy: boolean,
+  lifecycle: LlamaCppRuntimeLeaseDiagnostics["state"],
+): StatusChipTone {
+  if (processState === "error") {
+    return "critical";
+  }
+  if (healthy && (lifecycle === "active" || lifecycle === "persistent")) {
+    return "success";
+  }
+  if (lifecycle === "idle" || lifecycle === "closed") {
+    return "muted";
+  }
+  return "warning";
+}
+
 function readDaemonRuntimeDiagnostics(data: OpsRuntimeData): DaemonRuntimeDiagnostic[] {
   return data.daemon?.diagnostics ?? data.health?.daemonStatus?.diagnostics ?? [];
 }
@@ -2095,6 +2397,7 @@ export function buildNeedsAttentionItems(
   const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
   const schedulerReviewCount = data.timeline?.scheduler?.reviewQueue?.length ?? 0;
   const unknownSpendEvents = data.cost?.usageAvailability?.unknownEvents ?? 0;
+  const unknownCostEvents = data.cost?.usageAvailability?.metricAvailability?.costUsd?.unknownAttemptCount ?? 0;
   const failedRuntimeEvents = (data.timeline?.events?.items ?? []).filter((item) =>
     /failed|failure|error|degraded/i.test(`${item.eventType} ${item.eventClass ?? ""}`),
   );
@@ -2160,14 +2463,20 @@ export function buildNeedsAttentionItems(
     });
   }
 
-  if (unknownSpendEvents > 0 || sourceFailed(data, "cost")) {
+  if (unknownSpendEvents > 0 || unknownCostEvents > 0 || sourceFailed(data, "cost")) {
     items.push({
       id: "spend-coverage",
       title: sourceFailed(data, "cost") ? "Spend source unavailable" : "Spend coverage gap",
-      meta: sourceFailed(data, "cost") ? "unavailable" : `${unknownSpendEvents} unknown`,
+      meta: sourceFailed(data, "cost")
+        ? "unavailable"
+        : unknownCostEvents > 0
+          ? `${unknownCostEvents} cost unknown`
+          : `${unknownSpendEvents} usage unknown`,
       body: sourceFailed(data, "cost")
         ? "Cost data could not be loaded, so provider spend truth is incomplete."
-        : "Some runtime events are missing usage metadata and need cost review.",
+        : unknownCostEvents > 0
+          ? "Some runtime attempts have token evidence but no trustworthy cost, so displayed spend is a lower bound."
+          : "Some runtime events are missing usage metadata and need cost review.",
       primaryLabel: "Open costs",
       primaryRoute: { area: "ops", section: "costs", theme },
       inspectLabel: "Activity",
@@ -2220,7 +2529,7 @@ export function buildOpsHeadMetrics(
   const daemonValue = daemonRunning == null ? "unknown" : daemonRunning ? "running" : "stopped";
   const pendingValue = String(data.dashboard?.pendingApprovals ?? pendingApprovals);
   const subagentsValue = String(data.dashboard?.activeSubagents ?? 0);
-  const daySpendValue = formatUsd(data.dashboard?.dailyCostUsd ?? 0);
+  const daySpendValue = formatCostMetric(data.dashboard?.dailyCostUsd, readCurrentDayCostCompleteness(data));
 
   switch (section) {
     case "sessions":
@@ -2253,7 +2562,7 @@ export function buildOpsHeadMetrics(
     case "costs":
       return [
         { label: "Day spend", value: daySpendValue },
-        { label: "Tracked events", value: String(data.cost?.usageAvailability?.trackedEvents ?? 0) },
+        { label: "Tracked events", value: formatAvailabilityCount(data.cost?.usageAvailability?.trackedEvents) },
         { label: "Scope", value: data.cost?.scope ?? "day" },
       ];
     case "runtime":
@@ -2431,8 +2740,8 @@ const SECTION_RELIED_SOURCES: Record<string, readonly string[]> = {
   improvement: ["timeline"],
   notifications: ["timeline", "health"],
   costs: ["cost", "dashboard", "health"],
-  runtime: ["daemon", "health", "mcpServers", "backups"],
-  diagnostics: ["health"],
+  runtime: ["daemon", "health", "llamaCpp", "mcpServers", "backups"],
+  diagnostics: ["health", "llamaCpp"],
 };
 
 export type OpsDegradedSource = { source: string; message: string };
@@ -2528,6 +2837,83 @@ function readDaemonControlHandoff(data: OpsRuntimeData): DaemonControlHandoff | 
   };
 }
 
+function readCurrentDayCostCompleteness(data: OpsRuntimeData): boolean | undefined {
+  const windowCoverage = data.cost?.usageAvailability?.metricAvailability?.costUsd?.complete;
+  if (windowCoverage !== undefined) {
+    // Canonical coverage includes dispatch-unknown attempts that do not yet
+    // have a cost-ledger row, so a row-only aggregate cannot upgrade an
+    // incomplete window into a trustworthy exact zero.
+    return windowCoverage;
+  }
+  const dayKey = data.dashboard?.timestamp?.slice(0, 10);
+  const item = dayKey ? data.cost?.items.find((candidate) => candidate.key === dayKey) : undefined;
+  return item?.metricAvailability?.costUsdComplete;
+}
+
+function hasIncompleteCostProjection(data: OpsRuntimeData): boolean {
+  if (data.cost?.usageAvailability?.metricAvailability?.costUsd?.complete === false) {
+    return true;
+  }
+  if (data.cost?.items.some((item) => item.metricAvailability?.costUsdComplete === false)) {
+    return true;
+  }
+  return Boolean(
+    data.cost?.dailySeries?.some(
+      (day) =>
+        day.metricAvailability?.costUsdComplete === false ||
+        day.segments.some((segment) => segment.metricAvailability?.costUsdComplete === false),
+    ),
+  );
+}
+
+function describeIncompleteSpendChart(coverage: CostMetricCoverage | undefined): string {
+  const unknown = coverage?.unknownAttemptCount;
+  return unknown && unknown > 0
+    ? `Seven-day known spend chart. Totals are lower bounds because ${unknown} provider ${unknown === 1 ? "attempt has" : "attempts have"} unknown cost.`
+    : "Seven-day known spend chart. Totals are lower bounds because cost coverage is incomplete.";
+}
+
+function describeCostCoverageGap(coverage: CostMetricCoverage | undefined): string {
+  const unknown = coverage?.unknownAttemptCount;
+  return unknown && unknown > 0
+    ? `Known spend is a lower bound. ${unknown} provider ${unknown === 1 ? "attempt has" : "attempts have"} token or dispatch evidence without trustworthy cost.`
+    : "Known spend is a lower bound because at least one aggregate contains cost-unknown usage.";
+}
+
+function formatCostCoverage(coverage: CostMetricCoverage | undefined): string {
+  if (!coverage) {
+    return "Unavailable";
+  }
+  return coverage.complete ? "Complete" : `${coverage.unknownAttemptCount} unknown`;
+}
+
+function describeCostCoverage(coverage: CostMetricCoverage | undefined): string {
+  if (!coverage) {
+    return "Gateway did not report per-metric coverage";
+  }
+  const total = coverage.knownAttemptCount + coverage.unknownAttemptCount;
+  return total === 0
+    ? "No provider attempts in this window"
+    : `${coverage.knownAttemptCount}/${total} provider attempts have trustworthy cost`;
+}
+
+function formatAvailabilityCount(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? String(Math.floor(value)) : "Unavailable";
+}
+
+export function formatCostMetric(value: number | undefined, complete: boolean | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "Unavailable";
+  }
+  if (complete === false) {
+    return value > 0 ? `${formatUsd(value)}+` : "Unknown";
+  }
+  if (complete === undefined) {
+    return value > 0 ? `${formatUsd(value)} · unverified` : "Unverified";
+  }
+  return formatUsd(value);
+}
+
 /**
  * Returns the seven-day stacked spend series for the chart. The parser remains
  * defensive so stale gateways fail closed into the chart's empty state rather
@@ -2587,6 +2973,42 @@ export function readSpendDays(data: OpsRuntimeData): SpendDay[] {
     series.push({ isoDate, shortLabel, segments: parsedSegments });
   }
   return series.slice(-7);
+}
+
+/** Aggregate the seven-day provider series without relabeling day-scope summary keys as providers. */
+export function readProviderSpendRows(data: OpsRuntimeData): ProviderSpendRow[] {
+  const providers = new Map<string, ProviderSpendRow>();
+  for (const day of data.cost?.dailySeries ?? []) {
+    for (const segment of day.segments) {
+      const providerKey = segment.providerKey.trim();
+      if (!providerKey) continue;
+      const prior = providers.get(providerKey);
+      const costUsdComplete = segment.metricAvailability?.costUsdComplete;
+      providers.set(providerKey, {
+        providerKey,
+        label: segment.label?.trim() || prior?.label || providerKey,
+        tokenTotal: (prior?.tokenTotal ?? 0) + finiteNonNegative(segment.tokenTotal),
+        costUsd: (prior?.costUsd ?? 0) + finiteNonNegative(segment.costUsd),
+        costUsdComplete: prior ? mergeMetricCompleteness(prior.costUsdComplete, costUsdComplete) : costUsdComplete,
+      });
+    }
+  }
+  return [...providers.values()].sort(
+    (left, right) =>
+      right.costUsd - left.costUsd ||
+      right.tokenTotal - left.tokenTotal ||
+      left.providerKey.localeCompare(right.providerKey),
+  );
+}
+
+function finiteNonNegative(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function mergeMetricCompleteness(left: boolean | undefined, right: boolean | undefined): boolean | undefined {
+  if (left === false || right === false) return false;
+  if (left === undefined || right === undefined) return undefined;
+  return true;
 }
 
 function readRuntimeSourceMessage(status: unknown): string | null {

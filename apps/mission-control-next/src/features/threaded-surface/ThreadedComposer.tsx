@@ -15,6 +15,7 @@ import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
+import { ChatCapabilityProfilePreflight } from "./ChatCapabilityProfilePanel";
 
 /* C7: soft character ceiling for the draft. Not enforced (sending isn't
    blocked); the counter only surfaces once a message gets long. */
@@ -392,6 +393,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const currentRouteLabel = props.routePreflight
     ? [props.routePreflight.effectiveProviderId, props.routePreflight.effectiveModel].filter(Boolean).join(" / ")
     : null;
+  const capabilityProfile = props.routePreflight?.capabilityProfile;
   const sessionStateLabel = props.selectedSessionId ? "Thread ready" : "New thread";
   const webModeLabel =
     props.currentWebMode === "off"
@@ -439,7 +441,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const memoryLabel = formatHistoricalMemoryLabel(props.thread);
   const capabilityUseChips = getComposerCapabilityUseChips(props);
   const runtimeBlockerActive = Boolean(props.pendingApproval || props.pendingUserInput);
-  const composerActionDisabled = props.sending || runtimeBlockerActive;
+  const composerActionDisabled = props.sending || runtimeBlockerActive || props.historicalReadOnly;
   const researchArmed = props.currentWebMode === "quick" || props.currentWebMode === "deep";
   const reviewArmed = props.currentReviewDepth !== "off";
   const contextArmed = Boolean(
@@ -622,6 +624,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       ) : null}
 
+      {capabilityProfile ? <ChatCapabilityProfilePreflight profile={capabilityProfile} /> : null}
+
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
         <div className="mc-next-composer-banner warning">
           <StatusChip tone="warning">Confirm</StatusChip>
@@ -733,6 +737,20 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           <button
             type="button"
             className="mc-next-composer-suggestion"
+            aria-pressed={Boolean(props.modelCouncilEnabled)}
+            disabled={composerActionDisabled || !props.onToggleModelCouncil}
+            onClick={props.onToggleModelCouncil}
+            title={
+              props.modelCouncilEnabled
+                ? "Read-only model council is armed for Send"
+                : "Ask a governed read-only model council, then return one Chat answer"
+            }
+          >
+            Council
+          </button>
+          <button
+            type="button"
+            className="mc-next-composer-suggestion"
             aria-pressed={contextArmed}
             disabled={composerActionDisabled}
             onClick={props.onAttachFiles}
@@ -790,14 +808,19 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           <p>{props.liveVoiceStatusLabel ?? "OpenAI Realtime voice"}</p>
           <div className="mc-next-composer-action-row">
             {props.liveVoiceActive ? (
-              <button type="button" className="mc-next-composer-inline-button" onClick={props.onToggleLiveVoiceMute}>
+              <button
+                type="button"
+                className="mc-next-composer-inline-button"
+                disabled={props.historicalReadOnly}
+                onClick={props.onToggleLiveVoiceMute}
+              >
                 {props.liveVoiceMuted ? "Unmute mic" : "Mute mic"}
               </button>
             ) : null}
             <button
               type="button"
               className="mc-next-composer-inline-button primary"
-              disabled={!props.liveVoiceActive && !props.liveVoiceAvailable}
+              disabled={props.historicalReadOnly || (!props.liveVoiceActive && !props.liveVoiceAvailable)}
               title={!props.liveVoiceActive ? (props.liveVoiceUnavailableReason ?? undefined) : undefined}
               onClick={props.onToggleLiveVoice}
             >
@@ -810,6 +833,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       <div className="mc-next-composer-input-shell">
         <textarea
           ref={props.composerRef}
+          disabled={props.historicalReadOnly}
           value={props.draft}
           onChange={(event) => props.onDraftChange(event.target.value)}
           onKeyDown={props.onComposerKeyDown}

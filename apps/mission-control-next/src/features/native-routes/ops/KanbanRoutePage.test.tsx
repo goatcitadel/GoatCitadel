@@ -1,12 +1,14 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { KanbanRoutePage } from "./KanbanRoutePage";
 
 const fetchAgenticRuns = vi.fn();
 const bulkTaskAction = vi.fn();
 
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
   fetchAgenticRuns: (...args: unknown[]) => fetchAgenticRuns(...args),
   bulkTaskAction: (...args: unknown[]) => bulkTaskAction(...args),
 }));
@@ -14,6 +16,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 const baseRuns: AgenticRunListItem[] = [
   {
     taskId: "t-1",
+    taskRevision: 1,
     runId: "run-queued",
     title: "Queued run",
     taskStatus: "assigned",
@@ -23,6 +26,7 @@ const baseRuns: AgenticRunListItem[] = [
   },
   {
     taskId: "t-2",
+    taskRevision: 2,
     runId: "run-working",
     title: "Working",
     taskStatus: "in_progress",
@@ -43,6 +47,7 @@ const baseRuns: AgenticRunListItem[] = [
   },
   {
     taskId: "t-3",
+    taskRevision: 3,
     runId: "run-failed",
     title: "Failed handoff",
     taskStatus: "blocked",
@@ -52,6 +57,7 @@ const baseRuns: AgenticRunListItem[] = [
   },
   {
     taskId: "t-4",
+    taskRevision: 4,
     runId: "run-complete",
     title: "Closed run",
     taskStatus: "done",
@@ -160,7 +166,12 @@ describe("KanbanRoutePage", () => {
     await act(async () => {
       await unblockButton.props.onClick();
     });
-    expect(bulkTaskAction).toHaveBeenCalledWith({ action: "unblock", taskIds: ["t-3"], workspaceId: "default" });
+    expect(bulkTaskAction).toHaveBeenCalledWith({
+      action: "unblock",
+      taskIds: ["t-3"],
+      expectedRevisionsByTaskId: { "t-3": 3 },
+      workspaceId: "default",
+    });
     const updatedCheckbox = findRequiredByTestId(renderer, "kanban-select-t-3");
     expect((updatedCheckbox.props as { checked: boolean }).checked).toBe(false);
     expect(collectText(renderer.root)).toContain("1 selected task updated.");
@@ -183,6 +194,47 @@ describe("KanbanRoutePage", () => {
     expect(collectText(renderer.root)).toContain("bulk route offline");
     const checkedAfterFailure = findRequiredByTestId(renderer, "kanban-select-t-3");
     expect((checkedAfterFailure.props as { checked: boolean }).checked).toBe(true);
+    act(() => renderer.unmount());
+  });
+
+  it("refreshes canonical tasks on an actual 409 and requires an explicit retry with the new revision", async () => {
+    const refreshedRuns = baseRuns.map((run) => (run.taskId === "t-3" ? { ...run, taskRevision: 9 } : run));
+    fetchAgenticRuns.mockResolvedValueOnce({ items: baseRuns }).mockResolvedValueOnce({ items: refreshedRuns });
+    bulkTaskAction
+      .mockRejectedValueOnce(
+        new ApiRequestError("stale task", {
+          kind: "http",
+          method: "POST",
+          path: "/api/v1/tasks/bulk",
+          status: 409,
+        }),
+      )
+      .mockResolvedValueOnce({ tasks: [] });
+    const renderer = await renderPage();
+    await act(async () => {
+      findRequiredByTestId(renderer, "kanban-select-t-3").props.onChange();
+    });
+
+    await act(async () => {
+      await findRequiredButton(renderer, "unblock").props.onClick();
+    });
+
+    expect(fetchAgenticRuns).toHaveBeenCalledTimes(2);
+    expect((findRequiredByTestId(renderer, "kanban-select-t-3").props as { checked: boolean }).checked).toBe(true);
+    expect(collectText(renderer.root)).toContain("Canonical task data was refreshed");
+    expect(findRequiredByTestId(renderer, "kanban-conflict-retry")).toBeTruthy();
+
+    await act(async () => {
+      await findRequiredByTestId(renderer, "kanban-conflict-retry").props.onClick();
+    });
+
+    expect(bulkTaskAction).toHaveBeenLastCalledWith({
+      action: "unblock",
+      taskIds: ["t-3"],
+      expectedRevisionsByTaskId: { "t-3": 9 },
+      workspaceId: "default",
+    });
+    expect((findRequiredByTestId(renderer, "kanban-select-t-3").props as { checked: boolean }).checked).toBe(false);
     act(() => renderer.unmount());
   });
 

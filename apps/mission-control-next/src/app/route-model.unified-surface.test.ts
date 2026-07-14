@@ -7,6 +7,10 @@ import {
   buildModeRail,
   getRouteDescription,
   getRouteLabel,
+  getRouteReleaseScope,
+  RAIL_GROUPS,
+  RAIL_ITEMS,
+  routeKicker,
 } from "./route-model";
 
 describe("single chat surface route compatibility", () => {
@@ -116,5 +120,19 @@ describe("buildModeRail", () => {
   });
   it("defaults to the chat rail when mode is undefined", () => {
     expect(buildModeRail(undefined).map((i) => i.id)).toContain("chat-artifacts");
+  });
+});
+
+describe("trusted saved Ops boards route", () => {
+  it("round-trips /ops/boards as a shipped Observe route", () => {
+    const route = parseAppRoute("http://x/ops/boards");
+
+    expect(route).toMatchObject({ area: "ops", section: "boards" });
+    expect(buildAppHref(route)).toBe("/ops/boards");
+    expect(getRouteLabel(route)).toBe("Boards");
+    expect(routeKicker(route)).toBe("Ops · Observe · Boards");
+    expect(getRouteReleaseScope(route)).toMatchObject({ status: "ship" });
+    expect(RAIL_ITEMS.ops.some((item) => item.id === "ops-boards" && item.section === "boards")).toBe(true);
+    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-observe")?.sections).toContain("boards");
   });
 });

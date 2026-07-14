@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { RuntimeBuildIdentity } from "@goatcitadel/contracts";
 import type { DashboardStateResponse, HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { fetchDashboardState, fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchRuntimeBuildIdentity } from "@goatcitadel/mission-control-shared/api/review-readiness";
 
 /*
  * W4.4 (ship punchlist): shell status (dashboard + daemon health) extracted
@@ -19,17 +21,21 @@ import { fetchDashboardState, fetchHealthSummary } from "@goatcitadel/mission-co
 export type ShellStatusState = {
   dashboard: DashboardStateResponse | null;
   health: HealthSummaryResponse | null;
+  runtimeIdentity: RuntimeBuildIdentity | null;
   lastLoadedAt: number | null;
   dashboardError: string | null;
   healthError: string | null;
+  runtimeIdentityError: string | null;
 };
 
 const EMPTY_STATUS: ShellStatusState = {
   dashboard: null,
   health: null,
+  runtimeIdentity: null,
   lastLoadedAt: null,
   dashboardError: null,
   healthError: null,
+  runtimeIdentityError: null,
 };
 
 export interface UseShellStatusOptions {
@@ -94,6 +100,28 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
           ...current,
           lastLoadedAt: Date.now(),
           healthError: error instanceof Error ? error.message : "Unable to refresh daemon health.",
+        }));
+      });
+    void fetchRuntimeBuildIdentity()
+      .then((runtimeIdentity) => {
+        if (!isCurrentRefresh()) {
+          return;
+        }
+        setStatus((current) => ({
+          ...current,
+          runtimeIdentity,
+          lastLoadedAt: Date.now(),
+          runtimeIdentityError: null,
+        }));
+      })
+      .catch((error) => {
+        if (!isCurrentRefresh()) {
+          return;
+        }
+        setStatus((current) => ({
+          ...current,
+          lastLoadedAt: Date.now(),
+          runtimeIdentityError: error instanceof Error ? error.message : "Unable to refresh build identity.",
         }));
       });
   }, []);

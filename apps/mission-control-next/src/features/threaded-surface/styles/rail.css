@@ -660,3 +660,48 @@
   font-weight: 650;
   white-space: nowrap;
 }
+
+.mc-next-threaded-search-hits {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0 0.45rem 0.5rem;
+}
+
+.mc-next-threaded-search-hit {
+  display: grid;
+  gap: 0.18rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--mc-mode-chat) 24%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-mode-chat) 7%, var(--mc-surface-2));
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-threaded-search-hit:hover,
+.mc-next-threaded-search-hit:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-mode-chat) 62%, var(--border));
+  outline: none;
+}
+
+.mc-next-threaded-search-hit > span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-search-hit mark {
+  display: -webkit-box;
+  overflow: hidden;
+  color: inherit;
+  background: transparent;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}

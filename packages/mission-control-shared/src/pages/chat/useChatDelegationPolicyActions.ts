@@ -394,12 +394,16 @@ export function useChatDelegationPolicyActions(input: {
       if (!selectedSession) return;
       lastLocalPrefMutationAtRef.current = Date.now();
       try {
-        const updated = await updateChatProactivePolicy(selectedSession.sessionId, patch);
+        const updated = await updateChatProactivePolicy(selectedSession.sessionId, {
+          ...patch,
+          expectedRevision: prefs?.revision ?? selectedSession.revision,
+        });
         setProactiveStatus(updated);
         setPrefs((current) =>
           current
             ? {
                 ...current,
+                revision: updated.revision,
                 proactiveMode: updated.mode,
                 autonomyBudget: updated.autonomyBudget,
                 retrievalMode: updated.retrievalMode,
@@ -411,7 +415,7 @@ export function useChatDelegationPolicyActions(input: {
         setError((err as Error).message);
       }
     },
-    [lastLocalPrefMutationAtRef, selectedSession, setError, setPrefs, setProactiveStatus],
+    [lastLocalPrefMutationAtRef, prefs?.revision, selectedSession, setError, setPrefs, setProactiveStatus],
   );
 
   const handleTriggerProactive = useCallback(async () => {

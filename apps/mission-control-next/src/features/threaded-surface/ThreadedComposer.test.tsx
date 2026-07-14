@@ -87,6 +87,7 @@ function buildProps(overrides: Partial<any> = {}) {
     },
     currentWebMode: "auto",
     currentReviewDepth: "off",
+    modelCouncilEnabled: false,
     fullWebAccess: false,
     routePreflight: null,
     routePreflightLoading: false,
@@ -111,6 +112,7 @@ function buildProps(overrides: Partial<any> = {}) {
     onTogglePlanningMode: vi.fn(),
     onToggleResearchMode: vi.fn(),
     onToggleReviewMode: vi.fn(),
+    onToggleModelCouncil: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
     onApprovePending: vi.fn(),
@@ -307,6 +309,7 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain(">Plan<");
     expect(markup).toContain(">Research<");
     expect(markup).toContain(">Review<");
+    expect(markup).toContain(">Council<");
     expect(markup).toContain(">Attach context<");
     expect(markup).not.toContain("Subagent policy");
     expect(markup).not.toContain("Thinking level");
@@ -325,6 +328,7 @@ describe("ThreadedComposer", () => {
       onTogglePlanningMode: vi.fn(),
       onToggleResearchMode: vi.fn(),
       onToggleReviewMode: vi.fn(),
+      onToggleModelCouncil: vi.fn(),
       onAttachFiles: vi.fn(),
       onRunQuickResearch: vi.fn(),
       onReviewRunDetails: vi.fn(),
@@ -335,6 +339,7 @@ describe("ThreadedComposer", () => {
       planningMode: "advisory",
       currentWebMode: "quick",
       currentReviewDepth: "standard",
+      modelCouncilEnabled: true,
       pendingAttachments: [
         {
           attachmentId: "attachment-brief",
@@ -349,16 +354,19 @@ describe("ThreadedComposer", () => {
     expect(findSuggestionButton(renderer.root, "Plan").props["aria-pressed"]).toBe(true);
     expect(findSuggestionButton(renderer.root, "Research").props["aria-pressed"]).toBe(true);
     expect(findSuggestionButton(renderer.root, "Review").props["aria-pressed"]).toBe(true);
+    expect(findSuggestionButton(renderer.root, "Council").props["aria-pressed"]).toBe(true);
     expect(findSuggestionButton(renderer.root, "Attach context").props["aria-pressed"]).toBe(true);
 
     await click(findSuggestionButton(renderer.root, "Plan"));
     await click(findSuggestionButton(renderer.root, "Research"));
     await click(findSuggestionButton(renderer.root, "Review"));
+    await click(findSuggestionButton(renderer.root, "Council"));
     await click(findSuggestionButton(renderer.root, "Attach context"));
 
     expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
     expect(callbacks.onToggleResearchMode).toHaveBeenCalledTimes(1);
     expect(callbacks.onToggleReviewMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleModelCouncil).toHaveBeenCalledTimes(1);
     expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(1);
     expect(callbacks.onRunQuickResearch).not.toHaveBeenCalled();
     expect(callbacks.onReviewRunDetails).not.toHaveBeenCalled();

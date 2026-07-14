@@ -9,9 +9,11 @@ import { CitadelVaultRoutePage } from "./library/CitadelVaultRoutePage";
 import { CitadelWardsRoutePage } from "./library/CitadelWardsRoutePage";
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
+import { JourneyTimelineRoutePage } from "./library/JourneyTimelineRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
 import { BrowserSessionsRoutePage } from "./ops/BrowserSessionsRoutePage";
 import { KanbanRoutePage } from "./ops/KanbanRoutePage";
+import { OpsSavedBoardsRoutePage } from "./ops/OpsSavedBoardsRoutePage";
 import { QualityDashboardRoutePage } from "./ops/QualityDashboardRoutePage";
 import { RunDetailRoutePage } from "./ops/RunDetailRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
@@ -85,6 +87,9 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     if (section === "approvals") {
       return <ApprovalsRoutePage {...props} />;
     }
+    if (section === "boards") {
+      return <OpsSavedBoardsRoutePage {...props} />;
+    }
     if (section === "kanban") {
       return <KanbanRoutePage {...props} />;
     }
@@ -150,6 +155,8 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <CitadelVaultRoutePage {...props} />;
     case "memory":
       return <MemoryRoutePage {...props} />;
+    case "journey":
+      return <JourneyTimelineRoutePage {...props} />;
     case "knowledge":
       return <LibraryKnowledgeSection {...props} />;
     case "notes":
@@ -220,6 +227,8 @@ function labelForLibrarySection(section: NonNullable<AppRoute["section"]>) {
       return "Skill Curator";
     case "memory":
       return "Memory";
+    case "journey":
+      return "Journey";
     case "knowledge":
       return "Knowledge";
     case "notes":
@@ -247,6 +256,8 @@ function descriptionForLibrarySection(section: NonNullable<AppRoute["section"]>,
       return `Ranked skill status, immunity flags, and archive proposals for ${workspaceName}.`;
     case "memory":
       return `Durable memory posture and recent memory items for ${workspaceName}.`;
+    case "journey":
+      return `Read-only memory, skill, approval, and provenance history for ${workspaceName}.`;
     case "knowledge":
       return `Attachable context sources and knowledge-oriented files for ${workspaceName}.`;
     case "notes":

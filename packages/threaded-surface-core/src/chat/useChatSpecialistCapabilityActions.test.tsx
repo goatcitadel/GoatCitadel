@@ -33,6 +33,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchMcpTemplates: (...args: unknown[]) => fetchMcpTemplatesMock(...args),
   fetchSkills: (...args: unknown[]) => fetchSkillsMock(...args),
   installSkillImport: (...args: unknown[]) => installSkillImportMock(...args),
+  isApiRequestError: (error: unknown) =>
+    typeof error === "object" && error !== null && typeof Reflect.get(error, "status") === "number",
   updateChatSpecialistCandidate: (...args: unknown[]) => updateChatSpecialistCandidateMock(...args),
   updateSkillState: (...args: unknown[]) => updateSkillStateMock(...args),
 }));
@@ -111,7 +113,12 @@ function setupApiDefaults() {
   });
   updateSkillStateMock.mockResolvedValue({ skillId: "skill-planning", state: "enabled" });
   installSkillImportMock.mockResolvedValue({ installedSkillId: "skill-installed" });
-  fetchSkillsMock.mockResolvedValue({ items: [{ skillId: "skill-planning", state: "enabled" }] });
+  fetchSkillsMock.mockResolvedValue({
+    items: [
+      { skillId: "skill-planning", revision: 7, state: "enabled" },
+      { skillId: "skill-installed", revision: 3, state: "disabled" },
+    ],
+  });
   fetchMcpServersMock.mockResolvedValue({ items: [{ serverId: "server-1", name: "Filesystem" }] });
   fetchMcpTemplatesMock.mockResolvedValue({ items: [{ templateId: "template-1", name: "GitHub", installed: false }] });
 }
@@ -272,6 +279,7 @@ describe("useChatSpecialistCapabilityActions", () => {
     });
 
     expect(updateSkillStateMock).toHaveBeenCalledWith("skill-planning", {
+      expectedRevision: 7,
       state: "enabled",
       note: "Enabled from chat capability suggestion.",
     });
@@ -283,6 +291,143 @@ describe("useChatSpecialistCapabilityActions", () => {
         targetTurnId: "turn-1",
       }),
     );
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([]);
+  });
+
+  it("fails closed without a canonical skill revision and never resumes automatically", async () => {
+    fetchSkillsMock.mockResolvedValue({ items: [{ skillId: "skill-planning", revision: 0, state: "enabled" }] });
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    const suggestion = makeCapabilitySuggestion();
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.errors).toContain(
+      "Skill skill-planning is missing a positive canonical revision. Refresh skills and retry explicitly.",
+    );
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([suggestion]);
+  });
+
+  it("does not replay a capability suggestion after a stale revision conflict", async () => {
+    fetchSkillsMock
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-planning", revision: 7, state: "disabled" }] })
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-planning", revision: 8, state: "disabled" }] });
+    updateSkillStateMock.mockRejectedValueOnce(
+      Object.assign(new Error("Skill state changed elsewhere; refresh and retry explicitly."), {
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { expectedRevision: 7, currentRevision: 8 } },
+      }),
+    );
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    const suggestion = makeCapabilitySuggestion();
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(updateSkillStateMock).toHaveBeenCalledTimes(1);
+    expect(fetchSkillsMock).toHaveBeenCalledTimes(2);
+    expect(latestHarness?.installedSkills).toEqual([
+      expect.objectContaining({ skillId: "skill-planning", revision: 8 }),
+    ]);
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.queuedOutbound).toEqual([]);
+    expect(latestHarness?.errors).toContain(
+      "Skill skill-planning changed elsewhere. Canonical skills were refreshed; no update or turn retry was replayed. Review the refreshed state and retry explicitly.",
+    );
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([suggestion]);
+  });
+
+  it("retains an enable-only intent after install conflicts without reinstalling or resuming", async () => {
+    fetchSkillsMock
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-installed", revision: 3, state: "disabled" }] })
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-installed", revision: 4, state: "disabled" }] })
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-installed", revision: 4, state: "disabled" }] })
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-installed", revision: 5, state: "enabled" }] });
+    updateSkillStateMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Skill state changed elsewhere."), {
+          status: 409,
+          body: { code: "WRITE_CONFLICT", details: { expectedRevision: 3, currentRevision: 4 } },
+        }),
+      )
+      .mockResolvedValueOnce({ skillId: "skill-installed", state: "enabled" });
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    const suggestion = makeCapabilitySuggestion({
+      kind: "skill_import",
+      recommendedAction: "install_skill_enable",
+      title: "Hosted skill",
+      candidateId: undefined,
+      sourceRef: "skill://hosted",
+      sourceProvider: "github",
+    });
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(installSkillImportMock).toHaveBeenCalledTimes(1);
+    expect(updateSkillStateMock).toHaveBeenCalledTimes(1);
+    expect(updateSkillStateMock).toHaveBeenCalledWith("skill-installed", {
+      expectedRevision: 3,
+      state: "enabled",
+      note: "Enabled immediately from chat capability suggestion.",
+    });
+    expect(fetchSkillsMock).toHaveBeenCalledTimes(2);
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.queuedOutbound).toEqual([]);
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([
+      expect.objectContaining({
+        kind: "existing_but_disabled",
+        recommendedAction: "enable_skill",
+        candidateId: "skill-installed",
+        sourceProvider: undefined,
+        sourceRef: undefined,
+      }),
+    ]);
+    expect(latestHarness?.installedSkills).toEqual([
+      expect.objectContaining({ skillId: "skill-installed", revision: 4, state: "disabled" }),
+    ]);
+    expect(latestHarness?.errors.at(-1)).toContain("no update or turn retry was replayed");
+
+    const retainedIntent = latestHarness?.result.capabilitySuggestions[0];
+    expect(retainedIntent).toBeDefined();
+    await act(async () => {
+      latestHarness?.result.handleCapabilitySuggestionAction(retainedIntent!);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(installSkillImportMock).toHaveBeenCalledTimes(1);
+    expect(updateSkillStateMock).toHaveBeenCalledTimes(2);
+    expect(updateSkillStateMock).toHaveBeenLastCalledWith("skill-installed", {
+      expectedRevision: 4,
+      state: "enabled",
+      note: "Enabled from chat capability suggestion.",
+    });
+    expect(latestHarness?.executedOutbound).toHaveLength(1);
     expect(latestHarness?.result.capabilitySuggestions).toEqual([]);
   });
 
@@ -359,6 +504,7 @@ describe("useChatSpecialistCapabilityActions", () => {
       await latestHarness?.result.confirmCapabilitySuggestionAction();
     });
     expect(updateSkillStateMock).toHaveBeenCalledWith("skill-installed", {
+      expectedRevision: 3,
       state: "enabled",
       note: "Enabled immediately from chat capability suggestion.",
     });

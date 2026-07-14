@@ -8,6 +8,7 @@ export type LibrarySection =
   | "skills"
   | "capabilities"
   | "memory"
+  | "journey"
   | "knowledge"
   | "notes"
   | "communications"
@@ -22,6 +23,7 @@ export type LibrarySection =
   | "citadel-blueprint"
   | "citadel-vault";
 export type OpsSection =
+  | "boards"
   | "activity"
   | "sessions"
   | "schedules"
@@ -352,6 +354,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "memory",
     },
     {
+      id: "library-journey",
+      label: "Journey",
+      description: "Inspect experimental read-only skill-learning and candidate evidence.",
+      area: "library",
+      section: "journey",
+    },
+    {
       id: "library-knowledge",
       label: "Knowledge",
       description: "Knowledge ingest and retrieval as attachable context.",
@@ -402,6 +411,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
   ],
   ops: [
+    {
+      id: "ops-boards",
+      label: "Boards",
+      description: "Trusted saved layouts composed from canonical Ops summaries.",
+      area: "ops",
+      section: "boards",
+    },
     {
       id: "ops-activity",
       label: "Activity",
@@ -703,7 +719,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     {
       id: "library-knowledge",
       label: "Knowledge",
-      sections: ["agents", "skills", "capabilities", "memory", "knowledge", "notes"],
+      sections: ["agents", "skills", "capabilities", "memory", "journey", "knowledge", "notes"],
     },
     {
       id: "library-assets",
@@ -712,7 +728,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     },
   ],
   ops: [
-    { id: "ops-observe", label: "Observe", sections: ["activity", "sessions", "schedules"] },
+    { id: "ops-observe", label: "Observe", sections: ["boards", "activity", "sessions", "schedules"] },
     {
       id: "ops-control",
       label: "Operate",
@@ -840,6 +856,15 @@ export const ROUTE_RELEASE_SCOPE = [
   },
   {
     area: "library",
+    section: "journey",
+    status: "experimental",
+    releaseAction:
+      "Inspect currently captured learning, memory, approval, effect, and Skill Hub lifecycle evidence without mutation.",
+    verification: "verify:surface:regression, focused Journey route and service tests",
+    note: "Canonical producers cover skill learning, candidate governance, memory, approvals and effects, plus Skill Hub lifecycle events including rollback and revoke; import and cross-surface coverage remain experimental.",
+  },
+  {
+    area: "library",
     section: "knowledge",
     status: "ship",
     releaseAction: "Inspect knowledge sources and attachable context with source visibility.",
@@ -944,6 +969,14 @@ export const ROUTE_RELEASE_SCOPE = [
     releaseAction: "Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key.",
     verification: "verify:surface:regression, verify:auth:matrix",
     note: "Vault is release-bearing for sealed per-Citadel secret storage and fails closed when the keychain is unavailable; per-Chamber keys and rotation are the tracked follow-on.",
+  },
+  {
+    area: "ops",
+    section: "boards",
+    status: "ship",
+    releaseAction: "Create, select, edit, archive, and restore trusted layouts built from compiled Ops summaries.",
+    verification: "focused HX-410 Mission Control tests, verify:surface:regression",
+    note: "Saved boards are layout-only projections; every widget reloads its canonical source and never becomes runtime authority.",
   },
   {
     area: "ops",

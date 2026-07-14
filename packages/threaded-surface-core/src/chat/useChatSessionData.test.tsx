@@ -8,6 +8,8 @@ import { useChatSessionData, type ChatHistoryView } from "./useChatSessionData";
 
 const fetchChatCommandCatalogMock = vi.fn();
 const fetchChatGeneratedArtifactsMock = vi.fn();
+const fetchChatHistoryWindowMock = vi.fn();
+const fetchChatHistoryContinuationMock = vi.fn();
 const fetchChatLearnedMemoryMock = vi.fn();
 const fetchChatProjectsMock = vi.fn();
 const fetchChatProactiveRunsMock = vi.fn();
@@ -16,6 +18,7 @@ const fetchChatSessionBindingMock = vi.fn();
 const fetchChatSessionGeneratedArtifactsMock = vi.fn();
 const fetchChatSessionPrefsMock = vi.fn();
 const fetchChatSessionsMock = vi.fn();
+const fetchChatSessionSearchMock = vi.fn();
 const fetchChatSpecialistCandidatesMock = vi.fn();
 const fetchChatThreadMock = vi.fn();
 const fetchMcpServersMock = vi.fn();
@@ -35,6 +38,8 @@ let latestHarness: HarnessSnapshot | null = null;
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChatCommandCatalog: (...args: unknown[]) => fetchChatCommandCatalogMock(...args),
   fetchChatGeneratedArtifacts: (...args: unknown[]) => fetchChatGeneratedArtifactsMock(...args),
+  fetchChatHistoryWindow: (...args: unknown[]) => fetchChatHistoryWindowMock(...args),
+  fetchChatHistoryContinuation: (...args: unknown[]) => fetchChatHistoryContinuationMock(...args),
   fetchChatLearnedMemory: (...args: unknown[]) => fetchChatLearnedMemoryMock(...args),
   fetchChatProjects: (...args: unknown[]) => fetchChatProjectsMock(...args),
   fetchChatProactiveRuns: (...args: unknown[]) => fetchChatProactiveRunsMock(...args),
@@ -43,6 +48,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChatSessionGeneratedArtifacts: (...args: unknown[]) => fetchChatSessionGeneratedArtifactsMock(...args),
   fetchChatSessionPrefs: (...args: unknown[]) => fetchChatSessionPrefsMock(...args),
   fetchChatSessions: (...args: unknown[]) => fetchChatSessionsMock(...args),
+  fetchChatSessionSearch: (...args: unknown[]) => fetchChatSessionSearchMock(...args),
   fetchChatSpecialistCandidates: (...args: unknown[]) => fetchChatSpecialistCandidatesMock(...args),
   fetchChatThread: (...args: unknown[]) => fetchChatThreadMock(...args),
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
@@ -129,6 +135,32 @@ function makeThread(sessionId: string): ChatThreadResponse {
 function setupApiDefaults() {
   fetchChatProjectsMock.mockResolvedValue({ items: [{ projectId: "project-1", name: "Mission" }], folders: [] });
   fetchChatSessionsMock.mockResolvedValue({ items: [makeSession("session-1"), makeSession("session-2")] });
+  fetchChatSessionSearchMock.mockResolvedValue({ items: [] });
+  fetchChatHistoryWindowMock.mockResolvedValue({
+    anchor: {
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      messageId: "message-user",
+      sequence: 1,
+      state: "found",
+    },
+    items: [],
+    hasOlder: false,
+    hasNewer: false,
+    truncated: false,
+    droppedItems: 0,
+    byteLength: 2,
+  });
+  fetchChatHistoryContinuationMock.mockResolvedValue({
+    direction: "older",
+    cursorState: "valid",
+    items: [],
+    snapshotMaxSequence: 1,
+    hasMore: false,
+    truncated: false,
+    droppedItems: 0,
+    byteLength: 2,
+  });
   fetchSettingsMock.mockResolvedValue({
     llm: {
       providers: [{ providerId: "openai", enabled: true, models: [{ model: "gpt-5.5" }] }],
@@ -236,7 +268,6 @@ describe("useChatSessionData", () => {
       view: "active",
       limit: 100,
       workspaceId: "workspace-bootstrap",
-      q: undefined,
     });
     expect(fetchSettingsMock).toHaveBeenCalledTimes(1);
     expect(fetchChatCommandCatalogMock).toHaveBeenCalledTimes(1);
@@ -268,7 +299,12 @@ describe("useChatSessionData", () => {
   });
 
   it("uses search and archive limits and honors preferred session ids when reloading the sidebar", async () => {
-    fetchChatSessionsMock.mockResolvedValueOnce({ items: [makeSession("archived-1"), makeSession("archived-2")] });
+    fetchChatSessionSearchMock.mockResolvedValueOnce({
+      items: [
+        { session: makeSession("archived-1"), matchedFields: [], hits: [] },
+        { session: makeSession("archived-2"), matchedFields: [], hits: [] },
+      ],
+    });
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = create(
@@ -282,16 +318,20 @@ describe("useChatSessionData", () => {
       await flushEffects();
     });
 
-    expect(fetchChatSessionsMock).toHaveBeenCalledWith({
-      scope: "all",
+    expect(fetchChatSessionSearchMock).toHaveBeenCalledWith({
+      query: "release",
+      mode: "discovery",
       view: "archived",
       limit: 250,
       workspaceId: "workspace-search",
-      q: "release",
+      surface: undefined,
     });
+    expect(fetchChatSessionsMock).not.toHaveBeenCalled();
     expect(latestHarness?.selectedSessionId).toBe("archived-1");
 
-    fetchChatSessionsMock.mockResolvedValueOnce({ items: [makeSession("archived-2")] });
+    fetchChatSessionSearchMock.mockResolvedValueOnce({
+      items: [{ session: makeSession("archived-2"), matchedFields: [], hits: [] }],
+    });
     await act(async () => {
       await latestHarness?.result.loadSidebar("archived", {
         bypassCache: true,
@@ -358,6 +398,240 @@ describe("useChatSessionData", () => {
       "session-3",
     ]);
     expect(latestHarness?.result.sidebarNextCursor).toBeNull();
+  });
+
+  it("fences stale sidebar success, failure, and loading finalizers", async () => {
+    await act(async () => {
+      create(<Harness workspaceId="workspace-sidebar-race" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+
+    let resolveOld!: (value: { items: ChatSessionRecord[] }) => void;
+    let rejectOld!: (error: Error) => void;
+    const oldResponse = new Promise<{ items: ChatSessionRecord[] }>((resolve, reject) => {
+      resolveOld = resolve;
+      rejectOld = reject;
+    });
+    fetchChatSessionsMock.mockReturnValueOnce(oldResponse);
+    let oldLoad!: Promise<void>;
+    await act(async () => {
+      oldLoad = latestHarness!.result.loadSidebar("active", { bypassCache: true });
+      await Promise.resolve();
+    });
+
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [makeSession("session-current")] });
+    await act(async () => {
+      await latestHarness?.result.loadSidebar("active", { bypassCache: true });
+    });
+    expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual(["session-current"]);
+
+    await act(async () => {
+      resolveOld({ items: [makeSession("session-stale")] });
+      await oldLoad;
+    });
+    expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual(["session-current"]);
+    expect(latestHarness?.result.sidebarLoadingMore).toBe(false);
+
+    const staleFailure = new Promise<{ items: ChatSessionRecord[] }>((_resolve, reject) => {
+      rejectOld = reject;
+    });
+    fetchChatSessionsMock.mockReturnValueOnce(staleFailure);
+    let staleFailureLoad!: Promise<void>;
+    await act(async () => {
+      staleFailureLoad = latestHarness!.result.loadSidebar("active", { bypassCache: true });
+      await Promise.resolve();
+    });
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [makeSession("session-newest")] });
+    await act(async () => {
+      await latestHarness?.result.loadSidebar("active", { bypassCache: true });
+      rejectOld(new Error("stale sidebar failed"));
+      await staleFailureLoad;
+    });
+    expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual(["session-newest"]);
+    expect(latestHarness?.errors).not.toContain("stale sidebar failed");
+    expect(latestHarness?.result.sidebarLoadingMore).toBe(false);
+  });
+
+  it("fences competing historical hits and clears a pending hit when the selected session changes", async () => {
+    await act(async () => {
+      create(<Harness workspaceId="workspace-1" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+    const hit = (messageId: string, sequence: number) => ({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      messageId,
+      sequence,
+      excerpt: messageId,
+      score: 1,
+    });
+    const windowFor = (messageId: string, sequence: number) => ({
+      anchor: {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        messageId,
+        sequence,
+        state: "found" as const,
+      },
+      items: [],
+      hasOlder: false,
+      hasNewer: false,
+      truncated: false,
+      droppedItems: 0,
+      byteLength: 2,
+    });
+    let resolveFirst!: (value: ReturnType<typeof windowFor>) => void;
+    let resolveSecond!: (value: ReturnType<typeof windowFor>) => void;
+    fetchChatHistoryWindowMock
+      .mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)))
+      .mockReturnValueOnce(new Promise((resolve) => (resolveSecond = resolve)));
+
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    await act(async () => {
+      first = latestHarness!.result.openHistoricalWindow("session-1", hit("message-1", 1));
+      second = latestHarness!.result.openHistoricalWindow("session-1", hit("message-2", 2));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveSecond(windowFor("message-2", 2));
+      await second;
+      resolveFirst(windowFor("message-1", 1));
+      await first;
+    });
+    expect(latestHarness?.result.historicalWindow?.anchor.messageId).toBe("message-2");
+    expect(latestHarness?.result.historicalWindowTarget).toEqual({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
+
+    let resolvePending!: (value: ReturnType<typeof windowFor>) => void;
+    fetchChatHistoryWindowMock.mockReturnValueOnce(new Promise((resolve) => (resolvePending = resolve)));
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = latestHarness!.result.openHistoricalWindow("session-1", hit("message-3", 3));
+      latestHarness?.setSelectedSessionId("session-2");
+      await flushEffects();
+    });
+    await act(async () => {
+      resolvePending(windowFor("message-3", 3));
+      await pending;
+      await flushEffects();
+    });
+    expect(latestHarness?.selectedSessionId).toBe("session-2");
+    expect(latestHarness?.result.historicalWindow).toBeNull();
+    expect(latestHarness?.result.historicalWindowTarget).toBeNull();
+    expect(latestHarness?.result.historicalWindowLoading).toBe(false);
+  });
+
+  it("fails closed before fetch when an exact hit identity does not belong to the selected row", async () => {
+    await act(async () => {
+      create(<Harness workspaceId="workspace-1" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+    fetchChatHistoryWindowMock.mockClear();
+    let opened = true;
+    await act(async () => {
+      opened = await latestHarness!.result.openHistoricalWindow("session-1", {
+        workspaceId: "workspace-1",
+        sessionId: "session-collision",
+        messageId: "colliding-message",
+        sequence: 7,
+        excerpt: "collision",
+        score: 1,
+      });
+    });
+    expect(opened).toBe(false);
+    expect(fetchChatHistoryWindowMock).not.toHaveBeenCalled();
+    expect(latestHarness?.result.historicalWindowError).toMatch(/does not belong/i);
+  });
+
+  it("merges exact older and newer continuation pages and surfaces stale cursors", async () => {
+    await act(async () => {
+      create(<Harness workspaceId="workspace-1" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+    const historyMessage = (sequence: number) => ({
+      sequence,
+      isAnchor: sequence === 3,
+      message: {
+        messageId: `message-${sequence}`,
+        sessionId: "session-1",
+        role: "assistant" as const,
+        content: `message ${sequence}`,
+        timestamp: `2026-05-01T00:00:0${sequence}.000Z`,
+      },
+    });
+    const hit = {
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      messageId: "message-3",
+      sequence: 3,
+      excerpt: "message 3",
+      score: 1,
+    };
+    const initialWindow = {
+      anchor: { ...hit, state: "found" as const },
+      items: [historyMessage(3)],
+      snapshotMaxSequence: 5,
+      hasOlder: true,
+      hasNewer: true,
+      olderCursor: { messageId: "message-3", sequence: 3, snapshotMaxSequence: 5 },
+      newerCursor: { messageId: "message-3", sequence: 3, snapshotMaxSequence: 5 },
+      truncated: false,
+      droppedItems: 0,
+      byteLength: 100,
+    };
+    fetchChatHistoryWindowMock.mockResolvedValueOnce(initialWindow);
+    await act(async () => {
+      await latestHarness!.result.openHistoricalWindow("session-1", hit);
+    });
+    fetchChatHistoryContinuationMock
+      .mockResolvedValueOnce({
+        direction: "older",
+        cursorState: "valid",
+        items: [historyMessage(1), historyMessage(2)],
+        snapshotMaxSequence: 5,
+        hasMore: false,
+        truncated: false,
+        droppedItems: 0,
+        byteLength: 200,
+      })
+      .mockResolvedValueOnce({
+        direction: "newer",
+        cursorState: "valid",
+        items: [historyMessage(4), historyMessage(5)],
+        snapshotMaxSequence: 5,
+        hasMore: false,
+        truncated: false,
+        droppedItems: 0,
+        byteLength: 200,
+      });
+    await act(async () => {
+      await latestHarness!.result.loadHistoricalContinuation("older");
+      await latestHarness!.result.loadHistoricalContinuation("newer");
+    });
+    expect(latestHarness?.result.historicalWindow?.items.map((entry) => entry.sequence)).toEqual([1, 2, 3, 4, 5]);
+
+    fetchChatHistoryWindowMock.mockResolvedValueOnce(initialWindow);
+    await act(async () => {
+      await latestHarness!.result.openHistoricalWindow("session-1", hit);
+    });
+    fetchChatHistoryContinuationMock.mockResolvedValueOnce({
+      direction: "older",
+      cursorState: "stale",
+      items: [],
+      snapshotMaxSequence: 5,
+      hasMore: false,
+      truncated: false,
+      droppedItems: 0,
+      byteLength: 2,
+    });
+    await act(async () => {
+      await latestHarness!.result.loadHistoricalContinuation("older");
+    });
+    expect(latestHarness?.result.historicalContinuationError).toMatch(/stale/i);
+    expect(latestHarness?.result.historicalWindow?.items.map((entry) => entry.sequence)).toEqual([3]);
   });
 
   it("refreshes view state through resolved refresh plans and reports failures", async () => {

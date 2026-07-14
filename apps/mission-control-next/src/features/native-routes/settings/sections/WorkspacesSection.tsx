@@ -9,6 +9,7 @@ import {
   createCitadel,
   createWorkspace,
   fetchWorkspaces,
+  isApiRequestError,
   listCitadels,
   restoreCitadel,
   restoreWorkspace,
@@ -50,7 +51,9 @@ const CITADEL_KIND_OPTIONS: Array<CitadelRecord["kind"]> = [
 
 type DirectoryView = "active" | "archived" | "all";
 type DirectoryTransition = { kind: "select"; id: string } | { kind: "filter"; view: DirectoryView };
-type PendingArchive = { kind: "citadel" | "workspace"; id: string; label: string };
+type PendingArchive =
+  | { kind: "citadel"; id: string; label: string }
+  | { kind: "workspace"; id: string; label: string; expectedRevision: number };
 
 function createEmptyCitadelDraft() {
   return { name: "", description: "", slug: "", kind: "custom" };
@@ -314,6 +317,7 @@ export function WorkspacesSection({
     }
     try {
       const updated = await updateWorkspace(selectedWorkspace.workspaceId, {
+        expectedRevision: selectedWorkspace.revision,
         name: editForm.name.trim() || undefined,
         description: editForm.description.trim() || undefined,
         slug: editForm.slug.trim() || undefined,
@@ -322,6 +326,15 @@ export function WorkspacesSection({
       setNotice({ tone: "success", message: `Workspace ${updated.name} updated.` });
       await reload();
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "This workspace changed elsewhere. Your draft is preserved and the current revision was reloaded. Review it, then save again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     }
   };
@@ -337,12 +350,21 @@ export function WorkspacesSection({
         setNotice({ tone: "success", message: `Citadel ${pendingArchive.label} archived.` });
         await reloadCitadels();
       } else {
-        await archiveWorkspace(pendingArchive.id);
+        await archiveWorkspace(pendingArchive.id, pendingArchive.expectedRevision);
         setNotice({ tone: "success", message: `Workspace ${pendingArchive.label} archived.` });
         await reload();
       }
       setPendingArchive(null);
     } catch (archiveError) {
+      if (pendingArchive.kind === "workspace" && isApiRequestError(archiveError) && archiveError.status === 409) {
+        await reload();
+        setPendingArchive(null);
+        setNotice({
+          tone: "warning",
+          message: "This workspace changed elsewhere. The current revision was reloaded; review it and archive again.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(archiveError) });
     } finally {
       setArchiveBusy(false);
@@ -354,10 +376,18 @@ export function WorkspacesSection({
       return;
     }
     try {
-      await restoreWorkspace(selectedWorkspace.workspaceId);
+      await restoreWorkspace(selectedWorkspace.workspaceId, selectedWorkspace.revision);
       setNotice({ tone: "success", message: `Workspace ${selectedWorkspace.name} restored.` });
       await reload();
     } catch (restoreError) {
+      if (isApiRequestError(restoreError) && restoreError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message: "This workspace changed elsewhere. The current revision was reloaded; review it and restore again.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(restoreError) });
     }
   };
@@ -684,6 +714,11 @@ export function WorkspacesSection({
                     value: formatDateTime(selectedWorkspace.createdAt),
                     meta: `Updated ${formatDateTime(selectedWorkspace.updatedAt)}`,
                   },
+                  {
+                    label: "Revision",
+                    value: String(selectedWorkspace.revision),
+                    meta: "Used to fence concurrent edits",
+                  },
                 ]}
               />
               <SettingsButtonRow>
@@ -708,6 +743,7 @@ export function WorkspacesSection({
                         kind: "workspace",
                         id: selectedWorkspace.workspaceId,
                         label: selectedWorkspace.name,
+                        expectedRevision: selectedWorkspace.revision,
                       })
                     }
                   >

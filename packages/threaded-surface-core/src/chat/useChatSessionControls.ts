@@ -1,6 +1,7 @@
 import type { ChatMode, ChatSessionBindingRecord, ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useCallback, useState } from "react";
 import {
+  ApiRequestError,
   archiveChatSession,
   archiveWorkspaceChatSessions,
   assignChatSessionProject,
@@ -26,6 +27,7 @@ function createSessionPlaceholder(input: {
   const now = new Date().toISOString();
   return {
     sessionId: input.sessionId,
+    revision: 1,
     sessionKey: input.sessionId,
     workspaceId: input.workspaceId,
     scope: "mission",
@@ -54,6 +56,14 @@ export type SessionControlPending =
   | "binding"
   | "code_source";
 
+export type SessionMetadataConflictDraft =
+  | { sessionId: string; kind: "rename"; renameTitle: string }
+  | { sessionId: string; kind: "organization"; folderName: string; tagsValue: string };
+
+function isSessionRevisionConflict(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError && error.status === 409;
+}
+
 export function useChatSessionControls(input: {
   workspaceId: string;
   historyView: ChatHistoryView;
@@ -72,6 +82,8 @@ export function useChatSessionControls(input: {
   setQueuedOutbound: React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>;
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
   loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
+  refreshSessionAggregate?: (sessionId: string) => Promise<void>;
+  setSessionMetadataConflictDraft?: (draft: SessionMetadataConflictDraft | null) => void;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
 }) {
   const {
@@ -92,6 +104,8 @@ export function useChatSessionControls(input: {
     setQueuedOutbound,
     setThread,
     loadSidebar,
+    refreshSessionAggregate,
+    setSessionMetadataConflictDraft,
     setBinding,
   } = input;
 
@@ -100,7 +114,11 @@ export function useChatSessionControls(input: {
   const [projectPath, setProjectPath] = useState("chat/default");
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [sessionControlPending, setSessionControlPending] = useState<SessionControlPending>(null);
-  const [sessionDeleteConfirm, setSessionDeleteConfirm] = useState<{ sessionId: string; label: string } | null>(null);
+  const [sessionDeleteConfirm, setSessionDeleteConfirm] = useState<{
+    sessionId: string;
+    revision: number;
+    label: string;
+  } | null>(null);
   const [archiveWorkspacePending, setArchiveWorkspacePending] = useState(false);
   const [archiveWorkspaceConfirmOpen, setArchiveWorkspaceConfirmOpen] = useState(false);
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
@@ -206,56 +224,106 @@ export function useChatSessionControls(input: {
     setSessionControlPending("rename");
     try {
       await updateChatSession(selectedSession.sessionId, {
+        expectedRevision: selectedSession.revision,
         title: renameTitle.trim() || undefined,
       });
-      await loadSidebar();
+      setSessionMetadataConflictDraft?.(null);
+      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
     } catch (err) {
-      setError((err as Error).message);
+      if (isSessionRevisionConflict(err)) {
+        setSessionMetadataConflictDraft?.({
+          sessionId: selectedSession.sessionId,
+          kind: "rename",
+          renameTitle,
+        });
+        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
+          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
+        setError("This chat changed elsewhere. Your rename draft is preserved; review it and retry.");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setSessionControlPending(null);
     }
-  }, [loadSidebar, renameTitle, selectedSession, setError]);
+  }, [
+    historyView,
+    loadSidebar,
+    refreshSessionAggregate,
+    renameTitle,
+    selectedSession,
+    setError,
+    setSessionMetadataConflictDraft,
+  ]);
 
   const handleSaveOrganization = useCallback(async () => {
     if (!selectedSession) return;
     setSessionControlPending("organization");
     try {
       await updateChatSession(selectedSession.sessionId, {
+        expectedRevision: selectedSession.revision,
         folderName: folderName.trim() || "",
         tags: tagsValue
           .split(",")
           .map((item) => item.trim())
           .filter(Boolean),
       });
-      await loadSidebar();
+      setSessionMetadataConflictDraft?.(null);
+      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
     } catch (err) {
-      setError((err as Error).message);
+      if (isSessionRevisionConflict(err)) {
+        setSessionMetadataConflictDraft?.({
+          sessionId: selectedSession.sessionId,
+          kind: "organization",
+          folderName,
+          tagsValue,
+        });
+        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
+          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
+        setError("This chat changed elsewhere. Your organization draft is preserved; review it and retry.");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setSessionControlPending(null);
     }
-  }, [folderName, loadSidebar, selectedSession, setError, tagsValue]);
+  }, [
+    folderName,
+    historyView,
+    loadSidebar,
+    refreshSessionAggregate,
+    selectedSession,
+    setError,
+    setSessionMetadataConflictDraft,
+    tagsValue,
+  ]);
 
   const handleTogglePinSession = useCallback(async () => {
     if (!selectedSession) return;
     setSessionControlPending("pin");
     try {
-      if (selectedSession.pinned) await unpinChatSession(selectedSession.sessionId);
-      else await pinChatSession(selectedSession.sessionId);
-      await loadSidebar();
+      if (selectedSession.pinned) await unpinChatSession(selectedSession.sessionId, selectedSession.revision);
+      else await pinChatSession(selectedSession.sessionId, selectedSession.revision);
+      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
     } catch (err) {
-      setError((err as Error).message);
+      if (isSessionRevisionConflict(err)) {
+        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
+          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
+        setError("This chat changed elsewhere. Review the latest state, then click pin again.");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setSessionControlPending(null);
     }
-  }, [loadSidebar, selectedSession, setError]);
+  }, [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError]);
 
   const handleToggleArchiveSession = useCallback(async () => {
     if (!selectedSession) return;
     setSessionControlPending("archive");
     try {
       const restoring = selectedSession.lifecycleStatus === "archived";
-      if (restoring) await restoreChatSession(selectedSession.sessionId);
-      else await archiveChatSession(selectedSession.sessionId);
+      if (restoring) await restoreChatSession(selectedSession.sessionId, selectedSession.revision);
+      else await archiveChatSession(selectedSession.sessionId, selectedSession.revision);
       const sessionLeavesView = (!restoring && historyView === "active") || (restoring && historyView === "archived");
       if (sessionLeavesView) {
         setQueuedOutbound((current) => current.filter((item) => item.sessionId !== selectedSession.sessionId));
@@ -264,17 +332,33 @@ export function useChatSessionControls(input: {
       }
       await loadSidebar(historyView, { bypassCache: true });
     } catch (err) {
-      setError((err as Error).message);
+      if (isSessionRevisionConflict(err)) {
+        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
+          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
+        setError("This chat changed elsewhere. Review the latest state, then click archive or restore again.");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setSessionControlPending(null);
     }
-  }, [historyView, loadSidebar, selectedSession, setError, setQueuedOutbound, setSelectedSessionId, setThread]);
+  }, [
+    historyView,
+    loadSidebar,
+    refreshSessionAggregate,
+    selectedSession,
+    setError,
+    setQueuedOutbound,
+    setSelectedSessionId,
+    setThread,
+  ]);
 
   const handleDeleteSession = useCallback(
     (label: string) => {
       if (!selectedSession) return;
       setSessionDeleteConfirm({
         sessionId: selectedSession.sessionId,
+        revision: selectedSession.revision,
         label,
       });
     },
@@ -287,33 +371,58 @@ export function useChatSessionControls(input: {
     }
     setSessionControlPending("delete");
     try {
-      await deleteChatSession(sessionDeleteConfirm.sessionId);
+      await deleteChatSession(sessionDeleteConfirm.sessionId, sessionDeleteConfirm.revision);
       setQueuedOutbound((current) => current.filter((item) => item.sessionId !== sessionDeleteConfirm.sessionId));
       setThread(null);
       setSelectedSessionId((current) => (current === sessionDeleteConfirm.sessionId ? null : current));
       await loadSidebar();
     } catch (err) {
-      setError((err as Error).message);
+      if (isSessionRevisionConflict(err)) {
+        await (refreshSessionAggregate?.(sessionDeleteConfirm.sessionId) ??
+          loadSidebar(historyView, { bypassCache: true, preferredSessionId: sessionDeleteConfirm.sessionId }));
+        setError("This chat changed elsewhere. Review the latest state, then request deletion again.");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setSessionControlPending(null);
       setSessionDeleteConfirm(null);
     }
-  }, [loadSidebar, sessionDeleteConfirm, setError, setQueuedOutbound, setSelectedSessionId, setThread, workspaceId]);
+  }, [
+    historyView,
+    loadSidebar,
+    refreshSessionAggregate,
+    sessionDeleteConfirm,
+    setError,
+    setQueuedOutbound,
+    setSelectedSessionId,
+    setThread,
+  ]);
 
   const handleAssignProject = useCallback(
     async (value: string) => {
       if (!selectedSession) return;
       setSessionControlPending("project");
       try {
-        await assignChatSessionProject(selectedSession.sessionId, value === "none" ? undefined : value);
-        await loadSidebar();
+        await assignChatSessionProject(
+          selectedSession.sessionId,
+          value === "none" ? undefined : value,
+          selectedSession.revision,
+        );
+        await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
       } catch (err) {
-        setError((err as Error).message);
+        if (isSessionRevisionConflict(err)) {
+          await (refreshSessionAggregate?.(selectedSession.sessionId) ??
+            loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
+          setError("This chat changed elsewhere. Review the latest state, then choose the project again.");
+        } else {
+          setError((err as Error).message);
+        }
       } finally {
         setSessionControlPending(null);
       }
     },
-    [loadSidebar, selectedSession, setError],
+    [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError],
   );
 
   const handleImportCodeProject = useCallback(
@@ -334,18 +443,24 @@ export function useChatSessionControls(input: {
           workspaceId,
           ...input,
         });
-        await assignChatSessionProject(selectedSession.sessionId, result.project.projectId);
+        await assignChatSessionProject(selectedSession.sessionId, result.project.projectId, selectedSession.revision);
         await loadSidebar();
         return result.project;
       } catch (err) {
-        const message = (err as Error).message;
+        if (isSessionRevisionConflict(err)) {
+          await (refreshSessionAggregate?.(selectedSession.sessionId) ??
+            loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
+        }
+        const message = isSessionRevisionConflict(err)
+          ? "This chat changed elsewhere. The imported project is available; review the latest state and assign it again."
+          : (err as Error).message;
         setError(message);
         throw err;
       } finally {
         setSessionControlPending(null);
       }
     },
-    [loadSidebar, selectedSession, setError, workspaceId],
+    [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError, workspaceId],
   );
 
   const handleSaveExternalBinding = useCallback(async () => {

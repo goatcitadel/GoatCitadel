@@ -90,6 +90,7 @@ describe("chat-thread-reducer", () => {
     ]) {
       expect(isThreadMutatingStreamChunk({ type } as never)).toBe(true);
     }
+    expect(isThreadMutatingStreamChunk({ type: "tool_activity" } as never)).toBe(false);
     expect(isThreadMutatingStreamChunk({ type: "heartbeat" } as never)).toBe(false);
   });
 

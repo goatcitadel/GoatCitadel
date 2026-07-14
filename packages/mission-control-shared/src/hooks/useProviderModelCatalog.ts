@@ -24,6 +24,9 @@ export interface ProviderModelCatalogOption {
   defaultModel: string;
   apiStyle: RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
   resolvedApiStyle?: RuntimeSettingsResponse["llm"]["providers"][number]["resolvedApiStyle"];
+  authMode?: RuntimeSettingsResponse["llm"]["providers"][number]["authMode"];
+  googleCloud?: RuntimeSettingsResponse["llm"]["providers"][number]["googleCloud"];
+  authReadiness?: RuntimeSettingsResponse["llm"]["providers"][number]["authReadiness"];
   apiKeyRef?: string;
   apiKeySource?: string;
   hasApiKey?: boolean;
@@ -294,6 +297,9 @@ function buildProviderCatalog(
       defaultModel: provider.defaultModel,
       apiStyle: provider.apiStyle,
       resolvedApiStyle: provider.resolvedApiStyle,
+      authMode: provider.authMode,
+      googleCloud: provider.googleCloud,
+      authReadiness: provider.authReadiness,
       apiKeyRef: provider.apiKeyRef,
       apiKeySource: provider.apiKeySource,
       hasApiKey: provider.hasApiKey,

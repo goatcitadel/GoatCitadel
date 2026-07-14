@@ -19,6 +19,8 @@ import type {
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
+  ApiRequestError,
+  fetchChatProactiveStatus,
   fetchChatDelegationRun,
   runChatDelegation,
   runChatResearch,
@@ -349,6 +351,7 @@ export function useChatDelegationPolicyActions(input: {
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;
   loadSidebar: () => Promise<void>;
+  refreshSessionAggregate?: (sessionId: string) => Promise<void>;
   ensureSession: () => Promise<ChatSessionRecord>;
   setError: (value: string | null) => void;
   setSending: (value: boolean) => void;
@@ -372,6 +375,7 @@ export function useChatDelegationPolicyActions(input: {
     streamEnabled,
     codeModeNeedsProjectBinding,
     loadSidebar,
+    refreshSessionAggregate,
     ensureSession,
     setError,
     setSending,
@@ -385,6 +389,8 @@ export function useChatDelegationPolicyActions(input: {
 
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
   const [activeDelegationRun, setActiveDelegationRun] = useState<ActiveChatDelegationRun | null>(null);
+  const [proactivePolicyDraft, setProactivePolicyDraft] = useState<ChatProactivePolicyPatch | null>(null);
+  const [proactivePolicyConflict, setProactivePolicyConflict] = useState(false);
   const subagentRecommendationKeyRef = useRef<string>("");
   const selectedTurn = useMemo(
     () => resolveSelectedTurn(input.thread, input.selectedTurnId),
@@ -394,6 +400,8 @@ export function useChatDelegationPolicyActions(input: {
 
   useEffect(() => {
     setActiveDelegationRun(null);
+    setProactivePolicyDraft(null);
+    setProactivePolicyConflict(false);
   }, [selectedSession?.sessionId]);
 
   useEffect(() => {
@@ -508,12 +516,16 @@ export function useChatDelegationPolicyActions(input: {
       if (!selectedSession) return;
       lastLocalPrefMutationAtRef.current = Date.now();
       try {
-        const updated = await updateChatProactivePolicy(selectedSession.sessionId, patch);
+        const updated = await updateChatProactivePolicy(selectedSession.sessionId, {
+          ...patch,
+          expectedRevision: prefs?.revision ?? selectedSession.revision,
+        });
         setProactiveStatus(updated);
         setPrefs((current) =>
           current
             ? {
                 ...current,
+                revision: updated.revision,
                 proactiveMode: updated.mode,
                 autonomyBudget: updated.autonomyBudget,
                 retrievalMode: updated.retrievalMode,
@@ -521,11 +533,46 @@ export function useChatDelegationPolicyActions(input: {
               }
             : current,
         );
+        setProactivePolicyDraft(null);
+        setProactivePolicyConflict(false);
+        await (refreshSessionAggregate?.(selectedSession.sessionId) ?? loadSidebar());
       } catch (err) {
-        setError((err as Error).message);
+        if (err instanceof ApiRequestError && err.status === 409) {
+          const latest = await fetchChatProactiveStatus(selectedSession.sessionId);
+          await (refreshSessionAggregate?.(selectedSession.sessionId) ?? loadSidebar());
+          setProactiveStatus(latest.policy);
+          setPrefs((current) =>
+            current
+              ? {
+                  ...current,
+                  revision: latest.policy.revision,
+                  proactiveMode: latest.policy.mode,
+                  autonomyBudget: latest.policy.autonomyBudget,
+                  retrievalMode: latest.policy.retrievalMode,
+                  reflectionMode: latest.policy.reflectionMode,
+                }
+              : current,
+          );
+          setProactivePolicyDraft(patch);
+          setProactivePolicyConflict(true);
+          setError(
+            "This chat changed elsewhere. Canonical policy was refreshed; your unsaved policy draft is preserved for review and retry.",
+          );
+        } else {
+          setError((err as Error).message);
+        }
       }
     },
-    [lastLocalPrefMutationAtRef, selectedSession, setError, setPrefs, setProactiveStatus],
+    [
+      lastLocalPrefMutationAtRef,
+      loadSidebar,
+      prefs?.revision,
+      refreshSessionAggregate,
+      selectedSession,
+      setError,
+      setPrefs,
+      setProactiveStatus,
+    ],
   );
 
   const handleTriggerProactive = useCallback(async () => {
@@ -891,6 +938,8 @@ export function useChatDelegationPolicyActions(input: {
     delegationSuggestion,
     setDelegationSuggestion,
     handleRunQuickResearch,
+    proactivePolicyDraft,
+    proactivePolicyConflict,
     handleProactivePolicyPatch,
     handleTriggerProactive,
     handleSuggestDelegation,

@@ -1254,3 +1254,189 @@
   max-width: 30%;
   text-align: right;
 }
+
+/* Skill Hub operator lifecycle: immutable candidate and approval truth. */
+.mc-next-skill-hub {
+  min-width: 0;
+}
+
+.mc-next-skill-hub-boundary,
+.mc-next-skill-hub-error,
+.mc-next-skill-hub-blockers {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.58rem 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-area-color) 7%, var(--mc-surface-1));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-skill-hub-boundary svg,
+.mc-next-skill-hub-error svg,
+.mc-next-skill-hub-blockers svg {
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
+}
+
+.mc-next-skill-hub-error {
+  align-items: center;
+  justify-content: space-between;
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger) 9%, var(--mc-surface-1));
+  color: var(--foreground);
+}
+
+.mc-next-skill-hub-empty {
+  margin: 0;
+  padding: 0.7rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.mc-next-skill-hub-layout {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.72fr) minmax(0, 1.6fr);
+  gap: 0.72rem;
+  min-width: 0;
+}
+
+.mc-next-skill-hub-list,
+.mc-next-skill-hub-detail {
+  display: grid;
+  align-content: start;
+  gap: 0.62rem;
+  min-width: 0;
+}
+
+.mc-next-skill-hub-detail {
+  padding: 0.72rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-skill-hub-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.mc-next-skill-hub-heading > div {
+  min-width: 0;
+}
+
+.mc-next-skill-hub-heading span:first-child {
+  color: var(--mc-area-color);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-skill-hub-heading h3 {
+  margin: 0.15rem 0 0;
+  color: var(--foreground);
+  font-size: var(--text-lg);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-skill-hub-heading p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-skill-hub-heading .mc-next-settings-chip[data-state="callable"] {
+  border-color: color-mix(in oklab, var(--success) 42%, var(--border));
+  color: var(--success);
+}
+
+.mc-next-skill-hub-heading .mc-next-settings-chip[data-state="inactive"] {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 35%, var(--border));
+  color: var(--gc-risk-caution);
+}
+
+.mc-next-skill-hub-blockers {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-danger) 9%, var(--mc-surface-1));
+  color: var(--foreground);
+}
+
+.mc-next-skill-hub-blockers div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.mc-next-skill-hub-blockers strong,
+.mc-next-skill-hub-blockers span {
+  overflow-wrap: anywhere;
+}
+
+.mc-next-skill-hub-blockers span {
+  color: var(--text-secondary);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-skill-hub-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.42rem;
+  margin: 0;
+}
+
+.mc-next-skill-hub-facts > div {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+  padding: 0.48rem 0.54rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--card) 90%, transparent);
+}
+
+.mc-next-skill-hub-facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-next-skill-hub-facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .mc-next-skill-hub-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .mc-next-skill-hub-heading,
+  .mc-next-skill-hub-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mc-next-skill-hub-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

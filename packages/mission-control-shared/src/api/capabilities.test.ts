@@ -126,6 +126,31 @@ describe("capabilities API", () => {
     );
   });
 
+  it("uses the named-proof Code Mode verification API without raw command input", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ run: { runId: "run/1" }, evidence: { evidenceId: "proof-1" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchCodeModeRunVerificationEvidence, verifyCodeModeRun } = await import("./capabilities");
+
+    await verifyCodeModeRun(
+      "run/1",
+      { commandName: "typecheck" },
+      { sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1" },
+    );
+    await fetchCodeModeRunVerificationEvidence("run/1", {
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      limit: 25,
+    });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/api/v1/code-mode/runs/run%2F1/verification?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ commandName: "typecheck" });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/api/v1/code-mode/runs/run%2F1/verification/evidence?sessionId=session-1&workspaceId=workspace-1&limit=25",
+    );
+  });
+
   it("fetches the read-only Code Mode execution backend registry", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

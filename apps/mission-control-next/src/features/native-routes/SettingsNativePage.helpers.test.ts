@@ -66,6 +66,7 @@ import {
   labelForLocalOperatorOverrideScope,
   labelForSettingsSection,
   resolveLocalOperatorOverrideScopeRef,
+  resolveProviderCredentialReady,
 } from "./SettingsNativePage";
 
 describe("SettingsNativePage helpers", () => {
@@ -96,6 +97,25 @@ describe("SettingsNativePage helpers", () => {
     expect(resetLocalOperatorOverrideScopeRefForScope("session", "workspace-1")).toBe("");
     expect(resetLocalOperatorOverrideScopeRefForScope("run", "workspace-1")).toBe("");
     expect(resetLocalOperatorOverrideScopeRefForScope("operator", "workspace-1")).toBe("");
+  });
+
+  it("never treats Google ADC auth mode or an unrelated secret signal as credential readiness", () => {
+    expect(
+      resolveProviderCredentialReady({
+        providerId: "vertex",
+        authMode: "google-adc",
+        hasApiKey: false,
+        hasSecret: true,
+        localEndpoint: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveProviderCredentialReady({
+        providerId: "vertex",
+        authMode: "google-adc",
+        hasApiKey: true,
+      }),
+    ).toBe(true);
   });
 
   it("derives llama.cpp aliases from paths and model filenames", () => {
@@ -802,7 +822,13 @@ describe("SettingsNativePage helpers", () => {
       baseUrl: "",
       apiStyle: "openai-responses",
       defaultModel: "",
+      authMode: "",
       apiKeyEnv: "",
+      googleProjectId: "",
+      googleProjectIdEnv: "",
+      googleLocation: "",
+      googleLocationEnv: "",
+      googleEndpointId: "",
     });
     expect(buildProviderEditorDraft(null)).toEqual(createEmptyProviderEditorDraft());
     expect(
@@ -821,7 +847,30 @@ describe("SettingsNativePage helpers", () => {
       baseUrl: "https://api.anthropic.com",
       apiStyle: "anthropic-messages",
       defaultModel: "claude-opus-5",
+      authMode: "",
       apiKeyEnv: "ANTHROPIC_API_KEY",
+      googleProjectId: "",
+      googleProjectIdEnv: "",
+      googleLocation: "",
+      googleLocationEnv: "",
+      googleEndpointId: "",
+    });
+    expect(
+      buildProviderEditorDraft({
+        providerId: "vertex",
+        label: "Vertex AI",
+        baseUrl: "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/endpoints/openapi",
+        apiStyle: "openai-chat-completions",
+        defaultModel: "google/gemini-2.5-flash",
+        authMode: "google-adc",
+        googleCloud: { projectIdEnv: "GOOGLE_CLOUD_PROJECT", location: "us-central1", endpointId: "openapi" },
+      }),
+    ).toMatchObject({
+      authMode: "google-adc",
+      googleProjectIdEnv: "GOOGLE_CLOUD_PROJECT",
+      googleLocation: "us-central1",
+      googleEndpointId: "openapi",
+      apiKeyEnv: "",
     });
     expect(
       buildProviderEditorDraft({

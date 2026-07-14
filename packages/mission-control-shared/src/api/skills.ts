@@ -128,7 +128,7 @@ export async function createSkillEvaluationProposal(runId: string): Promise<Skil
 
 export async function updateSkillState(
   skillId: string,
-  input: { state: SkillRuntimeState; note?: string },
+  input: { expectedRevision: number; state: SkillRuntimeState; note?: string },
 ): Promise<SkillStateRecord> {
   return request<SkillStateRecord>("/api/v1/skills/by-id/state", {
     method: "PATCH",
@@ -138,6 +138,7 @@ export async function updateSkillState(
 
 export async function bulkUpdateSkillState(input: {
   skillIds: string[];
+  expectedRevisionsBySkillId: Record<string, number>;
   state: SkillRuntimeState;
   note?: string;
 }): Promise<{ items: SkillStateRecord[] }> {
@@ -152,7 +153,7 @@ export async function fetchSkillActivationPolicies(): Promise<SkillActivationPol
 }
 
 export async function patchSkillActivationPolicies(
-  input: Partial<SkillActivationPolicy>,
+  input: Partial<Omit<SkillActivationPolicy, "revision">> & { expectedRevision: number },
 ): Promise<SkillActivationPolicy> {
   return request<SkillActivationPolicy>("/api/v1/skills/activation-policies", {
     method: "PATCH",

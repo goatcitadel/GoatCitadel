@@ -17,6 +17,7 @@ import type {
   ChatMode,
   ChatModePresetRecord,
   ChatSessionRecord,
+  ChatSessionSearchHitRecord,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
@@ -32,6 +33,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import {
+  ApiRequestError,
   attachThreadKnowledgeAttachment,
   clearChatSessionGoal,
   createChatGeneratedArtifact,
@@ -39,6 +41,7 @@ import {
   fetchAgents,
   fetchChatGeneratedArtifact,
   fetchChatSessionGoal,
+  fetchChatSessionPrefs,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchRuntimeLifecycleExport,
@@ -75,6 +78,7 @@ import type { ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 import type { MissionControlActiveSessionSurfaceProps } from "./chat/MissionControlActiveSessionSurface";
 import { describeChatUiError, type ChatErrorSource } from "./chat/chat-error-copy";
 import type { OutboundContextBlock } from "./chat/useChatSurfaceOrchestration";
+import { useChatCapabilityProfileInspection } from "./chat/useChatCapabilityProfileInspection";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
 import {
@@ -129,6 +133,7 @@ import { useChatContextActions } from "./chat/useChatContextActions";
 import { useChatComposerInteractions } from "./chat/useChatComposerInteractions";
 import {
   abortActiveChatStream,
+  captureOutboundRequestPrefsSnapshot,
   type ActiveChatStreamState,
   useChatOutboundExecution,
 } from "./chat/useChatOutboundExecution";
@@ -139,7 +144,7 @@ import {
   useDebouncedLocalStoragePersistence,
 } from "./chat/useChatLocalPersistence";
 import { useChatSessionData } from "./chat/useChatSessionData";
-import { useChatSessionControls } from "./chat/useChatSessionControls";
+import { useChatSessionControls, type SessionMetadataConflictDraft } from "./chat/useChatSessionControls";
 import { useChatDockWorkbenchController } from "./chat/useChatDockWorkbenchController";
 import { useChatProviderRoutingController } from "./chat/useChatProviderRoutingController";
 import { useChatRoutePreflight } from "./chat/useChatRoutePreflight";
@@ -147,6 +152,7 @@ import {
   resolveOutboundDraftContent,
   useChatSurfaceOrchestration,
   type OutboundQueueItem,
+  type OutboundRequestPrefsSnapshot,
 } from "./chat/useChatSurfaceOrchestration";
 import { useChatThreadController } from "./chat/useChatThreadController";
 import { detectImageGenerationIntent } from "./chat/chat-image-intent";
@@ -194,6 +200,328 @@ export {
 };
 export type { PendingAttachmentDocumentMode } from "./chat/mission-threaded-controller-helpers";
 
+const MAX_HYDRATED_STORAGE_BYTES = 256 * 1024;
+const MAX_HYDRATED_QUEUE_ITEMS = 64;
+const MAX_HYDRATED_ATTACHMENTS = 16;
+const MAX_HYDRATED_MESSAGE_CHARS = 64 * 1024;
+const MAX_HYDRATED_ATTACHMENT_TEXT_CHARS = 64 * 1024;
+const MAX_HYDRATED_ATTACHMENT_SIZE_BYTES = 1024 * 1024 * 1024;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const SAFE_STORAGE_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9._ -]{0,255}$/iu;
+const WINDOWS_RESERVED_SEGMENT_PATTERN = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
+
+type UnknownRecord = Record<string, unknown>;
+
+function isPlainRecord(value: unknown): value is UnknownRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(record: UnknownRecord, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(record).every((key) => allowedKeys.has(key));
+}
+
+function hasOwn(record: UnknownRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isBoundedString(value: unknown, maxLength: number, allowEmpty = false): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= maxLength &&
+    (allowEmpty || value.length > 0) &&
+    !value.includes("\u0000")
+  );
+}
+
+function isSafeIdentifier(value: unknown, maxLength = 256): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value.length <= maxLength &&
+    value.trim() === value &&
+    !Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    })
+  );
+}
+
+function isCanonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 32) {
+    return false;
+  }
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
+function isSafeRelativeStoragePath(value: unknown): value is string {
+  if (
+    !isBoundedString(value, 1024) ||
+    value.trim() !== value ||
+    value.includes("\\") ||
+    value.includes(":") ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.includes("//") ||
+    /%(?:2e|2f|5c)/iu.test(value)
+  ) {
+    return false;
+  }
+  return value
+    .split("/")
+    .every(
+      (segment) =>
+        SAFE_STORAGE_SEGMENT_PATTERN.test(segment) &&
+        !WINDOWS_RESERVED_SEGMENT_PATTERN.test(segment) &&
+        !segment.endsWith(".") &&
+        !segment.endsWith(" "),
+    );
+}
+
+function isWithinStorageBudget(raw: string): boolean {
+  if (raw.length > MAX_HYDRATED_STORAGE_BYTES) {
+    return false;
+  }
+  return new TextEncoder().encode(raw).byteLength <= MAX_HYDRATED_STORAGE_BYTES;
+}
+
+function parseHydratedAttachment(
+  value: unknown,
+  scope: { workspaceId: string; sessionId: string | null },
+): ChatAttachmentRecord | null {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, [
+      "attachmentId",
+      "sessionId",
+      "workspaceId",
+      "projectId",
+      "fileName",
+      "mimeType",
+      "mediaType",
+      "sizeBytes",
+      "sha256",
+      "storageRelPath",
+      "extractStatus",
+      "extractPreview",
+      "thumbnailRelPath",
+      "ocrText",
+      "transcriptText",
+      "analysisStatus",
+      "createdAt",
+    ]) ||
+    !isSafeIdentifier(value.attachmentId) ||
+    typeof scope.sessionId !== "string" ||
+    value.sessionId !== scope.sessionId ||
+    value.workspaceId !== scope.workspaceId ||
+    !isSafeIdentifier(value.fileName, 512) ||
+    !isSafeIdentifier(value.mimeType, 256) ||
+    !Number.isSafeInteger(value.sizeBytes) ||
+    (value.sizeBytes as number) < 0 ||
+    (value.sizeBytes as number) > MAX_HYDRATED_ATTACHMENT_SIZE_BYTES ||
+    typeof value.sha256 !== "string" ||
+    !SHA256_PATTERN.test(value.sha256) ||
+    !isSafeRelativeStoragePath(value.storageRelPath) ||
+    !["ready", "unsupported", "failed"].includes(value.extractStatus as string) ||
+    !isCanonicalTimestamp(value.createdAt)
+  ) {
+    return null;
+  }
+  if (
+    (hasOwn(value, "projectId") && !isSafeIdentifier(value.projectId)) ||
+    (hasOwn(value, "mediaType") &&
+      !["text", "image", "audio", "video", "binary"].includes(value.mediaType as string)) ||
+    (hasOwn(value, "extractPreview") &&
+      !isBoundedString(value.extractPreview, MAX_HYDRATED_ATTACHMENT_TEXT_CHARS, true)) ||
+    (hasOwn(value, "thumbnailRelPath") && !isSafeRelativeStoragePath(value.thumbnailRelPath)) ||
+    (hasOwn(value, "ocrText") && !isBoundedString(value.ocrText, MAX_HYDRATED_ATTACHMENT_TEXT_CHARS, true)) ||
+    (hasOwn(value, "transcriptText") &&
+      !isBoundedString(value.transcriptText, MAX_HYDRATED_ATTACHMENT_TEXT_CHARS, true)) ||
+    (hasOwn(value, "analysisStatus") &&
+      !["queued", "running", "pending", "ready", "failed", "unsupported"].includes(value.analysisStatus as string))
+  ) {
+    return null;
+  }
+  return Object.freeze({ ...value }) as unknown as ChatAttachmentRecord;
+}
+
+function parseHydratedAttachmentsValue(
+  value: unknown,
+  scope: { workspaceId: string; sessionId: string | null },
+): ChatAttachmentRecord[] | null {
+  if (!Array.isArray(value) || value.length > MAX_HYDRATED_ATTACHMENTS) {
+    return null;
+  }
+  const parsed: ChatAttachmentRecord[] = [];
+  const attachmentIds = new Set<string>();
+  for (const candidate of value) {
+    const attachment = parseHydratedAttachment(candidate, scope);
+    if (!attachment || attachmentIds.has(attachment.attachmentId)) {
+      return null;
+    }
+    attachmentIds.add(attachment.attachmentId);
+    parsed.push(attachment);
+  }
+  return Object.freeze(parsed) as unknown as ChatAttachmentRecord[];
+}
+
+function parseHydratedRequestPrefs(value: unknown): OutboundRequestPrefsSnapshot | null {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, [
+      "mode",
+      "providerId",
+      "model",
+      "webMode",
+      "memoryMode",
+      "thinkingLevel",
+      "speedMode",
+      "subagentPolicy",
+      "fullWebAccess",
+    ]) ||
+    value.mode !== "chat" ||
+    !["auto", "off", "quick", "deep"].includes(value.webMode as string) ||
+    !["auto", "on", "off"].includes(value.memoryMode as string) ||
+    !["off", "minimal", "standard", "extended", "deep", "max", "ultra"].includes(value.thinkingLevel as string) ||
+    !["standard", "fast"].includes(value.speedMode as string) ||
+    !["off", "ask_when_useful", "auto_when_useful"].includes(value.subagentPolicy as string) ||
+    typeof value.fullWebAccess !== "boolean" ||
+    !isSafeIdentifier(value.providerId) ||
+    !isSafeIdentifier(value.model, 512)
+  ) {
+    return null;
+  }
+  return Object.freeze({ ...value }) as unknown as OutboundRequestPrefsSnapshot;
+}
+
+/** Fail-closed parser for browser-persisted attachment references. */
+export function parseHydratedChatAttachments(
+  raw: string | null,
+  scope: { workspaceId: string; sessionId: string | null },
+): ChatAttachmentRecord[] {
+  if (!raw || !isWithinStorageBudget(raw)) {
+    return [];
+  }
+  try {
+    return parseHydratedAttachmentsValue(JSON.parse(raw), scope) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Fail-closed parser for immutable browser-persisted outbound queue envelopes. */
+export function parseHydratedOutboundQueue(
+  raw: string | null,
+  scope: {
+    workspaceId: string;
+    sessionId: string | null;
+  },
+): OutboundQueueItem[] {
+  if (!raw || !isWithinStorageBudget(raw)) {
+    return [];
+  }
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value) || value.length > MAX_HYDRATED_QUEUE_ITEMS) {
+      return [];
+    }
+    const parsed: OutboundQueueItem[] = [];
+    const queueIds = new Set<string>();
+    for (const candidate of value) {
+      if (
+        !isPlainRecord(candidate) ||
+        !hasOnlyKeys(candidate, [
+          "id",
+          "action",
+          "sessionId",
+          "targetTurnId",
+          "content",
+          "attachments",
+          "createdAt",
+          "paused",
+          "modelCouncil",
+          "requestPrefs",
+        ]) ||
+        !isSafeIdentifier(candidate.id) ||
+        queueIds.has(candidate.id) ||
+        !["send", "edit", "retry"].includes(candidate.action as string) ||
+        !isBoundedString(candidate.content, MAX_HYDRATED_MESSAGE_CHARS, true) ||
+        !isCanonicalTimestamp(candidate.createdAt) ||
+        (hasOwn(candidate, "paused") && typeof candidate.paused !== "boolean") ||
+        (scope.sessionId === null ? hasOwn(candidate, "sessionId") : candidate.sessionId !== scope.sessionId)
+      ) {
+        return [];
+      }
+      const targetTurnId = hasOwn(candidate, "targetTurnId") ? candidate.targetTurnId : undefined;
+      if (
+        (candidate.action === "send" && (candidate.content as string).trim().length === 0) ||
+        (candidate.action === "send" && targetTurnId !== undefined) ||
+        (candidate.action === "edit" &&
+          ((candidate.content as string).trim().length === 0 || !isSafeIdentifier(targetTurnId))) ||
+        (candidate.action === "retry" &&
+          (candidate.content !== "" ||
+            !isSafeIdentifier(targetTurnId) ||
+            (candidate.attachments as unknown[]).length > 0))
+      ) {
+        return [];
+      }
+      if (
+        hasOwn(candidate, "modelCouncil") &&
+        (!isPlainRecord(candidate.modelCouncil) ||
+          !hasOnlyKeys(candidate.modelCouncil, ["enabled"]) ||
+          candidate.modelCouncil.enabled !== true)
+      ) {
+        return [];
+      }
+      const attachments = parseHydratedAttachmentsValue(candidate.attachments, scope);
+      const requestPrefs = hasOwn(candidate, "requestPrefs") ? parseHydratedRequestPrefs(candidate.requestPrefs) : null;
+      if (!attachments || !requestPrefs) {
+        return [];
+      }
+      queueIds.add(candidate.id);
+      parsed.push(
+        Object.freeze({
+          id: candidate.id,
+          action: candidate.action,
+          ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+          ...(typeof targetTurnId === "string" ? { targetTurnId } : {}),
+          content: candidate.content,
+          attachments,
+          createdAt: candidate.createdAt,
+          paused: true,
+          ...(hasOwn(candidate, "modelCouncil") ? { modelCouncil: Object.freeze({ enabled: true as const }) } : {}),
+          requestPrefs,
+        }) as OutboundQueueItem,
+      );
+    }
+    return Object.freeze(parsed) as unknown as OutboundQueueItem[];
+  } catch {
+    return [];
+  }
+}
+
+/** Replace prior-session state while preserving items enqueued after a session transition rendered. */
+export function mergeHydratedOutboundQueue(input: {
+  hydrated: OutboundQueueItem[];
+  current: OutboundQueueItem[];
+  baselineIds: ReadonlySet<string>;
+  sessionId: string | null;
+}): OutboundQueueItem[] {
+  const newlyQueued = input.current.filter(
+    (item) =>
+      !input.baselineIds.has(item.id) &&
+      (input.sessionId === null ? item.sessionId === undefined : item.sessionId === input.sessionId),
+  );
+  const retainedNewItems = newlyQueued.slice(0, MAX_HYDRATED_QUEUE_ITEMS);
+  const retainedIds = new Set(retainedNewItems.map((item) => item.id));
+  const hydrated = input.hydrated
+    .filter((item) => !retainedIds.has(item.id))
+    .slice(0, MAX_HYDRATED_QUEUE_ITEMS - retainedNewItems.length);
+  return [...hydrated, ...retainedNewItems];
+}
+
 export interface MissionThreadedSessionRailData {
   mode: ChatMode;
   showProjectCreate: boolean;
@@ -229,7 +557,10 @@ export interface MissionThreadedSessionRailData {
   onSelectProjectId: (projectId: string) => void;
   onSelectFolderId: (folderId: string) => void;
   onSelectTag: (tag: string | null) => void;
-  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
+  onSelectSession: (
+    sessionId: string,
+    options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord },
+  ) => void;
   renderSessionLabel: (sessionId: string) => string;
   onLoadMoreSessions?: () => void;
 }
@@ -435,11 +766,24 @@ export function MissionThreadedControllerHost({
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
   const [fullWebAccess, setFullWebAccess] = useState(true);
+  const [modelCouncilEnabled, setModelCouncilEnabled] = useState(false);
+  const modelCouncilEnabledRef = useRef(false);
+  const consumeModelCouncilArming = useCallback(() => {
+    const enabled = modelCouncilEnabledRef.current;
+    modelCouncilEnabledRef.current = false;
+    setModelCouncilEnabled(false);
+    return enabled ? ({ enabled: true } as const) : undefined;
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<ChatErrorSource | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
   const [folderName, setFolderName] = useState("");
   const [tagsValue, setTagsValue] = useState("");
+  const sessionMetadataConflictDraftRef = useRef<SessionMetadataConflictDraft | null>(null);
+  const [preferenceConflictDraft, setPreferenceConflictDraft] = useState<{
+    sessionId: string;
+    patch: ChatSessionPrefsPatch;
+  } | null>(null);
   const [streamEnabled, setStreamEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
@@ -506,6 +850,9 @@ export function MissionThreadedControllerHost({
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
   const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
   const queuedOutboundSetterRef = useRef<React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>>(() => []);
+  const outboundRequestPrefsSnapshotRef = useRef<OutboundRequestPrefsSnapshot>(
+    captureOutboundRequestPrefsSnapshot({ prefs: null }),
+  );
   const pushLocalNoticeRef = useRef<(message: string, tone?: ChatThreadNotice["tone"]) => void>(() => undefined);
   const applyFetchedThreadRef = useRef<(thread: ChatThreadResponse, requestVersion: number | null) => boolean>(
     () => false,
@@ -628,8 +975,18 @@ export function MissionThreadedControllerHost({
     secondaryLoading,
     sidebarNextCursor,
     sidebarLoadingMore,
+    historicalWindow,
+    historicalWindowLoading,
+    historicalWindowError,
+    historicalWindowTarget,
+    historicalContinuationLoading,
+    historicalContinuationError,
     loadSidebar,
+    openHistoricalWindow,
+    returnToLatest,
+    loadHistoricalContinuation,
     loadSessionCoreState,
+    loadSessionSecondaryState,
   } = sessionData;
   const currentSessionMode: ChatMode = "chat";
 
@@ -737,6 +1094,56 @@ export function MissionThreadedControllerHost({
     loadSessionCoreStateRef.current = loadSessionCoreState;
   }, [loadSessionCoreState]);
 
+  const refreshChatSessionAggregate = useCallback(
+    async (sessionId: string) => {
+      const [, , , goal] = await Promise.all([
+        loadSidebar(historyView, { bypassCache: true, preferredSessionId: sessionId }),
+        loadSessionCoreState(sessionId, { background: true, includeThread: false }),
+        loadSessionSecondaryState(sessionId, { background: true }),
+        fetchChatSessionGoal(sessionId),
+      ]);
+      setPinnedGoal(goal.goal ?? undefined);
+    },
+    [historyView, loadSessionCoreState, loadSessionSecondaryState, loadSidebar],
+  );
+
+  const handleSessionMetadataConflictDraftChange = useCallback((draft: SessionMetadataConflictDraft | null) => {
+    sessionMetadataConflictDraftRef.current = draft;
+  }, []);
+
+  const handleRenameTitleChange = useCallback(
+    (value: string) => {
+      setRenameTitle(value);
+      const conflictDraft = sessionMetadataConflictDraftRef.current;
+      if (conflictDraft?.kind === "rename" && conflictDraft.sessionId === selectedSession?.sessionId) {
+        sessionMetadataConflictDraftRef.current = { ...conflictDraft, renameTitle: value };
+      }
+    },
+    [selectedSession?.sessionId],
+  );
+
+  const handleFolderNameChange = useCallback(
+    (value: string) => {
+      setFolderName(value);
+      const conflictDraft = sessionMetadataConflictDraftRef.current;
+      if (conflictDraft?.kind === "organization" && conflictDraft.sessionId === selectedSession?.sessionId) {
+        sessionMetadataConflictDraftRef.current = { ...conflictDraft, folderName: value };
+      }
+    },
+    [selectedSession?.sessionId],
+  );
+
+  const handleTagsValueChange = useCallback(
+    (value: string) => {
+      setTagsValue(value);
+      const conflictDraft = sessionMetadataConflictDraftRef.current;
+      if (conflictDraft?.kind === "organization" && conflictDraft.sessionId === selectedSession?.sessionId) {
+        sessionMetadataConflictDraftRef.current = { ...conflictDraft, tagsValue: value };
+      }
+    },
+    [selectedSession?.sessionId],
+  );
+
   const sessionControls = useChatSessionControls({
     workspaceId,
     historyView,
@@ -755,6 +1162,8 @@ export function MissionThreadedControllerHost({
     setQueuedOutbound: (value) => queuedOutboundSetterRef.current(value),
     setThread,
     loadSidebar,
+    refreshSessionAggregate: refreshChatSessionAggregate,
+    setSessionMetadataConflictDraft: handleSessionMetadataConflictDraftChange,
     setBinding,
   });
   const {
@@ -852,6 +1261,8 @@ export function MissionThreadedControllerHost({
     setPendingApproval: () => undefined,
     setError: setUiError,
     onOutboundContextConsumed: handleOutboundContextConsumed,
+    consumeModelCouncilArming,
+    captureOutboundRequestPrefs: () => outboundRequestPrefsSnapshotRef.current,
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
@@ -888,6 +1299,12 @@ export function MissionThreadedControllerHost({
     mcpServers,
     mcpTemplates,
   });
+  outboundRequestPrefsSnapshotRef.current = captureOutboundRequestPrefsSnapshot({
+    prefs,
+    selectedProviderId,
+    selectedModel,
+    fullWebAccess,
+  });
   const executionSurfaceMode: ChatMode = "chat";
   const outboundSurfaceMode = resolveOutboundSurfaceMode({ lockSurface, surface, modeOverride });
   const executionRoutePrefs = useMemo(
@@ -897,7 +1314,9 @@ export function MissionThreadedControllerHost({
   const routePreflight = useChatRoutePreflight({
     sessionId: selectedSessionId,
     prefs: executionRoutePrefs,
+    content: draft,
     surfaceMode: executionSurfaceMode,
+    fullWebAccess,
     displayAction: editingTurnId ? "edit" : "send",
     displayTurnId: editingTurnId,
     enabled: Boolean(selectedSessionId),
@@ -1069,6 +1488,7 @@ export function MissionThreadedControllerHost({
     streamEnabled,
     codeModeNeedsProjectBinding: false,
     loadSidebar,
+    refreshSessionAggregate: refreshChatSessionAggregate,
     ensureSession,
     setError: setUiError,
     setSending,
@@ -1102,6 +1522,8 @@ export function MissionThreadedControllerHost({
     capabilitySuggestionPending,
     capabilityConfirmationCopy,
     handleRunQuickResearch,
+    proactivePolicyDraft,
+    proactivePolicyConflict,
     handleProactivePolicyPatch,
     handleTriggerProactive,
     handleSuggestDelegation,
@@ -1208,6 +1630,23 @@ export function MissionThreadedControllerHost({
     setDevDiagnosticsActiveChatSession(selectedSessionId ?? undefined);
   }, [selectedSessionId]);
 
+  const draftStorageKey = createDraftStorageKey(workspaceId, selectedSessionId);
+  const attachmentStorageKey = createAttachmentStorageKey(workspaceId, selectedSessionId);
+  const queueStorageKey = createQueueStorageKey(workspaceId, selectedSessionId);
+  const queueHydrationTransitionRef = useRef<{
+    key: string;
+    baselineIds: ReadonlySet<string>;
+  }>({
+    key: queueStorageKey,
+    baselineIds: new Set(queuedOutbound.map((item) => item.id)),
+  });
+  if (queueHydrationTransitionRef.current.key !== queueStorageKey) {
+    queueHydrationTransitionRef.current = {
+      key: queueStorageKey,
+      baselineIds: new Set(queuedOutbound.map((item) => item.id)),
+    };
+  }
+
   useEffect(() => {
     if (!selectedSessionId) {
       setPinnedGoal(undefined);
@@ -1257,21 +1696,45 @@ export function MissionThreadedControllerHost({
     if (typeof window === "undefined") {
       return;
     }
+    const hydrationTransition = queueHydrationTransitionRef.current;
     try {
-      const draftRaw = window.localStorage.getItem(createDraftStorageKey(workspaceId, selectedSessionId));
-      setDraft(draftRaw ?? "");
-      const attachmentsRaw = window.localStorage.getItem(createAttachmentStorageKey(workspaceId, selectedSessionId));
-      setPendingAttachments(attachmentsRaw ? (JSON.parse(attachmentsRaw) as ChatAttachmentRecord[]) : []);
-      const queueRaw = window.localStorage.getItem(createQueueStorageKey(workspaceId, selectedSessionId));
-      setQueuedOutbound(
-        queueRaw ? (JSON.parse(queueRaw) as OutboundQueueItem[]).map((item) => ({ ...item, paused: true })) : [],
+      const draftRaw = window.localStorage.getItem(draftStorageKey);
+      setDraft(
+        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : "",
+      );
+      const attachmentsRaw = window.localStorage.getItem(attachmentStorageKey);
+      setPendingAttachments(
+        parseHydratedChatAttachments(attachmentsRaw, {
+          workspaceId,
+          sessionId: selectedSessionId,
+        }),
+      );
+      const queueRaw = window.localStorage.getItem(queueStorageKey);
+      const hydratedQueue = parseHydratedOutboundQueue(queueRaw, {
+        workspaceId,
+        sessionId: selectedSessionId,
+      });
+      setQueuedOutbound((current) =>
+        mergeHydratedOutboundQueue({
+          hydrated: hydratedQueue,
+          current,
+          baselineIds: hydrationTransition.baselineIds,
+          sessionId: selectedSessionId,
+        }),
       );
     } catch {
       setDraft("");
       setPendingAttachments([]);
-      setQueuedOutbound([]);
+      setQueuedOutbound((current) =>
+        mergeHydratedOutboundQueue({
+          hydrated: [],
+          current,
+          baselineIds: hydrationTransition.baselineIds,
+          sessionId: selectedSessionId,
+        }),
+      );
     }
-  }, [selectedSessionId, workspaceId, setQueuedOutbound]);
+  }, [attachmentStorageKey, draftStorageKey, queueStorageKey, selectedSessionId, setQueuedOutbound, workspaceId]);
 
   useEffect(() => {
     setPendingAttachmentModes((current) => reconcilePendingAttachmentModes(current, pendingAttachments));
@@ -1292,12 +1755,9 @@ export function MissionThreadedControllerHost({
   const serializedPendingAttachments = useMemo(() => JSON.stringify(pendingAttachments), [pendingAttachments]);
   const serializedQueuedOutbound = useMemo(() => JSON.stringify(queuedOutbound), [queuedOutbound]);
 
-  useDebouncedLocalStoragePersistence(createDraftStorageKey(workspaceId, selectedSessionId), draft);
-  useDebouncedLocalStoragePersistence(
-    createAttachmentStorageKey(workspaceId, selectedSessionId),
-    serializedPendingAttachments,
-  );
-  useDebouncedLocalStoragePersistence(createQueueStorageKey(workspaceId, selectedSessionId), serializedQueuedOutbound);
+  useDebouncedLocalStoragePersistence(draftStorageKey, draft);
+  useDebouncedLocalStoragePersistence(attachmentStorageKey, serializedPendingAttachments);
+  useDebouncedLocalStoragePersistence(queueStorageKey, serializedQueuedOutbound);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1318,9 +1778,23 @@ export function MissionThreadedControllerHost({
   }, [visualStreamMode]);
 
   useEffect(() => {
-    setRenameTitle(selectedSession?.title ?? "");
-    setFolderName(selectedSession?.folderName ?? "");
-    setTagsValue((selectedSession?.tags ?? []).join(", "));
+    const conflictDraft = sessionMetadataConflictDraftRef.current;
+    const appliesToSelectedSession = conflictDraft?.sessionId === selectedSession?.sessionId;
+    setRenameTitle(
+      appliesToSelectedSession && conflictDraft?.kind === "rename"
+        ? conflictDraft.renameTitle
+        : (selectedSession?.title ?? ""),
+    );
+    setFolderName(
+      appliesToSelectedSession && conflictDraft?.kind === "organization"
+        ? conflictDraft.folderName
+        : (selectedSession?.folderName ?? ""),
+    );
+    setTagsValue(
+      appliesToSelectedSession && conflictDraft?.kind === "organization"
+        ? conflictDraft.tagsValue
+        : (selectedSession?.tags ?? []).join(", "),
+    );
   }, [selectedSession?.folderName, selectedSession?.sessionId, selectedSession?.tags, selectedSession?.title]);
   const planningMode = prefs?.planningMode ?? "off";
   const proactiveSuggestionCount = useMemo(
@@ -1378,6 +1852,11 @@ export function MissionThreadedControllerHost({
     hasDelegationSuggestion: Boolean(delegationSuggestion),
     learnedMemoryCount: learnedMemory.length,
     hasGeneratedArtifact: Boolean(activeGeneratedArtifact),
+  });
+  const capabilityProfileInspection = useChatCapabilityProfileInspection({
+    sessionId: selectedSessionId,
+    workspaceId: selectedSession?.workspaceId ?? workspaceId,
+    turn: selectedTurn,
   });
 
   useEffect(() => {
@@ -1450,6 +1929,10 @@ export function MissionThreadedControllerHost({
       if (!agenticRunTree?.runId || !control.enabled) {
         return;
       }
+      if (!Number.isInteger(agenticRunTree.taskRevision) || Number(agenticRunTree.taskRevision) < 1) {
+        setAgenticControlStatus("Canonical task revision is unavailable. Refresh the run before applying a control.");
+        return;
+      }
       setAgenticControlPending(control.action);
       setAgenticControlStatus(null);
       try {
@@ -1457,6 +1940,7 @@ export function MissionThreadedControllerHost({
           agenticRunTree.runId,
           {
             action: control.action,
+            expectedRevision: agenticRunTree.taskRevision!,
             controlId: `${agenticRunTree.runId}:${control.action}:${Date.now()}`,
             reason: "Mission Control operator action.",
           },
@@ -1467,6 +1951,15 @@ export function MissionThreadedControllerHost({
         await refreshOrchestrationRun();
         setAgenticControlStatus(response.message);
       } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 409) {
+          const refreshedTree = await resolveAgenticRunTree().catch(() => null);
+          setAgenticRunTree(refreshedTree);
+          const message =
+            "The run changed. Canonical state was refreshed; review it, then retry the control explicitly.";
+          setAgenticControlStatus(message);
+          pushLocalNotice(message, "warning");
+          return;
+        }
         const rawMessage = error instanceof Error ? error.message : String(error);
         const message = describeChatUiError(rawMessage, "refresh")?.summary ?? rawMessage;
         setAgenticControlStatus(message);
@@ -1475,7 +1968,13 @@ export function MissionThreadedControllerHost({
         setAgenticControlPending(null);
       }
     },
-    [agenticRunTree?.runId, pushLocalNotice, refreshOrchestrationRun, resolveAgenticRunTree],
+    [
+      agenticRunTree?.runId,
+      agenticRunTree?.taskRevision,
+      pushLocalNotice,
+      refreshOrchestrationRun,
+      resolveAgenticRunTree,
+    ],
   );
   const guardWorkbenchNavigation = useCallback(
     (action: () => void, message: string) => {
@@ -1721,6 +2220,10 @@ export function MissionThreadedControllerHost({
   const routeBoundaryAckRequired = requiresBoundaryAcknowledgment(currentRoutePreflight);
   const routePreflightPending = Boolean(selectedSessionId) && routePreflight.loading && !currentRoutePreflight;
   const routePreflightUnavailable = Boolean(selectedSessionId) && Boolean(routePreflight.error);
+  const historicalTargetIsSelected =
+    historicalWindowTarget?.workspaceId === workspaceId && historicalWindowTarget.sessionId === selectedSessionId;
+  const historicalModeActive =
+    historicalTargetIsSelected && Boolean(historicalWindow || historicalWindowLoading || historicalWindowError);
   const canSend =
     Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
     !sending &&
@@ -1729,11 +2232,25 @@ export function MissionThreadedControllerHost({
     !routeBlocked &&
     !routePreflightPending &&
     !routePreflightUnavailable &&
+    !historicalModeActive &&
     (!routeBoundaryAckRequired || currentRouteBoundaryAcknowledged);
+  const blockHistoricalMutation = useCallback(() => {
+    if (!historicalModeActive) return false;
+    pushLocalNotice("Return to the latest conversation before changing or sending anything.", "warning");
+    return true;
+  }, [historicalModeActive, pushLocalNotice]);
 
   const handleSelectSessionFromRail = useCallback(
-    (sessionId: string, options?: { turnId?: string | null }) => {
+    (sessionId: string, options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord }) => {
+      const openRequestedHistory = () => {
+        if (options?.searchHit) {
+          void openHistoricalWindow(sessionId, options.searchHit);
+        } else {
+          returnToLatest();
+        }
+      };
       if (sessionId === selectedSessionId) {
+        openRequestedHistory();
         setSelectedTurnId(options?.turnId ?? null);
         setSelectedContextTurnIds([]);
         setPendingThreadContext(null);
@@ -1743,6 +2260,7 @@ export function MissionThreadedControllerHost({
       }
       guardWorkbenchNavigation(() => {
         setSelectedSessionId(sessionId);
+        openRequestedHistory();
         setSelectedTurnId(options?.turnId ?? null);
         setSelectedContextTurnIds([]);
         setPendingThreadContext(null);
@@ -1750,7 +2268,14 @@ export function MissionThreadedControllerHost({
         setSessionRailOpen(false);
       }, "Switching sessions will discard the unsaved editor changes in the current Code workbench file.");
     },
-    [guardWorkbenchNavigation, selectedSessionId, setSelectedSessionId, setSelectedTurnId],
+    [
+      guardWorkbenchNavigation,
+      openHistoricalWindow,
+      returnToLatest,
+      selectedSessionId,
+      setSelectedSessionId,
+      setSelectedTurnId,
+    ],
   );
   const handleSessionRailOpenChange = useCallback(
     (next: boolean) => {
@@ -2029,7 +2554,12 @@ export function MissionThreadedControllerHost({
         setPrefs(optimisticPrefs);
       }
       try {
-        const updated = await updateChatSessionPrefs(sessionId, patch);
+        const baselinePrefs =
+          previousPrefs?.sessionId === sessionId ? previousPrefs : await fetchChatSessionPrefs(sessionId);
+        const updated = await updateChatSessionPrefs(sessionId, {
+          ...patch,
+          expectedRevision: baselinePrefs.revision,
+        });
         if (prefMutationSequenceRef.current !== mutationId) {
           return updated;
         }
@@ -2037,8 +2567,22 @@ export function MissionThreadedControllerHost({
           prefsRef.current = updated;
           setPrefs(updated);
         }
+        setPreferenceConflictDraft((current) => (current?.sessionId === sessionId ? null : current));
         return updated;
       } catch (err) {
+        if (err instanceof ApiRequestError && err.status === 409) {
+          const latestPrefs = await fetchChatSessionPrefs(sessionId);
+          await refreshChatSessionAggregate(sessionId);
+          if (shouldSyncLocalState) {
+            prefsRef.current = latestPrefs;
+            setPrefs(latestPrefs);
+          }
+          setPreferenceConflictDraft({ sessionId, patch });
+          setUiError(
+            "This chat changed elsewhere. Canonical preferences were refreshed; your unsaved preference draft is preserved for review and retry.",
+          );
+          throw err;
+        }
         if (prefMutationSequenceRef.current === mutationId && previousPrefs) {
           prefsRef.current = previousPrefs;
           setPrefs(previousPrefs);
@@ -2047,7 +2591,7 @@ export function MissionThreadedControllerHost({
         throw err;
       }
     },
-    [prefsRef, selectedSession, setPrefs],
+    [prefsRef, refreshChatSessionAggregate, selectedSession, setPrefs],
   );
   const handlePrefPatch = useCallback(
     async (patch: ChatSessionPrefsPatch) => {
@@ -2060,6 +2604,19 @@ export function MissionThreadedControllerHost({
     },
     [applyPrefPatchToSession, selectedSession],
   );
+  const handleRetryPreferenceDraft = useCallback(async () => {
+    if (!preferenceConflictDraft) return;
+    try {
+      await applyPrefPatchToSession(preferenceConflictDraft.sessionId, preferenceConflictDraft.patch);
+    } catch (_error) {
+      // The mutation helper preserves the draft and surfaces the current error.
+      void _error;
+    }
+  }, [applyPrefPatchToSession, preferenceConflictDraft]);
+  const handleDiscardPreferenceDraft = useCallback(() => {
+    setPreferenceConflictDraft(null);
+    setUiError(null);
+  }, [setUiError]);
   const handleToggleContextTurn = useCallback((turnId: string) => {
     setSelectedContextTurnIds((current) =>
       current.includes(turnId) ? current.filter((item) => item !== turnId) : [...current, turnId],
@@ -2511,28 +3068,63 @@ export function MissionThreadedControllerHost({
         return;
       }
       try {
-        const response = await setChatSessionGoal(selectedSessionId, { goal, turnBudget });
+        if (!selectedSession) {
+          return;
+        }
+        const response = await setChatSessionGoal(selectedSessionId, {
+          goal,
+          turnBudget,
+          expectedRevision: selectedSession.revision,
+        });
         setPinnedGoal(response.goal ?? undefined);
+        await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSessionId });
         pushLocalNotice(`Goal set: ${response.goal ?? goal}`, "success");
       } catch (cause) {
-        setUiError(cause instanceof Error ? cause.message : "Failed to set goal.");
+        if (cause instanceof ApiRequestError && cause.status === 409) {
+          await refreshChatSessionAggregate(selectedSessionId);
+          setUiError("This chat changed elsewhere. Your goal draft is preserved; review it and retry.");
+        } else {
+          setUiError(cause instanceof Error ? cause.message : "Failed to set goal.");
+        }
       }
     },
-    [pushLocalNotice, selectedSessionId, setUiError],
+    [
+      historyView,
+      loadSidebar,
+      pushLocalNotice,
+      refreshChatSessionAggregate,
+      selectedSession,
+      selectedSessionId,
+      setUiError,
+    ],
   );
 
   const handleClearGoal = useCallback(async () => {
-    if (!selectedSessionId) {
+    if (!selectedSessionId || !selectedSession) {
       return;
     }
     try {
-      await clearChatSessionGoal(selectedSessionId);
+      await clearChatSessionGoal(selectedSessionId, selectedSession.revision);
       setPinnedGoal(undefined);
+      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSessionId });
       pushLocalNotice("Goal cleared.", "success");
     } catch (cause) {
-      setUiError(cause instanceof Error ? cause.message : "Failed to clear goal.");
+      if (cause instanceof ApiRequestError && cause.status === 409) {
+        await refreshChatSessionAggregate(selectedSessionId);
+        setUiError("This chat changed elsewhere. Review the latest goal, then clear it again.");
+      } else {
+        setUiError(cause instanceof Error ? cause.message : "Failed to clear goal.");
+      }
     }
-  }, [pushLocalNotice, selectedSessionId, setUiError]);
+  }, [
+    historyView,
+    loadSidebar,
+    pushLocalNotice,
+    refreshChatSessionAggregate,
+    selectedSession,
+    selectedSessionId,
+    setUiError,
+  ]);
 
   const handleGoalStatus = useCallback(async () => {
     if (!selectedSessionId) {
@@ -2604,6 +3196,7 @@ export function MissionThreadedControllerHost({
         pushLocalNotice(`Usage: /queue ${queueCommand.kind} <message>`, "warning");
         return;
       }
+      const modelCouncil = consumeModelCouncilArming();
       setQueuedOutbound((current) => [
         ...current,
         {
@@ -2614,6 +3207,7 @@ export function MissionThreadedControllerHost({
           attachments: pendingAttachments,
           createdAt: new Date().toISOString(),
           paused: queueCommand.kind === "collect",
+          ...(modelCouncil ? { modelCouncil } : {}),
         },
       ]);
       setDraft("");
@@ -2658,6 +3252,7 @@ export function MissionThreadedControllerHost({
     }
   }, [
     attachPendingKnowledgeSources,
+    consumeModelCouncilArming,
     draft,
     editingTurnId,
     handleGenerateImage,
@@ -2679,8 +3274,14 @@ export function MissionThreadedControllerHost({
   ]);
 
   useEffect(() => {
-    composerSendHandlerRef.current = handleSendWithKnowledge;
-  }, [handleSendWithKnowledge]);
+    composerSendHandlerRef.current = async () => {
+      if (historicalModeActive) {
+        pushLocalNotice("Return to the latest conversation before sending a message.", "warning");
+        return;
+      }
+      await handleSendWithKnowledge();
+    };
+  }, [handleSendWithKnowledge, historicalModeActive, pushLocalNotice]);
 
   const threadNotices = useMemo(() => [...lifecycleNotices, ...localNotices], [lifecycleNotices, localNotices]);
   const queueItems = useMemo(
@@ -2760,14 +3361,22 @@ export function MissionThreadedControllerHost({
       hasMoreSessions: !deferredSearch && Boolean(sidebarNextCursor),
       loadingMoreSessions: sidebarLoadingMore,
       onToggleProjectCreate: () => setShowProjectCreate((current) => !current),
-      onCreateSession: handleCreateCurrentModeSession,
+      onCreateSession: () => {
+        if (!blockHistoricalMutation()) void handleCreateCurrentModeSession();
+      },
       onSearchChange: setSearch,
       onProjectNameChange: setProjectName,
       onProjectPathChange: setProjectPath,
-      onCreateProject: () => void handleCreateProject(),
+      onCreateProject: () => {
+        if (!blockHistoricalMutation()) void handleCreateProject();
+      },
       onHistoryViewChange: setHistoryView,
-      onArchiveWorkspace: handleArchiveWorkspace,
-      onConfirmArchiveWorkspace: handleConfirmArchiveWorkspace,
+      onArchiveWorkspace: () => {
+        if (!blockHistoricalMutation()) handleArchiveWorkspace();
+      },
+      onConfirmArchiveWorkspace: async () => {
+        if (!blockHistoricalMutation()) await handleConfirmArchiveWorkspace();
+      },
       onSelectProjectId: setSelectedProjectId,
       onSelectFolderId: setSelectedFolderId,
       onSelectTag: setSelectedTag,
@@ -2778,6 +3387,7 @@ export function MissionThreadedControllerHost({
     [
       archiveWorkspacePending,
       availableFolders,
+      blockHistoricalMutation,
       deferredSearch,
       externalSessions,
       handleArchiveWorkspace,
@@ -2833,14 +3443,17 @@ export function MissionThreadedControllerHost({
         providerOptions,
         selectedProviderId,
         selectedModel,
-        modelSwitchDisabled: !selectedSessionId || sending,
+        modelSwitchDisabled: !selectedSessionId || sending || historicalModeActive,
         sessionLifecycleStatus: selectedSession.lifecycleStatus,
         sessionArchivePending: sessionControlPending === "archive",
         dockOpen,
         onToggleDock: handleToggleDock,
-        onToggleArchiveSession: () => void handleToggleArchiveSession(),
+        onToggleArchiveSession: () => {
+          if (!blockHistoricalMutation()) void handleToggleArchiveSession();
+        },
         onNavigateSurface: handleNavigateSurface,
         onModeOverride: (_mode: ChatMode) => {
+          if (blockHistoricalMutation()) return;
           // A user-initiated override change: mark it so a later session switch
           // honors this explicit choice instead of snapping back to a URL seed.
           userAdjustedModeOverrideRef.current = true;
@@ -2849,6 +3462,7 @@ export function MissionThreadedControllerHost({
         },
         modeOverridePending: modeOverride,
         onRequestProviderChange: (providerId) => {
+          if (blockHistoricalMutation()) return;
           const provider = providerOptions.find((item) => item.providerId === providerId);
           const selection = resolveProviderModelSelection({
             provider,
@@ -2858,8 +3472,18 @@ export function MissionThreadedControllerHost({
           void loadModelsForProvider(providerId);
           requestThreadModelPatch({ providerId, model: selection.model ?? "" });
         },
-        onRequestModelChange: (model) => requestThreadModelPatch({ model }),
+        onRequestModelChange: (model) => {
+          if (!blockHistoricalMutation()) requestThreadModelPatch({ model });
+        },
         loading: messagesLoading,
+        historicalWindow: historicalTargetIsSelected ? historicalWindow : null,
+        historicalWindowLoading: historicalTargetIsSelected && historicalWindowLoading,
+        historicalWindowError: historicalTargetIsSelected ? historicalWindowError : null,
+        onReturnToLatest: returnToLatest,
+        historicalContinuationLoading: historicalTargetIsSelected ? historicalContinuationLoading : null,
+        historicalContinuationError: historicalTargetIsSelected ? historicalContinuationError : null,
+        onLoadHistoricalContinuation: (direction) => void loadHistoricalContinuation(direction),
+        historicalReadOnly: historicalModeActive,
         thread,
         selectedTurnId,
         selectedContextTurnIds,
@@ -2889,10 +3513,18 @@ export function MissionThreadedControllerHost({
         },
         onToggleContextTurn: handleToggleContextTurn,
         onClearContextSelection: handleClearContextSelection,
-        onStartNewThreadFromTurn: (turnId) => void handleStartNewThreadFromTurn(turnId),
-        onSwitchBranch: (turnId) => void handleSelectBranchTurnAndSync(turnId),
-        onRetryTurn: (turnId) => void handleRetryTurn(turnId),
-        onEditTurn: handleBeginEditTurn,
+        onStartNewThreadFromTurn: (turnId) => {
+          if (!blockHistoricalMutation()) void handleStartNewThreadFromTurn(turnId);
+        },
+        onSwitchBranch: (turnId) => {
+          if (!blockHistoricalMutation()) void handleSelectBranchTurnAndSync(turnId);
+        },
+        onRetryTurn: (turnId) => {
+          if (!blockHistoricalMutation()) void handleRetryTurn(turnId);
+        },
+        onEditTurn: (turnId) => {
+          if (!blockHistoricalMutation()) handleBeginEditTurn(turnId);
+        },
         onOpenRunDetails: (turnId) => {
           if (dockOpen && selectedTurnId === turnId) {
             handleDockOpenChange(false);
@@ -2903,18 +3535,33 @@ export function MissionThreadedControllerHost({
         },
         onExportRunBundle: () => void handleExportRunBundle(),
         onOpenGeneratedArtifact: (turnId) => void handleOpenGeneratedArtifactFromTurn(turnId),
-        onCreateGeneratedArtifact: (turnId) => void handleCreateGeneratedArtifactFromTurn(turnId),
-        onCreateGeneratedArtifactVersion: (turnId) =>
-          void handleCreateGeneratedArtifactFromTurn(turnId, { supersedeLatest: true }),
+        onCreateGeneratedArtifact: (turnId) => {
+          if (!blockHistoricalMutation()) void handleCreateGeneratedArtifactFromTurn(turnId);
+        },
+        onCreateGeneratedArtifactVersion: (turnId) => {
+          if (!blockHistoricalMutation()) {
+            void handleCreateGeneratedArtifactFromTurn(turnId, { supersedeLatest: true });
+          }
+        },
         onOpenPersonalitiesSettings,
         onOpenLibraryArtifacts,
         onOpenOpsRuntime,
-        onAcceptDelegation: handleAcceptDelegation,
+        onAcceptDelegation: async () => {
+          if (!blockHistoricalMutation()) await handleAcceptDelegation();
+        },
         onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
-        onApprovePending: (allowScope) => void handleApprovePending(allowScope),
-        onDenyPending: () => void handleDenyPending(),
+        // Historical transcript reads are mutation-locked. Only stop/cancel
+        // controls remain live as safety escapes; approvals and input do not.
+        onApprovePending: (allowScope) => {
+          if (!blockHistoricalMutation()) void handleApprovePending(allowScope);
+        },
+        onDenyPending: () => {
+          if (!blockHistoricalMutation()) void handleDenyPending();
+        },
         onOpenApprovals,
-        onSubmitUserInput: (response) => void handleSubmitUserInput(response),
+        onSubmitUserInput: (response) => {
+          if (!blockHistoricalMutation()) void handleSubmitUserInput(response);
+        },
         onRefreshThread: () => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true }),
         isDragActive,
         queueItems,
@@ -2932,9 +3579,11 @@ export function MissionThreadedControllerHost({
         presetApplyWarning,
         selectedTurnRecovery,
         selectedTurn,
+        capabilityProfileInspection,
         selectedSessionId,
         currentWebMode: prefs?.webMode ?? "auto",
         currentReviewDepth: prefs?.orchestrationReviewDepth ?? "off",
+        modelCouncilEnabled,
         fullWebAccess,
         currentThinkingLevel: prefs?.thinkingLevel ?? "standard",
         currentSpeedMode: prefs?.speedMode ?? "standard",
@@ -2954,39 +3603,110 @@ export function MissionThreadedControllerHost({
         onDragEnter: handleDragEnter,
         onDragOver: handleDragOver,
         onDragLeave: handleDragLeave,
-        onDrop: handleDrop,
-        onResumeAll: handleResumeQueue,
-        onRemoveQueuedItem: handleRemoveQueuedItem,
+        onDrop: (event) => {
+          if (blockHistoricalMutation()) {
+            event.preventDefault();
+            return;
+          }
+          handleDrop(event as Parameters<typeof handleDrop>[0]);
+        },
+        onResumeAll: () => {
+          if (!blockHistoricalMutation()) handleResumeQueue();
+        },
+        onRemoveQueuedItem: (id) => {
+          if (!blockHistoricalMutation()) handleRemoveQueuedItem(id);
+        },
         onCancelEdit: handleCancelEdit,
         onDismissError: handleDismissError,
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
-        onTogglePlanningMode: handleTogglePlanningMode,
-        onToggleResearchMode: handleToggleResearchMode,
-        onToggleReviewMode: handleToggleReviewMode,
-        onSetDeepMode: () => handleSetDeepMode(),
-        onFullWebAccessChange: setFullWebAccess,
-        onSetThinkingLevel: (level) => void handlePrefPatch({ thinkingLevel: level }),
-        onSetSpeedMode: (mode) => void handlePrefPatch({ speedMode: mode }),
-        onSetSubagentPolicy: (policy) => void handlePrefPatch({ subagentPolicy: policy }),
+        onTogglePlanningMode: () => {
+          if (!blockHistoricalMutation()) handleTogglePlanningMode();
+        },
+        onToggleResearchMode: () => {
+          if (!blockHistoricalMutation()) handleToggleResearchMode();
+        },
+        onToggleReviewMode: () => {
+          if (!blockHistoricalMutation()) handleToggleReviewMode();
+        },
+        onToggleModelCouncil: () => {
+          if (!blockHistoricalMutation()) {
+            const next = !modelCouncilEnabledRef.current;
+            modelCouncilEnabledRef.current = next;
+            setModelCouncilEnabled(next);
+          }
+        },
+        onSetDeepMode: () => {
+          if (!blockHistoricalMutation()) handleSetDeepMode();
+        },
+        onFullWebAccessChange: (value) => {
+          if (!blockHistoricalMutation()) setFullWebAccess(value);
+        },
+        onSetThinkingLevel: (level) => {
+          if (!blockHistoricalMutation()) void handlePrefPatch({ thinkingLevel: level });
+        },
+        onSetSpeedMode: (mode) => {
+          if (!blockHistoricalMutation()) void handlePrefPatch({ speedMode: mode });
+        },
+        onSetSubagentPolicy: (policy) => {
+          if (!blockHistoricalMutation()) void handlePrefPatch({ subagentPolicy: policy });
+        },
         onReviewRunDetails: handleRevealSelectedTurnDetails,
-        onDraftChange: setDraft,
-        onComposerKeyDown: handleComposerKeyDown,
-        onComposerPaste: handleComposerPaste,
-        onApplyDraftCommand: handleApplyDraftCommand,
-        onPresetChange: setSelectedPresetId,
-        onApplyPreset: () => void handleApplyPreset(),
+        onDraftChange: (value) => {
+          if (!blockHistoricalMutation()) setDraft(value);
+        },
+        onComposerKeyDown: (event) => {
+          if (blockHistoricalMutation()) {
+            event.preventDefault();
+            return;
+          }
+          handleComposerKeyDown(event);
+        },
+        onComposerPaste: (event) => {
+          if (blockHistoricalMutation()) {
+            event.preventDefault();
+            return;
+          }
+          handleComposerPaste(event);
+        },
+        onApplyDraftCommand: (command) => {
+          if (!blockHistoricalMutation()) handleApplyDraftCommand(command);
+        },
+        onPresetChange: (value) => {
+          if (!blockHistoricalMutation()) setSelectedPresetId(value);
+        },
+        onApplyPreset: () => {
+          if (!blockHistoricalMutation()) void handleApplyPreset();
+        },
         onDismissPresetWarning: () => setPresetApplyWarning(null),
-        onSetAttachmentMode: handleSetPendingAttachmentMode,
-        onRemoveThreadKnowledgeAttachment: (attachmentId) => void handleRemoveThreadKnowledge(attachmentId),
+        onSetAttachmentMode: (attachmentId, mode) => {
+          if (!blockHistoricalMutation()) handleSetPendingAttachmentMode(attachmentId, mode);
+        },
+        onRemoveThreadKnowledgeAttachment: (attachmentId) => {
+          if (!blockHistoricalMutation()) void handleRemoveThreadKnowledge(attachmentId);
+        },
         knowledgeUrlDraft,
         knowledgeUrlMode,
-        onKnowledgeUrlDraftChange: setKnowledgeUrlDraft,
-        onKnowledgeUrlModeChange: setKnowledgeUrlMode,
-        onAttachKnowledgeUrl: () => void handleAttachKnowledgeUrl(),
-        onRemoveAttachment: handleRemoveAttachment,
-        onAttachFiles: () => fileInputRef.current?.click(),
-        onUploadFiles: handleUploadFiles,
-        onRunQuickResearch: () => void handleRunQuickResearch(),
+        onKnowledgeUrlDraftChange: (value) => {
+          if (!blockHistoricalMutation()) setKnowledgeUrlDraft(value);
+        },
+        onKnowledgeUrlModeChange: (value) => {
+          if (!blockHistoricalMutation()) setKnowledgeUrlMode(value);
+        },
+        onAttachKnowledgeUrl: () => {
+          if (!blockHistoricalMutation()) void handleAttachKnowledgeUrl();
+        },
+        onRemoveAttachment: (attachmentId) => {
+          if (!blockHistoricalMutation()) handleRemoveAttachment(attachmentId);
+        },
+        onAttachFiles: () => {
+          if (!blockHistoricalMutation()) fileInputRef.current?.click();
+        },
+        onUploadFiles: (files) => {
+          if (!blockHistoricalMutation()) handleUploadFiles(files);
+        },
+        onRunQuickResearch: () => {
+          if (!blockHistoricalMutation()) void handleRunQuickResearch();
+        },
         voiceBusy,
         liveVoiceActive,
         liveVoiceAvailable,
@@ -3006,9 +3726,10 @@ export function MissionThreadedControllerHost({
         imageProviderOptions,
         selectedImageProviderId,
         selectedImageModel,
-        imageRouteSwitchDisabled: !selectedSessionId || sending,
+        imageRouteSwitchDisabled: !selectedSessionId || sending || historicalModeActive,
         imageRouteLabel,
         onRequestImageProviderChange: (providerId) => {
+          if (blockHistoricalMutation()) return;
           const provider = imageProviderOptions.find((item) => item.providerId === providerId);
           void loadModelsForProvider(providerId);
           void handlePrefPatch({
@@ -3016,38 +3737,68 @@ export function MissionThreadedControllerHost({
             imageModel: provider?.defaultModel ?? provider?.models[0] ?? "",
           });
         },
-        onRequestImageModelChange: (model) =>
+        onRequestImageModelChange: (model) => {
+          if (blockHistoricalMutation()) return;
           void handlePrefPatch({
             imageProviderId: selectedImageProviderId ?? "",
             imageModel: model,
-          }),
-        onToggleLiveVoice: () => void handleToggleLiveVoice(),
-        onToggleLiveVoiceMute: handleToggleLiveVoiceMute,
-        onToggleVoiceTalk: () => void handleToggleVoiceTalk(),
-        onOpenAudioTranscribe: handleOpenAudioTranscribe,
-        onAudioFileSelected: handleAudioFileSelected,
-        onToggleSpeakResponses: () => setSpeakResponsesEnabled((current) => !current),
-        onGenerateImage: () => void handleGenerateImage(),
-        onEditImage: () => void handleEditImage(),
+          });
+        },
+        onToggleLiveVoice: () => {
+          if (!blockHistoricalMutation()) void handleToggleLiveVoice();
+        },
+        onToggleLiveVoiceMute: () => {
+          if (!blockHistoricalMutation()) handleToggleLiveVoiceMute();
+        },
+        onToggleVoiceTalk: () => {
+          if (!blockHistoricalMutation()) void handleToggleVoiceTalk();
+        },
+        onOpenAudioTranscribe: () => {
+          if (!blockHistoricalMutation()) handleOpenAudioTranscribe();
+        },
+        onAudioFileSelected: (files) => {
+          if (!blockHistoricalMutation()) handleAudioFileSelected(files);
+        },
+        onToggleSpeakResponses: () => {
+          if (!blockHistoricalMutation()) setSpeakResponsesEnabled((current) => !current);
+        },
+        onGenerateImage: () => {
+          if (!blockHistoricalMutation()) void handleGenerateImage();
+        },
+        onEditImage: () => {
+          if (!blockHistoricalMutation()) void handleEditImage();
+        },
         activeGeneratedArtifact,
         onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
         onStopActiveTurn: () => void handleStopActiveTurn(),
-        onSend: () => void handleSendWithKnowledge(),
+        onSend: () => void handleComposerSend(),
         coworkStopRunControl: resolveCoworkComposerStopControl({
           mode: messageMode,
           delegationRunStatus: visibleDelegationRun?.status,
           controls: coworkViewModel.agenticRuntime?.controls,
         }),
-        onCoworkStopRun: (control) => void handleAgenticControl(control),
+        onCoworkStopRun: (control) => {
+          if (historicalModeActive && control.action !== "cancel") {
+            blockHistoricalMutation();
+            return;
+          }
+          void handleAgenticControl(control);
+        },
         coworkStopRunPending: agenticControlPending === "cancel",
         pinnedGoal,
         midTurnDisposition: resolveMidTurnDisposition({
           hasActiveStream: Boolean(activeStreamRef.current),
           draft,
         }),
-        onSteerMidTurn: handleSteerMidTurn,
-        onSetGoal: handleSetGoal,
-        onClearGoal: handleClearGoal,
+        onSteerMidTurn: async (instruction) => {
+          if (!blockHistoricalMutation()) await handleSteerMidTurn(instruction);
+        },
+        onSetGoal: async (goal, turnBudget) => {
+          if (!blockHistoricalMutation()) await handleSetGoal(goal, turnBudget);
+        },
+        onClearGoal: async () => {
+          if (!blockHistoricalMutation()) await handleClearGoal();
+        },
         onGoalStatus: handleGoalStatus,
         surfaceRoutePreview: surfacePreview,
         autoRouteActive,
@@ -3060,7 +3811,9 @@ export function MissionThreadedControllerHost({
     projectCount: projects?.items.length ?? 0,
     workspaceName,
     approvalsCount,
-    onCreateSession: handleCreateCurrentModeSession,
+    onCreateSession: () => {
+      if (!blockHistoricalMutation()) void handleCreateCurrentModeSession();
+    },
     onOpenCowork,
     onOpenCode,
     onOpenTasks,
@@ -3074,7 +3827,11 @@ export function MissionThreadedControllerHost({
           kind: "cowork",
           props: {
             viewModel: coworkViewModel,
-            onRetryTurn: activeWorkflowTurn ? () => void handleRetryTurn(activeWorkflowTurn.turnId) : undefined,
+            onRetryTurn: activeWorkflowTurn
+              ? () => {
+                  if (!blockHistoricalMutation()) void handleRetryTurn(activeWorkflowTurn.turnId);
+                }
+              : undefined,
             onStopTurn:
               activeWorkflowTurn && isChatTurnActiveStatus(activeWorkflowTurn.trace.status)
                 ? () => void handleStopActiveTurn()
@@ -3083,7 +3840,13 @@ export function MissionThreadedControllerHost({
             onOpenDetails: () => handleRevealActiveTurnDetails(),
             onFocusComposer: () => composerRef.current?.focus(),
             onRefreshRunState: () => void refreshOrchestrationRun(),
-            onAgenticControl: (control) => void handleAgenticControl(control),
+            onAgenticControl: (control) => {
+              if (historicalModeActive && control.action !== "cancel") {
+                blockHistoricalMutation();
+                return;
+              }
+              void handleAgenticControl(control);
+            },
             agenticControlPending,
             agenticControlStatus,
           },
@@ -3115,21 +3878,36 @@ export function MissionThreadedControllerHost({
               selectedProjectCandidateId: selectedProjectBindingCandidateId,
               sourceBindingBusy: sessionControlPending === "project" || sessionControlPending === "code_source",
               onBindExistingProject: async (projectId) => {
-                await handleAssignProject(projectId);
+                if (!blockHistoricalMutation()) await handleAssignProject(projectId);
               },
               onImportProjectSource: async (input) => {
-                await handleImportCodeProject(input);
+                if (!blockHistoricalMutation()) await handleImportCodeProject(input);
               },
-              onCreateWorktree: () => void createWorkbenchWorktree(workbenchState?.baseRef),
+              onCreateWorktree: () => {
+                if (!blockHistoricalMutation()) void createWorkbenchWorktree(workbenchState?.baseRef);
+              },
               onSelectFile: (relativePath) => void openWorkbenchFile(relativePath),
-              onDraftChange: (nextValue) => setWorkbenchDraftContent(nextValue),
+              onDraftChange: (nextValue) => {
+                if (!blockHistoricalMutation()) setWorkbenchDraftContent(nextValue);
+              },
               onExpandedPathsChange: (nextPaths) => setWorkbenchExpandedPaths(nextPaths),
               onRefresh: () => void refreshWorkbench(),
-              onSaveFile: () => void saveWorkbenchFile(),
-              onFileOperation: (input) => runWorkbenchFileOperation(input),
-              onDiscardDraft: () => discardWorkbenchDraft(),
-              onRunValidationCommand: (input) => void runWorkbenchValidationCommand(input),
-              onApplyPatch: (patch) => void applyWorkbenchPatch(patch),
+              onSaveFile: () => {
+                if (!blockHistoricalMutation()) void saveWorkbenchFile();
+              },
+              onFileOperation: async (input) => {
+                if (blockHistoricalMutation()) return false;
+                return runWorkbenchFileOperation(input);
+              },
+              onDiscardDraft: () => {
+                if (!blockHistoricalMutation()) discardWorkbenchDraft();
+              },
+              onRunValidationCommand: (input) => {
+                if (!blockHistoricalMutation()) void runWorkbenchValidationCommand(input);
+              },
+              onApplyPatch: (patch) => {
+                if (!blockHistoricalMutation()) void applyWorkbenchPatch(patch);
+              },
               onExportPatch: async () => {
                 const response = await exportWorkbenchPatch();
                 if (!response) {
@@ -3153,9 +3931,15 @@ export function MissionThreadedControllerHost({
                   "success",
                 );
               },
-              onRevertFile: (relativePath) => void revertWorkbenchFile(relativePath),
-              onRevertAll: () => void revertWorkbenchAll(),
-              onRunHelperSnippet: (language, source) => void handleRunCodeHelper(language, source),
+              onRevertFile: (relativePath) => {
+                if (!blockHistoricalMutation()) void revertWorkbenchFile(relativePath);
+              },
+              onRevertAll: () => {
+                if (!blockHistoricalMutation()) void revertWorkbenchAll();
+              },
+              onRunHelperSnippet: (language, source) => {
+                if (!blockHistoricalMutation()) void handleRunCodeHelper(language, source);
+              },
               onOpenApprovals,
             },
           }
@@ -3173,12 +3957,22 @@ export function MissionThreadedControllerHost({
     dropTargetProps: {
       isDragActive,
       fileInputRef,
-      onAttachFiles: () => fileInputRef.current?.click(),
-      onUploadFiles: handleUploadFiles,
+      onAttachFiles: () => {
+        if (!blockHistoricalMutation()) fileInputRef.current?.click();
+      },
+      onUploadFiles: (files) => {
+        if (!blockHistoricalMutation()) handleUploadFiles(files);
+      },
       onDragEnter: handleDragEnter as DragEventHandler<HTMLElement>,
       onDragOver: handleDragOver as DragEventHandler<HTMLElement>,
       onDragLeave: handleDragLeave as DragEventHandler<HTMLElement>,
-      onDrop: handleDrop as DragEventHandler<HTMLElement>,
+      onDrop: ((event) => {
+        if (blockHistoricalMutation()) {
+          event.preventDefault();
+          return;
+        }
+        handleDrop(event as Parameters<typeof handleDrop>[0]);
+      }) as DragEventHandler<HTMLElement>,
     },
     workflowPanel,
     btwSideChatProps,
@@ -3205,12 +3999,23 @@ export function MissionThreadedControllerHost({
           selectedModel,
           streamEnabled,
           visualStreamMode,
-          onStreamEnabledChange: setStreamEnabled,
-          onVisualStreamModeChange: setVisualStreamMode,
+          onStreamEnabledChange: (value) => {
+            if (!blockHistoricalMutation()) setStreamEnabled(value);
+          },
+          onVisualStreamModeChange: (value) => {
+            if (!blockHistoricalMutation()) setVisualStreamMode(value);
+          },
           prefs,
+          preferenceConflictDraft:
+            preferenceConflictDraft?.sessionId === selectedSession.sessionId ? preferenceConflictDraft.patch : null,
+          onRetryPreferenceConflictDraft: async () => {
+            if (!blockHistoricalMutation()) await handleRetryPreferenceDraft();
+          },
+          onDiscardPreferenceConflictDraft: handleDiscardPreferenceDraft,
           selectedSessionId,
           showTracePanel,
           selectedTurn,
+          capabilityProfileInspection,
           activeGeneratedArtifact,
           routePreflight: currentRoutePreflight,
           trust: sessionTrust,
@@ -3221,6 +4026,8 @@ export function MissionThreadedControllerHost({
           coworkItems,
           coworkViewModel,
           proactiveStatus,
+          proactivePolicyDraft,
+          proactivePolicyConflict,
           proactiveRuns,
           proactiveSuggestionCount,
           capabilitySuggestions,
@@ -3237,36 +4044,84 @@ export function MissionThreadedControllerHost({
           loadModelsForProvider,
           getCachedModels,
           resolveProviderModelSelection,
-          onPrefPatch: handlePrefPatch,
-          onSuggestDelegation: handleSuggestDelegation,
-          onTriggerProactive: handleTriggerProactive,
-          onProactivePolicyPatch: handleProactivePolicyPatch,
-          onRunCodeDelegation: handleRunCodeDelegation,
-          onCapabilitySuggestionAction: handleCapabilitySuggestionAction,
-          onCreateSpecialistDraft: handleCreateSpecialistDraft,
-          onActivateCatalogSpecialist: handleActivateCatalogSpecialist,
-          onSpecialistCandidatePatch: handleSpecialistCandidatePatch,
-          onAcceptDelegation: handleAcceptDelegation,
-          onRebuildLearnedMemory: handleRebuildLearnedMemory,
-          onUpdateMemoryStatus: handleMemoryStatusUpdate,
+          onPrefPatch: async (patch) => {
+            if (!blockHistoricalMutation()) await handlePrefPatch(patch);
+          },
+          onSuggestDelegation: async () => {
+            if (!blockHistoricalMutation()) await handleSuggestDelegation();
+          },
+          onTriggerProactive: async () => {
+            if (!blockHistoricalMutation()) await handleTriggerProactive();
+          },
+          onProactivePolicyPatch: async (patch) => {
+            if (!blockHistoricalMutation()) await handleProactivePolicyPatch(patch);
+          },
+          onRunCodeDelegation: async (presetKey) => {
+            if (!blockHistoricalMutation()) await handleRunCodeDelegation(presetKey);
+          },
+          onCapabilitySuggestionAction: (suggestion) => {
+            if (!blockHistoricalMutation()) handleCapabilitySuggestionAction(suggestion);
+          },
+          onCreateSpecialistDraft: async (suggestion) => {
+            if (!blockHistoricalMutation()) await handleCreateSpecialistDraft(suggestion);
+          },
+          onActivateCatalogSpecialist: async (suggestion) => {
+            if (!blockHistoricalMutation()) await handleActivateCatalogSpecialist(suggestion);
+          },
+          onSpecialistCandidatePatch: async (candidateId, patch, notice) => {
+            if (!blockHistoricalMutation()) await handleSpecialistCandidatePatch(candidateId, patch, notice);
+          },
+          onAcceptDelegation: async () => {
+            if (!blockHistoricalMutation()) await handleAcceptDelegation();
+          },
+          onRebuildLearnedMemory: async () => {
+            if (!blockHistoricalMutation()) await handleRebuildLearnedMemory();
+          },
+          onUpdateMemoryStatus: async (itemId, status) => {
+            if (!blockHistoricalMutation()) await handleMemoryStatusUpdate(itemId, status);
+          },
           onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
-          onRenameTitleChange: setRenameTitle,
+          onRenameTitleChange: (value) => {
+            if (!blockHistoricalMutation()) handleRenameTitleChange(value);
+          },
           renameTitle,
           folderName,
-          onFolderNameChange: setFolderName,
+          onFolderNameChange: (value) => {
+            if (!blockHistoricalMutation()) handleFolderNameChange(value);
+          },
           tagsValue,
-          onTagsValueChange: setTagsValue,
-          onRenameSession: handleRenameSession,
-          onSaveOrganization: handleSaveOrganization,
-          onTogglePinSession: handleTogglePinSession,
-          onToggleArchiveSession: handleToggleArchiveSession,
-          onDeleteSession: () => handleDeleteSession(formatSessionLabel(selectedSession)),
-          onAssignProject: handleAssignProject,
+          onTagsValueChange: (value) => {
+            if (!blockHistoricalMutation()) handleTagsValueChange(value);
+          },
+          onRenameSession: async () => {
+            if (!blockHistoricalMutation()) await handleRenameSession();
+          },
+          onSaveOrganization: async () => {
+            if (!blockHistoricalMutation()) await handleSaveOrganization();
+          },
+          onTogglePinSession: async () => {
+            if (!blockHistoricalMutation()) await handleTogglePinSession();
+          },
+          onToggleArchiveSession: async () => {
+            if (!blockHistoricalMutation()) await handleToggleArchiveSession();
+          },
+          onDeleteSession: () => {
+            if (!blockHistoricalMutation()) handleDeleteSession(formatSessionLabel(selectedSession));
+          },
+          onAssignProject: async (value) => {
+            if (!blockHistoricalMutation()) await handleAssignProject(value);
+          },
           onExportSnapshot: handleExportSessionSnapshot,
           onExportRunBundle: handleExportRunBundle,
-          onIntegrationConnectionIdChange: setIntegrationConnectionId,
-          onIntegrationTargetChange: setIntegrationTarget,
-          onSaveExternalBinding: handleSaveExternalBinding,
+          onIntegrationConnectionIdChange: (value) => {
+            if (!blockHistoricalMutation()) setIntegrationConnectionId(value);
+          },
+          onIntegrationTargetChange: (value) => {
+            if (!blockHistoricalMutation()) setIntegrationTarget(value);
+          },
+          onSaveExternalBinding: async () => {
+            if (!blockHistoricalMutation()) await handleSaveExternalBinding();
+          },
         }
       : null,
   };
@@ -3338,7 +4193,9 @@ export function MissionThreadedControllerHost({
         cancelDisabled={capabilitySuggestionPending}
         disableDismiss={capabilitySuggestionPending}
         onCancel={() => setCapabilitySuggestionConfirm(null)}
-        onConfirm={handleConfirmCapabilitySuggestion}
+        onConfirm={async () => {
+          if (!blockHistoricalMutation()) await handleConfirmCapabilitySuggestion();
+        }}
       />
       <ConfirmModal
         open={Boolean(workbenchDiscardConfirm)}
@@ -3366,6 +4223,9 @@ export function MissionThreadedControllerHost({
           if (!threadModelSwitchConfirm) {
             return;
           }
+          if (blockHistoricalMutation()) {
+            return;
+          }
           const patch = threadModelSwitchConfirm.patch;
           setThreadModelSwitchConfirm(null);
           void applyThreadModelPatch(patch);
@@ -3381,7 +4241,9 @@ export function MissionThreadedControllerHost({
         cancelDisabled={sessionControlPending === "delete"}
         disableDismiss={sessionControlPending === "delete"}
         onCancel={() => setSessionDeleteConfirm(null)}
-        onConfirm={handleConfirmDeleteSession}
+        onConfirm={async () => {
+          if (!blockHistoricalMutation()) await handleConfirmDeleteSession();
+        }}
       />
       <ConfirmModal
         open={archiveWorkspaceConfirmOpen}
@@ -3393,7 +4255,9 @@ export function MissionThreadedControllerHost({
         cancelDisabled={archiveWorkspacePending}
         disableDismiss={archiveWorkspacePending}
         onCancel={() => setArchiveWorkspaceConfirmOpen(false)}
-        onConfirm={handleConfirmArchiveWorkspace}
+        onConfirm={async () => {
+          if (!blockHistoricalMutation()) await handleConfirmArchiveWorkspace();
+        }}
       />
     </section>
   );

@@ -1,0 +1,489 @@
+/* Trusted saved Ops boards: compact mission-planning layouts over canonical sources. */
+.mc-next-ops-saved-boards-page {
+  --ops-board-accent: var(--mc-area-color, var(--accent));
+}
+
+.mc-next-ops-board-head-actions,
+.mc-next-ops-board-inline-actions,
+.mc-next-ops-board-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.mc-next-ops-board-selector,
+.mc-next-ops-board-editor,
+.mc-next-ops-board-view,
+.mc-next-ops-board-loading,
+.mc-next-ops-board-load-error {
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
+}
+
+.mc-next-ops-board-selector {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.mc-next-ops-board-selector > label:first-child {
+  display: grid;
+  flex: 1 1 18rem;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.mc-next-ops-board-selector label > span,
+.mc-next-ops-board-editor-fields label > span {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-ops-board-selector select,
+.mc-next-ops-board-editor-fields input,
+.mc-next-ops-board-editor-fields textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--background) 88%, var(--mc-surface-2));
+  font: inherit;
+}
+
+.mc-next-ops-board-selector select,
+.mc-next-ops-board-editor-fields input {
+  min-height: 2.25rem;
+  padding: 0.42rem 0.58rem;
+}
+
+.mc-next-ops-board-editor-fields textarea {
+  min-height: 5rem;
+  padding: 0.5rem 0.58rem;
+  resize: vertical;
+}
+
+.mc-next-ops-board-selector select:focus-visible,
+.mc-next-ops-board-editor-fields input:focus-visible,
+.mc-next-ops-board-editor-fields textarea:focus-visible {
+  border-color: var(--ops-board-accent);
+  outline: 2px solid color-mix(in oklab, var(--ops-board-accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
+.mc-next-ops-board-archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-height: 2.25rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.mc-next-ops-board-archive-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--ops-board-accent);
+}
+
+.mc-next-ops-board-editor,
+.mc-next-ops-board-view {
+  display: grid;
+  gap: 0.72rem;
+  padding: 0.76rem;
+}
+
+.mc-next-ops-board-editor-header,
+.mc-next-ops-board-view-header,
+.mc-next-ops-board-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.mc-next-ops-board-editor-header span,
+.mc-next-ops-board-section-heading span,
+.mc-next-ops-board-widget-kicker {
+  color: color-mix(in oklab, var(--ops-board-accent) 76%, var(--foreground));
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.mc-next-ops-board-editor-header h2,
+.mc-next-ops-board-section-heading h3,
+.mc-next-ops-board-title-row h2,
+.mc-next-ops-board-widget-header h3 {
+  margin: 0;
+  color: var(--foreground);
+}
+
+.mc-next-ops-board-editor-header h2,
+.mc-next-ops-board-title-row h2 {
+  font-size: var(--text-lg);
+}
+
+.mc-next-ops-board-section-heading h3,
+.mc-next-ops-board-widget-header h3 {
+  font-size: var(--text-sm);
+}
+
+.mc-next-ops-board-editor-header p,
+.mc-next-ops-board-view-header p,
+.mc-next-ops-board-catalog-grid p,
+.mc-next-ops-board-conflict p,
+.mc-next-ops-board-transition-confirm p,
+.mc-next-ops-board-widget-note,
+.mc-next-ops-board-widget-error p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-ops-board-editor-fields {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.7fr) minmax(16rem, 1.3fr);
+  gap: 0.6rem;
+}
+
+.mc-next-ops-board-editor-fields label {
+  display: grid;
+  align-content: start;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.mc-next-ops-board-catalog,
+.mc-next-ops-board-placement-editor {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.mc-next-ops-board-section-heading small {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-ops-board-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 0.45rem;
+}
+
+.mc-next-ops-board-catalog-grid article,
+.mc-next-ops-board-placement-editor li {
+  min-width: 0;
+  border: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--mc-surface-2) 76%, transparent);
+}
+
+.mc-next-ops-board-catalog-grid article {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.58rem;
+}
+
+.mc-next-ops-board-catalog-grid strong,
+.mc-next-ops-board-placement-copy strong {
+  display: block;
+  margin-bottom: 0.18rem;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+}
+
+.mc-next-ops-board-placement-editor ol {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-ops-board-placement-editor li {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.75fr) minmax(14rem, 1.4fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem;
+}
+
+.mc-next-ops-board-placement-copy {
+  min-width: 0;
+}
+
+.mc-next-ops-board-placement-copy span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ops-board-placement-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.28rem;
+}
+
+.mc-next-ops-board-placement-controls button {
+  min-width: 0;
+  padding-inline: 0.42rem;
+  white-space: normal;
+}
+
+.mc-next-ops-board-editor-actions {
+  justify-content: flex-end;
+  padding-top: 0.6rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.mc-next-ops-board-conflict,
+.mc-next-ops-board-transition-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 44%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-caution) 9%, var(--mc-surface-2));
+}
+
+.mc-next-ops-board-view-header > div:first-child {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.mc-next-ops-board-view-header > div:first-child > span {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: var(--text-2xs);
+}
+
+.mc-next-ops-board-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.mc-next-ops-board-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: minmax(2.25rem, auto);
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-ops-board-grid-cell {
+  min-width: 0;
+  min-height: 0;
+}
+
+.mc-next-ops-board-widget {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 12rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  border-top-color: color-mix(in oklab, var(--ops-board-accent) 48%, var(--border));
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(150deg, color-mix(in oklab, var(--ops-board-accent) 7%, transparent), transparent 48%),
+    color-mix(in oklab, var(--mc-surface-2) 86%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+
+.mc-next-ops-board-widget-header,
+.mc-next-ops-board-widget-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.62rem;
+}
+
+.mc-next-ops-board-widget-header {
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 54%, transparent);
+}
+
+.mc-next-ops-board-widget-header > div {
+  min-width: 0;
+}
+
+.mc-next-ops-board-widget-source {
+  max-width: 44%;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+  text-align: right;
+}
+
+.mc-next-ops-board-widget-body {
+  min-width: 0;
+  padding: 0.62rem;
+}
+
+.mc-next-ops-board-widget-footer {
+  align-items: center;
+  justify-content: flex-end;
+  padding-block: 0.42rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 48%, transparent);
+}
+
+.mc-next-ops-board-widget-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(5.4rem, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.mc-next-ops-board-widget-metrics div {
+  min-width: 0;
+  padding: 0.42rem 0.48rem;
+  border-left: 2px solid color-mix(in oklab, var(--ops-board-accent) 54%, var(--border));
+  background: color-mix(in oklab, var(--background) 38%, transparent);
+}
+
+.mc-next-ops-board-widget-metrics dt {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-ops-board-widget-metrics dd {
+  margin: 0.12rem 0 0;
+  color: var(--foreground);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ops-board-widget-signals {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-ops-board-widget-signals li {
+  padding: 0.3rem 0.42rem;
+  border-radius: var(--r-xs);
+  color: var(--text-secondary);
+  background: color-mix(in oklab, var(--background) 38%, transparent);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ops-board-widget-note {
+  margin-top: 0.52rem;
+}
+
+.mc-next-ops-board-widget-empty,
+.mc-next-ops-board-loading {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-ops-board-loading,
+.mc-next-ops-board-load-error {
+  padding: 0.75rem;
+}
+
+.mc-next-ops-board-load-error,
+.mc-next-ops-board-widget-error {
+  display: grid;
+  justify-items: start;
+  gap: 0.5rem;
+}
+
+@media (max-width: 1023px) {
+  .mc-next-ops-board-editor-fields,
+  .mc-next-ops-board-placement-editor li {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-ops-board-placement-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .mc-next-ops-board-selector,
+  .mc-next-ops-board-editor-header,
+  .mc-next-ops-board-view-header,
+  .mc-next-ops-board-section-heading,
+  .mc-next-ops-board-conflict,
+  .mc-next-ops-board-transition-confirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mc-next-ops-board-archive-toggle {
+    width: 100%;
+    min-height: auto;
+    white-space: normal;
+  }
+
+  .mc-next-ops-board-selector {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .mc-next-ops-board-selector > label:first-child {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .mc-next-ops-board-grid {
+    display: block;
+  }
+
+  .mc-next-ops-board-grid-cell {
+    margin-bottom: 0.55rem;
+  }
+
+  .mc-next-ops-board-widget-header {
+    flex-direction: column;
+  }
+
+  .mc-next-ops-board-widget-source {
+    max-width: none;
+    text-align: left;
+  }
+
+  .mc-next-ops-board-head-actions > button,
+  .mc-next-ops-board-editor-actions > button,
+  .mc-next-ops-board-inline-actions > button {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-next-ops-saved-boards-page *,
+  .mc-next-ops-saved-boards-page *::before,
+  .mc-next-ops-saved-boards-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

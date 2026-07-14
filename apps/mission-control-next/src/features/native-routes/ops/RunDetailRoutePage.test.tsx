@@ -195,6 +195,61 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("Audit-only");
   });
 
+  it("projects tool effect truth with inspect-before-retry guidance and verified receipts only", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      runId: "run-effect-truth",
+      status: "failed",
+      mode: "chat",
+      request: { summary: "Run governed tools.", requestedAt: "2026-07-13T19:00:00.000Z" },
+      tools: [
+        {
+          toolRunId: "tool-uncertain",
+          toolName: "http.post",
+          status: "failed",
+          effectPotential: "unknown",
+          effectDisposition: "unknown",
+          effectOutcomeKind: "uncertain",
+          effectEvidence: {
+            outcomeKind: "uncertain",
+            reason: "dispatch_may_have_occurred",
+            refs: [{ owner: "external_side_effect", refId: "unverified-ref" }],
+          },
+        },
+        {
+          toolRunId: "tool-concrete",
+          toolName: "code_mode.run",
+          status: "executed",
+          effectPotential: "unknown",
+          effectOutcomeKind: "concrete",
+          effectEvidence: {
+            outcomeKind: "concrete",
+            reason: "canonical_effect_receipt_linked",
+            refs: [{ owner: "code_mode", refId: "verified-code-run" }],
+          },
+        },
+      ],
+      artifacts: [],
+      approvals: [],
+      sideEffects: [],
+      errors: [],
+    });
+
+    const text = await renderText("run-effect-truth");
+    const trustedProjectionText = text.split("Expert raw trace")[0] ?? text;
+
+    expect(trustedProjectionText).toContain("effect potential unknown");
+    expect(trustedProjectionText).toContain("disposition unknown");
+    expect(trustedProjectionText).toContain("outcome uncertain");
+    expect(trustedProjectionText).toContain("evidence dispatch_may_have_occurred");
+    expect(trustedProjectionText).toContain("Inspect external or runtime state before retry");
+    expect(trustedProjectionText).toContain("verify it against the signed canonical owner receipt");
+    expect(trustedProjectionText).not.toContain("Verified effect receipt");
+    expect(trustedProjectionText).not.toContain("verified-code-run");
+    expect(trustedProjectionText).not.toContain("unverified-ref");
+    expect(text).toContain("Expert raw trace (diagnostic)");
+    expect(text).toContain("Raw IDs and refs are not trusted effect evidence");
+  });
+
   it("surfaces missing and unavailable evidence states outside raw JSON", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
       version: "observe.run_trace.v1",

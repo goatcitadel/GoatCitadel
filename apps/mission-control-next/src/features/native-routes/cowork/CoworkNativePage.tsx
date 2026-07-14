@@ -342,6 +342,7 @@ export function CoworkNativePage({
     }
     try {
       await updateTask(selectedTask.taskId, {
+        expectedRevision: selectedTask.revision,
         citadelId: activeCitadelId,
         workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
         title: detailDraft.title.trim() || selectedTask.title,
@@ -414,6 +415,7 @@ export function CoworkNativePage({
     }
     try {
       await deleteTask(selectedTask.taskId, {
+        expectedRevision: selectedTask.revision,
         citadelId: activeCitadelId,
         mode: "soft",
         deletedBy: "operator",
@@ -437,7 +439,12 @@ export function CoworkNativePage({
       return;
     }
     try {
-      await restoreTask(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId, activeCitadelId);
+      await restoreTask(
+        selectedTask.taskId,
+        selectedTask.revision,
+        selectedTask.workspaceId ?? activeWorkspaceId,
+        activeCitadelId,
+      );
       if (!isMounted()) {
         return;
       }

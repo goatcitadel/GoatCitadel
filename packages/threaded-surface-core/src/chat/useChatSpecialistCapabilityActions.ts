@@ -19,6 +19,7 @@ import {
   fetchMcpTemplates,
   fetchSkills,
   installSkillImport,
+  isApiRequestError,
   updateChatSpecialistCandidate,
   updateSkillState,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -193,13 +194,18 @@ export function useChatSpecialistCapabilityActions(input: {
 
   const runCapabilitySuggestionAction = useCallback(
     async (suggestion: ChatCapabilityUpgradeSuggestion) => {
+      let installedEnableSkillId: string | undefined;
       try {
         setError(null);
         if (suggestion.recommendedAction === "enable_skill") {
           if (!suggestion.candidateId) {
             throw new Error("This suggestion is missing the installed skill identifier.");
           }
+          const canonical = await fetchSkills();
+          setInstalledSkills(canonical.items);
+          const expectedRevision = readCanonicalSkillRevision(canonical.items, suggestion.candidateId);
           const updated = await updateSkillState(suggestion.candidateId, {
+            expectedRevision,
             state: "enabled",
             note: "Enabled from chat capability suggestion.",
           });
@@ -253,7 +259,12 @@ export function useChatSpecialistCapabilityActions(input: {
           if (!installed.installedSkillId) {
             throw new Error("The skill installed, but GoatCitadel could not resolve its installed skill identifier.");
           }
+          installedEnableSkillId = installed.installedSkillId;
+          const canonical = await fetchSkills();
+          setInstalledSkills(canonical.items);
+          const expectedRevision = readCanonicalSkillRevision(canonical.items, installedEnableSkillId);
           await updateSkillState(installed.installedSkillId, {
+            expectedRevision,
             state: "enabled",
             note: "Enabled immediately from chat capability suggestion.",
           });
@@ -356,7 +367,36 @@ export function useChatSpecialistCapabilityActions(input: {
 
         throw new Error(`Unsupported capability action: ${suggestion.recommendedAction}`);
       } catch (err) {
-        setError((err as Error).message);
+        const enableOnlySkillId = installedEnableSkillId;
+        if (enableOnlySkillId) {
+          setCapabilitySuggestions((current) =>
+            replaceCapabilitySuggestionWithEnableOnlyIntent(current, suggestion, enableOnlySkillId),
+          );
+        }
+        if (isSkillWriteConflict(err)) {
+          const conflictedSkillId = installedEnableSkillId ?? suggestion.candidateId;
+          if (conflictedSkillId) {
+            try {
+              const refreshed = await fetchSkills();
+              setInstalledSkills(refreshed.items);
+            } catch (refreshError) {
+              setError(
+                `Skill ${conflictedSkillId} changed elsewhere and the canonical refresh failed: ${errorMessage(refreshError)} No update or turn retry was replayed; retry explicitly.`,
+              );
+              return;
+            }
+          }
+          setError(
+            `Skill ${conflictedSkillId ?? "state"} changed elsewhere. Canonical skills were refreshed; no update or turn retry was replayed. Review the refreshed state and retry explicitly.`,
+          );
+          return;
+        }
+        const message = errorMessage(err);
+        setError(
+          installedEnableSkillId
+            ? `${message} ${installedEnableSkillId} is installed; the retained suggestion is enable-only, so retrying will not reinstall it.`
+            : message,
+        );
       }
     },
     [
@@ -414,6 +454,58 @@ export function useChatSpecialistCapabilityActions(input: {
     handleCapabilitySuggestionAction,
     confirmCapabilitySuggestionAction,
   };
+}
+
+function readCanonicalSkillRevision(items: SkillListItem[], skillId: string): number {
+  const revision = items.find((item) => item.skillId === skillId)?.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error(`Skill ${skillId} is missing a positive canonical revision. Refresh skills and retry explicitly.`);
+  }
+  return revision;
+}
+
+function replaceCapabilitySuggestionWithEnableOnlyIntent(
+  current: ChatCapabilityUpgradeSuggestion[],
+  original: ChatCapabilityUpgradeSuggestion,
+  installedSkillId: string,
+): ChatCapabilityUpgradeSuggestion[] {
+  const index = current.findIndex(
+    (item) =>
+      item === original ||
+      (item.kind === original.kind &&
+        item.recommendedAction === original.recommendedAction &&
+        item.title === original.title &&
+        item.candidateId === original.candidateId &&
+        item.sourceRef === original.sourceRef),
+  );
+  if (index < 0) {
+    return current;
+  }
+  const next = [...current];
+  next[index] = {
+    ...original,
+    kind: "existing_but_disabled",
+    recommendedAction: "enable_skill",
+    candidateId: installedSkillId,
+    sourceProvider: undefined,
+    sourceRef: undefined,
+  };
+  return next;
+}
+
+function isSkillWriteConflict(error: unknown): boolean {
+  if (!isApiRequestError(error) || error.status !== 409 || !isRecord(error.body)) {
+    return false;
+  }
+  return error.body.code === "WRITE_CONFLICT";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const CODE_MODE_CAPABILITY_CANDIDATE_SOURCE = `

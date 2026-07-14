@@ -19,6 +19,8 @@ import type {
   IntegrationActionInvokeResult,
   IntegrationFormSchema,
   IntegrationOperatorAction,
+  LlmProviderAuthReadiness,
+  LlmProviderConfig,
   NpuRuntimeStatus,
   OnboardingState,
   OrchestrationRun,
@@ -58,6 +60,7 @@ export interface CostSummaryResponse {
     trackedEvents: number;
     unknownEvents: number;
     totalAgentEvents: number;
+    metricAvailability?: CostMetricAvailability;
   };
   items: Array<{
     key: string;
@@ -66,6 +69,7 @@ export interface CostSummaryResponse {
     tokenCachedInput: number;
     tokenTotal: number;
     costUsd: number;
+    metricAvailability?: CostMetricCompleteness;
   }>;
   dailySeries?: Array<{
     isoDate: string;
@@ -75,6 +79,7 @@ export interface CostSummaryResponse {
     tokenCachedInput?: number;
     tokenTotal?: number;
     costUsd?: number;
+    metricAvailability?: CostMetricCompleteness;
     segments: Array<{
       providerKey: string;
       label: string;
@@ -84,12 +89,34 @@ export interface CostSummaryResponse {
       tokenTotal?: number;
       costUsd: number;
       models?: string[];
+      metricAvailability?: CostMetricCompleteness;
     }>;
   }>;
 }
 
+export interface CostMetricCompleteness {
+  inputTokensComplete: boolean;
+  outputTokensComplete: boolean;
+  cachedInputTokensComplete: boolean;
+  costUsdComplete: boolean;
+}
+
+export interface CostMetricAvailability {
+  inputTokens: CostMetricCoverage;
+  outputTokens: CostMetricCoverage;
+  cachedInputTokens: CostMetricCoverage;
+  costUsd: CostMetricCoverage;
+}
+
+export interface CostMetricCoverage {
+  knownAttemptCount: number;
+  unknownAttemptCount: number;
+  complete: boolean;
+}
+
 export interface TaskRecord {
   taskId: string;
+  revision: number;
   workspaceId?: string;
   title: string;
   description?: string;
@@ -360,41 +387,12 @@ export type {
 };
 
 export interface CronJobsResponse {
-  items: Array<{
-    jobId: string;
-    name: string;
-    action:
-      | "task"
-      | "improvement"
-      | "curator"
-      | "backup"
-      | "memory_flush"
-      | "memory_consolidation"
-      | "cost_report"
-      | "update_review"
-      | "watchdog"
-      | "no_agent"
-      | "agent_turn";
-    actionConfig?: Record<string, unknown>;
-    description?: string;
-    schedule: string;
-    enabled: boolean;
-    endAt?: string;
-    lastRunAt?: string;
-    nextRunAt?: string;
-    updatedAt?: string;
-    workdir?: string;
-    contextFrom?: string;
-    lastRunOutput?: string;
-    lastRunId?: string;
-    lastRunStatus?: "ok" | "failed";
-    /** Signed evidence envelope recorded for the last run (cronEvidenceV1Enabled). */
-    lastRunEvidenceEnvelopeId?: string;
-  }>;
+  items: CronJobRecordResponse[];
 }
 
 export interface CronJobRecordResponse {
   jobId: string;
+  revision: number;
   name: string;
   action:
     | "task"
@@ -406,7 +404,8 @@ export interface CronJobRecordResponse {
     | "cost_report"
     | "update_review"
     | "watchdog"
-    | "no_agent";
+    | "no_agent"
+    | "agent_turn";
   actionConfig?: Record<string, unknown>;
   description?: string;
   schedule: string;
@@ -420,6 +419,8 @@ export interface CronJobRecordResponse {
   lastRunOutput?: string;
   lastRunId?: string;
   lastRunStatus?: "ok" | "failed";
+  /** Signed evidence envelope recorded for the last run (cronEvidenceV1Enabled). */
+  lastRunEvidenceEnvelopeId?: string;
   failureCount?: number;
   backoffUntil?: string;
 }
@@ -439,6 +440,8 @@ export interface AgentsResponse {
 }
 
 export interface RuntimeSettingsResponse {
+  /** Opaque monotonic revision required by settings mutation requests. */
+  revision: number;
   environment: string;
   deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
   toolApprovalMode: "approve_all" | "approve_risky" | "bypass";
@@ -508,13 +511,15 @@ export interface RuntimeSettingsResponse {
         | "anthropic-messages"
         | "bedrock-messages";
       defaultModel: string;
-      authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
+      authMode?: LlmProviderConfig["authMode"];
+      googleCloud?: LlmProviderConfig["googleCloud"];
       oauthStatus?: {
         connected: boolean;
         accountLabel?: string;
         expiresAt?: string;
         requiresReauth?: boolean;
       };
+      authReadiness?: LlmProviderAuthReadiness;
       hasApiKey: boolean;
       apiKeySource: "inline" | "env" | "keychain" | "none";
       hasKeychainSecret?: boolean;
@@ -527,6 +532,7 @@ export interface RuntimeSettingsResponse {
         jsonMode: boolean;
         webSearch?: boolean;
         reasoning?: boolean;
+        reasoningEfforts?: NonNullable<LlmProviderConfig["capabilities"]>["reasoningEfforts"];
         voiceInput?: boolean;
         voiceOutput?: boolean;
         imageGenerate?: boolean;
@@ -586,6 +592,7 @@ export interface RuntimeSettingsResponse {
     autonomyV1Disabled?: boolean;
     chatThinkingStreamV1Enabled?: boolean;
     channelVoiceInboundV1Enabled?: boolean;
+    /** @deprecated Signal is outbound-only; true is retained only for blocked legacy-posture evidence. */
     signalInboundV1Enabled?: boolean;
     plannerFastPathV1Disabled?: boolean;
     parallelToolExecutionV1Disabled?: boolean;

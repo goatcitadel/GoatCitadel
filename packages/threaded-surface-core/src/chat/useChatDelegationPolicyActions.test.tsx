@@ -29,8 +29,21 @@ const streamChatDelegationMock = vi.fn();
 const suggestChatDelegationMock = vi.fn();
 const triggerChatProactiveMock = vi.fn();
 const updateChatProactivePolicyMock = vi.fn();
+const fetchChatProactiveStatusMock = vi.fn();
+const ApiRequestErrorMock = vi.hoisted(
+  () =>
+    class ApiRequestError extends Error {
+      public readonly status?: number;
+      public constructor(message: string, options: { status?: number }) {
+        super(message);
+        this.status = options.status;
+      }
+    },
+);
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  ApiRequestError: ApiRequestErrorMock,
+  fetchChatProactiveStatus: (...args: unknown[]) => fetchChatProactiveStatusMock(...args),
   fetchChatDelegationRun: (...args: unknown[]) => fetchChatDelegationRunMock(...args),
   runChatDelegation: (...args: unknown[]) => runChatDelegationMock(...args),
   runChatResearch: (...args: unknown[]) => runChatResearchMock(...args),
@@ -58,6 +71,7 @@ let latestHarness: HarnessSnapshot | null = null;
 function makeSession(): ChatSessionRecord {
   return {
     sessionId: "session-1",
+    revision: 7,
     title: "Build the panel",
     scope: "mission",
     lifecycleStatus: "active",
@@ -86,6 +100,7 @@ function makeMessages(
 function makeThread(withWorkflow = false): ChatThreadResponse {
   return {
     sessionId: "session-1",
+    revision: 7,
     selectedTurnId: "turn-1",
     activeLeafTurnId: "turn-1",
     turns: [
@@ -197,10 +212,22 @@ function setupApiDefaults() {
   });
   runChatResearchMock.mockResolvedValue({ summary: "Research complete", sources: [{ url: "https://example.test" }] });
   updateChatProactivePolicyMock.mockResolvedValue({
+    revision: 8,
     mode: "auto",
     autonomyBudget: { maxActionsPerHour: 2, maxActionsPerTurn: 1, cooldownSeconds: 30 },
     retrievalMode: "deep",
     reflectionMode: "summary",
+  });
+  fetchChatProactiveStatusMock.mockResolvedValue({
+    policy: {
+      sessionId: "session-1",
+      revision: 8,
+      mode: "off",
+      autonomyBudget: { maxActionsPerHour: 2, maxActionsPerTurn: 1, cooldownSeconds: 30 },
+      retrievalMode: "standard",
+      reflectionMode: "off",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    },
   });
   triggerChatProactiveMock.mockResolvedValue({
     runId: "proactive-1",
@@ -525,6 +552,7 @@ describe("useChatDelegationPolicyActions", () => {
     });
 
     expect(updateChatProactivePolicyMock).toHaveBeenCalledWith("session-1", {
+      expectedRevision: 7,
       proactiveMode: "auto",
       retrievalMode: "deep",
       reflectionMode: "summary",
@@ -542,6 +570,43 @@ describe("useChatDelegationPolicyActions", () => {
       surface: "chat",
     });
     expect(latestHarness?.proactiveRuns[0]?.runId).toBe("proactive-1");
+  });
+
+  it("keeps canonical proactive policy separate from an actual 409 draft and retries explicitly", async () => {
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    updateChatProactivePolicyMock.mockRejectedValueOnce(new ApiRequestErrorMock("stale policy", { status: 409 }));
+
+    await act(async () => {
+      await latestHarness?.result.handleProactivePolicyPatch({
+        proactiveMode: "auto",
+        reflectionMode: "summary",
+      });
+    });
+
+    expect(latestHarness?.proactiveStatus.mode).toBe("off");
+    expect(latestHarness?.prefs?.proactiveMode).toBe("off");
+    expect(latestHarness?.result.proactivePolicyConflict).toBe(true);
+    expect(latestHarness?.result.proactivePolicyDraft).toEqual({
+      proactiveMode: "auto",
+      reflectionMode: "summary",
+    });
+    expect(latestHarness?.errors).toContain(
+      "This chat changed elsewhere. Canonical policy was refreshed; your unsaved policy draft is preserved for review and retry.",
+    );
+
+    await act(async () => {
+      await latestHarness?.result.handleProactivePolicyPatch(latestHarness.result.proactivePolicyDraft!);
+    });
+    expect(updateChatProactivePolicyMock).toHaveBeenLastCalledWith("session-1", {
+      expectedRevision: 8,
+      proactiveMode: "auto",
+      reflectionMode: "summary",
+    });
+    expect(latestHarness?.result.proactivePolicyConflict).toBe(false);
+    expect(latestHarness?.result.proactivePolicyDraft).toBeNull();
   });
 
   it("suggests and accepts delegation with execution-plan graph steps", async () => {

@@ -2,9 +2,11 @@ import type {
   ChatAttachmentRecord,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
+  ChatHistoryWindowResponse,
   ChatMode,
   ChatOrchestrationReviewDepth,
   ChatSessionRecord,
+  ChatThinkingLevel,
   ChatThreadResponse,
   ChatWebMode,
   RoutingPreflightResult,
@@ -27,6 +29,7 @@ import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
 import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
+import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
 
 export interface ThreadedContextSelectionState {
   label: string;
@@ -62,6 +65,14 @@ export interface MissionControlActiveSessionSurfaceProps {
   onRequestProviderChange: (providerId: string) => void;
   onRequestModelChange: (model: string) => void;
   loading: boolean;
+  historicalWindow: ChatHistoryWindowResponse | null;
+  historicalWindowLoading: boolean;
+  historicalWindowError: string | null;
+  onReturnToLatest: () => void;
+  historicalContinuationLoading: "older" | "newer" | null;
+  historicalContinuationError: string | null;
+  onLoadHistoricalContinuation: (direction: "older" | "newer") => void;
+  historicalReadOnly: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
   selectedContextTurnIds: string[];
@@ -141,11 +152,13 @@ export interface MissionControlActiveSessionSurfaceProps {
     summary: string;
   } | null;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
+  capabilityProfileInspection: ChatCapabilityProfileInspection;
   selectedSessionId: string | null;
   currentWebMode: ChatWebMode;
   currentReviewDepth: ChatOrchestrationReviewDepth;
+  modelCouncilEnabled?: boolean;
   fullWebAccess: boolean;
-  currentThinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep";
+  currentThinkingLevel: ChatThinkingLevel;
   currentSpeedMode: "standard" | "fast";
   currentSubagentPolicy: "off" | "ask_when_useful" | "auto_when_useful";
   routePreflight: RoutingPreflightResult | null;
@@ -172,9 +185,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   onTogglePlanningMode: () => void;
   onToggleResearchMode: () => void;
   onToggleReviewMode: () => void;
+  onToggleModelCouncil?: () => void;
   onSetDeepMode: () => void;
   onFullWebAccessChange: (value: boolean) => void;
-  onSetThinkingLevel: (level: "off" | "minimal" | "standard" | "extended" | "deep") => void;
+  onSetThinkingLevel: (level: ChatThinkingLevel) => void;
   onSetSpeedMode: (mode: "standard" | "fast") => void;
   onSetSubagentPolicy: (policy: "off" | "ask_when_useful" | "auto_when_useful") => void;
   onReviewRunDetails: () => void;
