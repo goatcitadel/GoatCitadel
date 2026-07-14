@@ -1,6 +1,20 @@
 import type { ResearchSearchEngine, ResearchSearchRequest, ResearchSearchResponse } from "@goatcitadel/contracts";
+import { isSensitiveOfficialSearchQuery, resolveOfficialSearchProviders } from "@goatcitadel/policy-engine";
 
-const DEFAULT_ENGINES: ResearchSearchEngine[] = [
+const BLOCKED_ENGINE_ALIASES = new Map<string, string>([
+  ["baidu", "Baidu is excluded from the GoatCitadel US/global-English search broker."],
+  ["360", "360 Search is excluded from the GoatCitadel US/global-English search broker."],
+  ["so", "360 Search is excluded from the GoatCitadel US/global-English search broker."],
+  ["sogou", "Sogou is excluded from the GoatCitadel US/global-English search broker."],
+  ["wechat", "WeChat search is excluded from the GoatCitadel US/global-English search broker."],
+  ["weixin", "WeChat search is excluded from the GoatCitadel US/global-English search broker."],
+  ["shenma", "Shenma is excluded from the GoatCitadel US/global-English search broker."],
+  ["googlehk", "Google HK is excluded from the GoatCitadel US/global-English search broker."],
+  ["google_hk", "Google HK is excluded from the GoatCitadel US/global-English search broker."],
+  ["bingcn", "Bing CN is excluded from the GoatCitadel US/global-English search broker."],
+  ["bing_cn", "Bing CN is excluded from the GoatCitadel US/global-English search broker."],
+]);
+const LEGACY_ENGINES = new Set<ResearchSearchEngine>([
   "google",
   "bing",
   "duckduckgo",
@@ -10,85 +24,94 @@ const DEFAULT_ENGINES: ResearchSearchEngine[] = [
   "qwant",
   "wolframalpha",
   "parallel",
-];
-
-const BLOCKED_ENGINE_ALIASES = new Map<string, string>([
-  ["baidu", "Baidu is excluded from the GoatCitadel global search broker."],
-  ["360", "360 Search is excluded from the GoatCitadel global search broker."],
-  ["so", "360 Search is excluded from the GoatCitadel global search broker."],
-  ["sogou", "Sogou is excluded from the GoatCitadel global search broker."],
-  ["wechat", "WeChat search is excluded from the GoatCitadel global search broker."],
-  ["weixin", "WeChat search is excluded from the GoatCitadel global search broker."],
-  ["shenma", "Shenma is excluded from the GoatCitadel global search broker."],
-  ["googlehk", "Google HK is excluded from the GoatCitadel global search broker."],
-  ["google_hk", "Google HK is excluded from the GoatCitadel global search broker."],
-  ["bingcn", "Bing CN is excluded from the GoatCitadel global search broker."],
-  ["bing_cn", "Bing CN is excluded from the GoatCitadel global search broker."],
 ]);
 
-const API_ENV_BY_ENGINE: Record<ResearchSearchEngine, string[]> = {
-  google: ["GOATCITADEL_SEARCH_GOOGLE_API_KEY", "GOOGLE_SEARCH_API_KEY"],
-  bing: ["GOATCITADEL_SEARCH_BING_API_KEY", "BING_SEARCH_API_KEY"],
-  duckduckgo: ["GOATCITADEL_SEARCH_DUCKDUCKGO_API_KEY"],
-  brave: ["GOATCITADEL_SEARCH_BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"],
-  startpage: ["GOATCITADEL_SEARCH_STARTPAGE_API_KEY"],
-  ecosia: ["GOATCITADEL_SEARCH_ECOSIA_API_KEY"],
-  qwant: ["GOATCITADEL_SEARCH_QWANT_API_KEY"],
-  wolframalpha: ["GOATCITADEL_SEARCH_WOLFRAMALPHA_APP_ID", "WOLFRAM_ALPHA_APP_ID"],
-  parallel: ["GOATCITADEL_SEARCH_PARALLEL_API_KEY", "PARALLEL_API_KEY"],
-};
-
+/**
+ * Operator-facing discovery endpoint. It intentionally never executes external
+ * search: model/runtime execution has one governed owner, `browser.search`.
+ */
 export class ResearchSearchBrokerService {
-  public search(input: ResearchSearchRequest): ResearchSearchResponse {
+  public async search(input: ResearchSearchRequest): Promise<ResearchSearchResponse> {
     const query = input.query.trim();
-    const requested = input.engines?.length ? input.engines : DEFAULT_ENGINES;
-    const engines = Array.from(new Set(requested.filter(isAllowedEngine)));
-    const blocked = requested
+    const sensitiveQuery = isSensitiveOfficialSearchQuery(query);
+    const mode = input.mode ?? "quick";
+    const requestedProviders = resolveOfficialSearchProviders(input);
+    const blockedWarnings = (input.engines ?? [])
       .map((engine) => normalizeEngineName(String(engine)))
-      .filter((engine) => BLOCKED_ENGINE_ALIASES.has(engine));
-    const generatedAt = new Date().toISOString();
-    const engineStatuses = engines.map((engine) => ({
-      engine,
-      status: hasConfiguredApi(engine) ? ("degraded" as const) : ("unavailable" as const),
-      message: hasConfiguredApi(engine)
-        ? "Official API credentials are configured, but live broker execution is not enabled in this advisory pass."
-        : "No configured official API provider is available; GoatCitadel will not scrape this engine.",
-    }));
-    const warnings = [
-      "Search broker is advisory-only until an official provider adapter is configured and enabled.",
-      "No scraping fallback was attempted.",
-      ...blocked.map((engine) => BLOCKED_ENGINE_ALIASES.get(engine)).filter((value): value is string => Boolean(value)),
-    ];
+      .map((engine) => BLOCKED_ENGINE_ALIASES.get(engine))
+      .filter((value): value is string => Boolean(value));
+    const unsupportedLegacyEngines = Array.from(
+      new Set(
+        (input.engines ?? []).filter(
+          (engine): engine is ResearchSearchEngine =>
+            LEGACY_ENGINES.has(engine as ResearchSearchEngine) && engine !== "brave" && engine !== "parallel",
+        ),
+      ),
+    );
+
     return {
-      query,
-      generatedAt,
+      query: sensitiveQuery ? "[redacted-sensitive-query]" : query,
+      generatedAt: new Date().toISOString(),
+      mode,
+      routing: {
+        country: "US",
+        searchLanguage: "en",
+        requestedProviders,
+        attemptedProviders: [],
+        successfulProviders: [],
+        fallbackUsed: false,
+        partial: false,
+      },
+      providerAttempts: [],
+      execution: {
+        kind: "advisory_only",
+        executableTool: "browser.search",
+        requiredBackend: "official",
+        guidance: "Invoke browser.search with backend=official through the governed tool policy path.",
+      },
+      accounting: {
+        scope: "response_local",
+        persistence: "not_persisted",
+        cost: "unknown",
+        outboundRequests: [],
+      },
       results: [],
-      engineStatuses,
-      warnings,
+      engineStatuses: [
+        ...requestedProviders.map((provider) => ({
+          engine: provider,
+          status: "degraded" as const,
+          message: "Advisory only. Invoke browser.search with backend=official for governed execution.",
+        })),
+        ...unsupportedLegacyEngines.map((engine) => ({
+          engine,
+          status: "unavailable" as const,
+          message:
+            "This compatibility engine has no executable official provider adapter; no scraping fallback is available.",
+        })),
+      ],
+      warnings: [
+        sensitiveQuery
+          ? "Sensitive or internal query content was omitted; no external search was attempted."
+          : "This endpoint is advisory-only and did not execute an external search.",
+        ...unsupportedLegacyEngines.map((engine) => `${engine} has no executable official provider adapter.`),
+        ...blockedWarnings,
+      ],
     };
   }
 }
 
 export interface ResearchSearchRoutePort {
-  search(input: ResearchSearchRequest): ResearchSearchResponse;
+  search(input: ResearchSearchRequest): Promise<ResearchSearchResponse>;
 }
 
 export class ResearchSearchRouteService {
   public constructor(private readonly port: ResearchSearchRoutePort) {}
 
-  public search(input: ResearchSearchRequest): ResearchSearchResponse {
+  public search(input: ResearchSearchRequest): Promise<ResearchSearchResponse> {
     return this.port.search(input);
   }
 }
 
-function isAllowedEngine(value: unknown): value is ResearchSearchEngine {
-  return DEFAULT_ENGINES.includes(value as ResearchSearchEngine);
-}
-
 function normalizeEngineName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_]+/g, "");
-}
-
-function hasConfiguredApi(engine: ResearchSearchEngine): boolean {
-  return API_ENV_BY_ENGINE[engine].some((envName) => Boolean(process.env[envName]?.trim()));
 }

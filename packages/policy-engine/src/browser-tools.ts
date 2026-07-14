@@ -15,6 +15,11 @@ import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
+import {
+  executeOfficialResearchSearch,
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+} from "./research-search-official-providers.js";
 
 type BrowserToolName =
   | "browser.search"
@@ -231,8 +236,34 @@ async function executeBrowserSearch(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const query = asNonEmptyString(args.query, "query");
-  const requestedEngine = normalizeSearchEngine(asString(args.engine)) ?? "auto";
+  const rawEngine = asString(args.engine)?.toLowerCase();
   const requestedBackend = normalizeSearchBackend(asString(args.backend));
+  if (isOfficialResearchSearchInvocation(args)) {
+    const providers = resolveOfficialSearchProviders(args);
+    assertOfficialSearchProviderHostsAllowed(providers, config, executionContext);
+    const response = await executeOfficialResearchSearch(
+      {
+        query,
+        mode: args.mode === "research" ? "research" : "quick",
+        providers,
+        maxResults: clampInt(args.limit ?? args.maxResults, args.mode === "research" ? 10 : 5, 1, 20),
+        freshness: normalizeResearchFreshness(args.freshness),
+      },
+      {
+        signal: executionContext?.signal,
+        additionalAllowlists: [resolveNetworkAllowlist(config, executionContext)],
+      },
+    );
+    return {
+      ...response,
+      action: "search",
+      backend: "official",
+      backendUsed: response.routing?.successfulProviders.length ? true : false,
+      attemptedEngines: response.routing?.attemptedProviders ?? [],
+      fallbackUsed: response.routing?.fallbackUsed ?? false,
+    };
+  }
+  const requestedEngine = normalizeSearchEngine(rawEngine) ?? "auto";
   const requestedReadBackend = requestedBackend === "firecrawl" ? "firecrawl" : "native";
   const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
   if (requestedReadBackend === "firecrawl") {
@@ -2147,15 +2178,39 @@ function normalizeSearchEngine(engine: string | undefined): "auto" | "duckduckgo
   return undefined;
 }
 
-function normalizeSearchBackend(backend: string | undefined): "native" | "firecrawl" | "ollama" | undefined {
+function normalizeSearchBackend(
+  backend: string | undefined,
+): "native" | "firecrawl" | "ollama" | "official" | undefined {
   if (!backend) {
     return undefined;
   }
   const normalized = backend.toLowerCase();
-  if (normalized === "native" || normalized === "firecrawl" || normalized === "ollama") {
+  if (normalized === "native" || normalized === "firecrawl" || normalized === "ollama" || normalized === "official") {
     return normalized;
   }
   return undefined;
+}
+
+function assertOfficialSearchProviderHostsAllowed(
+  providers: Array<"brave" | "parallel">,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): void {
+  const targets = {
+    brave: "https://api.search.brave.com/res/v1/web/search",
+    parallel: "https://api.parallel.ai/v1/search",
+  } as const;
+  for (const provider of providers) {
+    const target = targets[provider];
+    assertHostAllowedForConfig(target, config, executionContext);
+    if (executionContext?.matchedGrantAllowedHosts !== undefined) {
+      assertHostAllowed(target, getGrantHostAllowlist(executionContext));
+    }
+  }
+}
+
+function normalizeResearchFreshness(value: unknown): "any" | "day" | "week" | "month" | undefined {
+  return value === "any" || value === "day" || value === "week" || value === "month" ? value : undefined;
 }
 
 function normalizeBrowserReadBackend(backend: string | undefined): "native" | "firecrawl" {

@@ -2975,6 +2975,317 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(result.policyReason).not.toContain("browser.search requires at least one native search host");
   });
 
+  it("fails closed for official search when full web access is disabled and the workspace allowlist is empty", async () => {
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: [] } },
+      createStorageStub(),
+    );
+    const result = await engine.invoke({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+      dryRun: true,
+    });
+    expect(result.outcome).toBe("blocked");
+    expect(result.audit?.reasonCodes).toContain("structural_safety_block");
+    expect(result.policyReason).toContain("api.search.brave.com");
+  });
+
+  it("ignores caller-supplied grant hosts and requires stored official-provider consent", async () => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+      },
+      createStorageStub(),
+    );
+    const result = await engine.invoke({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false, matchedGrantAllowedHosts: [] },
+      dryRun: true,
+    });
+    expect(result.outcome).toBe("approval_required");
+    expect(result.audit?.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
+  it("does not treat caller-supplied matching hosts as official-provider consent", () => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+      },
+      createStorageStub(),
+    );
+    const result = engine.evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false, matchedGrantAllowedHosts: ["api.search.brave.com"] },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(true);
+    expect(result.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
+  it("accepts only an active exact browser.search host-constrained grant as provider consent", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-brave-consent",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] } },
+      storage,
+    );
+    const result = engine.evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(false);
+    expect(result.matchedGrantId).toBe("grant-brave-consent");
+  });
+
+  it.each([
+    ["uppercase backend", { backend: "OFFICIAL" }, ["api.search.brave.com"]],
+    ["singular engine", { engine: "parallel" }, ["api.parallel.ai"]],
+    ["providers-only", { providers: ["brave"] }, ["api.search.brave.com"]],
+  ] as const)("uses canonical official-search selection for %s consent", (_label, selection, allowedHosts) => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-canonical-consent",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: [...allowedHosts] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const result = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: [...allowedHosts] } },
+      storage,
+    ).evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", ...selection },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(false);
+    expect(result.matchedGrantId).toBe("grant-canonical-consent");
+  });
+
+  it.each([
+    ["unconstrained", undefined],
+    ["empty", { allowedHosts: [] }],
+    ["wrong", { allowedHosts: ["api.parallel.ai"] }],
+    ["superset", { allowedHosts: ["api.search.brave.com", "example.com"] }],
+  ] as const)("does not accept an %s browser.search allow grant as Brave consent", (_label, constraints) => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-not-consent",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints,
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const result = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] } },
+      storage,
+    ).evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(true);
+    expect(result.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
+  it("does not let an official-search host grant act as generic native browser.search access", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-brave-only",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const request = {
+      toolName: "browser.search",
+      args: { query: "coverage", engine: "google" },
+      agentId: "agent",
+      sessionId: "session",
+    } as const;
+    const outsideProfile = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        profiles: { minimal: [] },
+        tools: { ...policyConfig.tools, profile: "minimal" },
+      },
+      storage,
+    ).evaluateAccess(request);
+    expect(outsideProfile.allowed).toBe(false);
+    expect(outsideProfile.reasonCodes).toContain("policy_disallow");
+    expect(outsideProfile.matchedGrantId).toBeUndefined();
+
+    const inProfile = new ToolPolicyEngine(policyConfig, storage).evaluateAccess(request);
+    expect(inProfile.allowed).toBe(true);
+    expect(inProfile.matchedGrantId).toBeUndefined();
+  });
+
+  it("requires one exact grant to cover both providers in research mode", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-partial",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const config = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com", "api.parallel.ai"] },
+    };
+    const input = {
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", mode: "research" },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    } as const;
+    expect(new ToolPolicyEngine(config, storage).evaluateAccess(input).requiresApproval).toBe(true);
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-combined",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com", "api.parallel.ai"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    expect(new ToolPolicyEngine(config, storage).evaluateAccess(input).requiresApproval).toBe(false);
+  });
+
+  it.each(["bypass", "code_mode"] as const)(
+    "applies official-provider consent after %s approval clearing",
+    (posture) => {
+      const config = {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: posture === "bypass" ? ("bypass" as const) : policyConfig.tools.approvalMode,
+        },
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+      };
+      const result = new ToolPolicyEngine(config, createStorageStub()).evaluateAccess({
+        toolName: "browser.search",
+        args: { query: "coverage", backend: "official", providers: ["brave"] },
+        agentId: "agent",
+        sessionId: "session",
+        policyContext: {
+          fullWebAccess: false,
+          ...(posture === "code_mode" ? { approvedCodeModeRunId: "code-mode-1" } : {}),
+        },
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.requiresApproval).toBe(true);
+      expect(result.reasonCodes).toContain("official_search_provider_consent_required");
+    },
+  );
+
+  it("keeps deny-wins and treats revoked official-search grants as no consent", () => {
+    const storage = createStorageStub();
+    const baseGrant = {
+      toolPattern: "browser.search",
+      scope: "session" as const,
+      scopeRef: "session",
+      grantType: "persistent" as const,
+      constraints: { allowedHosts: ["api.search.brave.com"] },
+      createdBy: "operator",
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+    const config = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+    };
+    const input = {
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    } as const;
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      { grantId: "grant-deny", ...baseGrant, decision: "deny" },
+    ] as never);
+    const denied = new ToolPolicyEngine(config, storage).evaluateAccess(input);
+    expect(denied.allowed).toBe(false);
+    expect(denied.reasonCodes).toContain("grant_deny");
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-revoked",
+        ...baseGrant,
+        decision: "allow",
+        revokedAt: "2026-07-14T00:01:00.000Z",
+      },
+    ] as never);
+    const revoked = new ToolPolicyEngine(config, storage).evaluateAccess(input);
+    expect(revoked.allowed).toBe(true);
+    expect(revoked.requiresApproval).toBe(true);
+    expect(revoked.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
   it("does not audit dry-run public-host browser reads because public web access is the default", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(

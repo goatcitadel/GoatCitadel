@@ -2726,6 +2726,136 @@ describe("approval lifecycle service", () => {
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(host.wakeDurableRun).toHaveBeenCalledTimes(2);
   });
+
+  it("does not create an official-search grant for approve-once replay", async () => {
+    const host = createOfficialSearchApprovalHarness({ providers: ["brave"] });
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "once",
+      resolvedBy: "operator-test",
+    });
+    expect(result.allowScope).toBe("once");
+    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
+  });
+
+  it("creates an exact host-constrained session grant from immutable official-search args", async () => {
+    const host = createOfficialSearchApprovalHarness({ providers: ["brave"], engine: "parallel" });
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        scope: "session",
+        scopeRef: "session-1",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+      }),
+    );
+  });
+
+  it.each([
+    ["uppercase backend", { backend: "OFFICIAL" }, ["api.search.brave.com"]],
+    ["singular engine", { backend: undefined, engine: "parallel" }, ["api.parallel.ai"]],
+    ["providers-only", { backend: undefined, providers: ["brave"] }, ["api.search.brave.com"]],
+  ] as const)("creates exact official-search grant hosts for %s selection", async (_label, selection, allowedHosts) => {
+    const host = createOfficialSearchApprovalHarness(selection as Record<string, unknown>);
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        constraints: { allowedHosts: [...allowedHosts] },
+      }),
+    );
+  });
+
+  it("does not misclassify an unrelated persistent approval with a providers array", async () => {
+    const host = createApprovalHarness({
+      approvalKind: "http.get",
+      approvalPayload: { sessionId: "session-1", url: "https://example.com", providers: ["brave"] },
+      chatToolName: "http.get",
+    });
+    const approval = host.storage.approvals.get("approval-1");
+    host.resolveApproval.mockResolvedValue({
+      approval: { ...approval, status: "approved", resolvedBy: "operator-test" },
+      resolutionEffects: { proactiveRunIds: [], chatTurnResume: { resumed: false } },
+    } as never);
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+    const grantInput = host.policyEngine.createGrant.mock.calls[0]?.[0];
+    expect(grantInput).toMatchObject({ toolPattern: "http.get", scope: "session" });
+    expect(grantInput).not.toHaveProperty("constraints");
+  });
+
+  it("creates one combined exact-host workspace grant for research mode defaults", async () => {
+    const host = createOfficialSearchApprovalHarness({ mode: "research" });
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+        constraints: { allowedHosts: ["api.parallel.ai", "api.search.brave.com"] },
+      }),
+    );
+  });
+
+  it("reuses only an active grant with the exact official-search host set", async () => {
+    const host = createOfficialSearchApprovalHarness({ mode: "research" });
+    const existing = {
+      grantId: "grant-existing",
+      toolPattern: "browser.search",
+      decision: "allow" as const,
+      scope: "workspace" as const,
+      scopeRef: "workspace-1",
+      grantType: "persistent" as const,
+      constraints: { allowedHosts: ["api.search.brave.com", "api.parallel.ai"] },
+      createdBy: "operator-test",
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+    host.policyEngine.listActiveGrants.mockReturnValue([existing] as never);
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+    expect(result.grant?.grantId).toBe("grant-existing");
+    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unconstrained", undefined],
+    ["partial", { allowedHosts: ["api.search.brave.com"] }],
+    ["extra", { allowedHosts: ["api.search.brave.com", "api.parallel.ai", "example.com"] }],
+  ] as const)("does not reuse an %s persistent grant for official-search consent", async (_label, constraints) => {
+    const host = createOfficialSearchApprovalHarness({ mode: "research" });
+    host.policyEngine.listActiveGrants.mockReturnValue([
+      {
+        grantId: "grant-wrong",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+        grantType: "persistent",
+        constraints,
+        createdBy: "operator-test",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ constraints: { allowedHosts: ["api.parallel.ai", "api.search.brave.com"] } }),
+    );
+  });
 });
 
 function createApprovalHarness(input?: {
@@ -2745,6 +2875,8 @@ function createApprovalHarness(input?: {
   codeModeRuns?: CodeModeRunRecord[];
   approvalLinkage?: ApprovalRequest["linkage"];
   shellExplainerPolicy?: ApprovalLifecycleHost["shellExplainerPolicy"];
+  approvalPayload?: Record<string, unknown>;
+  chatToolName?: string;
 }) {
   const pendingAction = input?.pendingAction;
   const codeModeRuns = input?.codeModeRuns ?? (input?.codeModeRun ? [input.codeModeRun] : []);
@@ -2756,7 +2888,7 @@ function createApprovalHarness(input?: {
     kind: input?.approvalKind ?? "shell.exec",
     riskLevel: "danger" as const,
     status: input?.approvalStatus ?? ("pending" as const),
-    payload: {
+    payload: input?.approvalPayload ?? {
       sessionId: "session-1",
       ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
     },
@@ -2919,7 +3051,11 @@ function createApprovalHarness(input?: {
         })),
       },
       chatToolRuns: {
-        listBySession: vi.fn(() => []),
+        listBySession: vi.fn(() =>
+          input?.chatToolName
+            ? ([{ approvalId: "approval-1", turnId: "turn-1", toolName: input.chatToolName }] as never)
+            : [],
+        ),
       },
       codeModeRuns: {
         find: vi.fn((runId: string) => codeModeRuns.find((run) => run.runId === runId)),
@@ -2995,6 +3131,29 @@ function createApprovalHarness(input?: {
   };
 
   return host as typeof host & ApprovalLifecycleHost & ApprovalRemoteActionContext;
+}
+
+function createOfficialSearchApprovalHarness(searchArgs: Record<string, unknown>) {
+  const host = createApprovalHarness({
+    approvalKind: "browser.search",
+    approvalPayload: { sessionId: "session-1", query: "current evidence", backend: "official", ...searchArgs },
+    chatToolName: "browser.search",
+  });
+  const approval = host.storage.approvals.get("approval-1");
+  host.resolveApproval.mockResolvedValue({
+    approval: { ...approval, status: "approved", resolvedBy: "operator-test" },
+    resolutionEffects: { proactiveRunIds: [], chatTurnResume: { resumed: false } },
+  } as never);
+  host.policyEngine.createGrant.mockImplementation(
+    (input: ToolGrantCreateInput) =>
+      ({
+        grantId: `grant-${input.scope}-${input.scopeRef}`,
+        ...input,
+        grantType: input.grantType ?? "persistent",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      }) as never,
+  );
+  return host;
 }
 
 function createRemoteActionTokenRecord(tokenId: string) {

@@ -661,17 +661,23 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "research",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Search web using browser automation.",
+    description: "Search the web through governed browser or official US/global-English provider execution.",
     pack: "core",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["live_data", "web_lookup", "research"],
-    usageHints: ["Use to discover candidate sources before navigating to a page."],
+    usageHints: [
+      "Use to discover candidate sources before navigating to a page.",
+      "Use backend=official for bounded Brave/Parallel API search; external request accounting is response-local only.",
+    ],
     argSchema: {
       type: "object",
       properties: {
         query: { type: "string" },
-        maxResults: { type: "integer", minimum: 1, maximum: 10 },
-        backend: { type: "string", enum: ["native", "firecrawl"] },
+        maxResults: { type: "integer", minimum: 1, maximum: 20 },
+        backend: { type: "string", enum: ["native", "firecrawl", "official"] },
+        mode: { type: "string", enum: ["quick", "research"] },
+        providers: { type: "array", items: { type: "string", enum: ["brave", "parallel"] }, maxItems: 2 },
+        freshness: { type: "string", enum: ["any", "day", "week", "month"] },
       },
       required: ["query"],
     },
@@ -679,6 +685,10 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       {
         title: "Search for authoritative sources before extracting",
         args: { query: "OpenAI background mode docs", maxResults: 5, backend: "firecrawl" },
+      },
+      {
+        title: "Search official providers for current primary sources",
+        args: { query: "OpenTelemetry specification updates", maxResults: 5, backend: "official", mode: "quick" },
       },
     ],
   },

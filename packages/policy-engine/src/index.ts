@@ -10,6 +10,7 @@ export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export * from "./ingestion-backends.js";
 export * from "./local-embeddings.js";
+export * from "./research-search-official-providers.js";
 export * from "./ingestion-source-type.js";
 export * from "./sandbox/path-jail.js";
 export * from "./sandbox/network-guard.js";

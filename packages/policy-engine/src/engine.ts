@@ -35,6 +35,10 @@ import {
   type IngestionSourceType,
 } from "./ingestion-source-type.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
+import {
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+} from "./research-search-official-providers.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -151,6 +155,10 @@ const BROWSER_SEARCH_ENGINE_URLS = {
   bing: "https://www.bing.com/search",
   google: "https://www.google.com/search",
 } as const;
+const OFFICIAL_SEARCH_PROVIDER_URLS = {
+  brave: "https://api.search.brave.com/res/v1/web/search",
+  parallel: "https://api.parallel.ai/v1/search",
+} as const;
 
 type BrowserSearchEngine = keyof typeof BROWSER_SEARCH_ENGINE_URLS;
 
@@ -169,10 +177,24 @@ function resolveBrowserSearchEngineCandidates(engineValue: unknown): BrowserSear
 }
 
 function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: ToolPolicyConfig): void {
+  const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
+  if (isOfficialResearchSearchInvocation(request.args ?? {})) {
+    const providers = resolveOfficialSearchProviders(request.args ?? {});
+    if (providers.length === 0) {
+      throw new Error("browser.search official backend requires at least one supported provider (brave or parallel).");
+    }
+    if (hasFullWebAccess(request)) {
+      return;
+    }
+    for (const provider of providers) {
+      const target = OFFICIAL_SEARCH_PROVIDER_URLS[provider];
+      assertHostAllowedForConfig(target, config);
+    }
+    return;
+  }
   if (hasFullWebAccess(request)) {
     return;
   }
-  const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
   if (backend === "firecrawl" && request.args?.firecrawlFallbackToNative === false) {
     return;
   }
@@ -193,12 +215,19 @@ function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: 
   );
 }
 
+function isOfficialSearchRequest(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): boolean {
+  return request.toolName === "browser.search" && isOfficialResearchSearchInvocation(request.args ?? {});
+}
+
 interface GrantDecision {
   decision: "allow" | "deny";
   grant: ToolGrantRecord;
   allowGrants?: ToolGrantRecord[];
   constraintsError?: string;
 }
+
+const HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE =
+  "host-constrained browser.search grant requires an official or explicit outbound target";
 
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   /**
@@ -896,8 +925,11 @@ export class ToolPolicyEngine {
       });
     }
 
+    const officialSearchRequest = isOfficialSearchRequest(request);
     const allowGrants =
-      grantDecision?.decision === "allow" ? (grantDecision.allowGrants ?? [grantDecision.grant]) : undefined;
+      grantDecision?.decision === "allow" && (!officialSearchRequest || !grantDecision.constraintsError)
+        ? (grantDecision.allowGrants ?? [grantDecision.grant])
+        : undefined;
 
     const structuralError = this.validateStructuralSafety(request, policy, allowGrants);
     if (structuralError) {
@@ -916,7 +948,7 @@ export class ToolPolicyEngine {
       );
     }
 
-    if (grantDecision?.decision === "allow" && grantDecision.constraintsError) {
+    if (grantDecision?.decision === "allow" && grantDecision.constraintsError && !officialSearchRequest) {
       return withWard({
         allowed: false,
         reasonCodes: ["grant_constraints_block"],
@@ -931,7 +963,7 @@ export class ToolPolicyEngine {
     }
 
     const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
-    const hasAllowGrant = grantDecision?.decision === "allow";
+    const hasAllowGrant = grantDecision?.decision === "allow" && !grantDecision.constraintsError;
     if (!inProfile && !hasAllowGrant) {
       return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
     }
@@ -995,7 +1027,15 @@ export class ToolPolicyEngine {
       requiresApproval = false;
     }
 
-    const { reasonCodes, policyReason } = this.buildAccessReason({
+    const officialSearchConsentGrant = officialSearchRequest
+      ? this.resolveOfficialSearchConsentGrant(request, allowGrants)
+      : undefined;
+    const officialSearchConsentRequired = officialSearchRequest && !officialSearchConsentGrant;
+    if (officialSearchConsentRequired) {
+      requiresApproval = true;
+    }
+
+    const accessReason = this.buildAccessReason({
       policy,
       localOperatorOverrideAuditId,
       codeModeRunPreapproved,
@@ -1008,19 +1048,24 @@ export class ToolPolicyEngine {
       argumentRisk,
       outsideRootsReadRequiresApproval,
     });
-    const effectiveAllowGrant =
-      grantDecision?.decision === "allow"
+    if (officialSearchConsentRequired) {
+      accessReason.reasonCodes.push("official_search_provider_consent_required");
+      accessReason.policyReason = "official search provider consent is required";
+    }
+    const effectiveAllowGrant = officialSearchRequest
+      ? officialSearchConsentGrant
+      : grantDecision?.decision === "allow"
         ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
         : undefined;
 
     return withWard({
       allowed: true,
-      reasonCodes,
+      reasonCodes: accessReason.reasonCodes,
       requiresApproval,
       matchedGrantId: effectiveAllowGrant?.grantId,
       matchedGrantAllowedHosts: effectiveAllowGrant ? getAllowedGrantHosts(effectiveAllowGrant.constraints) : undefined,
       riskLevel,
-      policyReason,
+      policyReason: accessReason.policyReason,
       grantToConsume: effectiveAllowGrant?.grantId,
       permissionProfileId: policy.permissionProfileId,
       localOperatorOverrideId: localOperatorOverrideAuditId,
@@ -1214,6 +1259,9 @@ export class ToolPolicyEngine {
         allowedGrants.push(grant);
         continue;
       }
+      if (constraintsError === HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE) {
+        continue;
+      }
       firstConstrainedAllow ??= { grant, constraintsError };
     }
 
@@ -1284,6 +1332,9 @@ export class ToolPolicyEngine {
         return "grant host constraints require a URL docs.ingest source";
       }
       const candidates = extractGrantHostCandidates(request, this.storage);
+      if (candidates.length === 0 && request.toolName === "browser.search") {
+        return HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE;
+      }
       if (candidates.length === 0 && request.toolName === "docs.ingest") {
         return "grant host constraints require a URL docs.ingest source";
       }
@@ -1498,6 +1549,31 @@ export class ToolPolicyEngine {
     allowGrants?: ToolGrantRecord[],
   ): ToolGrantRecord | undefined {
     return this.resolveGrantForOutsideRootsRead(request, policy, allowGrants) ?? fallback;
+  }
+
+  private resolveOfficialSearchConsentGrant(
+    request: ToolAccessEvaluateRequest,
+    allowGrants: ToolGrantRecord[] | undefined,
+  ): ToolGrantRecord | undefined {
+    const requiredHosts = [
+      ...new Set(
+        resolveOfficialSearchProviders(request.args ?? {}).map((provider) =>
+          new URL(OFFICIAL_SEARCH_PROVIDER_URLS[provider]).hostname.toLowerCase(),
+        ),
+      ),
+    ].sort();
+    if (requiredHosts.length === 0) {
+      return undefined;
+    }
+    return allowGrants?.find((grant) => {
+      if (grant.decision !== "allow" || grant.toolPattern !== "browser.search") {
+        return false;
+      }
+      const allowedHosts = new Set(
+        (grant.constraints?.allowedHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean),
+      );
+      return allowedHosts.size === requiredHosts.length && requiredHosts.every((host) => allowedHosts.has(host));
+    });
   }
 
   private resolveGrantForOutsideRootsRead(
@@ -2161,7 +2237,8 @@ function stripUndefined<T extends Record<string, unknown>>(input: T): T {
 
 function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: AccessEvaluation): ToolInvokeRequest {
   const allowedHosts = evaluation?.matchedGrantAllowedHosts?.filter((entry) => entry.trim().length > 0);
-  if (!evaluation?.matchedGrantId && (!allowedHosts || allowedHosts.length === 0)) {
+  const hasEvaluatedHostConstraint = evaluation?.matchedGrantAllowedHosts !== undefined;
+  if (!evaluation?.matchedGrantId && !hasEvaluatedHostConstraint) {
     return request;
   }
   return {
@@ -2169,8 +2246,9 @@ function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: Acce
     policyContext: {
       ...(request.policyContext ?? {}),
       matchedGrantId: evaluation?.matchedGrantId ?? request.policyContext?.matchedGrantId,
-      matchedGrantAllowedHosts:
-        allowedHosts && allowedHosts.length > 0 ? allowedHosts : request.policyContext?.matchedGrantAllowedHosts,
+      matchedGrantAllowedHosts: hasEvaluatedHostConstraint
+        ? (allowedHosts ?? [])
+        : request.policyContext?.matchedGrantAllowedHosts,
     },
   };
 }
@@ -2188,6 +2266,13 @@ function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, 
   }
   if (request.toolName.startsWith("browser.")) {
     const targets = stringTargets(request.args?.url);
+    if (request.toolName === "browser.search" && isOfficialResearchSearchInvocation(request.args ?? {})) {
+      targets.push(
+        ...resolveOfficialSearchProviders(request.args ?? {}).map(
+          (provider) => OFFICIAL_SEARCH_PROVIDER_URLS[provider],
+        ),
+      );
+    }
     if (request.args?.backend === "firecrawl") {
       targets.push(readFirecrawlBaseUrl(request.args));
     }
@@ -2307,6 +2392,11 @@ function extractGrantHostCandidates(
 ): string[] {
   const candidates = extractHostCandidates(request.args);
   const args = request.args;
+  if (request.toolName === "browser.search") {
+    candidates.push(
+      ...extractOutboundHostCandidates(request).flatMap((target) => extractHostCandidates({ url: target })),
+    );
+  }
   if (readDocsIngestSourceTypeIfValid(request) === "url" && typeof args?.source === "string") {
     candidates.push(...extractHostCandidates({ url: args.source }));
   }

@@ -48,7 +48,12 @@ import {
 } from "./approval-observability.js";
 import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-follow-up.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
-import type { ApprovalCreateAuthority, ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import {
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+  type ApprovalCreateAuthority,
+  type ToolPolicyEngine,
+} from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
 export class ApprovalExpiredAfterCommitError extends ValidationError {
@@ -970,6 +975,9 @@ export async function resolveChatToolApproval(
   if (persistentGrantScope && !toolPattern?.trim()) {
     throw new Error(`Approval ${approvalId} does not expose a tool pattern for persistent allow.`);
   }
+  const officialSearchAllowedHosts = persistentGrantScope
+    ? resolveOfficialSearchApprovalGrantHosts(approval, toolPattern)
+    : undefined;
   const resolution = await host.resolveApproval(approvalId, {
     decision,
     resolvedBy,
@@ -998,7 +1006,7 @@ export async function resolveChatToolApproval(
     for (const scopeRef of persistentGrantRequest.scopeRefs) {
       try {
         const nextGrant =
-          findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern) ??
+          findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern, officialSearchAllowedHosts) ??
           createToolGrant(host, {
             toolPattern,
             decision: "allow",
@@ -1006,10 +1014,17 @@ export async function resolveChatToolApproval(
             scopeRef,
             grantType: "persistent",
             createdBy: resolvedBy,
+            ...(officialSearchAllowedHosts ? { constraints: { allowedHosts: officialSearchAllowedHosts } } : {}),
           });
         grant ??= nextGrant;
       } catch (error) {
-        const recoveredGrant = findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern);
+        const recoveredGrant = findExistingGrant(
+          host,
+          persistentGrantRequest.scope,
+          scopeRef,
+          toolPattern,
+          officialSearchAllowedHosts,
+        );
         if (recoveredGrant) {
           grant ??= recoveredGrant;
           continue;
@@ -1122,8 +1137,41 @@ function findExistingGrant(
   scope: "session" | "workspace",
   scopeRef: string,
   toolPattern: string,
+  exactAllowedHosts?: string[],
 ): ToolGrantRecord | undefined {
   return host.policyEngine
     .listActiveGrants(scope, scopeRef, 500)
-    .find((grant) => grant.decision === "allow" && grant.toolPattern === toolPattern);
+    .find(
+      (grant) =>
+        grant.decision === "allow" &&
+        grant.toolPattern === toolPattern &&
+        (exactAllowedHosts === undefined ||
+          haveSameExactHostSet(grant.constraints?.allowedHosts ?? [], exactAllowedHosts)),
+    );
+}
+
+function resolveOfficialSearchApprovalGrantHosts(approval: ApprovalRequest, toolPattern: string): string[] | undefined {
+  if (approval.kind !== "browser.search" || toolPattern !== "browser.search") {
+    return undefined;
+  }
+  if (!isOfficialResearchSearchInvocation(approval.payload)) {
+    return undefined;
+  }
+  const providers = resolveOfficialSearchProviders(approval.payload);
+  const hosts = providers.map((provider) => (provider === "brave" ? "api.search.brave.com" : "api.parallel.ai"));
+  if (hosts.length === 0) {
+    throw new Error(`Approval ${approval.approvalId} does not select a supported official search provider.`);
+  }
+  return [...new Set(hosts)].sort();
+}
+
+function haveSameExactHostSet(left: string[], right: string[]): boolean {
+  const normalize = (values: string[]) =>
+    [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort();
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return (
+    normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((value, index) => value === normalizedRight[index])
+  );
 }
