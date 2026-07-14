@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { ApprovalEffectRepository, buildApprovalEffectIdempotencyKey } from "./approval-effect-repo.js";
+import { GovernanceJourneyEventRepository } from "./governance-journey-event-repo.js";
 import { createDatabase } from "./sqlite.js";
 
 const createdFiles: string[] = [];
@@ -32,7 +33,11 @@ function createRepoWithDb(): { repo: ApprovalEffectRepository; db: ReturnType<ty
   };
 }
 
-function insertApproval(db: ReturnType<typeof createDatabase>, approvalId: string): void {
+function insertApproval(
+  db: ReturnType<typeof createDatabase>,
+  approvalId: string,
+  linkage?: Record<string, unknown>,
+): void {
   db.prepare(
     `
     INSERT INTO approvals (
@@ -40,13 +45,14 @@ function insertApproval(db: ReturnType<typeof createDatabase>, approvalId: strin
       kind,
       risk_level,
       status,
+      linkage_json,
       payload_json,
       preview_json,
       explanation_status,
       created_at
-    ) VALUES (?, 'tool_call', 'caution', 'approved', '{}', '{}', 'not_requested', ?)
+    ) VALUES (?, 'tool_call', 'caution', 'approved', ?, '{}', '{}', 'not_requested', ?)
   `,
-  ).run(approvalId, "2026-03-21T10:00:00.000Z");
+  ).run(approvalId, linkage ? JSON.stringify(linkage) : null, "2026-03-21T10:00:00.000Z");
 }
 
 describe("ApprovalEffectRepository", () => {
@@ -60,6 +66,42 @@ describe("ApprovalEffectRepository", () => {
       }),
       "approval-1:approval_wait_wake:durable_run:run-1",
     );
+  });
+
+  it("lists bounded approval-effect batches in one deterministic projection", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-a");
+    insertApproval(db, "approval-b");
+
+    for (const [approvalId, targetId, createdAt] of [
+      ["approval-a", "run-3", "2026-03-21T10:03:00.000Z"],
+      ["approval-a", "run-1", "2026-03-21T10:01:00.000Z"],
+      ["approval-a", "run-2", "2026-03-21T10:02:00.000Z"],
+      ["approval-b", "run-4", "2026-03-21T10:04:00.000Z"],
+    ] as const) {
+      repo.upsert({
+        approvalId,
+        effectKind: "approval_wait_wake",
+        targetKind: "durable_run",
+        targetId,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
+
+    const batches = repo.listByApprovalIds(["approval-b", "approval-a", "approval-a"], 2);
+    assert.deepEqual(
+      batches.map((batch) => ({
+        approvalId: batch.approvalId,
+        targets: batch.effects.map((effect) => effect.targetId),
+        total: batch.total,
+      })),
+      [
+        { approvalId: "approval-b", targets: ["run-4"], total: 1 },
+        { approvalId: "approval-a", targets: ["run-1", "run-2"], total: 3 },
+      ],
+    );
+    assert.deepEqual(repo.listByApprovalIds([], 2), []);
   });
 
   it("upserts, claims, renews, completes, skips, fails, and recovers effects", () => {
@@ -248,6 +290,137 @@ describe("ApprovalEffectRepository", () => {
     );
     assert.equal(claimedRecovered?.effectId, expired.effectId);
     assert.equal(claimedRecovered?.attemptCount, 1);
+  });
+
+  it("atomically projects every workspace-scoped terminal effect without payload content", () => {
+    const { repo, db } = createRepoWithDb();
+    const journeys = new GovernanceJourneyEventRepository(db);
+    insertApproval(db, "approval-journey", {
+      workspaceId: "workspace-journey",
+      sessionId: "session-journey",
+      turnId: "turn-journey",
+    });
+    const createRunning = (
+      effectKind: "approval_wait_wake" | "pending_action_execute" | "approval_inbox_follow_up",
+      targetKind: "durable_run" | "pending_action" | "approval",
+      targetId: string,
+      workerId: string,
+    ) =>
+      repo.upsert({
+        approvalId: "approval-journey",
+        effectKind,
+        targetKind,
+        targetId,
+        status: "running",
+        claimedBy: workerId,
+        claimedAt: "2026-03-21T10:00:00.000Z",
+        leaseExpiresAt: "2099-03-21T10:10:00.000Z",
+        version: 1,
+        createdAt: "2026-03-21T10:00:00.000Z",
+        updatedAt: "2026-03-21T10:00:00.000Z",
+      });
+    const completedBase = createRunning("approval_wait_wake", "durable_run", "run-secret", "worker-complete");
+    const skippedBase = createRunning("pending_action_execute", "pending_action", "action-secret", "worker-skip");
+    const failedBase = createRunning("approval_inbox_follow_up", "approval", "approval-journey", "worker-fail");
+
+    const completed = repo.completeEffect(completedBase.effectId, "worker-complete", 1, {
+      result: { privateOutput: "must-not-project-complete" },
+      completedAt: "2026-03-21T10:01:00.000Z",
+    });
+    const skipped = repo.skipEffect(skippedBase.effectId, "worker-skip", 1, {
+      result: { privateOutput: "must-not-project-skip" },
+      completedAt: "2026-03-21T10:02:00.000Z",
+    });
+    const failed = repo.failEffect(failedBase.effectId, "worker-fail", 1, {
+      result: { privateOutput: "must-not-project-fail" },
+      lastError: "must-not-project-error",
+      completedAt: "2026-03-21T10:03:00.000Z",
+    });
+
+    for (const [effect, expectedStatus, workerId, poisoningStatus] of [
+      [completed, "completed", "worker-complete", "clean"],
+      [skipped, "skipped", "worker-skip", "clean"],
+      [failed, "failed", "worker-fail", "blocked"],
+    ] as const) {
+      assert.ok(effect);
+      const journey = journeys.get(`approval-effect:journey:${effect.effectId}`);
+      assert.deepEqual(
+        {
+          scopeKind: journey.scopeKind,
+          workspaceId: journey.workspaceId,
+          eventType: journey.eventType,
+          subjectKind: journey.subjectKind,
+          subjectId: journey.subjectId,
+          action: journey.action,
+          actorId: journey.actorId,
+          actorType: journey.actorType,
+          sessionId: journey.sessionId,
+          turnId: journey.turnId,
+          approvalId: journey.approvalId,
+          sourceKind: journey.sourceKind,
+          sourceId: journey.sourceId,
+          poisoningStatus: journey.poisoningStatus,
+          evidenceRefs: journey.evidenceRefs,
+          sourceRequired: journey.provenance.sourceRequired,
+          approvalRequired: journey.provenance.approvalRequired,
+        },
+        {
+          scopeKind: "workspace",
+          workspaceId: "workspace-journey",
+          eventType: "approval_effect_lifecycle",
+          subjectKind: "approval_effect",
+          subjectId: effect.effectId,
+          action: expectedStatus,
+          actorId: workerId,
+          actorType: "approval_effect",
+          sessionId: "session-journey",
+          turnId: "turn-journey",
+          approvalId: "approval-journey",
+          sourceKind: "approval_effect",
+          sourceId: effect.effectId,
+          poisoningStatus,
+          evidenceRefs: [{ owner: "approval", refId: "approval-journey" }],
+          sourceRequired: true,
+          approvalRequired: false,
+        },
+      );
+      assert.match(journey.fingerprint ?? "", /^[a-f0-9]{64}$/u);
+      assert.doesNotMatch(JSON.stringify(journey), /must-not-project|run-secret|action-secret/u);
+    }
+  });
+
+  it("rolls a terminal effect transition back when its Journey insert fails", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-journey-rollback", { workspaceId: "workspace-journey" });
+    const running = repo.upsert({
+      approvalId: "approval-journey-rollback",
+      effectKind: "approval_wait_wake",
+      targetKind: "durable_run",
+      targetId: "run-rollback",
+      status: "running",
+      claimedBy: "worker-rollback",
+      claimedAt: "2026-03-21T10:00:00.000Z",
+      leaseExpiresAt: "2099-03-21T10:10:00.000Z",
+      version: 1,
+    });
+    const internal = repo as unknown as {
+      journeyEvents: { create: (event: unknown) => unknown };
+    };
+    internal.journeyEvents.create = () => {
+      throw new Error("journey insert unavailable");
+    };
+
+    assert.throws(
+      () => repo.completeEffect(running.effectId, "worker-rollback", 1, { result: { resumed: true } }),
+      /journey insert unavailable/u,
+    );
+    assert.equal(repo.get(running.effectId).status, "running");
+    assert.equal(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM governance_journey_events WHERE subject_id = ?")
+        .get<{ count: number }>(running.effectId)?.count,
+      0,
+    );
   });
 
   it("uses the database clock for claim, heartbeat, and reclaim across skewed workers", () => {

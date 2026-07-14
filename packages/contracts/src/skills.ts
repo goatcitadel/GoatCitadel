@@ -39,6 +39,8 @@ export type SkillRuntimeState = "enabled" | "sleep" | "disabled";
 
 export interface SkillStateRecord {
   skillId: string;
+  /** Optimistic-concurrency revision for the governed runtime-skill aggregate. */
+  revision: number;
   state: SkillRuntimeState;
   note?: string;
   updatedAt: string;
@@ -49,11 +51,15 @@ export interface SkillStateRecord {
 }
 
 export interface SkillActivationPolicy {
+  /** Optimistic-concurrency revision for the singleton activation-policy aggregate. */
+  revision: number;
   guardedAutoThreshold: number;
   requireFirstUseConfirmation: boolean;
 }
 
 export interface SkillListItem extends LoadedSkill {
+  /** Current runtime-skill aggregate revision used by state mutation requests. */
+  revision: number;
   state: SkillRuntimeState;
   note?: string;
   stateUpdatedAt?: string;
@@ -129,7 +135,29 @@ export interface SkillImportProvenance {
   repositoryUrl?: string;
   sourceUrl?: string;
   commitSha?: string;
+  contentIntegrity?: SkillContentIntegrityManifest;
   nonCallableUntilActivated: true;
+}
+
+export interface SkillContentIntegrityFile {
+  path: string;
+  sha256: string;
+  bytes: number;
+}
+
+/**
+ * Deterministic manifest for the import payload copied into a managed skill.
+ * GoatCitadel-owned `source.json` and VCS internals are intentionally excluded
+ * because neither is callable skill content.
+ */
+export interface SkillContentIntegrityManifest {
+  manifestVersion: "goatcitadel.skill-tree.v1";
+  algorithm: "sha256";
+  treeSha256: string;
+  fileCount: number;
+  totalBytes: number;
+  excludedPaths: ["source.json", ".git/**"];
+  files: SkillContentIntegrityFile[];
 }
 
 export interface SkillImportExternalToolMapping {

@@ -29,7 +29,7 @@ export interface FetchResult {
 }
 
 export interface ContextSourceAttribution {
-  sourceType: "file" | "url" | "text" | "memory" | "mcp";
+  sourceType: "file" | "url" | "text" | "memory" | "mcp" | "external_source_snapshot";
   sourceRef: string;
   title?: string;
   backend?: IngestionBackend["backend"];

@@ -25,6 +25,7 @@ interface OrphanedLatestUserMessageRow {
  */
 export class ChatTurnRecoveryRepository {
   private readonly listOrphanedLatestUserMessagesStmt;
+  private readonly listOrphanedLatestUserMessagesPageStmt;
 
   public constructor(db: DatabaseClient) {
     // Latest message per session (by insertion order) that is a real operator
@@ -48,11 +49,51 @@ export class ChatTurnRecoveryRepository {
       ORDER BY m.timestamp ASC, m.message_id ASC
       LIMIT @limit
     `);
+    this.listOrphanedLatestUserMessagesPageStmt = db.prepare(`
+      SELECT m.session_id, m.message_id, m.timestamp
+      FROM chat_messages AS m
+      INNER JOIN (
+        SELECT session_id, MAX(seq) AS max_seq
+        FROM chat_messages
+        GROUP BY session_id
+      ) AS latest
+        ON latest.session_id = m.session_id AND latest.max_seq = m.seq
+      LEFT JOIN chat_turn_traces AS trace
+        ON trace.user_message_id = m.message_id
+      WHERE m.role = 'user'
+        AND m.actor_type = 'user'
+        AND trace.turn_id IS NULL
+        AND (m.timestamp > @afterTimestamp OR (m.timestamp = @afterTimestamp AND m.message_id > @afterMessageId))
+      ORDER BY m.timestamp ASC, m.message_id ASC
+      LIMIT @limit
+    `);
   }
 
   public listOrphanedLatestUserMessages(limit = 500): OrphanedLatestUserMessageRecord[] {
     const rows = this.listOrphanedLatestUserMessagesStmt.all({
       limit: Math.max(1, Math.min(limit, 1000)),
+    });
+    return (Array.isArray(rows) ? rows : []).filter(isOrphanedLatestUserMessageRow).map((row) => ({
+      sessionId: row.session_id,
+      messageId: row.message_id,
+      timestamp: row.timestamp,
+    }));
+  }
+
+  public listOrphanedLatestUserMessagesPage(
+    input: {
+      afterTimestamp?: string;
+      afterMessageId?: string;
+      limit?: number;
+    } = {},
+  ): OrphanedLatestUserMessageRecord[] {
+    if (!input.afterTimestamp || !input.afterMessageId) {
+      return this.listOrphanedLatestUserMessages(input.limit);
+    }
+    const rows = this.listOrphanedLatestUserMessagesPageStmt.all({
+      afterTimestamp: input.afterTimestamp,
+      afterMessageId: input.afterMessageId,
+      limit: Math.max(1, Math.min(input.limit ?? 500, 1000)),
     });
     return (Array.isArray(rows) ? rows : []).filter(isOrphanedLatestUserMessageRow).map((row) => ({
       sessionId: row.session_id,

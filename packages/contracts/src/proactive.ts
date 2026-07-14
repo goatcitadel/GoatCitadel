@@ -16,6 +16,7 @@ export type ProactiveStopReason =
 
 export interface ProactivePolicy {
   sessionId: string;
+  revision: number;
   mode: ProactiveMode;
   autonomyBudget: {
     maxActionsPerHour: number;

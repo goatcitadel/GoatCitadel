@@ -24,6 +24,10 @@ export const ASSEMBLY_STAGES = [
   "S3_revise",
   "S4_convergence",
   "S5_synthesis",
+  "C0_resolve",
+  "C1_participate",
+  "C2_assemble",
+  "C3_synthesize",
   "completed",
 ] as const;
 
@@ -37,6 +41,8 @@ export const ASSEMBLY_ARTIFACT_TYPES = [
   "defense_response",
   "convergence_score",
   "result",
+  "model_council_participant",
+  "model_council_synthesis",
 ] as const;
 
 export type AssemblyArtifactType = (typeof ASSEMBLY_ARTIFACT_TYPES)[number];
@@ -75,6 +81,100 @@ export interface AssemblyParticipantModel {
   providerId: string;
   model: string;
   label?: string;
+}
+
+export type AssemblyRunKind = "assembly" | "chat_model_council";
+
+export interface ModelCouncilParticipantResolution {
+  participantId: string;
+  role: "primary" | "advisory";
+  providerId: string;
+  model: string;
+  contextWindowTokens: number;
+  /** Secret-free hash of the exact server-owned endpoint/auth/API-style route configuration. */
+  routeConfigFingerprint: string;
+  routeFingerprint: string;
+  advisoryOnly: true;
+  toolsAllowed: false;
+}
+
+export interface ModelCouncilRoutedContextBinding {
+  snapshotId: string;
+  snapshotHash: string;
+  contextTextHash: string;
+  contextBytes: number;
+  usedTokens: number;
+  promptReservedTokens: number;
+  outputReservedTokens: number;
+  estimatorVersion: string;
+  budgetPolicyVersion: string;
+}
+
+export interface ModelCouncilResolution {
+  schemaVersion: "assembly.model-council-resolution.v1";
+  resolutionHash: string;
+  turnId: string;
+  sessionId: string;
+  workspaceId: string;
+  capabilityProfileId: string;
+  capabilityProfileHash: string;
+  /** Hash of the exact immutable message prefix sent to every council call. */
+  historyHash: string;
+  participants: ModelCouncilParticipantResolution[];
+  synthesisParticipantId: string;
+  routedContext?: ModelCouncilRoutedContextBinding;
+  createdAt: string;
+}
+
+export interface ModelCouncilAttemptEvidence {
+  attemptId: string;
+  stage: "C1_participate" | "C3_synthesize";
+  participantId: string;
+  role: "primary" | "advisory" | "synthesis";
+  status: "completed" | "failed";
+  responseHash?: string;
+  effectiveProviderId?: string;
+  effectiveModel?: string;
+  modelUsageEventIds: string[];
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  errorFingerprint?: string;
+}
+
+/** Public evidence contains fingerprints and counts only, never participant text. */
+export interface ModelCouncilEvidence {
+  schemaVersion: "assembly.model-council-evidence.v1";
+  resolutionHash: string;
+  participantCount: number;
+  completedParticipantCount: number;
+  dissentCount: number;
+  minorityCount: number;
+  dissentFingerprints: string[];
+  minorityFingerprints: string[];
+  canonicalAnswerHash?: string;
+  attempts: ModelCouncilAttemptEvidence[];
+  updatedAt: string;
+}
+
+/** Durable internal artifact. Inspection projects this to content-free evidence. */
+export interface ModelCouncilParticipantArtifact {
+  attempt: ModelCouncilAttemptEvidence;
+  responseText: string;
+}
+
+/** Durable internal artifact for the one canonical synthesized Chat answer. */
+export interface ModelCouncilSynthesisArtifact {
+  attempt: ModelCouncilAttemptEvidence;
+  answer: string;
+}
+
+export interface ModelCouncilExecutionResult {
+  runId: string;
+  answer: string;
+  usage?: AssemblyUsageSummary;
+  modelUsageEventIds: string[];
+  evidence: ModelCouncilEvidence;
 }
 
 export interface AssemblyContextRef {
@@ -350,6 +450,8 @@ export interface ModelReputation {
 
 export interface AssemblyRunRecord {
   runId: string;
+  runKind?: AssemblyRunKind;
+  sourceTurnId?: string;
   workspaceId?: string;
   sourceSessionId?: string;
   sourceTaskId?: string;
@@ -364,6 +466,11 @@ export interface AssemblyRunRecord {
   stopReason?: string;
   usage?: AssemblyUsageSummary;
   error?: string;
+  generation?: number;
+  leaseOwnerId?: string;
+  leaseExpiresAt?: string;
+  councilResolution?: ModelCouncilResolution;
+  councilEvidence?: ModelCouncilEvidence;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -385,7 +492,10 @@ export interface AssemblyArtifactRecord {
     | AdversarialReview
     | DefenseResponse
     | ConvergenceScore
-    | AssemblyResult;
+    | AssemblyResult
+    | ModelCouncilParticipantArtifact
+    | ModelCouncilSynthesisArtifact
+    | ModelCouncilAttemptEvidence;
   createdAt: string;
 }
 

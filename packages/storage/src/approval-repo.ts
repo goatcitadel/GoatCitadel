@@ -266,10 +266,12 @@ export class ApprovalRepository {
       status: "pending",
       linkageJson: serializeApprovalLinkage(input.linkage),
       payloadJson: JSON.stringify(
-        embedApprovalLinkage(
-          input.rollbackNote ? { ...input.payload, rollbackNote: input.rollbackNote } : input.payload,
-          input.linkage,
-        ),
+        input.kind === "skill_hub.lifecycle"
+          ? stripApprovalLinkage(input.payload)
+          : embedApprovalLinkage(
+              input.rollbackNote ? { ...input.payload, rollbackNote: input.rollbackNote } : input.payload,
+              input.linkage,
+            ),
       ),
       previewJson: JSON.stringify(input.preview),
       explanationStatus: "not_requested",
@@ -457,7 +459,11 @@ export class ApprovalRepository {
         approvalId,
         status,
         linkageJson: serializeApprovalLinkage(current.linkage),
-        payloadJson: JSON.stringify(embedApprovalLinkage(input.editedPayload ?? current.payload, current.linkage)),
+        payloadJson: JSON.stringify(
+          current.kind === "skill_hub.lifecycle"
+            ? stripApprovalLinkage(input.editedPayload ?? current.payload)
+            : embedApprovalLinkage(input.editedPayload ?? current.payload, current.linkage),
+        ),
         resolvedBy: input.resolvedBy,
         resolutionNote: input.resolutionNote ?? null,
         allowExpired: options?.allowExpired ? 1 : 0,
@@ -493,7 +499,11 @@ export class ApprovalRepository {
       this.updatePayloadStmt.run({
         approvalId,
         linkageJson: serializeApprovalLinkage(nextLinkage),
-        payloadJson: JSON.stringify(embedApprovalLinkage(payload, nextLinkage)),
+        payloadJson: JSON.stringify(
+          row.kind === "skill_hub.lifecycle"
+            ? stripApprovalLinkage(payload)
+            : embedApprovalLinkage(payload, nextLinkage),
+        ),
       });
       return this.get(approvalId);
     });

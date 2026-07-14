@@ -45,6 +45,7 @@ describe("CronJobRecord", () => {
   it("carries workdir, contextFrom, lastRunOutput, lastRunId, and backoff evidence", () => {
     const record: CronJobRecord = {
       jobId: "id",
+      revision: 1,
       name: "n",
       action: "no_agent",
       schedule: "*/5 * * * *",

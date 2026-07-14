@@ -69,6 +69,10 @@ describe("DurableRunEventRepository", () => {
       listed.map((event) => event.eventId),
       ["event-1", "event-2"],
     );
+    assert.deepEqual(
+      listed.map((event) => event.sequence),
+      [1, 2],
+    );
     assert.deepEqual(listed[0]?.payload, { providerId: "openai" });
     assert.equal(listed[1]?.stepKey, undefined);
     assert.deepEqual(listed[1]?.payload, {});
@@ -76,6 +80,66 @@ describe("DurableRunEventRepository", () => {
     assert.deepEqual(
       events.listByRun("run-1", 0).map((event) => event.eventId),
       ["event-1"],
+    );
+  });
+
+  it("orders colliding timestamps by the per-run monotonic sequence", () => {
+    const { events, runs } = createRepos();
+    runs.createRun({
+      runId: "run-colliding-time",
+      workflowKey: "chat.turn.execute",
+      now: "2026-05-12T00:00:00.000Z",
+    });
+    for (const eventId of ["event-z", "event-a", "event-m"]) {
+      events.append({
+        eventId,
+        runId: "run-colliding-time",
+        eventType: "run_started",
+        createdAt: "2026-05-12T00:00:01.000Z",
+      });
+    }
+
+    assert.deepEqual(
+      events.listByRun("run-colliding-time").map((event) => [event.eventId, event.sequence]),
+      [
+        ["event-z", 1],
+        ["event-a", 2],
+        ["event-m", 3],
+      ],
+    );
+    assert.deepEqual(
+      events.listAfterSequence("run-colliding-time", 1).map((event) => event.eventId),
+      ["event-a", "event-m"],
+    );
+  });
+
+  it("rejects a duplicate append without consuming the next per-run sequence", () => {
+    const { events, runs } = createRepos();
+    runs.createRun({
+      runId: "run-duplicate",
+      workflowKey: "chat.turn.execute",
+      now: "2026-05-12T00:00:00.000Z",
+    });
+    const first = {
+      eventId: "event-stable",
+      runId: "run-duplicate",
+      eventType: "run_started" as const,
+      createdAt: "2026-05-12T00:00:01.000Z",
+    };
+    events.append(first);
+
+    assert.throws(() => events.append(first), /UNIQUE constraint failed/);
+    events.append({
+      ...first,
+      eventId: "event-after-rejected-duplicate",
+    });
+
+    assert.deepEqual(
+      events.listByRun("run-duplicate").map((event) => [event.eventId, event.sequence]),
+      [
+        ["event-stable", 1],
+        ["event-after-rejected-duplicate", 2],
+      ],
     );
   });
 });

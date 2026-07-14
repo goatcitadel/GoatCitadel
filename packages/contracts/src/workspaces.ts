@@ -13,6 +13,7 @@ export interface WorkspacePrefs {
 
 export interface WorkspaceRecord {
   workspaceId: string;
+  revision: number;
   citadelId?: string;
   name: string;
   description?: string;

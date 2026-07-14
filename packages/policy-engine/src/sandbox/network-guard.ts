@@ -166,7 +166,7 @@ export interface FetchBodyReadLimits {
   maxBytes: number;
 }
 
-type DnsLookupFunction = (
+export type DnsLookupFunction = (
   hostname: string,
   options: LookupOptions,
   callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
@@ -700,14 +700,18 @@ function guardedDispatcherCacheKey(url: string, allowlist: string[]): string | u
 function createGuardedDispatcher(url: string, allowlist: string[], dnsLookup?: DnsLookupFunction): Dispatcher {
   return new Agent({
     connect: {
-      lookup: createGuardedLookup(url, allowlist, dnsLookup ?? nodeDnsLookup),
+      lookup: createGuardedDnsLookup(url, allowlist, dnsLookup ?? nodeDnsLookup),
     },
     keepAliveTimeout: 1,
     keepAliveMaxTimeout: 1,
   });
 }
 
-function createGuardedLookup(hostOrUrl: string, allowlist: string[], dnsLookup: DnsLookupFunction): DnsLookupFunction {
+export function createGuardedDnsLookup(
+  hostOrUrl: string,
+  allowlist: string[],
+  dnsLookup: DnsLookupFunction = nodeDnsLookup,
+): DnsLookupFunction {
   return (hostname, options, callback) => {
     dnsLookup(hostname, options, (error, address, family) => {
       if (error) {

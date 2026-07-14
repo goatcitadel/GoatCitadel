@@ -99,6 +99,32 @@ function parseProvenance(raw: string | null): SkillLifecycleProvenance | undefin
   if (typeof parsed.sourceProvider === "string") {
     provenance.sourceProvider = parsed.sourceProvider;
   }
+  if (typeof parsed.commitSha === "string" && /^[a-f0-9]{7,64}$/i.test(parsed.commitSha)) {
+    provenance.commitSha = parsed.commitSha;
+  }
+  if (isRecord(parsed.contentIntegrity)) {
+    const integrity = parsed.contentIntegrity;
+    if (
+      integrity.manifestVersion === "goatcitadel.skill-tree.v1" &&
+      typeof integrity.treeSha256 === "string" &&
+      /^[a-f0-9]{64}$/.test(integrity.treeSha256) &&
+      typeof integrity.fileCount === "number" &&
+      Number.isSafeInteger(integrity.fileCount) &&
+      integrity.fileCount >= 0 &&
+      typeof integrity.totalBytes === "number" &&
+      Number.isSafeInteger(integrity.totalBytes) &&
+      integrity.totalBytes >= 0 &&
+      typeof integrity.verified === "boolean"
+    ) {
+      provenance.contentIntegrity = {
+        manifestVersion: integrity.manifestVersion,
+        treeSha256: integrity.treeSha256,
+        fileCount: integrity.fileCount,
+        totalBytes: integrity.totalBytes,
+        verified: integrity.verified,
+      };
+    }
+  }
   return provenance;
 }
 

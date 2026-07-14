@@ -8,6 +8,7 @@ import type { IntegrationPluginAuthorManifest, PluginDescriptorHealthIssue } fro
 export type { IntegrationPluginAuthorManifest } from "@goatcitadel/contracts";
 
 export const INTEGRATION_PLUGIN_MANIFEST_FILENAME = "goatcitadel.integration-plugin.json";
+export const INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES = 256 * 1024;
 
 export interface ResolvedIntegrationPluginAuthorManifestSource {
   source: string;
@@ -96,7 +97,7 @@ export async function loadIntegrationPluginAuthorManifest(
   manifestPath: string,
 ): Promise<IntegrationPluginAuthorManifest> {
   const absolutePath = path.resolve(manifestPath);
-  const raw = await fsPromises.readFile(absolutePath, "utf8");
+  const raw = await readIntegrationPluginManifest(absolutePath);
   return validateIntegrationPluginAuthorManifest(JSON.parse(raw) as unknown);
 }
 
@@ -121,9 +122,9 @@ export function resolveIntegrationPluginAuthorManifestSource(
     return { source: resolvedCandidate };
   }
 
-  const raw = fs.readFileSync(manifestPath, "utf8");
   let parsed: unknown;
   try {
+    const raw = readIntegrationPluginManifestSync(manifestPath);
     parsed = JSON.parse(raw) as unknown;
   } catch (error) {
     return {
@@ -146,4 +147,65 @@ export function resolveIntegrationPluginAuthorManifestSource(
     manifest: detailed.manifest,
     descriptorHash: detailed.descriptorHash,
   };
+}
+
+async function readIntegrationPluginManifest(manifestPath: string): Promise<string> {
+  const handle = await fsPromises.open(manifestPath, "r");
+  try {
+    const stats = await handle.stat();
+    assertIntegrationPluginManifestFile(stats, manifestPath);
+    const buffer = Buffer.alloc(INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (result.bytesRead === 0) {
+        break;
+      }
+      bytesRead += result.bytesRead;
+    }
+    assertIntegrationPluginManifestByteCount(bytesRead, manifestPath);
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+function readIntegrationPluginManifestSync(manifestPath: string): string {
+  const descriptor = fs.openSync(manifestPath, "r");
+  try {
+    const stats = fs.fstatSync(descriptor);
+    assertIntegrationPluginManifestFile(stats, manifestPath);
+    const buffer = Buffer.alloc(INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const chunkBytes = fs.readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (chunkBytes === 0) {
+        break;
+      }
+      bytesRead += chunkBytes;
+    }
+    assertIntegrationPluginManifestByteCount(bytesRead, manifestPath);
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function assertIntegrationPluginManifestFile(stats: Pick<fs.Stats, "isFile" | "size">, manifestPath: string): void {
+  if (!stats.isFile()) {
+    throw new Error(`Integration plugin descriptor must be a regular file: ${manifestPath}`);
+  }
+  if (stats.size > INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES) {
+    throw new Error(
+      `Integration plugin descriptor exceeds the ${INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES}-byte limit: ${manifestPath}`,
+    );
+  }
+}
+
+function assertIntegrationPluginManifestByteCount(bytesRead: number, manifestPath: string): void {
+  if (bytesRead > INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES) {
+    throw new Error(
+      `Integration plugin descriptor exceeds the ${INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES}-byte limit: ${manifestPath}`,
+    );
+  }
 }

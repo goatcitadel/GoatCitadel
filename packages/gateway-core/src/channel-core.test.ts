@@ -304,6 +304,33 @@ describe("describeChannelCapabilities", () => {
     ]);
   });
 
+  it("keeps Signal outbound-only even when stale inbound settings remain", () => {
+    const capabilities = describeChannelCapabilities("signal", {
+      baseUrl: "http://127.0.0.1:8080",
+      inboundEnabled: " TRUE ",
+      pollIntervalSeconds: 5,
+    });
+
+    expect(capabilities.supportedActions).toEqual(expect.arrayContaining(["channel.send"]));
+    expect(capabilities.setupReady).toBe(true);
+    expect(capabilities.inboundModes).toEqual(["none"]);
+    expect(capabilities.runtimePosture).toEqual(
+      expect.objectContaining({
+        outboundTransport: "api",
+        lifecycle: "stateless",
+        inboundReadiness: "unsupported",
+      }),
+    );
+    expect(capabilities.runtimePosture).not.toHaveProperty("inboundTransport");
+    expect(capabilities.runtimePosture.operatorSummary).toContain("no acknowledgement or replay contract");
+    expect(capabilities.supportNotes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Outbound Signal sends remain available"),
+        expect.stringContaining("deprecated inboundEnabled=true"),
+      ]),
+    );
+  });
+
   it("falls back to default channel capabilities for unknown adapters", () => {
     const capabilities = describeChannelCapabilities("custom-channel", {});
 

@@ -177,6 +177,11 @@ export interface CronWatchdogRunResult {
 
 export interface CronJobRecord {
   jobId: string;
+  revision: number;
+  /** Monotonic fencing generation for canonical cron_runs admission. */
+  executionGeneration?: number;
+  /** Canonical non-terminal run currently holding this job generation. */
+  activeRunId?: string;
   name: string;
   action: CronJobAction;
   actionConfig?: CronJobActionConfig;

@@ -1,4 +1,5 @@
 import type { CronJobRecord } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
@@ -10,6 +11,9 @@ export interface CronJobRepositoryOptions {
 
 interface CronJobRow {
   job_id: string;
+  revision: number;
+  execution_generation: number;
+  active_run_id: string | null;
   name: string;
   action: string;
   action_config_json: string | null;
@@ -32,8 +36,53 @@ interface CronJobRow {
   updated_at: string;
 }
 
+export type CronJobSpecInput = Pick<
+  CronJobRecord,
+  | "jobId"
+  | "name"
+  | "action"
+  | "actionConfig"
+  | "description"
+  | "schedule"
+  | "enabled"
+  | "endAt"
+  | "workdir"
+  | "contextFrom"
+>;
+
+export interface CronJobSpecPatch {
+  name?: string;
+  action?: CronJobRecord["action"];
+  actionConfig?: CronJobRecord["actionConfig"] | null;
+  description?: string | null;
+  schedule?: string;
+  enabled?: boolean;
+  endAt?: string | null;
+  workdir?: string | null;
+  contextFrom?: string | null;
+}
+
+export interface CronJobRuntimeTelemetryPatch {
+  lastRunAt?: string | null;
+  nextRunAt?: string | null;
+  lastRunOutput?: string | null;
+  lastRunId?: string | null;
+  lastRunStatus?: CronJobRecord["lastRunStatus"] | null;
+  lastRunEvidenceEnvelopeId?: string | null;
+  lastFailureAt?: string | null;
+  lastFailure?: CronJobRecord["lastFailure"] | null;
+  failureCount?: number | null;
+  backoffUntil?: string | null;
+}
+
+export type CronJobUpsertInput = Omit<CronJobRecord, "revision"> & { revision?: number };
+
 export class CronJobRepository {
-  private readonly upsertStmt;
+  private readonly insertStmt;
+  private readonly specFenceStmt;
+  private readonly specUpdateStmt;
+  private readonly telemetryMergeStmt;
+  private readonly generationTelemetryMergeStmt;
   private readonly getStmt;
   private readonly listStmt;
   private readonly listByCitadelStmt;
@@ -43,33 +92,72 @@ export class CronJobRepository {
     private readonly db: DatabaseClient,
     private readonly options: CronJobRepositoryOptions = {},
   ) {
-    this.upsertStmt = db.prepare(`
+    this.insertStmt = db.prepare(`
       INSERT INTO cron_jobs (
-        job_id, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, last_run_output, last_run_id, last_run_status, last_run_evidence_envelope_id, last_failure_at, last_failure_json, failure_count, backoff_until, updated_at
+        job_id, revision, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, last_run_output, last_run_id, last_run_status, last_run_evidence_envelope_id, last_failure_at, last_failure_json, failure_count, backoff_until, updated_at
       ) VALUES (
-        @jobId, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @workdir, @contextFrom, @lastRunOutput, @lastRunId, @lastRunStatus, @lastRunEvidenceEnvelopeId, @lastFailureAt, @lastFailureJson, @failureCount, @backoffUntil, @updatedAt
+        @jobId, 1, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @workdir, @contextFrom, @lastRunOutput, @lastRunId, @lastRunStatus, @lastRunEvidenceEnvelopeId, @lastFailureAt, @lastFailureJson, @failureCount, @backoffUntil, @updatedAt
       )
-      ON CONFLICT(job_id) DO UPDATE SET
-        name = excluded.name,
-        action = excluded.action,
-        action_config_json = excluded.action_config_json,
-        description = excluded.description,
-        schedule = excluded.schedule,
-        enabled = excluded.enabled,
-        end_at = excluded.end_at,
-        last_run_at = excluded.last_run_at,
-        next_run_at = excluded.next_run_at,
-        workdir = excluded.workdir,
-        context_from = excluded.context_from,
-        last_run_output = excluded.last_run_output,
-        last_run_id = excluded.last_run_id,
-        last_run_status = excluded.last_run_status,
-        last_run_evidence_envelope_id = excluded.last_run_evidence_envelope_id,
-        last_failure_at = excluded.last_failure_at,
-        last_failure_json = excluded.last_failure_json,
-        failure_count = excluded.failure_count,
-        backoff_until = excluded.backoff_until,
-        updated_at = excluded.updated_at
+      ON CONFLICT(job_id) DO NOTHING
+    `);
+    this.specFenceStmt = db.prepare(`
+      UPDATE cron_jobs
+      SET revision = revision
+      WHERE job_id = @jobId
+        AND revision = @expectedRevision
+    `);
+    this.specUpdateStmt = db.prepare(`
+      UPDATE cron_jobs
+      SET revision = revision + 1,
+          name = @name,
+          action = @action,
+          action_config_json = @actionConfigJson,
+          description = @description,
+          schedule = @schedule,
+          enabled = @enabled,
+          end_at = @endAt,
+          workdir = @workdir,
+          context_from = @contextFrom,
+          updated_at = @updatedAt
+      WHERE job_id = @jobId
+        AND revision = @expectedRevision
+    `);
+    this.telemetryMergeStmt = db.prepare(`
+      UPDATE cron_jobs
+      SET last_run_at = CASE WHEN @writeLastRunAt = 1 THEN @lastRunAt ELSE last_run_at END,
+          next_run_at = CASE WHEN @writeNextRunAt = 1 THEN @nextRunAt ELSE next_run_at END,
+          last_run_output = CASE WHEN @writeLastRunOutput = 1 THEN @lastRunOutput ELSE last_run_output END,
+          last_run_id = CASE WHEN @writeLastRunId = 1 THEN @lastRunId ELSE last_run_id END,
+          last_run_status = CASE WHEN @writeLastRunStatus = 1 THEN @lastRunStatus ELSE last_run_status END,
+          last_run_evidence_envelope_id = CASE
+            WHEN @writeLastRunEvidenceEnvelopeId = 1 THEN @lastRunEvidenceEnvelopeId
+            ELSE last_run_evidence_envelope_id
+          END,
+          last_failure_at = CASE WHEN @writeLastFailureAt = 1 THEN @lastFailureAt ELSE last_failure_at END,
+          last_failure_json = CASE WHEN @writeLastFailure = 1 THEN @lastFailureJson ELSE last_failure_json END,
+          failure_count = CASE WHEN @writeFailureCount = 1 THEN @failureCount ELSE failure_count END,
+          backoff_until = CASE WHEN @writeBackoffUntil = 1 THEN @backoffUntil ELSE backoff_until END,
+          updated_at = @updatedAt
+      WHERE job_id = @jobId
+    `);
+    this.generationTelemetryMergeStmt = db.prepare(`
+      UPDATE cron_jobs
+      SET last_run_at = CASE WHEN @writeLastRunAt = 1 THEN @lastRunAt ELSE last_run_at END,
+          next_run_at = CASE WHEN @writeNextRunAt = 1 THEN @nextRunAt ELSE next_run_at END,
+          last_run_output = CASE WHEN @writeLastRunOutput = 1 THEN @lastRunOutput ELSE last_run_output END,
+          last_run_id = CASE WHEN @writeLastRunId = 1 THEN @lastRunId ELSE last_run_id END,
+          last_run_status = CASE WHEN @writeLastRunStatus = 1 THEN @lastRunStatus ELSE last_run_status END,
+          last_run_evidence_envelope_id = CASE
+            WHEN @writeLastRunEvidenceEnvelopeId = 1 THEN @lastRunEvidenceEnvelopeId
+            ELSE last_run_evidence_envelope_id
+          END,
+          last_failure_at = CASE WHEN @writeLastFailureAt = 1 THEN @lastFailureAt ELSE last_failure_at END,
+          last_failure_json = CASE WHEN @writeLastFailure = 1 THEN @lastFailureJson ELSE last_failure_json END,
+          failure_count = CASE WHEN @writeFailureCount = 1 THEN @failureCount ELSE failure_count END,
+          backoff_until = CASE WHEN @writeBackoffUntil = 1 THEN @backoffUntil ELSE backoff_until END,
+          updated_at = @updatedAt
+      WHERE job_id = @jobId
+        AND execution_generation = @expectedExecutionGeneration
     `);
 
     this.getStmt = db.prepare("SELECT * FROM cron_jobs WHERE job_id = @jobId");
@@ -80,53 +168,149 @@ export class CronJobRepository {
     this.deleteStmt = db.prepare("DELETE FROM cron_jobs WHERE job_id = @jobId");
   }
 
-  public upsert(job: CronJobRecord, now = new Date().toISOString()): CronJobRecord {
-    this.upsertStmt.run({
-      jobId: job.jobId,
-      name: job.name,
-      action: job.action,
-      actionConfigJson: job.actionConfig ? JSON.stringify(job.actionConfig) : null,
-      description: job.description ?? null,
-      schedule: job.schedule,
-      enabled: job.enabled ? 1 : 0,
-      endAt: job.endAt ?? null,
-      lastRunAt: job.lastRunAt ?? null,
-      nextRunAt: job.nextRunAt ?? null,
-      workdir: job.workdir ?? null,
-      contextFrom: job.contextFrom ?? null,
-      lastRunOutput: job.lastRunOutput ?? null,
-      lastRunId: job.lastRunId ?? null,
-      lastRunStatus: job.lastRunStatus ?? null,
-      lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId ?? null,
-      lastFailureAt: job.lastFailureAt ?? null,
-      lastFailureJson: job.lastFailure ? JSON.stringify(job.lastFailure) : null,
-      failureCount: job.failureCount ?? null,
-      backoffUntil: job.backoffUntil ?? null,
-      updatedAt: now,
+  public createSpec(job: CronJobSpecInput, now = new Date().toISOString()): CronJobRecord {
+    const jobId = normalizeJobId(job.jobId);
+    return this.db.transaction("immediate", () => {
+      const inserted = this.insertStmt.run(toInsertParams(projectCronJobSpec({ ...job, jobId }), now));
+      if (inserted.changes === 0) {
+        this.throwWriteConflict(jobId, 0);
+      }
+      return this.require(jobId);
     });
-
-    return {
-      ...job,
-      workdir: job.workdir ?? undefined,
-      contextFrom: job.contextFrom ?? undefined,
-      lastRunOutput: job.lastRunOutput ?? undefined,
-      lastRunId: job.lastRunId ?? undefined,
-      lastRunStatus: job.lastRunStatus ?? undefined,
-      lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId ?? undefined,
-      lastFailureAt: job.lastFailureAt ?? undefined,
-      ...(job.lastFailure ? { lastFailure: job.lastFailure } : {}),
-      failureCount: job.failureCount ?? undefined,
-      backoffUntil: job.backoffUntil ?? undefined,
-      updatedAt: now,
-    };
   }
 
-  public upsertIfChanged(job: CronJobRecord, now = new Date().toISOString()): CronJobRecord {
-    const existing = this.get(job.jobId);
-    if (existing && cronJobsMatch(existing, job)) {
-      return existing;
-    }
-    return this.upsert(job, now);
+  public updateSpecWithRevision(
+    jobId: string,
+    patch: CronJobSpecPatch,
+    expectedRevision: number,
+    now = new Date().toISOString(),
+  ): CronJobRecord {
+    const normalizedJobId = normalizeJobId(jobId);
+    validateExpectedRevision(expectedRevision);
+    return this.db.transaction("immediate", () => {
+      this.fenceSpec(normalizedJobId, expectedRevision);
+      const current = this.require(normalizedJobId);
+      const next = applySpecPatch(current, patch);
+      if (cronJobSpecsMatch(current, next)) {
+        return current;
+      }
+      const updated = this.specUpdateStmt.run({
+        ...toSpecParams(next),
+        jobId: normalizedJobId,
+        expectedRevision,
+        updatedAt: now,
+      });
+      if (updated.changes === 0) {
+        this.throwWriteConflict(normalizedJobId, expectedRevision);
+      }
+      return this.require(normalizedJobId);
+    });
+  }
+
+  public deleteWithRevision(jobId: string, expectedRevision: number): boolean {
+    const normalizedJobId = normalizeJobId(jobId);
+    validateExpectedRevision(expectedRevision);
+    return this.db.transaction("immediate", () => {
+      this.fenceSpec(normalizedJobId, expectedRevision);
+      return Number(this.deleteStmt.run({ jobId: normalizedJobId }).changes ?? 0) > 0;
+    });
+  }
+
+  public mergeRuntimeTelemetry(
+    jobId: string,
+    patch: CronJobRuntimeTelemetryPatch,
+    now = new Date().toISOString(),
+  ): CronJobRecord {
+    const normalizedJobId = normalizeJobId(jobId);
+    return this.db.transaction("immediate", () => {
+      const current = this.get(normalizedJobId);
+      if (!current) {
+        throw new NotFoundError({ entity: "Cron job", id: normalizedJobId });
+      }
+      if (!hasRuntimeTelemetryFields(patch)) {
+        return current;
+      }
+      this.telemetryMergeStmt.run(toTelemetryParams(normalizedJobId, patch, now));
+      return this.require(normalizedJobId);
+    });
+  }
+
+  /**
+   * Merge compatibility telemetry only while the caller still owns the exact
+   * cron execution generation. This prevents a late terminal write from an
+   * older run from overwriting telemetry for a newly admitted occurrence.
+   */
+  public mergeRuntimeTelemetryForExecutionGeneration(
+    jobId: string,
+    expectedExecutionGeneration: number,
+    patch: CronJobRuntimeTelemetryPatch,
+    now = new Date().toISOString(),
+  ): CronJobRecord | undefined {
+    const normalizedJobId = normalizeJobId(jobId);
+    const normalizedGeneration = normalizeExecutionGeneration(expectedExecutionGeneration);
+    return this.db.transaction("immediate", () => {
+      const current = this.get(normalizedJobId);
+      if (!current) {
+        throw new NotFoundError({ entity: "Cron job", id: normalizedJobId });
+      }
+      if (current.executionGeneration !== normalizedGeneration) {
+        return undefined;
+      }
+      if (!hasRuntimeTelemetryFields(patch)) {
+        return current;
+      }
+      const merged = this.generationTelemetryMergeStmt.run({
+        ...toTelemetryParams(normalizedJobId, patch, now),
+        expectedExecutionGeneration: normalizedGeneration,
+      });
+      return merged.changes > 0 ? this.require(normalizedJobId) : undefined;
+    });
+  }
+
+  /**
+   * Startup/built-in reconciliation owns only the job specification. Existing
+   * runtime telemetry is retained and revision advances only for a real spec change.
+   */
+  public reconcileSpec(job: CronJobUpsertInput, now = new Date().toISOString()): CronJobRecord {
+    const jobId = normalizeJobId(job.jobId);
+    return this.db.transaction("immediate", () => {
+      const current = this.get(jobId);
+      if (!current) {
+        const inserted = this.insertStmt.run(toInsertParams({ ...job, jobId }, now));
+        if (inserted.changes === 0) {
+          this.throwWriteConflict(jobId, 0);
+        }
+        return this.require(jobId);
+      }
+      return this.updateSpecWithRevision(jobId, toFullSpecPatch(job), current.revision, now);
+    });
+  }
+
+  /** Compatibility API for operator/service callers while routes adopt explicit revisions. */
+  public upsert(job: CronJobUpsertInput, now = new Date().toISOString()): CronJobRecord {
+    const jobId = normalizeJobId(job.jobId);
+    return this.db.transaction("immediate", () => {
+      const current = this.get(jobId);
+      let saved: CronJobRecord;
+      if (!current) {
+        const inserted = this.insertStmt.run(toInsertParams({ ...job, jobId }, now));
+        if (inserted.changes === 0) {
+          this.throwWriteConflict(jobId, 0);
+        }
+        saved = this.require(jobId);
+      } else {
+        saved = this.updateSpecWithRevision(jobId, toFullSpecPatch(job), current.revision, now);
+        const telemetry = telemetryPatchFromRecord(job);
+        if (hasRuntimeTelemetryFields(telemetry)) {
+          saved = this.mergeRuntimeTelemetry(jobId, telemetry, now);
+        }
+      }
+      return saved;
+    });
+  }
+
+  public upsertIfChanged(job: CronJobUpsertInput, now = new Date().toISOString()): CronJobRecord {
+    return this.reconcileSpec(job, now);
   }
 
   public get(jobId: string): CronJobRecord | undefined {
@@ -157,9 +341,40 @@ export class CronJobRepository {
   }
 
   public delete(jobId: string): boolean {
-    const result = this.deleteStmt.run({ jobId });
-    const changes = Number((result as { changes?: number }).changes ?? 0);
-    return changes > 0;
+    const existing = this.get(jobId);
+    return existing ? this.deleteWithRevision(jobId, existing.revision) : false;
+  }
+
+  private require(jobId: string): CronJobRecord {
+    const record = this.get(jobId);
+    if (!record) {
+      throw new NotFoundError({ entity: "Cron job", id: jobId });
+    }
+    return record;
+  }
+
+  private fenceSpec(jobId: string, expectedRevision: number): void {
+    const fenced = this.specFenceStmt.run({ jobId, expectedRevision });
+    if (fenced.changes === 0) {
+      this.throwWriteConflict(jobId, expectedRevision);
+    }
+  }
+
+  private throwWriteConflict(jobId: string, expectedRevision: number): never {
+    const current = this.get(jobId);
+    if (!current) {
+      throw new NotFoundError({ entity: "Cron job", id: jobId });
+    }
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: `cron_job ${jobId} changed since revision ${expectedRevision}`,
+      details: {
+        resourceKind: "cron_job",
+        resourceId: jobId,
+        expectedRevision,
+        currentRevision: current.revision,
+      },
+    });
   }
 
   private mapRow(row: CronJobRow): CronJobRecord {
@@ -187,6 +402,9 @@ export class CronJobRepository {
     );
     return {
       jobId: row.job_id,
+      revision: normalizeRevision(row.revision),
+      executionGeneration: normalizeExecutionGeneration(row.execution_generation),
+      activeRunId: row.active_run_id ?? undefined,
       name: row.name,
       action: row.action as CronJobRecord["action"],
       ...(actionConfig ? { actionConfig } : {}),
@@ -228,6 +446,172 @@ function parseCronLastFailure(value: unknown): {
       message: value.message,
       code: value.code,
     },
+  };
+}
+
+function normalizeJobId(jobId: string): string {
+  const normalized = jobId.trim();
+  if (!normalized) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "jobId" });
+  }
+  return normalized;
+}
+
+function validateExpectedRevision(expectedRevision: number): void {
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+    throw new ValidationError({ field: "expectedRevision" });
+  }
+}
+
+function normalizeRevision(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(`cron_jobs revision must be a positive integer, got ${String(value)}`);
+  }
+  return value;
+}
+
+function normalizeExecutionGeneration(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`cron_jobs execution_generation must be a non-negative integer, got ${String(value)}`);
+  }
+  return value;
+}
+
+function hasOwn(value: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function applySpecPatch(current: CronJobRecord, patch: CronJobSpecPatch): CronJobRecord {
+  return {
+    ...current,
+    name: patch.name ?? current.name,
+    action: patch.action ?? current.action,
+    actionConfig: hasOwn(patch, "actionConfig") ? (patch.actionConfig ?? undefined) : current.actionConfig,
+    description: hasOwn(patch, "description") ? (patch.description ?? undefined) : current.description,
+    schedule: patch.schedule ?? current.schedule,
+    enabled: patch.enabled ?? current.enabled,
+    endAt: hasOwn(patch, "endAt") ? (patch.endAt ?? undefined) : current.endAt,
+    workdir: hasOwn(patch, "workdir") ? (patch.workdir ?? undefined) : current.workdir,
+    contextFrom: hasOwn(patch, "contextFrom") ? (patch.contextFrom ?? undefined) : current.contextFrom,
+  };
+}
+
+function toFullSpecPatch(job: CronJobSpecInput): CronJobSpecPatch {
+  return {
+    name: job.name,
+    action: job.action,
+    actionConfig: job.actionConfig ?? null,
+    description: job.description ?? null,
+    schedule: job.schedule,
+    enabled: job.enabled,
+    endAt: job.endAt ?? null,
+    workdir: job.workdir ?? null,
+    contextFrom: job.contextFrom ?? null,
+  };
+}
+
+function projectCronJobSpec(job: CronJobSpecInput): CronJobSpecInput {
+  return {
+    jobId: job.jobId,
+    name: job.name,
+    action: job.action,
+    actionConfig: job.actionConfig,
+    description: job.description,
+    schedule: job.schedule,
+    enabled: job.enabled,
+    endAt: job.endAt,
+    workdir: job.workdir,
+    contextFrom: job.contextFrom,
+  };
+}
+
+function toSpecParams(job: CronJobSpecInput): Record<string, unknown> {
+  return {
+    name: job.name,
+    action: job.action,
+    actionConfigJson: job.actionConfig ? JSON.stringify(job.actionConfig) : null,
+    description: job.description ?? null,
+    schedule: job.schedule,
+    enabled: job.enabled ? 1 : 0,
+    endAt: job.endAt ?? null,
+    workdir: job.workdir ?? null,
+    contextFrom: job.contextFrom ?? null,
+  };
+}
+
+function toInsertParams(
+  job: CronJobSpecInput & Partial<CronJobRuntimeTelemetryPatch>,
+  now: string,
+): Record<string, unknown> {
+  return {
+    jobId: job.jobId,
+    ...toSpecParams(job),
+    lastRunAt: job.lastRunAt ?? null,
+    nextRunAt: job.nextRunAt ?? null,
+    lastRunOutput: job.lastRunOutput ?? null,
+    lastRunId: job.lastRunId ?? null,
+    lastRunStatus: job.lastRunStatus ?? null,
+    lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId ?? null,
+    lastFailureAt: job.lastFailureAt ?? null,
+    lastFailureJson: job.lastFailure ? JSON.stringify(job.lastFailure) : null,
+    failureCount: job.failureCount ?? null,
+    backoffUntil: job.backoffUntil ?? null,
+    updatedAt: now,
+  };
+}
+
+const RUNTIME_TELEMETRY_FIELDS = [
+  "lastRunAt",
+  "nextRunAt",
+  "lastRunOutput",
+  "lastRunId",
+  "lastRunStatus",
+  "lastRunEvidenceEnvelopeId",
+  "lastFailureAt",
+  "lastFailure",
+  "failureCount",
+  "backoffUntil",
+] as const satisfies ReadonlyArray<keyof CronJobRuntimeTelemetryPatch>;
+
+function hasRuntimeTelemetryFields(patch: CronJobRuntimeTelemetryPatch): boolean {
+  return RUNTIME_TELEMETRY_FIELDS.some((field) => hasOwn(patch, field));
+}
+
+function telemetryPatchFromRecord(job: CronJobUpsertInput): CronJobRuntimeTelemetryPatch {
+  const patch: CronJobRuntimeTelemetryPatch = {};
+  for (const field of RUNTIME_TELEMETRY_FIELDS) {
+    if (hasOwn(job, field)) {
+      const value = job[field];
+      (patch as Record<string, unknown>)[field] = value ?? null;
+    }
+  }
+  return patch;
+}
+
+function toTelemetryParams(jobId: string, patch: CronJobRuntimeTelemetryPatch, now: string): Record<string, unknown> {
+  return {
+    jobId,
+    writeLastRunAt: hasOwn(patch, "lastRunAt") ? 1 : 0,
+    lastRunAt: patch.lastRunAt ?? null,
+    writeNextRunAt: hasOwn(patch, "nextRunAt") ? 1 : 0,
+    nextRunAt: patch.nextRunAt ?? null,
+    writeLastRunOutput: hasOwn(patch, "lastRunOutput") ? 1 : 0,
+    lastRunOutput: patch.lastRunOutput ?? null,
+    writeLastRunId: hasOwn(patch, "lastRunId") ? 1 : 0,
+    lastRunId: patch.lastRunId ?? null,
+    writeLastRunStatus: hasOwn(patch, "lastRunStatus") ? 1 : 0,
+    lastRunStatus: patch.lastRunStatus ?? null,
+    writeLastRunEvidenceEnvelopeId: hasOwn(patch, "lastRunEvidenceEnvelopeId") ? 1 : 0,
+    lastRunEvidenceEnvelopeId: patch.lastRunEvidenceEnvelopeId ?? null,
+    writeLastFailureAt: hasOwn(patch, "lastFailureAt") ? 1 : 0,
+    lastFailureAt: patch.lastFailureAt ?? null,
+    writeLastFailure: hasOwn(patch, "lastFailure") ? 1 : 0,
+    lastFailureJson: patch.lastFailure ? JSON.stringify(patch.lastFailure) : null,
+    writeFailureCount: hasOwn(patch, "failureCount") ? 1 : 0,
+    failureCount: patch.failureCount ?? null,
+    writeBackoffUntil: hasOwn(patch, "backoffUntil") ? 1 : 0,
+    backoffUntil: patch.backoffUntil ?? null,
+    updatedAt: now,
   };
 }
 
@@ -278,7 +662,7 @@ function deepEqualCanonical(left: unknown, right: unknown): boolean {
   return true;
 }
 
-function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
+function cronJobSpecsMatch(existing: CronJobRecord, next: CronJobSpecInput): boolean {
   return (
     existing.jobId === next.jobId &&
     existing.name === next.name &&
@@ -288,18 +672,8 @@ function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
     existing.schedule === next.schedule &&
     existing.enabled === next.enabled &&
     existing.endAt === next.endAt &&
-    existing.lastRunAt === next.lastRunAt &&
-    existing.nextRunAt === next.nextRunAt &&
     existing.workdir === next.workdir &&
-    existing.contextFrom === next.contextFrom &&
-    existing.lastRunOutput === next.lastRunOutput &&
-    existing.lastRunId === next.lastRunId &&
-    existing.lastRunStatus === next.lastRunStatus &&
-    existing.lastRunEvidenceEnvelopeId === next.lastRunEvidenceEnvelopeId &&
-    existing.lastFailureAt === next.lastFailureAt &&
-    deepEqualCanonical(existing.lastFailure ?? {}, next.lastFailure ?? {}) &&
-    existing.failureCount === next.failureCount &&
-    existing.backoffUntil === next.backoffUntil
+    existing.contextFrom === next.contextFrom
   );
 }
 
@@ -313,6 +687,9 @@ const CRON_JOB_ROW_COLUMNS: ReadonlyArray<
   readonly [keyof CronJobRow & string, "string" | "string | null" | "number" | "number | null"]
 > = [
   ["job_id", "string"],
+  ["revision", "number"],
+  ["execution_generation", "number"],
+  ["active_run_id", "string | null"],
   ["name", "string"],
   ["action", "string"],
   ["action_config_json", "string | null"],

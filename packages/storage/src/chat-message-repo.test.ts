@@ -8,6 +8,7 @@ import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 
 const createdFiles: string[] = [];
@@ -181,6 +182,307 @@ describe("ChatMessageRepository", () => {
       page.map((item) => item.messageId),
       ["m2", "m3"],
     );
+  });
+
+  it("bounds the first keyset page by the captured high-water sequence", () => {
+    const boundedCalls: unknown[][] = [];
+    const noopStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        if (sql.includes("SELECT workspace_id") && sql.includes("chat_session_meta")) {
+          return {
+            ...noopStatement,
+            get: <T = unknown>() => ({ workspace_id: "workspace-1" }) as T,
+          };
+        }
+        if (sql.includes("SELECT MAX(cm.seq) AS seq")) {
+          // Model a READ COMMITTED transaction whose first statement observes seq=2.
+          return { ...noopStatement, get: <T = unknown>() => ({ seq: 2 }) as T };
+        }
+        if (sql.includes("cm.seq <= ?") && sql.includes("ORDER BY cm.seq DESC")) {
+          return {
+            ...noopStatement,
+            all: <T = unknown>(...params: unknown[]): T[] => {
+              boundedCalls.push(params);
+              return [
+                {
+                  seq: 2,
+                  message_id: "m2",
+                  session_id: "sess-1",
+                  role: "assistant",
+                  actor_type: "agent",
+                  actor_id: "assistant",
+                  content: "captured",
+                  parts_json: null,
+                  attachments_json: null,
+                  timestamp: "2026-03-05T01:00:02.000Z",
+                  token_input: null,
+                  token_output: null,
+                  cost_usd: null,
+                  created_at: "2026-03-05T01:00:02.000Z",
+                  steered: null,
+                  parent_delegation_step_id: null,
+                },
+              ] as unknown as T[];
+            },
+          };
+        }
+        if (
+          sql.includes("WHERE session_id = ?") &&
+          !sql.includes("seq < ?") &&
+          !sql.includes("seq > ?") &&
+          sql.includes("ORDER BY seq DESC")
+        ) {
+          return {
+            ...noopStatement,
+            all: () => {
+              throw new Error("unbounded latest read would admit the concurrent seq=3 append");
+            },
+          };
+        }
+        return noopStatement;
+      },
+      exec: () => undefined,
+      close: () => undefined,
+      transaction: (_mode, callback) => callback(),
+    };
+
+    const page = new ChatMessageRepository(db).listPage({
+      workspaceId: "workspace-1",
+      sessionId: "sess-1",
+      limit: 2,
+    });
+
+    assert.deepEqual(boundedCalls, [["workspace-1", "sess-1", 2, 3]]);
+    assert.equal(page.snapshotMaxSequence, 2);
+    assert.deepEqual(
+      page.items.map((item) => item.messageId),
+      ["m2"],
+    );
+  });
+
+  it("returns explicit stale cursor truth instead of falling back to latest messages", () => {
+    const { repo, db } = createRepoWithDb();
+    new ChatSessionMetaRepository(db).ensure("sess-page", undefined, "workspace-1");
+    repo.upsertMany([
+      message({ messageId: "page-1", sessionId: "sess-page" }),
+      message({ messageId: "page-2", sessionId: "sess-page" }),
+    ]);
+
+    const page = repo.listPage({
+      workspaceId: "workspace-1",
+      sessionId: "sess-page",
+      cursor: "deleted-cursor",
+    });
+
+    assert.equal(page.cursorState, "stale");
+    assert.deepEqual(page.items, []);
+  });
+
+  it("freezes numeric-offset compatibility pages to the first page high-water mark", () => {
+    const { repo, db } = createRepoWithDb();
+    new ChatSessionMetaRepository(db).ensure("sess-offset", undefined, "workspace-1");
+    for (let index = 1; index <= 5; index += 1) {
+      repo.upsert(message({ messageId: `offset-${index}`, sessionId: "sess-offset" }));
+    }
+    const first = repo.listOffsetPage({
+      workspaceId: "workspace-1",
+      sessionId: "sess-offset",
+      limit: 2,
+      offset: 0,
+    });
+    repo.upsert(message({ messageId: "offset-concurrent", sessionId: "sess-offset" }));
+    const second = repo.listOffsetPage({
+      workspaceId: "workspace-1",
+      sessionId: "sess-offset",
+      limit: 2,
+      offset: first.nextOffset,
+      snapshotMaxSequence: first.snapshotMaxSequence,
+      snapshotMessageCount: first.snapshotMessageCount,
+    });
+
+    assert.equal(first.cursorState, "offset");
+    assert.equal(second.cursorState, "offset");
+    assert.equal(
+      second.items.some((item) => item.messageId === "offset-concurrent"),
+      false,
+    );
+    assert.equal(new Set([...first.items, ...second.items].map((item) => item.messageId)).size, 4);
+    assert.equal(
+      repo.listOffsetPage({
+        workspaceId: "workspace-1",
+        sessionId: "sess-offset",
+        limit: 2,
+        offset: 2,
+      }).cursorState,
+      "stale",
+    );
+
+    repo.deleteByMessageIds("sess-offset", [first.items.at(-1)!.messageId]);
+    assert.equal(
+      repo.listOffsetPage({
+        workspaceId: "workspace-1",
+        sessionId: "sess-offset",
+        limit: 2,
+        offset: first.nextOffset,
+        snapshotMaxSequence: first.snapshotMaxSequence,
+        snapshotMessageCount: first.snapshotMessageCount,
+      }).cursorState,
+      "stale",
+      "deleting a row before the next numeric offset must not shift and skip a message",
+    );
+  });
+
+  it("centers and top-ups exact anchored windows without crossing session or workspace identity", () => {
+    const { repo, db } = createRepoWithDb();
+    const meta = new ChatSessionMetaRepository(db);
+    meta.ensure("sess-anchor", undefined, "workspace-1");
+    meta.ensure("sess-other", undefined, "workspace-2");
+    for (let index = 1; index <= 7; index += 1) {
+      repo.upsert(message({ messageId: `anchor-${index}`, sessionId: "sess-anchor", content: `message ${index}` }));
+      if (index <= 3) {
+        repo.upsert(message({ messageId: `other-${index}`, sessionId: "sess-other", content: `other ${index}` }));
+      }
+    }
+    const anchorSequence = Number(
+      (db.prepare("SELECT seq FROM chat_messages WHERE message_id = ?").get("anchor-2") as { seq: number }).seq,
+    );
+
+    const found = repo.readAnchoredWindow(
+      {
+        workspaceId: "workspace-1",
+        sessionId: "sess-anchor",
+        messageId: "anchor-2",
+        sequence: anchorSequence,
+      },
+      5,
+    );
+    assert.equal(found.anchor.state, "found");
+    assert.deepEqual(
+      found.items.map((entry) => entry.message.messageId),
+      ["anchor-1", "anchor-2", "anchor-3", "anchor-4", "anchor-5"],
+    );
+    assert.equal(found.items.filter((entry) => entry.isAnchor).length, 1);
+
+    assert.equal(
+      repo.readAnchoredWindow({
+        workspaceId: "workspace-1",
+        sessionId: "sess-anchor",
+        messageId: "anchor-2",
+        sequence: anchorSequence + 1,
+      }).anchor.state,
+      "identity_mismatch",
+    );
+    assert.equal(
+      repo.readAnchoredWindow({
+        workspaceId: "workspace-2",
+        sessionId: "sess-anchor",
+        messageId: "anchor-2",
+        sequence: anchorSequence,
+      }).anchor.state,
+      "identity_mismatch",
+    );
+
+    repo.deleteByMessageIds("sess-anchor", ["anchor-2"]);
+    const unavailable = repo.readAnchoredWindow({
+      workspaceId: "workspace-1",
+      sessionId: "sess-anchor",
+      messageId: "anchor-2",
+      sequence: anchorSequence,
+    });
+    assert.equal(unavailable.anchor.state, "unavailable");
+    assert.equal(unavailable.anchor.unavailableReason, "missing_deleted_or_compacted");
+  });
+
+  it("pages older and newer from exact anchored cursors without duplicates, skips, or snapshot drift", () => {
+    const { repo, db } = createRepoWithDb();
+    const meta = new ChatSessionMetaRepository(db);
+    meta.ensure("sess-continuation", undefined, "workspace-1");
+    meta.ensure("sess-gap", undefined, "workspace-1");
+    for (let index = 1; index <= 6; index += 1) {
+      repo.upsert(message({ messageId: `continuation-${index}`, sessionId: "sess-continuation" }));
+      repo.upsert(message({ messageId: `gap-${index}`, sessionId: "sess-gap" }));
+    }
+    const anchorSequence = Number(
+      (db.prepare("SELECT seq FROM chat_messages WHERE message_id = ?").get("continuation-4") as { seq: number }).seq,
+    );
+    const window = repo.readAnchoredWindow(
+      {
+        workspaceId: "workspace-1",
+        sessionId: "sess-continuation",
+        messageId: "continuation-4",
+        sequence: anchorSequence,
+      },
+      1,
+    );
+    assert.equal(window.anchor.state, "found");
+    const oldest = window.items[0]!;
+    const newest = window.items.at(-1)!;
+    const snapshotMaxSequence = window.snapshotMaxSequence!;
+
+    repo.upsert(message({ messageId: "continuation-appended", sessionId: "sess-continuation" }));
+    const older = repo.readHistoryContinuation({
+      workspaceId: "workspace-1",
+      sessionId: "sess-continuation",
+      direction: "older",
+      cursorMessageId: oldest.message.messageId,
+      cursorSequence: oldest.sequence,
+      snapshotMaxSequence,
+      limit: 2,
+    });
+    const newer = repo.readHistoryContinuation({
+      workspaceId: "workspace-1",
+      sessionId: "sess-continuation",
+      direction: "newer",
+      cursorMessageId: newest.message.messageId,
+      cursorSequence: newest.sequence,
+      snapshotMaxSequence,
+      limit: 2,
+    });
+    assert.equal(older.hasMore, true);
+    assert.ok(older.nextCursor);
+    const oldestPage = repo.readHistoryContinuation({
+      workspaceId: "workspace-1",
+      sessionId: "sess-continuation",
+      direction: "older",
+      cursorMessageId: older.nextCursor!.messageId,
+      cursorSequence: older.nextCursor!.sequence,
+      snapshotMaxSequence: older.nextCursor!.snapshotMaxSequence,
+      limit: 2,
+    });
+    const allIds = [...oldestPage.items, ...older.items, ...window.items, ...newer.items].map(
+      (entry) => entry.message.messageId,
+    );
+    assert.deepEqual(
+      allIds,
+      Array.from({ length: 6 }, (_, index) => `continuation-${index + 1}`),
+    );
+    assert.equal(new Set(allIds).size, allIds.length);
+    assert.equal(
+      allIds.includes("continuation-appended"),
+      false,
+      "post-snapshot appends must not enter continuation pages",
+    );
+    assert.equal(older.cursorState, "valid");
+    assert.equal(newer.cursorState, "valid");
+
+    repo.deleteByMessageIds("sess-continuation", [oldest.message.messageId]);
+    const stale = repo.readHistoryContinuation({
+      workspaceId: "workspace-1",
+      sessionId: "sess-continuation",
+      direction: "older",
+      cursorMessageId: oldest.message.messageId,
+      cursorSequence: oldest.sequence,
+      snapshotMaxSequence,
+      limit: 2,
+    });
+    assert.equal(stale.cursorState, "stale");
+    assert.deepEqual(stale.items, []);
   });
 
   it("loads selected messages in one bounded batch", () => {

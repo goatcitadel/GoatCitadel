@@ -127,6 +127,7 @@ export type ApprovalEffectKind =
   | "approval_inbox_follow_up"
   | "approval_after_hooks"
   | "approval_resolution_signals"
+  | "skill_hub_lifecycle_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -176,7 +177,13 @@ export interface ApprovalObservabilityEnvelope {
 
 export type ApprovalEffectStatus = "pending" | "running" | "completed" | "skipped" | "failed";
 
-export type ApprovalEffectTargetKind = "durable_run" | "chat_turn" | "pending_action" | "remote_token" | "approval";
+export type ApprovalEffectTargetKind =
+  | "durable_run"
+  | "chat_turn"
+  | "pending_action"
+  | "remote_token"
+  | "approval"
+  | "skill_hub_operation";
 
 export interface ApprovalEffectRecord {
   effectId: string;

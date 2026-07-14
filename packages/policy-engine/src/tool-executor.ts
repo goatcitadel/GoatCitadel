@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- This established owner exceeds the line limit; decomposition belongs in a separate behavior-preserving tranche. */
 import fsSync from "node:fs";
 import path from "node:path";
 import { execFile, spawn } from "node:child_process";
@@ -23,6 +24,7 @@ import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { scanBrowserContentGuard } from "./browser-content-guard.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
+import type { AcquireLocalEmbeddingLease, PrepareEmbeddingUsageDispatch } from "./local-embeddings.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import {
   killBackgroundProcess,
@@ -32,11 +34,7 @@ import {
 import { executeArtifactTool, isArtifactToolName } from "./tool-executor/artifact-executor.js";
 import { executeCommsTool } from "./tool-executor/comms-executor.js";
 import { executeFilesystemTool, isFilesystemToolName } from "./tool-executor/filesystem-executor.js";
-import {
-  executeKnowledgeTool,
-  isKnowledgeToolName,
-  type ToolFamilyExecutor,
-} from "./tool-executor/knowledge-executor.js";
+import { executeKnowledgeTool, isKnowledgeToolName } from "./tool-executor/knowledge-executor.js";
 import { executeScheduleManage, executeSubagentFanout } from "./tool-executor/schedule-agent-executor.js";
 export { killAllBackgroundProcesses, killBackgroundProcess } from "./tool-executor/background-processes.js";
 export { resolveFixedOutboundHostsForTool } from "./tool-executor/fixed-outbound-hosts.js";
@@ -61,6 +59,12 @@ const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 const MAX_SHELL_OUTPUT_BYTES = 4096;
 
 export interface ToolExecutorRuntimeHooks {
+  /**
+   * Acquire a request-scoped runtime lease only when the resolved embedding
+   * transport is the configured local llama.cpp service.
+   */
+  acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
+  prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
   /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
@@ -70,6 +74,12 @@ export interface ToolExecutorRuntimeHooks {
   isApprovalActionConnectorReady?: (connectionId: string) => boolean;
   /** Called at the concrete provider or irreversible mutation boundary. */
   beforeExternalSideEffect?: () => void;
+  /**
+   * Final process-local precondition for the five cwd-bearing builtin process
+   * tools. The executor awaits it after command/cwd resolution and immediately
+   * before spawn/execFile; it is never serialized into a tool request.
+   */
+  beforeProcessSpawn?: (boundary: ToolProcessSpawnBoundary) => void | Promise<void>;
   /**
    * Impure `schedule.manage` fulfillment. The cron mutation (create/list/cancel
    * an `agent_turn` job) lives in the gateway, not this pure package, so the
@@ -98,6 +108,27 @@ export interface ToolExecutorRuntimeHooks {
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
 }
 
+export type ToolProcessSpawnName = "shell.exec" | "shell.exec_background" | "tests.run" | "lint.run" | "build.run";
+
+export interface ToolProcessSpawnBoundary {
+  toolName: ToolProcessSpawnName;
+  cwd?: string;
+}
+
+export class ToolBeforeProcessSpawnError extends Error {
+  public constructor(
+    public readonly boundaryCause: unknown,
+    public readonly cancelled: boolean,
+  ) {
+    super(
+      cancelled
+        ? "Tool process spawn was cancelled before execution."
+        : `Tool process spawn precondition failed: ${errorMessage(boundaryCause)}`,
+    );
+    this.name = "ToolBeforeProcessSpawnError";
+  }
+}
+
 const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /sk-[a-zA-Z0-9]{20,}/g,
   /key-[a-zA-Z0-9]{20,}/g,
@@ -119,8 +150,19 @@ function resolveToolActorId(request: ToolInvokeRequest): string {
   return request.policyContext?.authActorId?.trim() || request.consentContext?.operatorId?.trim() || request.agentId;
 }
 
-const executeKnowledgeFamily: ToolFamilyExecutor = (request, config, storage) =>
+const executeKnowledgeFamily = (
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: Storage,
+  runtimeHooks: ToolExecutorRuntimeHooks,
+) =>
   executeKnowledgeTool(request, config, storage, {
+    ...(runtimeHooks.acquireLocalEmbeddingLease
+      ? { acquireLocalEmbeddingLease: runtimeHooks.acquireLocalEmbeddingLease }
+      : {}),
+    ...(runtimeHooks.prepareEmbeddingUsageDispatch
+      ? { prepareEmbeddingUsageDispatch: runtimeHooks.prepareEmbeddingUsageDispatch }
+      : {}),
     assertReadPathAllowedForRequest,
     fetchAllowlisted,
     resolveExecutionGrantAllowedHosts,
@@ -170,7 +212,7 @@ export async function executeTool(
     return finalizeToolResult(await executeArtifactTool(request.toolName, request.args, config));
   }
   if (isKnowledgeToolName(request.toolName)) {
-    return finalizeToolResult(await executeKnowledgeFamily(request, config, storage));
+    return finalizeToolResult(await executeKnowledgeFamily(request, config, storage, runtimeHooks));
   }
   switch (request.toolName) {
     case "session.status":
@@ -182,9 +224,9 @@ export async function executeTool(
     case "http.post":
       return finalizeToolResult(await httpPost(request, config, storage, runtimeHooks));
     case "shell.exec":
-      return finalizeToolResult(await shellExec(request, config, storage));
+      return finalizeToolResult(await shellExec(request, config, storage, runtimeHooks));
     case "shell.exec_background":
-      return finalizeToolResult(await shellExecBackground(request, config, storage));
+      return finalizeToolResult(await shellExecBackground(request, config, storage, runtimeHooks));
     case "git.status":
       return finalizeToolResult(await gitStatus());
     case "git.diff":
@@ -202,11 +244,11 @@ export async function executeTool(
     case "git.worktree.remove":
       return finalizeToolResult(await gitWorktreeRemove(request.args, config));
     case "tests.run":
-      return finalizeToolResult(await runRestricted("test", request, config, storage));
+      return finalizeToolResult(await runRestricted("test", request, config, storage, runtimeHooks));
     case "lint.run":
-      return finalizeToolResult(await runRestricted("lint", request, config, storage));
+      return finalizeToolResult(await runRestricted("lint", request, config, storage, runtimeHooks));
     case "build.run":
-      return finalizeToolResult(await runRestricted("build", request, config, storage));
+      return finalizeToolResult(await runRestricted("build", request, config, storage, runtimeHooks));
     case "schedule.manage":
       return finalizeToolResult(await executeScheduleManage(request, runtimeHooks));
     case "agent.fanout":
@@ -356,7 +398,12 @@ async function httpPost(
   }
 }
 
-async function shellExec(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+async function shellExec(
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: Storage,
+  runtimeHooks: ToolExecutorRuntimeHooks,
+) {
   const args = request.args;
   const command = required(args.command, "command");
   const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
@@ -369,6 +416,7 @@ async function shellExec(request: ToolInvokeRequest, config: ToolPolicyConfig, s
   }
   const parsed = parseExecFileCommand(command);
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
+  await assertBeforeProcessSpawn(runtimeHooks, request, "shell.exec", cwd);
   const outcome = await runShellExecToCompletion(executable, cwd, request.signal);
   return {
     command,
@@ -499,7 +547,12 @@ function runShellExecToCompletion(
   });
 }
 
-async function shellExecBackground(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+async function shellExecBackground(
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: Storage,
+  runtimeHooks: ToolExecutorRuntimeHooks,
+) {
   const args = request.args;
   const command = required(args.command, "command");
   const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
@@ -512,6 +565,7 @@ async function shellExecBackground(request: ToolInvokeRequest, config: ToolPolic
   }
   const parsed = parseExecFileCommand(command);
   const executable = resolveExecutableCommand(parsed.file, parsed.args);
+  await assertBeforeProcessSpawn(runtimeHooks, request, "shell.exec_background", cwd);
   return await new Promise<Record<string, unknown>>((resolve, reject) => {
     const child = spawn(executable.file, executable.args, {
       cwd,
@@ -617,6 +671,7 @@ async function runRestricted(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
   storage: Storage,
+  runtimeHooks: ToolExecutorRuntimeHooks,
 ) {
   const args = request.args;
   const manager = asString(args.manager) ?? "pnpm";
@@ -630,6 +685,8 @@ async function runRestricted(
   }
   const cmdArgs = manager === "pnpm" ? [...(filter ? ["--filter", filter] : []), "run", kind] : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
+  const toolName = `${kind === "test" ? "tests" : kind}.run` as ToolProcessSpawnName;
+  await assertBeforeProcessSpawn(runtimeHooks, request, toolName, cwd);
   const { stdout, stderr } = await execFileAsync(command.file, command.args, {
     timeout: 120000,
     windowsHide: true,
@@ -637,6 +694,29 @@ async function runRestricted(
     cwd,
   });
   return { manager, kind, cwd, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
+}
+
+async function assertBeforeProcessSpawn(
+  runtimeHooks: ToolExecutorRuntimeHooks,
+  request: ToolInvokeRequest,
+  toolName: ToolProcessSpawnName,
+  cwd: string | undefined,
+): Promise<void> {
+  if (request.signal?.aborted) {
+    throw new ToolBeforeProcessSpawnError(undefined, true);
+  }
+  try {
+    await runtimeHooks.beforeProcessSpawn?.({ toolName, ...(cwd ? { cwd } : {}) });
+  } catch (error) {
+    throw new ToolBeforeProcessSpawnError(error, false);
+  }
+  if (request.signal?.aborted) {
+    throw new ToolBeforeProcessSpawnError(undefined, true);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function resolveRestrictedCommand(

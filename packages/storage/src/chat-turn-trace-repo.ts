@@ -44,6 +44,9 @@ interface ChatTurnTraceRow {
   capability_upgrade_suggestions_json: string | null;
   specialist_candidate_suggestions_json: string | null;
   failure_json: string | null;
+  capability_snapshot_id: string | null;
+  capability_profile_id: string | null;
+  capability_profile_hash: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -80,6 +83,9 @@ export interface ChatTurnTraceCreateInput {
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
   specialistCandidateSuggestions?: ChatSpecialistCandidateSuggestionRecord[];
   failure?: ChatTurnTraceRecord["failure"];
+  capabilitySnapshotId?: string;
+  capabilityProfileId?: string;
+  capabilityProfileHash?: string;
   startedAt?: string;
   finishedAt?: string;
 }
@@ -107,6 +113,9 @@ export interface ChatTurnTracePatchInput {
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
   specialistCandidateSuggestions?: ChatSpecialistCandidateSuggestionRecord[];
   failure?: ChatTurnTraceRecord["failure"];
+  capabilitySnapshotId?: string;
+  capabilityProfileId?: string;
+  capabilityProfileHash?: string;
   finishedAt?: string;
 }
 
@@ -119,6 +128,7 @@ export class ChatTurnTraceRepository {
   private readonly listBySessionStmt;
   private readonly listCompletedSinceStmt;
   private readonly listActiveStmt;
+  private readonly listActivePageStmt;
   private readonly deleteByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly getByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
@@ -134,14 +144,14 @@ export class ChatTurnTraceRepository {
         assistant_message_id, execution_plan_id, status, mode, model, web_mode, memory_mode, thinking_level,
         routing_json, retrieval_json, reflection_json, proactive_json, completion_json, durable_json,
         orchestration_json, guidance_json, loop_guard_json, pending_user_input_json, citations_json,
-        failure_json,
+        failure_json, capability_snapshot_id, capability_profile_id, capability_profile_hash,
         capability_upgrade_suggestions_json, specialist_candidate_suggestions_json, started_at, finished_at
       ) VALUES (
         @turnId, @sessionId, @userMessageId, @parentTurnId, @branchKind, @sourceTurnId,
         @assistantMessageId, @executionPlanId, @status, @mode, @model, @webMode, @memoryMode, @thinkingLevel,
         @routingJson, @retrievalJson, @reflectionJson, @proactiveJson, @completionJson, @durableJson,
         @orchestrationJson, @guidanceJson, @loopGuardJson, @pendingUserInputJson, @citationsJson,
-        @failureJson,
+        @failureJson, @capabilitySnapshotId, @capabilityProfileId, @capabilityProfileHash,
         @capabilityUpgradeSuggestionsJson, @specialistCandidateSuggestionsJson, @startedAt, @finishedAt
       )
       ON CONFLICT(turn_id) DO NOTHING
@@ -168,6 +178,9 @@ export class ChatTurnTraceRepository {
         pending_user_input_json = @pendingUserInputJson,
         citations_json = @citationsJson,
         failure_json = @failureJson,
+        capability_snapshot_id = @capabilitySnapshotId,
+        capability_profile_id = @capabilityProfileId,
+        capability_profile_hash = @capabilityProfileHash,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
         finished_at = @finishedAt
@@ -195,6 +208,9 @@ export class ChatTurnTraceRepository {
         pending_user_input_json = @pendingUserInputJson,
         citations_json = @citationsJson,
         failure_json = @failureJson,
+        capability_snapshot_id = @capabilitySnapshotId,
+        capability_profile_id = @capabilityProfileId,
+        capability_profile_hash = @capabilityProfileHash,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
         specialist_candidate_suggestions_json = @specialistCandidateSuggestionsJson,
         finished_at = @finishedAt
@@ -216,6 +232,13 @@ export class ChatTurnTraceRepository {
     this.listActiveStmt = db.prepare(`
       SELECT * FROM chat_turn_traces
       WHERE status IN (${activeStatusPlaceholders})
+      ORDER BY started_at ASC, turn_id ASC
+      LIMIT ?
+    `);
+    this.listActivePageStmt = db.prepare(`
+      SELECT * FROM chat_turn_traces
+      WHERE status IN (${activeStatusPlaceholders})
+        AND (started_at > ? OR (started_at = ? AND turn_id > ?))
       ORDER BY started_at ASC, turn_id ASC
       LIMIT ?
     `);
@@ -270,6 +293,9 @@ export class ChatTurnTraceRepository {
         pendingUserInputJson: input.pendingUserInput ? JSON.stringify(input.pendingUserInput) : null,
         citationsJson: input.citations ? JSON.stringify(input.citations) : null,
         failureJson: input.failure ? JSON.stringify(input.failure) : null,
+        capabilitySnapshotId: input.capabilitySnapshotId ?? null,
+        capabilityProfileId: input.capabilityProfileId ?? null,
+        capabilityProfileHash: input.capabilityProfileHash ?? null,
         capabilityUpgradeSuggestionsJson: input.capabilityUpgradeSuggestions
           ? JSON.stringify(input.capabilityUpgradeSuggestions)
           : null,
@@ -351,6 +377,9 @@ export class ChatTurnTraceRepository {
       ),
       citationsJson: JSON.stringify(input.citations ?? current.citations ?? []),
       failureJson: JSON.stringify(hasFailure ? (input.failure ?? null) : (current.failure ?? null)),
+      capabilitySnapshotId: input.capabilitySnapshotId ?? current.capabilitySnapshotId ?? null,
+      capabilityProfileId: input.capabilityProfileId ?? current.capabilityProfileId ?? null,
+      capabilityProfileHash: input.capabilityProfileHash ?? current.capabilityProfileHash ?? null,
       capabilityUpgradeSuggestionsJson: JSON.stringify(
         input.capabilityUpgradeSuggestions ?? current.capabilityUpgradeSuggestions ?? [],
       ),
@@ -380,6 +409,28 @@ export class ChatTurnTraceRepository {
   public listActive(limit = 500): ChatTurnTraceRecord[] {
     const rows = toChatTurnTraceRows(
       this.listActiveStmt.all(...CHAT_TURN_ACTIVE_STATUSES, Math.max(1, Math.min(limit, 1000))),
+    );
+    return rows.map(mapRow);
+  }
+
+  public listActivePage(
+    input: {
+      afterStartedAt?: string;
+      afterTurnId?: string;
+      limit?: number;
+    } = {},
+  ): ChatTurnTraceRecord[] {
+    if (!input.afterStartedAt || !input.afterTurnId) {
+      return this.listActive(input.limit);
+    }
+    const rows = toChatTurnTraceRows(
+      this.listActivePageStmt.all(
+        ...CHAT_TURN_ACTIVE_STATUSES,
+        input.afterStartedAt,
+        input.afterStartedAt,
+        input.afterTurnId,
+        Math.max(1, Math.min(input.limit ?? 500, 1000)),
+      ),
     );
     return rows.map(mapRow);
   }
@@ -583,6 +634,9 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     guidance: parseOptionalObjectJson<ChatTurnTraceRecord["guidance"]>(row.guidance_json),
     loopGuard: parseOptionalObjectJson<ChatTurnTraceRecord["loopGuard"]>(row.loop_guard_json),
     pendingUserInput: parseOptionalObjectJson<ChatUserInputPromptRecord>(row.pending_user_input_json),
+    capabilitySnapshotId: row.capability_snapshot_id ?? undefined,
+    capabilityProfileId: row.capability_profile_id ?? undefined,
+    capabilityProfileHash: row.capability_profile_hash ?? undefined,
     capabilityUpgradeSuggestions: parseOptionalArrayJson<ChatCapabilityUpgradeSuggestion>(
       row.capability_upgrade_suggestions_json,
     ),
@@ -726,6 +780,9 @@ function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
     (typeof value.specialist_candidate_suggestions_json === "string" ||
       value.specialist_candidate_suggestions_json === null) &&
     (typeof value.failure_json === "string" || value.failure_json === null) &&
+    (typeof value.capability_snapshot_id === "string" || value.capability_snapshot_id === null) &&
+    (typeof value.capability_profile_id === "string" || value.capability_profile_id === null) &&
+    (typeof value.capability_profile_hash === "string" || value.capability_profile_hash === null) &&
     typeof value.started_at === "string" &&
     (typeof value.finished_at === "string" || value.finished_at === null)
   );

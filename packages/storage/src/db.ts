@@ -13,12 +13,28 @@ export interface DbStatement {
 
 export type DbTransactionMode = "deferred" | "immediate" | "exclusive";
 
+export interface DatabaseOnlineBackupProgress {
+  totalPages: number;
+  remainingPages: number;
+}
+
+export interface DatabaseOnlineBackupOptions {
+  pagesPerBatch?: number;
+  onProgress?: (progress: DatabaseOnlineBackupProgress) => void;
+}
+
 export interface DatabaseClient {
   readonly dialect: "sqlite" | "postgres";
   prepare(sql: string): DbStatement;
   exec(sql: string): void;
   close(): void;
   transaction<T>(mode: DbTransactionMode, callback: () => T): T;
+  /**
+   * Materialize a transactionally coherent database snapshot while the source
+   * connection remains online. SQLite implements this with its online backup
+   * API; other drivers and legacy injected clients may omit it.
+   */
+  backupTo?(destinationPath: string, options?: DatabaseOnlineBackupOptions): Promise<void>;
 }
 
 export function assertSynchronousTransactionResult(result: unknown): void {

@@ -39,6 +39,36 @@ export type CodeModeRunStatus =
   | "rejected"
   | "expired";
 
+export type CodeModeExecutionPhase =
+  | "not_started"
+  | "claimed"
+  | "boundary_crossed"
+  | "output_captured_completed"
+  | "output_captured_failed"
+  | "terminal"
+  | "legacy_unknown";
+
+export type CodeModeRecoveryDisposition = "none" | "retryable" | "manual_reconciliation" | "terminal";
+
+/**
+ * Durable recovery truth for a governed Code Mode execution claim.
+ *
+ * `boundary_crossed` is deliberately conservative: once recorded, a restart
+ * must not blindly replay the child because tool/workspace mutation may already
+ * have happened. Artifact integrity and semantic verification remain separate
+ * claims and this record does not imply hostile-code sandboxing.
+ */
+export interface CodeModeExecutionRecoveryRecord {
+  generation: number;
+  phase: CodeModeExecutionPhase;
+  disposition: CodeModeRecoveryDisposition;
+  boundaryCrossedAt?: string;
+  interruptedAt?: string;
+  interruptionReason?: string;
+  finalTranscriptEventId?: string;
+  finalTranscriptEnqueuedAt?: string;
+}
+
 export interface CapabilityArtifactRecord {
   artifactId: string;
   relPath: string;
@@ -71,6 +101,8 @@ export interface CapabilityCatalogEntry {
     deterministic: boolean;
     codeModeAllowed: boolean;
   };
+  /** Server-authored tool recovery upper bound included in catalog hashes. */
+  effectPotential?: import("./tool-effect-truth.js").ToolEffectPotentialRecord;
 }
 
 export interface CapabilityCatalogSnapshotRecord {
@@ -125,6 +157,14 @@ export interface SkillLifecycleRecord {
     source: string;
     sourceRef?: string;
     sourceProvider?: string;
+    commitSha?: string;
+    contentIntegrity?: {
+      manifestVersion: "goatcitadel.skill-tree.v1";
+      treeSha256: string;
+      fileCount: number;
+      totalBytes: number;
+      verified: boolean;
+    };
   };
   createdAt: string;
   updatedAt: string;
@@ -133,7 +173,14 @@ export interface SkillLifecycleRecord {
 export interface CandidateSkillVersionRecord {
   candidateId: string;
   versionId: string;
-  sourceKind: "code_mode_generated" | "manual";
+  sourceKind: "code_mode_generated" | "manual" | "learned_correction" | "history_workshop" | "upstream_hub";
+  /** Derived by storage for pre-161 records; governed records carry every required lineage field. */
+  lineageStatus?: "legacy_missing" | "governed";
+  workspaceId?: string;
+  sourceFingerprint?: string;
+  upstreamSnapshotId?: string;
+  supersedesVersionId?: string;
+  createdByActorId?: string;
   title: string;
   summary?: string;
   bundleRoot: string;
@@ -373,6 +420,102 @@ export interface CodeModeTrustedCodeWriteVerification {
   notes: string[];
 }
 
+export type CodeModeVerificationStatus =
+  | "not_applicable"
+  | "completed_unverified"
+  | "verification_failed"
+  | "verified"
+  | "stale";
+
+export type CodeModeVerificationEvidenceStatus = Extract<
+  CodeModeVerificationStatus,
+  "verification_failed" | "verified" | "stale"
+>;
+
+export type CodeModeVerificationCommandName =
+  | "git_diff_check"
+  | "test"
+  | "typecheck"
+  | "lint"
+  | "build"
+  | "check"
+  | "verify"
+  | "coverage";
+
+export type CodeModeVerificationEvidenceCommandName = CodeModeVerificationCommandName | "passive_freshness_check";
+
+export type CodeModeVerificationProofScope = "worktree" | "full" | "targeted";
+
+export interface CodeModeVerificationArtifactBinding {
+  artifactKind: CodeModeTrustedCodeWriteVerificationArtifactKind;
+  artifactId: string;
+  relPath: string;
+  expectedSha256: string;
+  actualSha256: string;
+  verified: boolean;
+}
+
+export interface CodeModeVerificationSubjectBinding {
+  subjectHash: string;
+  codeModeInputHash: string;
+  codeHash: string;
+  wrapperManifestHash: string;
+  policySnapshotHash: string;
+  worktreeIdentityHash: string;
+  worktreeStateHash: string;
+  worktreeBaseRef?: string;
+  worktreeHeadHash?: string;
+  changedFiles: string[];
+  changedFilesTruncated: boolean;
+  artifacts: CodeModeVerificationArtifactBinding[];
+}
+
+export interface CodeModeVerificationEvidenceRecord {
+  evidenceId: string;
+  runId: string;
+  status: CodeModeVerificationEvidenceStatus;
+  reason?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  turnId?: string;
+  operatorId?: string;
+  commandName: CodeModeVerificationEvidenceCommandName;
+  commandLabel: string;
+  command: string;
+  args: string[];
+  scope: CodeModeVerificationProofScope;
+  commandRunId?: string;
+  commandStatus: import("./agentic-runtime.js").AgenticCommandRunStatus | "not_run";
+  exitCode?: number;
+  startedAt: string;
+  finishedAt: string;
+  durationMs?: number;
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  outputArtifactRefs: string[];
+  subject: CodeModeVerificationSubjectBinding;
+  createdAt: string;
+}
+
+export interface CodeModeRunVerificationState {
+  status: CodeModeVerificationStatus;
+  evidenceId?: string;
+  subjectHash?: string;
+  reason?: string;
+  updatedAt: string;
+}
+
+export interface CodeModeRunVerificationRequest {
+  commandName: CodeModeVerificationCommandName;
+}
+
+export interface CodeModeRunVerificationResponse {
+  run: CodeModeRunRecord;
+  evidence: CodeModeVerificationEvidenceRecord;
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
@@ -395,6 +538,7 @@ export interface CodeModeRunRecord {
   turnId?: string;
   sandbox?: CodeModeSandboxMetadata;
   executionBackend?: CodeModeRunExecutionBackendRef;
+  executionRecovery: CodeModeExecutionRecoveryRecord;
   autonomousActivation?: CodeModeAutonomousActivationEvidence;
   codeArtifact: CapabilityArtifactRecord;
   wrapperManifestArtifact: CapabilityArtifactRecord;
@@ -406,6 +550,7 @@ export interface CodeModeRunRecord {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   trustedCodeWriteVerification?: CodeModeTrustedCodeWriteVerification;
+  verification?: CodeModeRunVerificationState;
   result?: Record<string, unknown>;
   error?: string;
   errorCode?: string;
@@ -521,6 +666,8 @@ export interface CodeModeRunListOptions {
 
 export interface CandidateSkillDetailRecord {
   candidateId: string;
+  /** Optimistic-concurrency revision for the governed candidate-skill aggregate. */
+  revision: number;
   versions: CandidateSkillVersionRecord[];
   latestVersion?: CandidateSkillVersionRecord;
   activeVersion?: CandidateSkillVersionRecord;
@@ -539,6 +686,8 @@ export interface CapabilityProposalDetailRecord {
 export interface CandidateLifecycleActionResult {
   action: CandidateLifecycleAction;
   candidateId: string;
+  /** Candidate-skill aggregate revision after this lifecycle action. */
+  revision: number;
   selectedVersionId: string;
   changedVersionIds: string[];
   occurredAt: string;

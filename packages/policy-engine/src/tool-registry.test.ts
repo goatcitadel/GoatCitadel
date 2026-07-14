@@ -139,6 +139,20 @@ describe("tool registry", () => {
     expect(tool?.recommendedContexts).toEqual(expect.arrayContaining(["chat", "cowork", "code"]));
   });
 
+  it("registers session.history as an exact, safe, read-only anchored-history tool", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((item) => item.toolName === "session.history");
+    expect(tool).toMatchObject({
+      category: "session",
+      riskLevel: "safe",
+      requiresApproval: false,
+      readOnly: true,
+      pack: "core",
+    });
+    expect(tool?.argSchema).toMatchObject({ required: ["messageId", "sequence"] });
+  });
+
   it("registers schedule.manage as a danger, approval-gated tool (P1-F2)", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "schedule.manage");
@@ -162,6 +176,7 @@ describe("listReadOnlyBuiltinToolNames", () => {
   it("contains only safe, approval-free, read-only tools", () => {
     const names = listReadOnlyBuiltinToolNames();
     expect(names.has("session.search")).toBe(true);
+    expect(names.has("session.history")).toBe(true);
     expect(names.has("memory.read")).toBe(true);
     expect(names.has("time.now")).toBe(true);
     expect(names.has("fs.write")).toBe(false);

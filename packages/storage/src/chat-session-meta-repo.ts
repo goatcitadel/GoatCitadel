@@ -1,9 +1,11 @@
 import type { DatabaseClient } from "./db.js";
 import { ValidationError } from "@goatcitadel/contracts";
 import type { ChatFolderRecord, ChatSessionOrigin } from "@goatcitadel/contracts";
+import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 
 export interface ChatSessionMetaRecord {
   sessionId: string;
+  revision: number;
   workspaceId?: string;
   title?: string;
   origin?: ChatSessionOrigin;
@@ -24,6 +26,7 @@ export interface ChatSessionMetaRecord {
 
 interface ChatSessionMetaRow {
   session_id: string;
+  revision: number | null | undefined;
   workspace_id: string;
   title: string | null;
   origin: string | null;
@@ -60,32 +63,50 @@ export interface ChatSessionMetaPatchInput {
 
 export class ChatSessionMetaRepository {
   private readonly getStmt;
-  private readonly upsertStmt;
+  private readonly getForUpdateStmt;
+  private readonly insertStmt;
+  private readonly updateStmt;
+  private readonly incrementGoalTurnsStmt;
+  private readonly revisions;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.revisions = new ChatSessionRevisionRepository(db);
     this.getStmt = db.prepare("SELECT * FROM chat_session_meta WHERE session_id = ?");
-    this.upsertStmt = db.prepare(`
+    this.getForUpdateStmt = db.prepare(
+      `SELECT * FROM chat_session_meta WHERE session_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+    );
+    this.insertStmt = db.prepare(`
       INSERT INTO chat_session_meta (
         session_id, workspace_id, title, origin, include_in_history, pinned, lifecycle_status, archived_at, folder_id, folder_name, tags_json, pinned_goal, goal_turn_budget, goal_turns_used, goal_set_at, created_at, updated_at
       ) VALUES (
         @sessionId, @workspaceId, @title, @origin, @includeInHistory, @pinned, @lifecycleStatus, @archivedAt, @folderId, @folderName, @tagsJson, @pinnedGoal, @goalTurnBudget, @goalTurnsUsed, @goalSetAt, @createdAt, @updatedAt
       )
-      ON CONFLICT(session_id) DO UPDATE SET
-        workspace_id = excluded.workspace_id,
-        title = excluded.title,
-        origin = excluded.origin,
-        include_in_history = excluded.include_in_history,
-        pinned = excluded.pinned,
-        lifecycle_status = excluded.lifecycle_status,
-        archived_at = excluded.archived_at,
-        folder_id = excluded.folder_id,
-        folder_name = excluded.folder_name,
-        tags_json = excluded.tags_json,
-        pinned_goal = excluded.pinned_goal,
-        goal_turn_budget = excluded.goal_turn_budget,
-        goal_turns_used = excluded.goal_turns_used,
-        goal_set_at = excluded.goal_set_at,
-        updated_at = excluded.updated_at
+      ON CONFLICT(session_id) DO NOTHING
+    `);
+    this.updateStmt = db.prepare(`
+      UPDATE chat_session_meta
+      SET workspace_id = @workspaceId,
+          title = @title,
+          origin = @origin,
+          include_in_history = @includeInHistory,
+          pinned = @pinned,
+          lifecycle_status = @lifecycleStatus,
+          archived_at = @archivedAt,
+          folder_id = @folderId,
+          folder_name = @folderName,
+          tags_json = @tagsJson,
+          pinned_goal = @pinnedGoal,
+          goal_turn_budget = @goalTurnBudget,
+          goal_turns_used = @goalTurnsUsed,
+          goal_set_at = @goalSetAt,
+          updated_at = @updatedAt
+      WHERE session_id = @sessionId
+    `);
+    this.incrementGoalTurnsStmt = db.prepare(`
+      UPDATE chat_session_meta
+      SET goal_turns_used = goal_turns_used + 1,
+          updated_at = @updatedAt
+      WHERE session_id = @sessionId
     `);
   }
 
@@ -94,12 +115,18 @@ export class ChatSessionMetaRepository {
     return row ? mapRow(row) : undefined;
   }
 
+  /** Lock session ownership before a transactionally fenced attribution check. */
+  public getForUpdate(sessionId: string): ChatSessionMetaRecord | undefined {
+    const row = toChatSessionMetaRow(this.getForUpdateStmt.get(sessionId));
+    return row ? mapRow(row) : undefined;
+  }
+
   public ensure(sessionId: string, now = new Date().toISOString(), workspaceId = "default"): ChatSessionMetaRecord {
     const existing = this.get(sessionId);
     if (existing) {
       return existing;
     }
-    this.upsertStmt.run({
+    this.insertStmt.run({
       sessionId,
       workspaceId: sanitizeWorkspaceId(workspaceId),
       title: null,
@@ -131,57 +158,66 @@ export class ChatSessionMetaRepository {
     now = new Date().toISOString(),
   ): ChatSessionMetaRecord {
     const current = this.ensure(sessionId, now);
-    const normalizedFolderName = input.folderName !== undefined ? sanitizeOptional(input.folderName) : undefined;
-    const normalizedFolderId =
-      input.folderId !== undefined
-        ? sanitizeOptional(input.folderId)
-        : normalizedFolderName !== undefined
-          ? normalizedFolderName
-            ? sanitizeFolderId(normalizedFolderName)
-            : null
-          : undefined;
-    const pinnedGoalWrite = resolveOptionalGoalString(input.pinnedGoal, current.pinnedGoal);
-    const goalBudgetWrite = resolveOptionalGoalNumber(input.goalTurnBudget, current.goalTurnBudget);
-    const goalSetAtWrite = resolveOptionalGoalString(input.goalSetAt, current.goalSetAt);
-    // Writing pinnedGoal (set or clear) resets the per-goal turn counter.
-    const goalTurnsUsedWrite = input.pinnedGoal !== undefined ? 0 : current.goalTurnsUsed;
-    this.upsertStmt.run({
+    return this.patchWithRevision(sessionId, input, current.revision, now);
+  }
+
+  public patchWithRevision(
+    sessionId: string,
+    input: ChatSessionMetaPatchInput,
+    expectedRevision: number,
+    now = new Date().toISOString(),
+  ): ChatSessionMetaRecord {
+    const result = this.revisions.runWithRevision(
       sessionId,
-      workspaceId:
-        input.workspaceId !== undefined
-          ? sanitizeWorkspaceId(input.workspaceId)
-          : sanitizeWorkspaceId(current.workspaceId ?? "default"),
-      title: input.title !== undefined ? sanitizeOptional(input.title) : (current.title ?? null),
-      origin: input.origin !== undefined ? sanitizeOrigin(input.origin) : sanitizeOrigin(current.origin),
-      includeInHistory:
-        input.includeInHistory !== undefined ? (input.includeInHistory ? 1 : 0) : current.includeInHistory ? 1 : 0,
-      pinned: input.pinned !== undefined ? (input.pinned ? 1 : 0) : current.pinned ? 1 : 0,
-      lifecycleStatus: input.lifecycleStatus ?? current.lifecycleStatus,
-      archivedAt: input.archivedAt !== undefined ? input.archivedAt : (current.archivedAt ?? null),
-      folderId: normalizedFolderId !== undefined ? normalizedFolderId : (current.folderId ?? null),
-      folderName: normalizedFolderName !== undefined ? normalizedFolderName : (current.folderName ?? null),
-      tagsJson: input.tags !== undefined ? JSON.stringify(sanitizeTags(input.tags)) : JSON.stringify(current.tags),
-      pinnedGoal: pinnedGoalWrite,
-      goalTurnBudget: goalBudgetWrite,
-      goalTurnsUsed: goalTurnsUsedWrite,
-      goalSetAt: goalSetAtWrite,
-      createdAt: current.createdAt,
-      updatedAt: now,
-    });
-    const row = toChatSessionMetaRow(this.getStmt.get(sessionId));
-    if (!row) {
-      throw new TypeError("chat_session_meta patch did not return a row");
-    }
-    return mapRow(row);
+      expectedRevision,
+      () => {
+        const current = this.requireRow(sessionId, "patch");
+        const normalizedFolderName = input.folderName !== undefined ? sanitizeOptional(input.folderName) : undefined;
+        const normalizedFolderId =
+          input.folderId !== undefined
+            ? sanitizeOptional(input.folderId)
+            : normalizedFolderName !== undefined
+              ? normalizedFolderName
+                ? sanitizeFolderId(normalizedFolderName)
+                : null
+              : undefined;
+        const next = {
+          sessionId,
+          workspaceId:
+            input.workspaceId !== undefined
+              ? sanitizeWorkspaceId(input.workspaceId)
+              : sanitizeWorkspaceId(current.workspaceId ?? "default"),
+          title: input.title !== undefined ? sanitizeOptional(input.title) : (current.title ?? null),
+          origin: input.origin !== undefined ? sanitizeOrigin(input.origin) : sanitizeOrigin(current.origin),
+          includeInHistory:
+            input.includeInHistory !== undefined ? (input.includeInHistory ? 1 : 0) : current.includeInHistory ? 1 : 0,
+          pinned: input.pinned !== undefined ? (input.pinned ? 1 : 0) : current.pinned ? 1 : 0,
+          lifecycleStatus: input.lifecycleStatus ?? current.lifecycleStatus,
+          archivedAt: input.archivedAt !== undefined ? input.archivedAt : (current.archivedAt ?? null),
+          folderId: normalizedFolderId !== undefined ? normalizedFolderId : (current.folderId ?? null),
+          folderName: normalizedFolderName !== undefined ? normalizedFolderName : (current.folderName ?? null),
+          tagsJson: input.tags !== undefined ? JSON.stringify(sanitizeTags(input.tags)) : JSON.stringify(current.tags),
+          pinnedGoal: resolveOptionalGoalString(input.pinnedGoal, current.pinnedGoal),
+          goalTurnBudget: resolveOptionalGoalNumber(input.goalTurnBudget, current.goalTurnBudget),
+          goalTurnsUsed: input.pinnedGoal !== undefined ? 0 : current.goalTurnsUsed,
+          goalSetAt: resolveOptionalGoalString(input.goalSetAt, current.goalSetAt),
+          updatedAt: now,
+        };
+        if (isSemanticNoop(current, next)) {
+          return { value: current, changed: false };
+        }
+        this.updateStmt.run(next);
+        return { value: this.requireRow(sessionId, "patch"), changed: true };
+      },
+      now,
+    );
+    return { ...result.value, revision: result.revision };
   }
 
   public incrementGoalTurnsUsed(sessionId: string, now = new Date().toISOString()): number {
-    const current = this.ensure(sessionId, now);
-    const next = (current.goalTurnsUsed ?? 0) + 1;
-    this.db
-      .prepare(`UPDATE chat_session_meta SET goal_turns_used = ?, updated_at = ? WHERE session_id = ?`)
-      .run(next, now, sessionId);
-    return next;
+    this.ensure(sessionId, now);
+    this.incrementGoalTurnsStmt.run({ sessionId, updatedAt: now });
+    return this.requireRow(sessionId, "goal counter").goalTurnsUsed;
   }
 
   public listBySessionIds(sessionIds: string[], workspaceId?: string): Map<string, ChatSessionMetaRecord> {
@@ -240,6 +276,14 @@ export class ChatSessionMetaRepository {
       updatedAt: row.updated_at,
     }));
   }
+
+  private requireRow(sessionId: string, operation: string): ChatSessionMetaRecord {
+    const row = toChatSessionMetaRow(this.getStmt.get(sessionId));
+    if (!row) {
+      throw new TypeError(`chat_session_meta ${operation} did not return a row`);
+    }
+    return mapRow(row);
+  }
 }
 
 function toChatSessionMetaRow(row: unknown): ChatSessionMetaRow | undefined {
@@ -263,6 +307,7 @@ function isChatSessionMetaRow(value: unknown): value is ChatSessionMetaRow {
 
   return (
     typeof value.session_id === "string" &&
+    (typeof value.revision === "number" || value.revision === null || value.revision === undefined) &&
     typeof value.workspace_id === "string" &&
     (typeof value.title === "string" || value.title === null) &&
     (typeof value.origin === "string" || value.origin === null) &&
@@ -289,6 +334,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function mapRow(row: ChatSessionMetaRow): ChatSessionMetaRecord {
   return {
     sessionId: row.session_id,
+    revision: normalizeRevision(row.revision),
     workspaceId: row.workspace_id,
     title: row.title ?? undefined,
     origin:
@@ -409,4 +455,45 @@ function parseTags(raw: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+function normalizeRevision(value: number | null | undefined): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : 1;
+}
+
+function isSemanticNoop(
+  current: ChatSessionMetaRecord,
+  next: {
+    workspaceId: string;
+    title: string | null;
+    origin: string | null;
+    includeInHistory: number;
+    pinned: number;
+    lifecycleStatus: "active" | "archived";
+    archivedAt: string | null;
+    folderId: string | null;
+    folderName: string | null;
+    tagsJson: string;
+    pinnedGoal: string | null;
+    goalTurnBudget: number | null;
+    goalTurnsUsed: number;
+    goalSetAt: string | null;
+  },
+): boolean {
+  return (
+    next.workspaceId === (current.workspaceId ?? "default") &&
+    next.title === (current.title ?? null) &&
+    next.origin === (current.origin ?? null) &&
+    next.includeInHistory === (current.includeInHistory ? 1 : 0) &&
+    next.pinned === (current.pinned ? 1 : 0) &&
+    next.lifecycleStatus === current.lifecycleStatus &&
+    next.archivedAt === (current.archivedAt ?? null) &&
+    next.folderId === (current.folderId ?? null) &&
+    next.folderName === (current.folderName ?? null) &&
+    next.tagsJson === JSON.stringify(current.tags) &&
+    next.pinnedGoal === (current.pinnedGoal ?? null) &&
+    next.goalTurnBudget === (current.goalTurnBudget ?? null) &&
+    next.goalTurnsUsed === current.goalTurnsUsed &&
+    next.goalSetAt === (current.goalSetAt ?? null)
+  );
 }

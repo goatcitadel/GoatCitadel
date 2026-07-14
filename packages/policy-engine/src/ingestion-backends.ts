@@ -20,7 +20,7 @@ import {
   redactUrlForError,
 } from "./sandbox/network-guard.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
-import { generateEmbedding } from "./local-embeddings.js";
+import { generateEmbedding, type EmbeddingRuntimeOptions } from "./local-embeddings.js";
 import { parseNativeFileDocument } from "./native-document-parser.js";
 import { mapWithConcurrency } from "./async-utils.js";
 
@@ -57,6 +57,7 @@ export async function ingestDocumentViaBackend(input: {
   request: ToolInvokeRequest;
   storage: Storage;
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
+  embeddingRuntime?: Omit<EmbeddingRuntimeOptions, "purpose">;
   networkAllowlist?: string[];
   sourceAllowlist?: string[];
 }): Promise<{
@@ -66,6 +67,7 @@ export async function ingestDocumentViaBackend(input: {
   chunksSaved: number;
   cached: boolean;
   chunks: RetrievedContextChunk[];
+  modelUsageEventIds?: string[];
 }> {
   const args = input.request.args;
   const sourceType = parseIngestionSourceType(args.sourceType);
@@ -171,12 +173,30 @@ export async function ingestDocumentViaBackend(input: {
     title,
     metadata,
   });
-  const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (content) => {
-    const generated = await generateEmbedding(content);
+  const canonicalUsageEventIds = new Set<string>();
+  const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (content, chunkIndex) => {
+    const embeddingSignal = input.embeddingRuntime?.signal ?? input.request.signal;
+    const generated = await generateEmbedding(content, undefined, undefined, {
+      ...input.embeddingRuntime,
+      purpose: "document_ingest",
+      ...(embeddingSignal ? { signal: embeddingSignal } : {}),
+      modelUsageAttribution: {
+        ...input.embeddingRuntime?.modelUsageAttribution,
+        operationId: input.embeddingRuntime?.modelUsageAttribution?.operationId ?? `document-ingest:${doc.docId}`,
+        dispatchGeneration:
+          input.embeddingRuntime?.modelUsageAttribution?.dispatchGeneration ?? `document-ingest:${doc.docId}`,
+        attemptIndex: (input.embeddingRuntime?.modelUsageAttribution?.attemptIndex ?? 0) + chunkIndex,
+        workerId: input.embeddingRuntime?.modelUsageAttribution?.workerId ?? `chunk:${chunkIndex}`,
+      },
+    });
+    collectModelUsageEventIds(canonicalUsageEventIds, generated.modelUsageEventIds);
     return {
       content,
       embedding: generated.embedding,
-      embeddingMetadata: generated.metadata,
+      embeddingMetadata: {
+        ...generated.metadata,
+        ...(generated.modelUsageEventIds ? { modelUsageEventIds: generated.modelUsageEventIds } : {}),
+      },
     };
   });
   const savedChunks = input.storage.knowledge.appendChunks(doc.docId, embeddedChunks);
@@ -193,7 +213,15 @@ export async function ingestDocumentViaBackend(input: {
       score: 1,
       attribution,
     })),
+    ...(canonicalUsageEventIds.size > 0 ? { modelUsageEventIds: [...canonicalUsageEventIds] } : {}),
   };
+}
+
+function collectModelUsageEventIds(target: Set<string>, eventIds: readonly string[] | undefined): void {
+  for (const candidate of eventIds ?? []) {
+    const eventId = candidate.trim();
+    if (eventId && eventId.length <= 256 && target.size < 1_000) target.add(eventId);
+  }
 }
 
 export function searchIngestedContext(input: { storage: Storage; namespace?: string; query: string; limit?: number }): {
@@ -547,6 +575,9 @@ export function resolveIngestionTrustLevel(
   value: unknown,
 ): ToolExecutionTrustLevel {
   const explicit = optionalString(value);
+  if (sourceType === "external_source_snapshot") {
+    return "untrusted_external";
+  }
   if (sourceType === "url" || sourceType === "text") {
     return explicit === "mixed_untrusted" ? "mixed_untrusted" : "untrusted_external";
   }

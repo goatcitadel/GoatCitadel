@@ -88,6 +88,31 @@ function createScriptedRepo(getRows: unknown[]): ChatSessionMetaRepository {
 }
 
 describe("ChatSessionMetaRepository", () => {
+  it("uses a PostgreSQL row lock for transactionally fenced ownership reads", () => {
+    const preparedSql: string[] = [];
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new ChatSessionMetaRepository(db);
+
+    assert.equal(repo.getForUpdate("session-missing"), undefined);
+    assert.ok(preparedSql.includes("SELECT * FROM chat_session_meta WHERE session_id = ? FOR UPDATE"));
+  });
+
   it("returns defaults when ensuring a missing row", () => {
     const repo = createRepo();
     const meta = repo.ensure("sess-1");

@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { deriveCredentialDims, EventIngestService } from "./event-ingest.js";
+import { resolveSessionRoute } from "./session-key.js";
 
 function buildPayload(): GatewayEventInput {
   return {
@@ -33,6 +35,75 @@ function hashOf(payload: GatewayEventInput): string {
 }
 
 describe("EventIngestService", () => {
+  it("persists partial legacy usage as lower bounds and does not duplicate it on replay", async () => {
+    const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const root = path.join(os.tmpdir(), `goatcitadel-event-ingest-partial-${unique}`);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    try {
+      const service = new EventIngestService(storage);
+      const payload: GatewayEventInput = {
+        ...buildPayload(),
+        eventId: "evt-partial-usage",
+        actor: { type: "system", id: "runtime" },
+        message: { role: "assistant", content: "partial usage" },
+        usage: {
+          inputTokens: 17,
+          outputTokens: 5,
+          providerId: "openai",
+          model: "gpt-partial",
+        },
+      };
+
+      const first = await service.ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "idem-partial-usage",
+        payload,
+      });
+      const replay = await service.ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "idem-partial-usage",
+        payload,
+      });
+
+      expect(first).toMatchObject({ accepted: true, deduped: false });
+      expect(replay).toMatchObject({ accepted: true, deduped: true });
+      expect(storage.db.prepare("SELECT COUNT(*) AS count FROM cost_ledger").get<{ count: number }>()?.count).toBe(1);
+      expect(storage.costLedger.summary("day", "2000-01-01T00:00:00.000Z", "2999-12-31T23:59:59.999Z")).toEqual([
+        expect.objectContaining({
+          tokenInput: 17,
+          tokenOutput: 5,
+          tokenCachedInput: 0,
+          tokenTotal: 22,
+          costUsd: 0,
+          metricAvailability: {
+            inputTokensComplete: true,
+            outputTokensComplete: true,
+            cachedInputTokensComplete: false,
+            costUsdComplete: false,
+          },
+        }),
+      ]);
+      expect(storage.costLedger.usageAvailability("2000-01-01T00:00:00.000Z", "2999-12-31T23:59:59.999Z")).toEqual({
+        trackedEvents: 1,
+        unknownEvents: 0,
+        totalAgentEvents: 1,
+        metricAvailability: {
+          inputTokens: { knownAttemptCount: 1, unknownAttemptCount: 0, complete: true },
+          outputTokens: { knownAttemptCount: 1, unknownAttemptCount: 0, complete: true },
+          cachedInputTokens: { knownAttemptCount: 0, unknownAttemptCount: 1, complete: false },
+          costUsd: { knownAttemptCount: 0, unknownAttemptCount: 1, complete: false },
+        },
+      });
+    } finally {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not hold a database transaction open while appending the transcript", async () => {
     let inTransaction = false;
     const session: SessionMeta = {
@@ -943,6 +1014,369 @@ describe("EventIngestService", () => {
       }),
     );
     warnSpy.mockRestore();
+  });
+});
+
+describe("EventIngestService canonical usage references", () => {
+  function createCanonicalStorage(label: string): Storage {
+    const unique = `${label}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(os.tmpdir(), `goatcitadel-canonical-ingest-${unique}`, "transcripts"),
+      auditDir: path.join(os.tmpdir(), `goatcitadel-canonical-ingest-${unique}`, "audit"),
+    });
+  }
+
+  function canonicalPayload(input?: {
+    eventId?: string;
+    usageEventIds?: string[];
+    workspaceId?: string;
+    turnId?: string;
+    taskId?: string;
+    includeOwner?: boolean;
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    costUsd?: number;
+  }): GatewayEventInput {
+    const base = buildPayload();
+    const route = resolveSessionRoute(base.route);
+    const includeOwner = input?.includeOwner ?? true;
+    return {
+      ...base,
+      eventId: input?.eventId ?? "assistant-event-1",
+      actor: { type: "agent", id: "assistant" },
+      message: { role: "assistant", content: "canonical result" },
+      ...(input?.taskId ? { taskId: input.taskId } : {}),
+      usage: {
+        inputTokens: input?.inputTokens ?? 5,
+        outputTokens: input?.outputTokens ?? 2,
+        cachedInputTokens: input?.cachedInputTokens ?? 1,
+        costUsd: input?.costUsd ?? 0.25,
+        providerId: "openai",
+        model: "gpt-effective",
+        canonicalUsageEventIds: input?.usageEventIds ?? ["usage-event-1"],
+        ...(includeOwner
+          ? {
+              canonicalUsageOwner: {
+                workspaceId: input?.workspaceId ?? "workspace-a",
+                sessionId: route.sessionId,
+                turnId: input?.turnId ?? "turn-a",
+              },
+            }
+          : {}),
+      },
+    };
+  }
+
+  function seedCanonicalUsage(
+    storage: Storage,
+    payload: GatewayEventInput,
+    input?: {
+      eventId?: string;
+      workspaceId?: string;
+      sessionId?: string;
+      turnId?: string;
+      taskId?: string;
+      terminal?: boolean;
+      skipTurnTrace?: boolean;
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedInputTokens?: number;
+      costUsd?: number;
+    },
+  ): string {
+    const route = resolveSessionRoute(payload.route);
+    const eventId = input?.eventId ?? "usage-event-1";
+    const sessionId = input?.sessionId ?? route.sessionId;
+    const workspaceId = input?.workspaceId ?? "workspace-a";
+    const turnId = input?.turnId ?? "turn-a";
+    storage.sessions.upsert({
+      sessionId,
+      sessionKey: sessionId === route.sessionId ? route.sessionKey : `chat:local:${sessionId}`,
+      kind: "dm",
+      channel: "chat",
+      account: "local",
+      timestamp: "2026-07-13T00:00:00.000Z",
+    });
+    storage.chatSessionMeta.ensure(sessionId, "2026-07-13T00:00:00.000Z", workspaceId);
+    if (!input?.skipTurnTrace) {
+      storage.chatTurnTraces.create({
+        turnId,
+        sessionId,
+        userMessageId: `user-${turnId}`,
+        status: "running",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        routing: {},
+        startedAt: "2026-07-13T00:00:00.000Z",
+      });
+    }
+    storage.modelUsageEvents.begin({
+      eventId,
+      idempotencyKey: `usage-key-${eventId}`,
+      source: "manual_test",
+      callKind: "chat_initial",
+      requestedProviderId: "openai",
+      requestedModelId: "gpt-requested",
+      effectiveProviderId: "openai",
+      effectiveModelId: "gpt-dispatched",
+      effectiveApiStyle: "openai-chat-completions",
+      operationId: `operation-${eventId}`,
+      dispatchGeneration: "generation-1",
+      attemptIndex: 0,
+      transportAttemptIndex: 0,
+      dispatchOwnerId: "gateway-owner-a",
+      dispatchLeaseExpiresAt: "2999-01-01T00:00:00.000Z",
+      fallbackIndex: 0,
+      repairIndex: 0,
+      workspaceId,
+      sessionId,
+      turnId,
+      ...(input?.taskId ? { taskId: input.taskId } : {}),
+      credentialType: "api_key",
+      usagePool: "standard",
+      credentialSource: "env",
+      startedAt: "2026-07-13T00:00:01.000Z",
+    });
+    storage.modelUsageEvents.acceptTransport(eventId, "gateway-owner-a", "2999-01-01T00:00:00.000Z");
+    if (input?.terminal ?? true) {
+      storage.modelUsageEvents.finalizeAndProject(eventId, {
+        dispatchOwnerId: "gateway-owner-a",
+        terminalOutcome: "succeeded",
+        availability: "tracked",
+        pricingSource: "provider_reported",
+        costSource: "provider_reported",
+        inputTokens: input?.inputTokens ?? 5,
+        outputTokens: input?.outputTokens ?? 2,
+        cachedInputTokens: input?.cachedInputTokens ?? 1,
+        costUsd: input?.costUsd ?? 0.25,
+        reportedEffectiveModelId: "gpt-effective",
+        finishedAt: "2026-07-13T00:00:02.000Z",
+        durationMs: 1_000,
+      });
+    }
+    return eventId;
+  }
+
+  function costLedgerCount(storage: Storage): number {
+    const row = storage.db.prepare("SELECT COUNT(*) AS count FROM cost_ledger").get<{ count: number | string }>();
+    return Number(row?.count ?? 0);
+  }
+
+  it("validates terminal ownership and skips both legacy projections without losing transcript usage", async () => {
+    const storage = createCanonicalStorage("valid");
+    try {
+      const payload = canonicalPayload({ taskId: "task-a" });
+      const route = resolveSessionRoute(payload.route);
+      seedCanonicalUsage(storage, payload, { taskId: "task-a" });
+      const before = storage.sessions.getBySessionId(route.sessionId);
+
+      const result = await new EventIngestService(storage).ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "canonical-ingest-1",
+        payload,
+      });
+
+      const after = storage.sessions.getBySessionId(route.sessionId);
+      expect(result).toMatchObject({ accepted: true, deduped: false });
+      expect(after.tokenInput).toBe(before.tokenInput);
+      expect(after.tokenOutput).toBe(before.tokenOutput);
+      expect(after.tokenCachedInput).toBe(before.tokenCachedInput);
+      expect(after.costUsdTotal).toBe(before.costUsdTotal);
+      expect(costLedgerCount(storage)).toBe(1);
+      expect(storage.chatMessages.get(payload.eventId)).toMatchObject({
+        tokenInput: 5,
+        tokenOutput: 2,
+        costUsd: 0.25,
+      });
+
+      const replay = await new EventIngestService(storage).ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "canonical-ingest-1",
+        payload,
+      });
+      expect(replay).toMatchObject({ accepted: true, deduped: true });
+      expect(costLedgerCount(storage)).toBe(1);
+      expect(storage.sessions.getBySessionId(route.sessionId)).toMatchObject({
+        tokenInput: before.tokenInput,
+        tokenOutput: before.tokenOutput,
+        tokenCachedInput: before.tokenCachedInput,
+        costUsdTotal: before.costUsdTotal,
+      });
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("preserves an exact-zero canonical projection without creating a zero-valued cache row", async () => {
+    const storage = createCanonicalStorage("zero");
+    try {
+      const payload = canonicalPayload({ inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 });
+      const route = resolveSessionRoute(payload.route);
+      seedCanonicalUsage(storage, payload, {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        costUsd: 0,
+      });
+
+      await new EventIngestService(storage).ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "canonical-zero-1",
+        payload,
+      });
+
+      expect(costLedgerCount(storage)).toBe(1);
+      expect(storage.sessions.getBySessionId(route.sessionId)).toMatchObject({
+        tokenInput: 0,
+        tokenOutput: 0,
+        tokenCachedInput: 0,
+        costUsdTotal: 0,
+      });
+      expect(storage.modelUsageEvents.findByEventId("usage-event-1")).toMatchObject({
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        costUsd: 0,
+      });
+    } finally {
+      storage.close();
+    }
+  });
+
+  it.each([
+    "missing",
+    "foreign-workspace",
+    "cross-session",
+    "cross-turn",
+    "task-mismatch",
+    "record-task-without-payload-task",
+    "self-consistent-foreign-workspace",
+    "turn-owned-by-another-session",
+    "mixed",
+    "in-flight",
+    "duplicate",
+    "owner-missing",
+  ])("rejects %s canonical references atomically instead of falling back to legacy usage", async (scenario) => {
+    const storage = createCanonicalStorage(scenario);
+    try {
+      let payload = canonicalPayload({ taskId: "task-a" });
+      seedCanonicalUsage(storage, payload, { taskId: "task-a" });
+      if (scenario === "missing") {
+        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["missing-event"] });
+      } else if (scenario === "foreign-workspace") {
+        payload = canonicalPayload({ taskId: "task-a", workspaceId: "workspace-foreign" });
+      } else if (scenario === "cross-session") {
+        payload = canonicalPayload({ taskId: "task-a" });
+        payload.usage!.canonicalUsageOwner!.sessionId = "session-foreign";
+      } else if (scenario === "cross-turn") {
+        payload = canonicalPayload({ taskId: "task-a", turnId: "turn-foreign" });
+      } else if (scenario === "task-mismatch") {
+        payload = canonicalPayload({ taskId: "task-foreign" });
+      } else if (scenario === "record-task-without-payload-task") {
+        payload = canonicalPayload();
+      } else if (scenario === "self-consistent-foreign-workspace") {
+        seedCanonicalUsage(storage, payload, {
+          eventId: "usage-foreign-owner",
+          workspaceId: "workspace-foreign",
+          taskId: "task-a",
+        });
+        payload = canonicalPayload({
+          taskId: "task-a",
+          workspaceId: "workspace-foreign",
+          usageEventIds: ["usage-foreign-owner"],
+        });
+      } else if (scenario === "turn-owned-by-another-session") {
+        storage.chatTurnTraces.create({
+          turnId: "turn-foreign-owner",
+          sessionId: "session-foreign",
+          userMessageId: "user-turn-foreign-owner",
+          status: "running",
+          mode: "chat",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "standard",
+          routing: {},
+          startedAt: "2026-07-13T00:00:00.000Z",
+        });
+        seedCanonicalUsage(storage, payload, {
+          eventId: "usage-foreign-turn-owner",
+          turnId: "turn-foreign-owner",
+          taskId: "task-a",
+          skipTurnTrace: true,
+        });
+        payload = canonicalPayload({
+          taskId: "task-a",
+          turnId: "turn-foreign-owner",
+          usageEventIds: ["usage-foreign-turn-owner"],
+        });
+      } else if (scenario === "mixed") {
+        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-event-1", "missing-event"] });
+      } else if (scenario === "in-flight") {
+        seedCanonicalUsage(storage, payload, {
+          eventId: "usage-in-flight",
+          taskId: "task-a",
+          terminal: false,
+        });
+        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-in-flight"] });
+      } else if (scenario === "duplicate") {
+        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-event-1", "usage-event-1"] });
+      } else if (scenario === "owner-missing") {
+        payload = canonicalPayload({ taskId: "task-a", includeOwner: false });
+      }
+      const route = resolveSessionRoute(payload.route);
+      const before = storage.sessions.getBySessionId(route.sessionId);
+      const beforeCostCount = costLedgerCount(storage);
+
+      await expect(
+        new EventIngestService(storage).ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: `canonical-invalid-${scenario}`,
+          payload,
+        }),
+      ).rejects.toThrow(/canonical usage|canonicalUsageOwner/u);
+
+      expect(storage.chatMessages.get(payload.eventId)).toBeUndefined();
+      expect(storage.idempotency.find("/api/v1/gateway/events", `canonical-invalid-${scenario}`)).toBeUndefined();
+      expect(costLedgerCount(storage)).toBe(beforeCostCount);
+      expect(storage.sessions.getBySessionId(route.sessionId)).toMatchObject({
+        tokenInput: before.tokenInput,
+        tokenOutput: before.tokenOutput,
+        tokenCachedInput: before.tokenCachedInput,
+        costUsdTotal: before.costUsdTotal,
+      });
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("keeps the legacy projection path when canonical ids are absent", async () => {
+    const storage = createCanonicalStorage("legacy");
+    try {
+      const payload = canonicalPayload();
+      delete payload.usage!.canonicalUsageEventIds;
+      delete payload.usage!.canonicalUsageOwner;
+      const route = resolveSessionRoute(payload.route);
+
+      await new EventIngestService(storage).ingest({
+        endpoint: "/api/v1/gateway/events",
+        idempotencyKey: "legacy-usage-1",
+        payload,
+      });
+
+      expect(storage.sessions.getBySessionId(route.sessionId)).toMatchObject({
+        tokenInput: 5,
+        tokenOutput: 2,
+        tokenCachedInput: 1,
+        costUsdTotal: 0.25,
+      });
+      expect(costLedgerCount(storage)).toBe(1);
+    } finally {
+      storage.close();
+    }
   });
 });
 

@@ -4,6 +4,76 @@ import type { PermissionSurface, ToolPolicyActorContext } from "./policy.js";
 
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpServerStatus = "disconnected" | "connecting" | "connected" | "error";
+export type McpServerConnectionMode = "static" | "requester_scoped";
+export const MCP_REQUESTER_RESOLUTION_BINDING_VERSION = "goatcitadel.mcp-requester-resolution-binding.v1" as const;
+export const MCP_REQUESTER_SCOPE_HASH_MATERIAL_VERSION = "goatcitadel.mcp-requester-scope-hash-material.v1" as const;
+
+export interface McpRequesterResolutionTransportPolicy {
+  allowedSchemes: Array<"http" | "https">;
+  /** Exact canonical host names only. Wildcards and URL components are forbidden. */
+  allowedHosts: string[];
+  allowedPorts: number[];
+  /** Lowercase RFC 9110 field names. Values are resolved ephemerally and are never stored here. */
+  allowedHeaderNames: string[];
+}
+
+export interface McpRequesterResolutionConfig {
+  resolverId: string;
+  resolverVersion: string;
+  configGeneration: number;
+  transportPolicy: McpRequesterResolutionTransportPolicy;
+}
+
+export interface McpRequesterResolutionMeshBinding {
+  activationId: string;
+  activationRevision: number;
+  publisherGeneration: number;
+  healthGeneration: number;
+  publicationLeaseFencingToken: number;
+  manifestSha256: string;
+  entrySha256: string;
+  descriptorSha256: string;
+}
+
+/**
+ * Secret-free, immutable evidence that one selected tool may resolve a
+ * requester-scoped MCP connection. Resolved destinations and header values are
+ * deliberately impossible to represent in this contract.
+ */
+export interface McpRequesterResolutionBinding {
+  schemaVersion: typeof MCP_REQUESTER_RESOLUTION_BINDING_VERSION;
+  mode: "requester_scoped";
+  serverId: string;
+  toolName: string;
+  resolverId: string;
+  resolverVersion: string;
+  resolverConfigGeneration: number;
+  requesterScopeSha256: string;
+  serverConfigRevision: number;
+  serverConfigSha256: string;
+  transportPolicySha256: string;
+  callableCatalogSnapshotId: string;
+  callableCatalogSha256: string;
+  meshActivation?: McpRequesterResolutionMeshBinding;
+  bindingSha256: string;
+}
+
+export type McpRequesterResolutionBindingMaterial = Omit<McpRequesterResolutionBinding, "bindingSha256">;
+
+export type McpRequesterScopeAuthActorSource = "token" | "basic" | "loopback" | "device" | "companion";
+
+export interface McpRequesterScopeHashInput {
+  profileId: string;
+  turnId: string;
+  sessionId: string;
+  workspaceId: string;
+  authActorId: string;
+  authActorSource: McpRequesterScopeAuthActorSource;
+}
+
+export interface McpRequesterScopeHashMaterial extends McpRequesterScopeHashInput {
+  schemaVersion: typeof MCP_REQUESTER_SCOPE_HASH_MATERIAL_VERSION;
+}
 export type McpServerCategory =
   | "development"
   | "browser"
@@ -54,6 +124,11 @@ export interface McpServerRecord {
   serverId: string;
   label: string;
   transport: McpTransport;
+  /** Missing on legacy rows means `static`. */
+  connectionMode?: McpServerConnectionMode;
+  /** Server-owned CAS revision. Required for requester-scoped servers. */
+  configurationRevision?: number;
+  requesterResolution?: McpRequesterResolutionConfig;
   command?: string;
   args?: string[];
   url?: string;
@@ -102,6 +177,8 @@ export interface McpToolRecord {
 export interface McpServerCreateInput {
   label: string;
   transport: McpTransport;
+  connectionMode?: McpServerConnectionMode;
+  requesterResolution?: McpRequesterResolutionConfig;
   command?: string;
   args?: string[];
   url?: string;
@@ -117,6 +194,8 @@ export interface McpServerCreateInput {
 
 export interface McpServerUpdateInput {
   label?: string;
+  connectionMode?: McpServerConnectionMode;
+  requesterResolution?: McpRequesterResolutionConfig | null;
   command?: string;
   args?: string[];
   url?: string;
@@ -128,6 +207,419 @@ export interface McpServerUpdateInput {
   costTier?: McpCostTier;
   policy?: Partial<McpServerPolicy>;
   verifiedAt?: string;
+}
+
+export interface McpServerConnectionConfiguration {
+  transport: McpTransport;
+  connectionMode?: McpServerConnectionMode;
+  configurationRevision?: number;
+  requesterResolution?: McpRequesterResolutionConfig | null;
+  command?: string;
+  args?: string[];
+  url?: string;
+  authType?: "none" | "token" | "oauth2";
+  oauth?: McpOAuthConfig;
+  authState?: McpServerAuthState;
+  policy?: Partial<McpServerPolicy>;
+}
+
+/** Resolve the compatibility default while rejecting an unknown runtime value. */
+export function resolveMcpServerConnectionMode(
+  input: Pick<McpServerConnectionConfiguration, "connectionMode">,
+): McpServerConnectionMode {
+  if (input.connectionMode === undefined || input.connectionMode === "static") return "static";
+  if (input.connectionMode === "requester_scoped") return "requester_scoped";
+  throw new TypeError("MCP server connectionMode is invalid.");
+}
+
+/**
+ * Enforce the static/requester-scoped split before configuration persistence.
+ * This validator intentionally accepts no resolved connection material.
+ */
+export function assertMcpServerConnectionConfiguration(input: McpServerConnectionConfiguration): void {
+  const mode = resolveMcpServerConnectionMode(input);
+  if (mode === "static") {
+    if (input.requesterResolution !== undefined && input.requesterResolution !== null) {
+      throw new TypeError("Static MCP servers cannot carry requester resolution configuration.");
+    }
+    return;
+  }
+  assertExactObjectKeys(
+    input,
+    [
+      "args",
+      "authState",
+      "authType",
+      "command",
+      "configurationRevision",
+      "connectionMode",
+      "oauth",
+      "policy",
+      "requesterResolution",
+      "transport",
+      "url",
+    ],
+    "requester-scoped connection configuration",
+    ["args", "authState", "authType", "command", "oauth", "policy", "url"],
+  );
+  if (input.transport !== "http" && input.transport !== "sse") {
+    throw new TypeError("Requester-scoped MCP servers require HTTP or SSE transport.");
+  }
+  if (input.command !== undefined || input.args !== undefined || input.url !== undefined) {
+    throw new TypeError("Requester-scoped MCP servers cannot carry a static destination.");
+  }
+  if (input.authType !== undefined && input.authType !== "none") {
+    throw new TypeError("Requester-scoped MCP servers cannot carry static authentication.");
+  }
+  if (input.oauth !== undefined || input.authState !== undefined) {
+    throw new TypeError("Requester-scoped MCP servers cannot carry static authentication state.");
+  }
+  if (input.policy !== undefined) {
+    assertExactObjectKeys(
+      input.policy,
+      [
+        "allowedEnvKeys",
+        "allowedToolPatterns",
+        "blockedToolPatterns",
+        "notes",
+        "redactionMode",
+        "requireFirstToolApproval",
+      ],
+      "requester-scoped server policy",
+      [
+        "allowedEnvKeys",
+        "allowedToolPatterns",
+        "blockedToolPatterns",
+        "notes",
+        "redactionMode",
+        "requireFirstToolApproval",
+      ],
+    );
+    if (input.policy.allowedEnvKeys !== undefined) {
+      if (!Array.isArray(input.policy.allowedEnvKeys) || input.policy.allowedEnvKeys.length > 0) {
+        throw new TypeError("Requester-scoped MCP servers cannot pass credential environment variables.");
+      }
+    }
+  }
+  assertPositiveSafeInteger(input.configurationRevision, "configurationRevision");
+  assertMcpRequesterResolutionConfig(input.requesterResolution);
+}
+
+/**
+ * Canonical non-secret identity material used to bind a requester-scoped MCP
+ * profile entry to the exact authenticated turn. Callers hash the returned
+ * material with the repository canonical JSON SHA-256 convention.
+ */
+export function mcpRequesterScopeHashMaterial(input: McpRequesterScopeHashInput): McpRequesterScopeHashMaterial {
+  assertExactObjectKeys(
+    input,
+    ["authActorId", "authActorSource", "profileId", "sessionId", "turnId", "workspaceId"],
+    "requester scope hash input",
+  );
+  assertCanonicalMcpIdentifier(input.profileId, "requesterScope.profileId", 256);
+  assertCanonicalMcpIdentifier(input.turnId, "requesterScope.turnId", 256);
+  assertCanonicalMcpIdentifier(input.sessionId, "requesterScope.sessionId", 256);
+  assertCanonicalMcpIdentifier(input.workspaceId, "requesterScope.workspaceId", 256);
+  assertCanonicalMcpIdentifier(input.authActorId, "requesterScope.authActorId", 256);
+  if (
+    !(
+      "token" === input.authActorSource ||
+      "basic" === input.authActorSource ||
+      "loopback" === input.authActorSource ||
+      "device" === input.authActorSource ||
+      "companion" === input.authActorSource
+    )
+  ) {
+    throw new TypeError("MCP requesterScope.authActorSource is not authenticated for requester-scoped MCP.");
+  }
+  return {
+    schemaVersion: MCP_REQUESTER_SCOPE_HASH_MATERIAL_VERSION,
+    profileId: input.profileId,
+    turnId: input.turnId,
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    authActorId: input.authActorId,
+    authActorSource: input.authActorSource,
+  };
+}
+
+export function assertMcpRequesterResolutionConfig(input: unknown): asserts input is McpRequesterResolutionConfig {
+  assertExactObjectKeys(
+    input,
+    ["configGeneration", "resolverId", "resolverVersion", "transportPolicy"],
+    "requesterResolution",
+  );
+  const value = input as Record<string, unknown>;
+  assertCanonicalMcpIdentifier(value.resolverId, "resolverId", 128);
+  assertCanonicalSemVer(value.resolverVersion, "resolverVersion");
+  assertPositiveSafeInteger(value.configGeneration, "configGeneration");
+  assertExactObjectKeys(
+    value.transportPolicy,
+    ["allowedHeaderNames", "allowedHosts", "allowedPorts", "allowedSchemes"],
+    "transportPolicy",
+  );
+  const policy = value.transportPolicy as Record<string, unknown>;
+  assertAllowedSchemes(policy.allowedSchemes);
+  assertAllowedHosts(policy.allowedHosts);
+  assertAllowedPorts(policy.allowedPorts);
+  assertAllowedHeaderNames(policy.allowedHeaderNames);
+}
+
+export function assertMcpRequesterResolutionBinding(input: unknown): asserts input is McpRequesterResolutionBinding {
+  assertExactObjectKeys(
+    input,
+    [
+      "bindingSha256",
+      "callableCatalogSha256",
+      "callableCatalogSnapshotId",
+      "meshActivation",
+      "mode",
+      "requesterScopeSha256",
+      "resolverConfigGeneration",
+      "resolverId",
+      "resolverVersion",
+      "schemaVersion",
+      "serverConfigRevision",
+      "serverConfigSha256",
+      "serverId",
+      "toolName",
+      "transportPolicySha256",
+    ],
+    "requester resolution binding",
+    ["meshActivation"],
+  );
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== MCP_REQUESTER_RESOLUTION_BINDING_VERSION || value.mode !== "requester_scoped") {
+    throw new TypeError("MCP requester resolution binding version or mode is invalid.");
+  }
+  assertCanonicalMcpIdentifier(value.serverId, "serverId", 256);
+  assertCanonicalMcpIdentifier(value.toolName, "toolName", 256);
+  assertCanonicalMcpIdentifier(value.resolverId, "resolverId", 128);
+  assertCanonicalSemVer(value.resolverVersion, "resolverVersion");
+  assertPositiveSafeInteger(value.resolverConfigGeneration, "resolverConfigGeneration");
+  assertPositiveSafeInteger(value.serverConfigRevision, "serverConfigRevision");
+  assertCanonicalMcpIdentifier(value.callableCatalogSnapshotId, "callableCatalogSnapshotId", 256);
+  for (const field of [
+    "requesterScopeSha256",
+    "serverConfigSha256",
+    "transportPolicySha256",
+    "callableCatalogSha256",
+    "bindingSha256",
+  ] as const) {
+    assertLowercaseSha256(value[field], field);
+  }
+  if (value.meshActivation !== undefined) {
+    assertMcpRequesterResolutionMeshBinding(value.meshActivation);
+  }
+}
+
+export function mcpRequesterResolutionBindingHashMaterial(
+  input: McpRequesterResolutionBinding,
+): McpRequesterResolutionBindingMaterial {
+  assertMcpRequesterResolutionBinding(input);
+  const { bindingSha256: _bindingSha256, ...material } = input;
+  return material;
+}
+
+function assertMcpRequesterResolutionMeshBinding(input: unknown): asserts input is McpRequesterResolutionMeshBinding {
+  assertExactObjectKeys(
+    input,
+    [
+      "activationId",
+      "activationRevision",
+      "descriptorSha256",
+      "entrySha256",
+      "healthGeneration",
+      "manifestSha256",
+      "publicationLeaseFencingToken",
+      "publisherGeneration",
+    ],
+    "meshActivation",
+  );
+  const value = input as Record<string, unknown>;
+  assertCanonicalMcpIdentifier(value.activationId, "meshActivation.activationId", 256);
+  for (const field of [
+    "activationRevision",
+    "publisherGeneration",
+    "healthGeneration",
+    "publicationLeaseFencingToken",
+  ] as const) {
+    assertPositiveSafeInteger(value[field], `meshActivation.${field}`);
+  }
+  for (const field of ["manifestSha256", "entrySha256", "descriptorSha256"] as const) {
+    assertLowercaseSha256(value[field], `meshActivation.${field}`);
+  }
+}
+
+function assertExactObjectKeys(
+  input: unknown,
+  allowedKeys: readonly string[],
+  field: string,
+  optionalKeys: readonly string[] = [],
+): asserts input is Record<string, unknown> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new TypeError(`MCP ${field} must be an object.`);
+  }
+  const keys = Object.keys(input).sort(compareExactMcpStrings);
+  const allowed = new Set(allowedKeys);
+  if (keys.some((key) => !allowed.has(key))) {
+    throw new TypeError(`MCP ${field} contains unsupported fields.`);
+  }
+  const optional = new Set(optionalKeys);
+  if (allowedKeys.some((key) => !optional.has(key) && !keys.includes(key))) {
+    throw new TypeError(`MCP ${field} is missing required fields.`);
+  }
+}
+
+function assertCanonicalMcpIdentifier(input: unknown, field: string, maxLength: number): asserts input is string {
+  if (
+    typeof input !== "string" ||
+    input.length < 1 ||
+    input.length > maxLength ||
+    input !== input.normalize("NFKC").trim() ||
+    /\s/u.test(input) ||
+    containsAsciiControlCharacter(input) ||
+    /^(?:[a-z][a-z0-9+.-]*:)?\/\//iu.test(input) ||
+    input.includes("\\")
+  ) {
+    throw new TypeError(`MCP ${field} is not a canonical identifier.`);
+  }
+}
+
+function assertCanonicalSemVer(input: unknown, field: string): asserts input is string {
+  if (
+    typeof input !== "string" ||
+    input.length > 128 ||
+    !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.test(
+      input,
+    )
+  ) {
+    throw new TypeError(`MCP ${field} must be a canonical SemVer value.`);
+  }
+}
+
+function assertPositiveSafeInteger(input: unknown, field: string): asserts input is number {
+  if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 1) {
+    throw new TypeError(`MCP ${field} must be a positive safe integer.`);
+  }
+}
+
+function assertLowercaseSha256(input: unknown, field: string): asserts input is string {
+  if (typeof input !== "string" || !/^[a-f0-9]{64}$/u.test(input)) {
+    throw new TypeError(`MCP ${field} must be a lowercase sha256 digest.`);
+  }
+}
+
+function assertAllowedSchemes(input: unknown): asserts input is Array<"http" | "https"> {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 2) {
+    throw new TypeError("MCP transportPolicy.allowedSchemes is invalid.");
+  }
+  for (const value of input) {
+    if (value !== "http" && value !== "https") {
+      throw new TypeError("MCP transportPolicy.allowedSchemes contains an invalid scheme.");
+    }
+  }
+  assertStrictlySortedMcpStrings(input, "transportPolicy.allowedSchemes");
+}
+
+function assertAllowedHosts(input: unknown): asserts input is string[] {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 64) {
+    throw new TypeError("MCP transportPolicy.allowedHosts is invalid.");
+  }
+  for (const value of input) {
+    if (
+      typeof value !== "string" ||
+      value.length < 1 ||
+      value.length > 253 ||
+      value !== value.normalize("NFKC").trim().toLowerCase() ||
+      /\s/u.test(value) ||
+      containsAsciiControlCharacter(value) ||
+      value.includes("*")
+    ) {
+      throw new TypeError("MCP transportPolicy.allowedHosts must use lowercase canonical hosts.");
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(`https://${value}/`);
+    } catch {
+      throw new TypeError("MCP transportPolicy.allowedHosts contains an invalid host.");
+    }
+    if (parsed.hostname !== value || parsed.port !== "" || parsed.username !== "" || parsed.password !== "") {
+      throw new TypeError("MCP transportPolicy.allowedHosts must contain exact hosts only.");
+    }
+  }
+  assertStrictlySortedMcpStrings(input, "transportPolicy.allowedHosts");
+}
+
+function containsAsciiControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.charCodeAt(0);
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function assertAllowedPorts(input: unknown): asserts input is number[] {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 64) {
+    throw new TypeError("MCP transportPolicy.allowedPorts is invalid.");
+  }
+  let prior = 0;
+  for (const value of input) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 65_535 || value <= prior) {
+      throw new TypeError("MCP transportPolicy.allowedPorts must be unique and sorted.");
+    }
+    prior = value;
+  }
+}
+
+function assertAllowedHeaderNames(input: unknown): asserts input is string[] {
+  if (!Array.isArray(input) || input.length > 64) {
+    throw new TypeError("MCP transportPolicy.allowedHeaderNames is invalid.");
+  }
+  const forbidden = new Set([
+    "connection",
+    "content-length",
+    "cookie",
+    "forwarded",
+    "host",
+    "last-event-id",
+    "mcp-protocol-version",
+    "mcp-session-id",
+    "proxy-authorization",
+    "proxy-connection",
+    "set-cookie",
+    "transfer-encoding",
+    "upgrade",
+  ]);
+  for (const value of input) {
+    if (
+      typeof value !== "string" ||
+      value !== value.normalize("NFKC").trim().toLowerCase() ||
+      value.length < 1 ||
+      value.length > 64 ||
+      !/^[!#$%&'*+.^_`|~0-9a-z-]+$/u.test(value) ||
+      forbidden.has(value) ||
+      value.startsWith("proxy-") ||
+      value.startsWith("x-forwarded-")
+    ) {
+      throw new TypeError("MCP transportPolicy.allowedHeaderNames contains a forbidden name.");
+    }
+  }
+  assertStrictlySortedMcpStrings(input, "transportPolicy.allowedHeaderNames");
+}
+
+function assertStrictlySortedMcpStrings(input: string[], field: string): void {
+  for (let index = 1; index < input.length; index += 1) {
+    if (compareExactMcpStrings(input[index]!, input[index - 1]!) <= 0) {
+      throw new TypeError(`MCP ${field} must be unique and sorted by exact value.`);
+    }
+  }
+}
+
+function compareExactMcpStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export interface McpOAuthStartResponse {

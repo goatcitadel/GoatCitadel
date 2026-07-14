@@ -1,4 +1,14 @@
-import type { MemoryEmbeddingProfile, MemoryEmbeddingProfileRequest } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  type MemoryEmbeddingProfile,
+  type MemoryEmbeddingProfileRequest,
+  type ModelUsageAttributionContext,
+  type ModelUsageCostSource,
+  type ModelUsageCredentialSource,
+  type ModelUsageCredentialType,
+  type ModelUsagePool,
+  type ModelUsagePricingSource,
+} from "@goatcitadel/contracts";
 import { readBoundedResponseJson } from "./sandbox/network-guard.js";
 
 /**
@@ -13,10 +23,114 @@ import { readBoundedResponseJson } from "./sandbox/network-guard.js";
  *
  * Provider selection is resolved from `GOATCITADEL_EMBEDDINGS_PROVIDER`
  * (default `pseudo`). Any real provider degrades to `pseudo` on missing config
- * or any runtime/transport error — embeddings are best-effort and the embedding
- * path never throws.
+ * or any ordinary runtime/transport error — embeddings are best-effort. An
+ * explicit caller abort or canonical usage-settlement failure is propagated
+ * instead of being hidden behind a pseudo fallback.
  */
 export type EmbeddingProviderId = "pseudo" | "llamacpp" | "remote";
+
+export type EmbeddingLeasePurpose =
+  | "memory_write"
+  | "document_ingest"
+  | "embedding_index"
+  | "embedding_query"
+  | "embedding_repair";
+
+export interface LocalEmbeddingRuntimeLease {
+  release(): void | Promise<void>;
+}
+
+export interface LocalEmbeddingLeaseRequest {
+  providerId: "llamacpp";
+  url: string;
+  purpose: EmbeddingLeasePurpose;
+  signal?: AbortSignal;
+}
+
+export type AcquireLocalEmbeddingLease = (
+  request: LocalEmbeddingLeaseRequest,
+) => Promise<LocalEmbeddingRuntimeLease | undefined>;
+
+/**
+ * Structural usage-accounting port kept in policy-engine so this package does
+ * not depend on gateway-core. The Gateway binds its canonical accounting
+ * service to this port at composition time.
+ */
+export interface EmbeddingUsageAttempt {
+  readonly eventId: string;
+  observe(usage: unknown): void;
+  observeNormalized(observation: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    costUsd?: number;
+    costSource?: ModelUsageCostSource;
+    pricingSource?: ModelUsagePricingSource;
+    effectiveModelId?: string;
+  }): void;
+  succeed(usage?: unknown): { eventId: string };
+  fail(error: unknown, usage?: unknown): { eventId: string };
+  cancel(reason?: unknown): { eventId: string };
+}
+
+export interface EmbeddingUsageDispatchReservation {
+  readonly eventId: string;
+  accept(): EmbeddingUsageAttempt;
+  abandon(): void;
+  markDispatchUnknown(reason?: string): void;
+}
+
+export interface EmbeddingUsageDispatchInput {
+  source: "embedding_runtime";
+  attribution: ModelUsageAttributionContext;
+  requestedProviderId?: string;
+  requestedModelId?: string;
+  effectiveProviderId: Exclude<EmbeddingProviderId, "pseudo">;
+  effectiveModelId: string;
+  effectiveApiStyle: "llamacpp_embedding" | "openai_embeddings";
+  transportAttemptIndex: number;
+  credential: {
+    credentialType: ModelUsageCredentialType;
+    usagePool: ModelUsagePool;
+    credentialSource: ModelUsageCredentialSource;
+  };
+  pricing?: {
+    catalogVersion?: string;
+    catalogHash?: string;
+    inputRateUsdPerMillion?: number;
+    outputRateUsdPerMillion?: number;
+    cachedInputRateUsdPerMillion?: number;
+  };
+}
+
+export type PrepareEmbeddingUsageDispatch = (
+  input: EmbeddingUsageDispatchInput,
+) => EmbeddingUsageDispatchReservation | undefined;
+
+/**
+ * Canonical usage ownership or settlement could not be persisted. This must
+ * fail closed instead of looking like an ordinary best-effort pseudo fallback;
+ * any retained intent/accepted record remains recoverable by the accounting
+ * owner's lease-recovery path.
+ */
+export class EmbeddingUsageSettlementError extends Error {
+  public constructor(cause: unknown) {
+    super("Embedding usage accounting persistence failed", { cause });
+    this.name = "EmbeddingUsageSettlementError";
+  }
+}
+
+export interface EmbeddingRuntimeOptions {
+  purpose: EmbeddingLeasePurpose;
+  signal?: AbortSignal;
+  acquireLocalServiceLease?: AcquireLocalEmbeddingLease;
+  /** Stable caller lineage for the logical embedding operation. */
+  modelUsageAttribution?: ModelUsageAttributionContext;
+  /** Canonical pre-fetch intent owner, normally bound by GatewayService. */
+  prepareModelUsageDispatch?: PrepareEmbeddingUsageDispatch;
+  /** Internal transport retry ordinal; the current runtime performs no retries. */
+  transportAttemptIndex?: number;
+}
 
 /**
  * Provider selection as resolved from raw config. Adds an `"unsupported"`
@@ -42,6 +156,8 @@ export interface GeneratedEmbedding {
   metadata: EmbeddingMetadata;
   profile: MemoryEmbeddingProfile;
   method: "pseudo-embedding" | "llamacpp-embedding" | "remote-embedding";
+  /** Canonical provider-attempt references for provenance linking. */
+  modelUsageEventIds?: string[];
 }
 
 const PSEUDO_MODEL_ID = "pseudo-hash-v1";
@@ -59,6 +175,15 @@ const MAX_EMBEDDINGS_TIMEOUT_MS = 120_000;
 // A single-input embedding response is one vector (even 8192 dims ≈ ~200 KB of
 // JSON floats). 2 MiB matches DEFAULT_FETCH_MAX_RESPONSE_BYTES with >10x headroom.
 const MAX_EMBEDDINGS_RESPONSE_BYTES = 2 * 1024 * 1024;
+const LOCAL_EMBEDDING_ZERO_PRICING = Object.freeze({
+  catalogVersion: "goatcitadel-local-embedding-zero-v1",
+  // SHA-256 of the frozen canonical payload
+  // {"cachedInputRateUsdPerMillion":0,"inputRateUsdPerMillion":0,"outputRateUsdPerMillion":0}.
+  catalogHash: "6b36ae888f77a29b1bb877cbfad5abbe9b0b19490164945f405da1e32aca2e56",
+  inputRateUsdPerMillion: 0,
+  outputRateUsdPerMillion: 0,
+  cachedInputRateUsdPerMillion: 0,
+});
 
 /**
  * Generate an embedding for `text` using the configured provider, stamping the
@@ -66,16 +191,19 @@ const MAX_EMBEDDINGS_RESPONSE_BYTES = 2 * 1024 * 1024;
  * dimensions) so `isEmbeddingCurrent` validates correctly and the W1 store +
  * retrieve paths share one consistent dimensionality.
  *
- * The signature is intentionally async and unchanged from the pseudo-only era:
- * W1 callers already `await` it, so adding network I/O for real providers is
- * transparent. On missing config or any error the call resolves to a pseudo
- * embedding (it never rejects) — embeddings are best-effort.
+ * The original first three arguments remain compatible with the pseudo-only
+ * era. W1 callers already `await` it, so adding network I/O and the optional
+ * request-scoped runtime options is transparent. On missing config or provider
+ * error the call resolves to a pseudo embedding. An explicit caller abort or
+ * canonical usage-settlement failure rejects.
  */
 export async function generateEmbedding(
   text: string,
   now = new Date(),
   request?: MemoryEmbeddingProfileRequest,
+  runtimeOptions?: EmbeddingRuntimeOptions,
 ): Promise<GeneratedEmbedding> {
+  throwIfCallerAborted(runtimeOptions?.signal);
   const providerId = resolveEmbeddingProviderId(request);
   if (providerId === "pseudo" || providerId === "unsupported") {
     // Pseudo, or an unrecognised provider id — both resolve to a pseudo profile
@@ -90,11 +218,15 @@ export async function generateEmbedding(
     return createPseudoEmbedding(text, now, realProfile);
   }
   try {
-    const generated = await generateRealEmbedding(providerId, text, now, realProfile);
+    const generated = await generateRealEmbedding(providerId, text, now, realProfile, runtimeOptions);
     if (generated) {
       return generated;
     }
   } catch (error) {
+    if (error instanceof ConflictError || error instanceof EmbeddingUsageSettlementError) {
+      throw error;
+    }
+    throwIfCallerAborted(runtimeOptions?.signal);
     return createPseudoEmbedding(text, now, pseudoFallbackProfile(request, providerId, describeError(error)));
   }
   return createPseudoEmbedding(text, now, pseudoFallbackProfile(request, providerId, "embedding-empty-result"));
@@ -191,37 +323,87 @@ async function generateRealEmbedding(
   text: string,
   now: Date,
   profile: MemoryEmbeddingProfile,
+  runtimeOptions?: EmbeddingRuntimeOptions,
 ): Promise<GeneratedEmbedding | undefined> {
   const config = resolveRealProviderConfig(providerId);
   if (!config) {
     return undefined;
   }
-  const rawVector =
-    providerId === "llamacpp" ? await fetchLlamaCppEmbedding(config, text) : await fetchRemoteEmbedding(config, text);
-  const embedding = sanitizeEmbeddingVector(rawVector);
-  if (!embedding || embedding.length !== profile.dimensions) {
-    // Dimension mismatch (or empty/invalid vector) would poison cosine
-    // similarity against existing vectors — refuse and let the caller fall back.
-    throw new Error(
-      embedding
-        ? `embedding-dimension-mismatch: expected ${profile.dimensions}, received ${embedding.length}`
-        : "embedding-invalid-vector",
-    );
+  throwIfCallerAborted(runtimeOptions?.signal);
+  const lease =
+    providerId === "llamacpp" && runtimeOptions?.acquireLocalServiceLease
+      ? await runtimeOptions.acquireLocalServiceLease({
+          providerId: "llamacpp",
+          url: config.url,
+          purpose: runtimeOptions.purpose,
+          ...(runtimeOptions.signal ? { signal: runtimeOptions.signal } : {}),
+        })
+      : undefined;
+  let dispatched: EmbeddingProviderFetch | undefined;
+  let settlementStarted = false;
+  try {
+    throwIfCallerAborted(runtimeOptions?.signal);
+    dispatched =
+      providerId === "llamacpp"
+        ? await fetchLlamaCppEmbedding(config, text, runtimeOptions)
+        : await fetchRemoteEmbedding(config, text, runtimeOptions);
+    if (dispatched.usage !== undefined) {
+      dispatched.attempt?.observe(dispatched.usage);
+    }
+    if (dispatched.reportedModelId) {
+      dispatched.attempt?.observeNormalized({ effectiveModelId: dispatched.reportedModelId });
+    }
+    const embedding = sanitizeEmbeddingVector(dispatched.rawVector);
+    if (!embedding || embedding.length !== profile.dimensions) {
+      // Dimension mismatch (or empty/invalid vector) would poison cosine
+      // similarity against existing vectors — refuse and let the caller fall back.
+      throw new Error(
+        embedding
+          ? `embedding-dimension-mismatch: expected ${profile.dimensions}, received ${embedding.length}`
+          : "embedding-invalid-vector",
+      );
+    }
+    throwIfCallerAborted(runtimeOptions?.signal);
+    let terminal: { eventId: string } | undefined;
+    if (dispatched.attempt) {
+      settlementStarted = true;
+      try {
+        terminal = dispatched.attempt.succeed();
+      } catch (error) {
+        throw new EmbeddingUsageSettlementError(error);
+      }
+    }
+    return {
+      embedding,
+      profile,
+      method: providerId === "llamacpp" ? "llamacpp-embedding" : "remote-embedding",
+      ...(terminal ? { modelUsageEventIds: [terminal.eventId] } : {}),
+      metadata: {
+        provider: providerId,
+        modelId: profile.modelId,
+        dimensions: embedding.length,
+        generatedAt: now.toISOString(),
+        version: profile.version,
+        profileId: profile.profileId,
+        profileStatus: profile.status,
+      },
+    };
+  } catch (error) {
+    if (dispatched?.attempt && !settlementStarted) {
+      try {
+        if (runtimeOptions?.signal?.aborted) {
+          dispatched.attempt.cancel(runtimeOptions.signal.reason ?? error);
+        } else {
+          dispatched.attempt.fail(error);
+        }
+      } catch (settlementError) {
+        throw asEmbeddingUsageSettlementError(settlementError);
+      }
+    }
+    throw error;
+  } finally {
+    await releaseEmbeddingLease(lease);
   }
-  return {
-    embedding,
-    profile,
-    method: providerId === "llamacpp" ? "llamacpp-embedding" : "remote-embedding",
-    metadata: {
-      provider: providerId,
-      modelId: profile.modelId,
-      dimensions: embedding.length,
-      generatedAt: now.toISOString(),
-      version: profile.version,
-      profileId: profile.profileId,
-      profileStatus: profile.status,
-    },
-  };
 }
 
 interface RealProviderConfig {
@@ -229,6 +411,18 @@ interface RealProviderConfig {
   modelId: string;
   apiKey?: string;
   timeoutMs: number;
+}
+
+interface EmbeddingProviderFetch {
+  rawVector: unknown;
+  usage?: unknown;
+  reportedModelId?: string;
+  attempt?: EmbeddingUsageAttempt;
+}
+
+interface EmbeddingJsonFetch {
+  payload: unknown;
+  attempt?: EmbeddingUsageAttempt;
 }
 
 function resolveRealProviderConfig(providerId: EmbeddingProviderId): RealProviderConfig | undefined {
@@ -246,52 +440,205 @@ function resolveRealProviderConfig(providerId: EmbeddingProviderId): RealProvide
   };
 }
 
-async function fetchLlamaCppEmbedding(config: RealProviderConfig, text: string): Promise<unknown> {
-  const payload = await fetchEmbeddingJson(config, {
+async function fetchLlamaCppEmbedding(
+  config: RealProviderConfig,
+  text: string,
+  runtimeOptions?: EmbeddingRuntimeOptions,
+): Promise<EmbeddingProviderFetch> {
+  const fetched = await fetchEmbeddingJson("llamacpp", config, runtimeOptions, {
     body: { content: text },
   });
+  const payload = fetched.payload;
   // llama.cpp returns `{ embedding: number[] }` or, with newer builds,
   // `[{ embedding: number[] }]` / `{ data: [{ embedding }] }`.
-  return (
-    pickEmbeddingArray(payload) ??
-    pickEmbeddingArray(firstArrayItem(payload)) ??
-    pickEmbeddingArray(firstDataItem(payload))
-  );
+  return {
+    rawVector:
+      pickEmbeddingArray(payload) ??
+      pickEmbeddingArray(firstArrayItem(payload)) ??
+      pickEmbeddingArray(firstDataItem(payload)),
+    ...extractEmbeddingUsage(payload),
+    ...(fetched.attempt ? { attempt: fetched.attempt } : {}),
+  };
 }
 
-async function fetchRemoteEmbedding(config: RealProviderConfig, text: string): Promise<unknown> {
-  const payload = await fetchEmbeddingJson(config, {
+async function fetchRemoteEmbedding(
+  config: RealProviderConfig,
+  text: string,
+  runtimeOptions?: EmbeddingRuntimeOptions,
+): Promise<EmbeddingProviderFetch> {
+  const fetched = await fetchEmbeddingJson("remote", config, runtimeOptions, {
     body: { model: config.modelId, input: text },
   });
+  const payload = fetched.payload;
   // OpenAI-compatible shape: `{ data: [{ embedding: number[] }] }`.
-  return pickEmbeddingArray(firstDataItem(payload)) ?? pickEmbeddingArray(payload);
+  return {
+    rawVector: pickEmbeddingArray(firstDataItem(payload)) ?? pickEmbeddingArray(payload),
+    ...extractEmbeddingUsage(payload),
+    ...(fetched.attempt ? { attempt: fetched.attempt } : {}),
+  };
 }
 
 async function fetchEmbeddingJson(
+  providerId: Exclude<EmbeddingProviderId, "pseudo">,
   config: RealProviderConfig,
+  runtimeOptions: EmbeddingRuntimeOptions | undefined,
   options: { body: Record<string, unknown> },
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+): Promise<EmbeddingJsonFetch> {
+  throwIfCallerAborted(runtimeOptions?.signal);
+  let reservation: EmbeddingUsageDispatchReservation | undefined;
   try {
-    const response = await fetch(config.url, {
+    reservation = runtimeOptions?.prepareModelUsageDispatch?.(
+      buildEmbeddingUsageDispatchInput(providerId, config, runtimeOptions),
+    );
+  } catch (error) {
+    throw asEmbeddingUsageSettlementError(error);
+  }
+  const dispatchController = new AbortController();
+  let responsePromise: Promise<Response>;
+  try {
+    responsePromise = fetch(config.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
       },
       body: JSON.stringify(options.body),
-      signal: controller.signal,
+      signal: combineAbortSignal(runtimeOptions?.signal, config.timeoutMs, dispatchController.signal),
     });
+  } catch (error) {
+    try {
+      reservation?.abandon();
+    } catch (settlementError) {
+      throw asEmbeddingUsageSettlementError(settlementError);
+    }
+    throw error;
+  }
+
+  let attempt: EmbeddingUsageAttempt | undefined;
+  try {
+    attempt = reservation?.accept();
+  } catch (error) {
+    try {
+      try {
+        reservation?.markDispatchUnknown("embedding_transport_acceptance_persistence_failed");
+      } catch (settlementError) {
+        throw asEmbeddingUsageSettlementError(settlementError);
+      }
+    } finally {
+      dispatchController.abort(error);
+      void Promise.resolve(responsePromise).catch(() => undefined);
+    }
+    throw asEmbeddingUsageSettlementError(error);
+  }
+
+  try {
+    const response = await responsePromise;
     if (!response.ok) {
       throw new Error(`embedding-http-${response.status}`);
     }
-    return await readBoundedResponseJson(response, {
+    const payload = await readBoundedResponseJson(response, {
       maxBytes: MAX_EMBEDDINGS_RESPONSE_BYTES,
       timeoutMs: config.timeoutMs,
     });
-  } finally {
-    clearTimeout(timer);
+    return { payload, ...(attempt ? { attempt } : {}) };
+  } catch (error) {
+    if (attempt) {
+      try {
+        if (runtimeOptions?.signal?.aborted) {
+          attempt.cancel(runtimeOptions.signal.reason ?? error);
+        } else {
+          attempt.fail(error);
+        }
+      } catch (settlementError) {
+        throw asEmbeddingUsageSettlementError(settlementError);
+      }
+    }
+    throw error;
+  }
+}
+
+function combineAbortSignal(
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  dispatchSignal?: AbortSignal,
+): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signals = [timeoutSignal, ...(signal ? [signal] : []), ...(dispatchSignal ? [dispatchSignal] : [])];
+  return signals.length === 1 ? timeoutSignal : AbortSignal.any(signals);
+}
+
+function buildEmbeddingUsageDispatchInput(
+  providerId: Exclude<EmbeddingProviderId, "pseudo">,
+  config: RealProviderConfig,
+  runtimeOptions: EmbeddingRuntimeOptions,
+): EmbeddingUsageDispatchInput {
+  const attribution: ModelUsageAttributionContext = {
+    ...runtimeOptions.modelUsageAttribution,
+    callKind: "embedding",
+    utilityKind: runtimeOptions.modelUsageAttribution?.utilityKind ?? runtimeOptions.purpose,
+  };
+  return {
+    source: "embedding_runtime",
+    attribution,
+    requestedProviderId: attribution.requestedProviderId ?? providerId,
+    requestedModelId: attribution.requestedModelId ?? config.modelId,
+    effectiveProviderId: providerId,
+    effectiveModelId: config.modelId,
+    effectiveApiStyle: providerId === "llamacpp" ? "llamacpp_embedding" : "openai_embeddings",
+    transportAttemptIndex: normalizeTransportAttemptIndex(runtimeOptions.transportAttemptIndex),
+    credential:
+      providerId === "llamacpp"
+        ? { credentialType: "unknown", usagePool: "local", credentialSource: "none" }
+        : {
+            credentialType: config.apiKey ? "api_key" : "unknown",
+            usagePool: "standard",
+            credentialSource: config.apiKey ? "env" : "none",
+          },
+    ...(providerId === "llamacpp" ? { pricing: LOCAL_EMBEDDING_ZERO_PRICING } : {}),
+  };
+}
+
+function normalizeTransportAttemptIndex(value: number | undefined): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function extractEmbeddingUsage(payload: unknown): Pick<EmbeddingProviderFetch, "usage" | "reportedModelId"> {
+  if (!isRecord(payload)) {
+    return {};
+  }
+  const usage = isRecord(payload.usage) ? payload.usage : undefined;
+  const reportedModelId = optionalString(payload.model);
+  return {
+    ...(usage ? { usage } : {}),
+    ...(reportedModelId ? { reportedModelId } : {}),
+  };
+}
+
+function throwIfCallerAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  const error = new Error("Embedding generation was aborted");
+  error.name = "AbortError";
+  throw error;
+}
+
+function asEmbeddingUsageSettlementError(cause: unknown): EmbeddingUsageSettlementError {
+  return cause instanceof EmbeddingUsageSettlementError ? cause : new EmbeddingUsageSettlementError(cause);
+}
+
+async function releaseEmbeddingLease(lease: LocalEmbeddingRuntimeLease | undefined): Promise<void> {
+  if (!lease) {
+    return;
+  }
+  try {
+    await lease.release();
+  } catch {
+    // Cleanup must not replace a valid vector or the provider error that caused
+    // a best-effort pseudo fallback.
   }
 }
 

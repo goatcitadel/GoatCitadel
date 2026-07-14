@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Storage } from "./index.js";
+import { buildChatCompactionAttemptId, buildChatCompactionStateKey } from "./chat-conversation-summary-repo.js";
 
 const createdDirs: string[] = [];
 const createdStorageInstances: Storage[] = [];
@@ -89,6 +90,8 @@ describe("Storage.deleteChatSessionData", () => {
     assert.equal(countRows(storage, "chat_execution_plans", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_execution_plan_steps", "plan_id = 'plan-sess-1'"), 0);
     assert.equal(countRows(storage, "chat_conversation_summaries", "session_id = 'sess-1'"), 0);
+    assert.equal(countRows(storage, "chat_compaction_breakers", "session_id = 'sess-1'"), 0);
+    assert.equal(countRows(storage, "chat_compaction_states", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "tool_access_decisions", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "tool_invocations", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "policy_blocks", "session_id = 'sess-1'"), 0);
@@ -101,6 +104,8 @@ describe("Storage.deleteChatSessionData", () => {
     assert.equal(countRows(storage, "runtime_decision_traces", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "chat_generated_artifacts", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "chat_thread_knowledge_attachments", "session_id = 'sess-2'"), 1);
+    assert.equal(countRows(storage, "chat_compaction_breakers", "session_id = 'sess-2'"), 1);
+    assert.equal(countRows(storage, "chat_compaction_states", "session_id = 'sess-2'"), 1);
     assert.equal(countRows(storage, "knowledge_documents", "namespace = 'chat-session:sess-2:knowledge'"), 1);
     assert.equal(countKnowledgeChunksByNamespace(storage, "chat-session:sess-2:knowledge"), 1);
   });
@@ -267,6 +272,40 @@ function seedChatSession(storage: Storage, sessionId: string): void {
     summary: "compact summary",
     createdAt: now,
     updatedAt: now,
+  });
+  const compactionBoundaryTurnIds = [`turn-${sessionId}`];
+  const compactionBoundarySourceHash = `compaction-boundary-hash-${sessionId}`;
+  const compactionState = {
+    stateKey: buildChatCompactionStateKey(
+      sessionId,
+      `compaction-dimension-${sessionId}`,
+      compactionBoundaryTurnIds,
+      compactionBoundarySourceHash,
+    ),
+    sessionId,
+    dimensionHash: `compaction-dimension-${sessionId}`,
+    boundaryTurnIds: compactionBoundaryTurnIds,
+    boundarySourceHash: compactionBoundarySourceHash,
+    baselineInputTokens: 1200,
+    lastObservedInputTokens: 1200,
+    observedTurnCount: 1,
+    armed: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+  storage.chatConversationSummaries.commitCompactionBoundary({
+    state: compactionState,
+    attemptId: buildChatCompactionAttemptId({
+      sessionId,
+      dimensionHash: compactionState.dimensionHash,
+      branchHeadTurnId: `turn-${sessionId}`,
+      observedTurnCount: compactionState.observedTurnCount,
+      boundarySourceHash: compactionBoundarySourceHash,
+      disposition: "structured",
+    }),
+    branchHeadTurnId: `turn-${sessionId}`,
+    disposition: "structured",
+    startedAt: now,
   });
   storage.chatAttachments.create(
     {

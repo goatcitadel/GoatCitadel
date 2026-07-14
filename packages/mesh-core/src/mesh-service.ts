@@ -15,7 +15,7 @@ import type {
   MeshSessionOwnerRecord,
   MeshStatus,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { MeshRuntimeArtifactSnapshot, Storage } from "@goatcitadel/storage";
 
 export interface MeshRuntimeOptions {
   enabled: boolean;
@@ -27,6 +27,10 @@ export interface MeshRuntimeOptions {
   tailnetEnabled: boolean;
   joinToken?: string;
   defaultLeaseTtlSeconds: number;
+}
+
+export interface MeshRuntimeOptionsReplacement {
+  rollback(): void;
 }
 
 export class MeshService {
@@ -45,22 +49,89 @@ export class MeshService {
   }
 
   public init(): void {
+    this.persistOptionsAtomically(this.options);
+  }
+
+  public getOptionsSnapshot(): MeshRuntimeOptions {
+    return { ...this.options };
+  }
+
+  /**
+   * Replaces the complete runtime posture only after its durable mesh rows
+   * commit together. A failed node/token write leaves the prior in-memory
+   * options active and the database transaction rolls back both writes.
+   */
+  public replaceOptions(input: MeshRuntimeOptions): MeshRuntimeOptions {
+    const next = normalizeMeshRuntimeOptions(input, this.options);
+    this.persistOptionsAtomically(next);
+    this.options = next;
+    return this.getOptionsSnapshot();
+  }
+
+  /**
+   * Replaces runtime options while retaining an exact durable rollback handle.
+   * Unlike a second replaceOptions(previous) call, rollback restores overwritten
+   * timestamps/token state and deletes candidate-only node/token rows.
+   */
+  public replaceOptionsReversibly(input: MeshRuntimeOptions): MeshRuntimeOptionsReplacement {
+    const previous = this.getOptionsSnapshot();
+    const next = normalizeMeshRuntimeOptions(input, this.options);
+    let artifacts: MeshRuntimeArtifactSnapshot | undefined;
+    this.runAtomically(() => {
+      artifacts = this.storage.mesh.snapshotRuntimeArtifacts(next.localNodeId, next.joinToken);
+      this.persistOptionsRows(next);
+    });
+    if (!artifacts) {
+      throw new Error("Mesh runtime artifact snapshot was not captured");
+    }
+    this.options = next;
+
+    return {
+      rollback: () => {
+        this.runAtomically(() => {
+          this.storage.mesh.restoreRuntimeArtifacts(artifacts as MeshRuntimeArtifactSnapshot);
+        });
+        this.options = previous;
+      },
+    };
+  }
+
+  /**
+   * Replays the exact pre-candidate artifact receipt retained by the config
+   * generation journal. This is intentionally idempotent so startup can repeat
+   * it after another hard crash before clearing the journal marker.
+   */
+  public restoreRuntimeArtifactsForRecovery(snapshot: MeshRuntimeArtifactSnapshot): void {
+    this.runAtomically(() => {
+      this.storage.mesh.restoreRuntimeArtifacts(snapshot);
+    });
+  }
+
+  private persistOptionsAtomically(options: MeshRuntimeOptions): void {
+    this.runAtomically(() => this.persistOptionsRows(options));
+  }
+
+  private persistOptionsRows(options: MeshRuntimeOptions): void {
     const now = new Date().toISOString();
     this.storage.mesh.upsertNode({
-      nodeId: this.options.localNodeId,
-      label: this.options.localNodeLabel,
-      advertiseAddress: this.options.advertiseAddress,
-      transport: this.options.mode,
+      nodeId: options.localNodeId,
+      label: options.localNodeLabel,
+      advertiseAddress: options.advertiseAddress,
+      transport: options.mode,
       status: "online",
       capabilities: ["gateway", "scheduler", "orchestration"],
       joinedAt: now,
       lastSeenAt: now,
     });
 
-    if (this.options.joinToken?.trim()) {
+    if (options.joinToken?.trim()) {
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      this.storage.mesh.issueJoinToken(this.options.joinToken.trim(), expiresAt);
+      this.storage.mesh.issueJoinToken(options.joinToken.trim(), expiresAt);
     }
+  }
+
+  private runAtomically<T>(write: () => T): T {
+    return this.storage.db.transaction("immediate", write);
   }
 
   public status(): MeshStatus {
@@ -82,21 +153,10 @@ export class MeshService {
   }
 
   public updateOptions(input: Partial<MeshRuntimeOptions>): void {
-    const next: MeshRuntimeOptions = {
+    this.replaceOptions({
       ...this.options,
       ...input,
-      localNodeId: input.localNodeId?.trim() || this.options.localNodeId,
-      mode: input.mode ?? this.options.mode,
-      enabled: input.enabled ?? this.options.enabled,
-      requireMtls: input.requireMtls ?? this.options.requireMtls,
-      tailnetEnabled: input.tailnetEnabled ?? this.options.tailnetEnabled,
-      defaultLeaseTtlSeconds: input.defaultLeaseTtlSeconds ?? this.options.defaultLeaseTtlSeconds,
-      joinToken: input.joinToken ?? this.options.joinToken,
-      localNodeLabel: input.localNodeLabel ?? this.options.localNodeLabel,
-      advertiseAddress: input.advertiseAddress ?? this.options.advertiseAddress,
-    };
-    this.options = next;
-    this.init();
+    });
   }
 
   public join(request: MeshJoinRequest): MeshJoinResult {
@@ -253,4 +313,21 @@ export class MeshService {
       },
     ];
   }
+}
+
+function normalizeMeshRuntimeOptions(input: MeshRuntimeOptions, fallback: MeshRuntimeOptions): MeshRuntimeOptions {
+  const localNodeId = input.localNodeId.trim() || fallback.localNodeId;
+  if (!localNodeId) {
+    throw new Error("Mesh localNodeId is required");
+  }
+  if (!Number.isInteger(input.defaultLeaseTtlSeconds) || input.defaultLeaseTtlSeconds < 1) {
+    throw new Error("Mesh defaultLeaseTtlSeconds must be a positive integer");
+  }
+  return {
+    ...input,
+    localNodeId,
+    localNodeLabel: input.localNodeLabel,
+    advertiseAddress: input.advertiseAddress,
+    joinToken: input.joinToken,
+  };
 }

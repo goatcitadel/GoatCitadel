@@ -28,6 +28,21 @@ function createRepo(): CostLedgerRepository {
   return new CostLedgerRepository(db);
 }
 
+function metricAvailability(knownAttemptCount: number, unknownAttemptCount: number) {
+  return {
+    knownAttemptCount,
+    unknownAttemptCount,
+    complete: unknownAttemptCount === 0,
+  };
+}
+
+const COMPLETE_METRICS = {
+  inputTokensComplete: true,
+  outputTokensComplete: true,
+  cachedInputTokensComplete: true,
+  costUsdComplete: true,
+} as const;
+
 describe("CostLedgerRepository", () => {
   it("aggregates by session/day/agent/task", () => {
     const repo = createRepo();
@@ -98,7 +113,7 @@ describe("CostLedgerRepository", () => {
     assert.equal(summary[0]?.tokenTotal, 15);
   });
 
-  it("reports tracked vs unknown usage availability for agent events", () => {
+  it("reports tracked vs unknown usage availability for all legacy attempts", () => {
     const repo = createRepo();
     repo.insert({
       sessionId: "s1",
@@ -130,9 +145,15 @@ describe("CostLedgerRepository", () => {
     });
 
     const availability = repo.usageAvailability("2026-02-27T00:00:00.000Z", "2026-02-27T23:59:59.999Z");
-    assert.equal(availability.totalAgentEvents, 2);
-    assert.equal(availability.trackedEvents, 1);
-    assert.equal(availability.unknownEvents, 1);
+    assert.equal(availability.totalAgentEvents, 3);
+    assert.equal(availability.trackedEvents, 3);
+    assert.equal(availability.unknownEvents, 0);
+    assert.deepEqual(availability.metricAvailability, {
+      inputTokens: metricAvailability(3, 0),
+      outputTokens: metricAvailability(3, 0),
+      cachedInputTokens: metricAvailability(3, 0),
+      costUsd: metricAvailability(3, 0),
+    });
   });
 
   it("builds a seven-day provider spend series with anomaly-ready totals", () => {
@@ -176,11 +197,209 @@ describe("CostLedgerRepository", () => {
     assert.equal(series[3]?.isoDate, "2026-02-23");
     assert.equal(series[1]?.segments[0]?.providerKey, "openai");
     assert.deepEqual(series[1]?.segments[0]?.models, ["gpt-5"]);
+    assert.deepEqual(series[1]?.segments[0]?.metricAvailability, COMPLETE_METRICS);
     assert.equal(series[3]?.costUsd, 5.2);
+    assert.deepEqual(series[3]?.metricAvailability, COMPLETE_METRICS);
     assert.deepEqual(
       series[3]?.segments.map((segment) => segment.providerKey),
       ["anthropic", "unattributed"],
     );
+  });
+
+  it("uses the exact requested timestamp window for daily totals and coverage", () => {
+    const repo = createRepo();
+    const db = (
+      repo as unknown as {
+        db: { prepare: (sql: string) => { run: (params: Record<string, unknown>) => unknown } };
+      }
+    ).db;
+    const insert = db.prepare(`
+      INSERT INTO cost_ledger (
+        session_id, agent_id, provider_id, model_id, day,
+        token_input, token_output, token_cached_input, cost_usd,
+        created_at, usage_known_mask
+      ) VALUES (
+        @sessionId, NULL, @providerId, @modelId, @day,
+        @tokenInput, @tokenOutput, @tokenCachedInput, @costUsd,
+        @createdAt, @usageKnownMask
+      )
+    `);
+    insert.run({
+      sessionId: "outside-window",
+      providerId: "openai",
+      modelId: "gpt-outside",
+      day: "2026-07-13",
+      tokenInput: 100,
+      tokenOutput: 50,
+      tokenCachedInput: 0,
+      costUsd: 9,
+      createdAt: "2026-07-13T08:00:00.000Z",
+      usageKnownMask: "",
+    });
+    insert.run({
+      sessionId: "inside-window",
+      providerId: "anthropic",
+      modelId: "claude-inside",
+      day: "2026-07-13",
+      tokenInput: 10,
+      tokenOutput: 5,
+      tokenCachedInput: 0,
+      costUsd: 1,
+      createdAt: "2026-07-13T12:00:00.000Z",
+      usageKnownMask: "input,output,cached,cost",
+    });
+
+    const from = "2026-07-13T10:00:00.000Z";
+    const to = "2026-07-13T13:00:00.000Z";
+    assert.deepEqual(repo.summary("day", from, to), [
+      {
+        scope: "day",
+        key: "2026-07-13",
+        tokenInput: 10,
+        tokenOutput: 5,
+        tokenCachedInput: 0,
+        tokenTotal: 15,
+        costUsd: 1,
+        metricAvailability: COMPLETE_METRICS,
+      },
+    ]);
+    assert.equal(repo.dailySeries(from, to)[0]?.costUsd, 1);
+    assert.deepEqual(repo.usageAvailability(from, to), {
+      trackedEvents: 1,
+      unknownEvents: 0,
+      totalAgentEvents: 1,
+      metricAvailability: {
+        inputTokens: metricAvailability(1, 0),
+        outputTokens: metricAvailability(1, 0),
+        cachedInputTokens: metricAvailability(1, 0),
+        costUsd: metricAvailability(1, 0),
+      },
+    });
+  });
+
+  it("keeps partial token totals while marking unknown cost in summary, provider, and coverage projections", () => {
+    const repo = createRepo();
+    const db = (
+      repo as unknown as {
+        db: {
+          prepare: (sql: string) => { run: (params: Record<string, unknown>) => unknown };
+        };
+      }
+    ).db;
+    db.prepare(
+      `
+      INSERT INTO cost_ledger (
+        session_id, agent_id, provider_id, model_id, day,
+        token_input, token_output, token_cached_input, cost_usd,
+        created_at, usage_known_mask
+      ) VALUES (
+        @sessionId, @agentId, @providerId, @modelId, @day,
+        @tokenInput, @tokenOutput, @tokenCachedInput, @costUsd,
+        @createdAt, @usageKnownMask
+      )
+    `,
+    ).run({
+      sessionId: "s-partial",
+      agentId: "assistant",
+      providerId: "openai",
+      modelId: "gpt-partial",
+      day: "2026-02-24",
+      tokenInput: 12,
+      tokenOutput: 3,
+      tokenCachedInput: 0,
+      costUsd: 0,
+      createdAt: "2026-02-24T12:00:00.000Z",
+      usageKnownMask: "input,output",
+    });
+
+    const summary = repo.summary("day", "2026-02-24T00:00:00.000Z", "2026-02-24T23:59:59.999Z");
+    assert.equal(summary[0]?.tokenTotal, 15);
+    assert.equal(summary[0]?.costUsd, 0);
+    assert.deepEqual(summary[0]?.metricAvailability, {
+      inputTokensComplete: true,
+      outputTokensComplete: true,
+      cachedInputTokensComplete: false,
+      costUsdComplete: false,
+    });
+
+    const series = repo.dailySeries("2026-02-24T00:00:00.000Z", "2026-02-24T23:59:59.999Z");
+    assert.equal(series[0]?.tokenTotal, 15);
+    assert.equal(series[0]?.costUsd, 0);
+    assert.deepEqual(series[0]?.metricAvailability, summary[0]?.metricAvailability);
+    assert.deepEqual(series[0]?.segments[0]?.metricAvailability, summary[0]?.metricAvailability);
+
+    assert.deepEqual(repo.usageAvailability("2026-02-24T00:00:00.000Z", "2026-02-24T23:59:59.999Z"), {
+      trackedEvents: 1,
+      unknownEvents: 0,
+      totalAgentEvents: 1,
+      metricAvailability: {
+        inputTokens: metricAvailability(1, 0),
+        outputTokens: metricAvailability(1, 0),
+        cachedInputTokens: metricAvailability(0, 1),
+        costUsd: metricAvailability(0, 1),
+      },
+    });
+  });
+
+  it("treats a legacy NULL usage mask as incomplete even when numeric lower bounds are nonzero", () => {
+    const repo = createRepo();
+    const db = (
+      repo as unknown as {
+        db: {
+          prepare: (sql: string) => { run: (params: Record<string, unknown>) => unknown };
+        };
+      }
+    ).db;
+    db.prepare(
+      `
+      INSERT INTO cost_ledger (
+        session_id, agent_id, provider_id, model_id, day,
+        token_input, token_output, token_cached_input, cost_usd,
+        created_at, usage_known_mask
+      ) VALUES (
+        @sessionId, @agentId, @providerId, @modelId, @day,
+        @tokenInput, @tokenOutput, @tokenCachedInput, @costUsd,
+        @createdAt, NULL
+      )
+    `,
+    ).run({
+      sessionId: "s-legacy-null-mask",
+      agentId: "assistant",
+      providerId: "legacy-provider",
+      modelId: "legacy-model",
+      day: "2026-02-25",
+      tokenInput: 9,
+      tokenOutput: 4,
+      tokenCachedInput: 2,
+      costUsd: 0.25,
+      createdAt: "2026-02-25T12:00:00.000Z",
+    });
+
+    const incomplete = {
+      inputTokensComplete: false,
+      outputTokensComplete: false,
+      cachedInputTokensComplete: false,
+      costUsdComplete: false,
+    };
+    const summary = repo.summary("day", "2026-02-25T00:00:00.000Z", "2026-02-25T23:59:59.999Z");
+    assert.equal(summary[0]?.tokenTotal, 13);
+    assert.equal(summary[0]?.costUsd, 0.25);
+    assert.deepEqual(summary[0]?.metricAvailability, incomplete);
+
+    const series = repo.dailySeries("2026-02-25T00:00:00.000Z", "2026-02-25T23:59:59.999Z");
+    assert.deepEqual(series[0]?.metricAvailability, incomplete);
+    assert.deepEqual(series[0]?.segments[0]?.metricAvailability, incomplete);
+    assert.deepEqual(repo.usageAvailability("2026-02-25T00:00:00.000Z", "2026-02-25T23:59:59.999Z"), {
+      trackedEvents: 1,
+      unknownEvents: 0,
+      totalAgentEvents: 1,
+      metricAvailability: {
+        inputTokens: metricAvailability(0, 1),
+        outputTokens: metricAvailability(0, 1),
+        cachedInputTokens: metricAvailability(0, 1),
+        costUsd: metricAvailability(0, 1),
+      },
+    });
   });
 
   it("uses zero availability defaults when aggregate rows are missing or nullish", () => {
@@ -194,6 +413,12 @@ describe("CostLedgerRepository", () => {
       trackedEvents: 0,
       unknownEvents: 0,
       totalAgentEvents: 0,
+      metricAvailability: {
+        inputTokens: metricAvailability(0, 0),
+        outputTokens: metricAvailability(0, 0),
+        cachedInputTokens: metricAvailability(0, 0),
+        costUsd: metricAvailability(0, 0),
+      },
     });
 
     internal.summaryUsageAvailabilityStmt = {
@@ -203,6 +428,12 @@ describe("CostLedgerRepository", () => {
       trackedEvents: 0,
       unknownEvents: 0,
       totalAgentEvents: 0,
+      metricAvailability: {
+        inputTokens: metricAvailability(0, 0),
+        outputTokens: metricAvailability(0, 0),
+        cachedInputTokens: metricAvailability(0, 0),
+        costUsd: metricAvailability(0, 0),
+      },
     });
   });
 

@@ -18,9 +18,13 @@ export type ChatMode = "chat" | "cowork" | "code";
 export type ChatModeTeamBehavior = "single_lead" | "guided_swarm" | "constrained_squad";
 export type ChatWebMode = "auto" | "off" | "quick" | "deep";
 export type ChatMemoryMode = "auto" | "on" | "off";
-export type ChatThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
+export type ChatThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep" | "max" | "ultra";
 export type ChatSpeedMode = "standard" | "fast";
 export type ChatSubagentPolicy = "off" | "ask_when_useful" | "auto_when_useful";
+export interface ChatModelCouncilRequest {
+  /** Explicit per-turn opt-in. Participant identities remain server-owned. */
+  enabled: true;
+}
 export type ChatNormalizationProfile = "live" | "prompt_pack_harness" | "quick_web";
 export type ChatTurnExecutionProfile = "standard" | "quick_web";
 export interface ChatPromptContextBudgetReceipt {
@@ -97,6 +101,7 @@ export type ChatInputPart =
 
 export interface ChatProjectRecord {
   projectId: string;
+  revision: number;
   workspaceId?: string;
   name: string;
   description?: string;
@@ -138,7 +143,10 @@ export interface ChatFolderRecord {
 }
 
 export interface ChatSessionSearchHitRecord {
+  workspaceId: string;
+  sessionId: string;
   messageId: string;
+  sequence: number;
   turnId?: string;
   excerpt: string;
   score: number;
@@ -233,6 +241,7 @@ export interface ChatGeneratedArtifactRecord {
 
 export interface ChatSessionRecord {
   sessionId: string;
+  revision: number;
   sessionKey: string;
   workspaceId?: string;
   scope: ChatSessionScope;
@@ -297,6 +306,7 @@ export type ChatSessionSearchMode = "discovery" | "scroll" | "browse";
 export interface ChatSessionSearchQuery {
   query: string;
   mode?: ChatSessionSearchMode;
+  view?: ChatSessionLifecycleStatus | "all";
   citadelId?: string;
   workspaceId?: string;
   surface?: ChatMode;
@@ -595,6 +605,7 @@ export interface ChatMessageRecord {
 
 export interface ChatSessionPrefsRecord {
   sessionId: string;
+  revision: number;
   mode: ChatMode;
   planningMode: ChatPlanningMode;
   providerId?: string;
@@ -630,6 +641,7 @@ export interface ChatAutonomyBudget {
 }
 
 export interface ChatSessionPrefsPatch {
+  expectedRevision?: number;
   mode?: ChatMode;
   planningMode?: ChatPlanningMode;
   providerId?: string;
@@ -851,6 +863,12 @@ export interface ChatToolRunRecord {
   reuseReason?: string;
   error?: string;
   failureGuidance?: string;
+  /** Planning-time upper bound frozen before any dispatch can occur. */
+  effectPotential?: import("./tool-effect-truth.js").ToolEffectPotential;
+  /** Uncertain recovery posture only; concrete effects use effectOutcomeKind + evidence refs. */
+  effectDisposition?: import("./tool-effect-truth.js").ToolEffectDisposition;
+  effectOutcomeKind?: import("./tool-effect-truth.js").ToolEffectOutcomeKind;
+  effectEvidence?: import("./tool-effect-truth.js").ToolEffectEvidenceRecord;
 }
 
 export type ChatTurnLifecycleStatus =
@@ -935,6 +953,30 @@ export interface ChatTurnFailedFileMutationRecord {
   error: string;
 }
 
+/**
+ * Input-token truth for the first provider request that belonged to the turn's
+ * effective execution route. This is intentionally separate from aggregate
+ * loop/repair usage: later tool-loop, fallback, or repair calls must never be
+ * mistaken for the original prompt size used by compaction hysteresis.
+ */
+export interface ChatTurnFirstProviderRequestUsageRecord {
+  /** Provider-reported input tokens, when that exact first request returned them. */
+  reportedInputTokens?: number;
+  /** Reported value or the deterministic request estimate when reporting was unavailable. */
+  effectiveInputTokens: number;
+  source: "provider_reported" | "deterministic_estimate";
+  availability: "reported" | "unavailable";
+  unavailableReason?: "provider_usage_missing" | "request_failed_before_usage";
+  providerId?: string;
+  model?: string;
+  /**
+   * Stable provider/model/capability-selection dimension used by compaction.
+   * Omitted when the response proves the first request executed on a different
+   * effective provider/model than the sealed dimension.
+   */
+  compactionDimensionHash?: string;
+}
+
 export interface ChatTurnCompletionRecord {
   finishReason?: string;
   status: ChatTurnCompletionStatus;
@@ -943,6 +985,7 @@ export interface ChatTurnCompletionRecord {
   usage?: ChatStreamUsageRecord;
   latencyMs?: number;
   providerCallCount?: number;
+  firstProviderRequestUsage?: ChatTurnFirstProviderRequestUsageRecord;
   /**
    * Audit marker set when a recoverable failure was cleared at turn
    * finalization because the assistant content was judged substantive.
@@ -1250,8 +1293,127 @@ export interface ChatConversationSummaryRecord {
   endTurnId: string;
   turnIds: string[];
   sourceHash: string;
+  /** Stable identity for an exact ordered turn-id/source-hash summary window. */
+  windowKey?: string;
   tokenEstimate: number;
   summary: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatCompactionStateRecord {
+  stateKey: string;
+  sessionId: string;
+  dimensionHash: string;
+  providerId?: string;
+  model?: string;
+  profileFingerprint?: string;
+  boundaryTurnIds: string[];
+  boundarySourceHash: string;
+  baselineInputTokens: number;
+  lastObservedInputTokens: number;
+  observedTurnCount: number;
+  armed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ChatCompactionBreakerStatus = "closed" | "awaiting_evidence" | "tripped" | "blocked_corrupt";
+
+export type ChatCompactionAttemptDisposition = "structured" | "fallback" | "no_progress";
+
+export type ChatCompactionAttemptOutcome = "healthy" | "ineffective" | "fallback" | "no_progress" | "unverified";
+
+export type ChatCompactionBreakerActionKind = "force" | "repair";
+
+export type ChatCompactionBreakerActionStatus = "pending" | "consumed" | "expired" | "rejected";
+
+export interface ChatCompactionBreakerActionRecord {
+  actionId: string;
+  sessionId: string;
+  dimensionHash: string;
+  actionKind: ChatCompactionBreakerActionKind;
+  expectedBreakerRevision: number;
+  actorHash: string;
+  requestEvidenceHash: string;
+  policyDecisionHash: string;
+  auditEvidenceHash: string;
+  approvalId?: string;
+  reason: string;
+  status: ChatCompactionBreakerActionStatus;
+  rejectionReason?: string;
+  createdAt: string;
+  expiresAt: string;
+  consumedAt?: string;
+  resultingAttemptId?: string;
+  resultingBreakerRevision?: number;
+  quarantinedStateKey?: string;
+  updatedAt: string;
+}
+
+export interface ChatCompactionBreakerActionCreateRequest {
+  dimensionHash: string;
+  actionKind: ChatCompactionBreakerActionKind;
+  expectedBreakerRevision: number;
+  reason: string;
+  /** Short-lived authorization window. The Gateway applies a stricter maximum. */
+  expiresInSeconds?: number;
+  approvalId?: string;
+}
+
+export interface ChatCompactionBreakerActionCreateResponse {
+  action: ChatCompactionBreakerActionRecord;
+}
+
+export interface ChatCompactionBreakerApprovalCreateRequest {
+  dimensionHash: string;
+  actionKind: ChatCompactionBreakerActionKind;
+  expectedBreakerRevision: number;
+  reason: string;
+  /** Short-lived approval window. The Gateway applies a strict maximum. */
+  expiresInSeconds?: number;
+}
+
+export interface ChatCompactionBreakerApprovalCreateResponse {
+  approval: import("./approvals.js").ApprovalRequest;
+  approvalBindingHash: string;
+}
+
+export interface ChatCompactionBreakerRepairResponse {
+  action: ChatCompactionBreakerActionRecord;
+  breaker: ChatCompactionBreakerRecord;
+}
+
+/**
+ * Durable, per-provider/model/capability-dimension anti-thrashing truth.
+ *
+ * Boundary state remains branch-specific. This aggregate deliberately does
+ * not: a restart or fork must not erase two proven ineffective/fallback
+ * attempts for the same logical session and sealed execution dimension.
+ */
+export interface ChatCompactionBreakerRecord {
+  sessionId: string;
+  dimensionHash: string;
+  providerId?: string;
+  model?: string;
+  profileFingerprint?: string;
+  status: ChatCompactionBreakerStatus;
+  fallbackStreak: number;
+  ineffectiveStreak: number;
+  pendingAttemptId?: string;
+  pendingStateKey?: string;
+  pendingBranchHeadTurnId?: string;
+  pendingObservedTurnCount?: number;
+  pendingDisposition?: ChatCompactionAttemptDisposition;
+  pendingStartedAt?: string;
+  lastAttemptId?: string;
+  lastEvidenceTurnId?: string;
+  lastEvidenceInputTokens?: number;
+  lastOutcome: ChatCompactionAttemptOutcome;
+  revision: number;
+  lastRepairedAt?: string;
+  lastRepairedActorHash?: string;
+  lastRepairReason?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1292,6 +1454,8 @@ export interface ChatTurnTraceRecord {
   startedAt: string;
   finishedAt?: string;
   capabilitySnapshotId?: string;
+  capabilityProfileId?: string;
+  capabilityProfileHash?: string;
   codeModeRunId?: string;
   pendingApprovalSummary?: ChatStreamApprovalRecord;
   pendingUserInput?: ChatUserInputPromptRecord;
@@ -1300,6 +1464,7 @@ export interface ChatTurnTraceRecord {
   routing: {
     executionProfile?: ChatTurnExecutionProfile;
     promptContextBudget?: ChatPromptContextBudgetReceipt;
+    routedContext?: import("./routed-context.js").ChatRoutedContextBindingReceipt;
     usedVisionFallback?: boolean;
     effectiveProviderId?: string;
     effectiveModel?: string;
@@ -1632,6 +1797,8 @@ export interface ChatDelegateAcceptRequest {
 export interface ChatSendMessageRequest {
   content: string;
   parts?: ChatInputPart[];
+  /** Structured Gateway-resolved refs. Raw file paths, URLs, git refs, and shell expressions are not accepted. */
+  contextRefs?: import("./routed-context.js").ChatRoutedContextRef[];
   mobileContext?: MobileContextEnvelope[];
   providerId?: string;
   model?: string;
@@ -1651,6 +1818,11 @@ export interface ChatSendMessageRequest {
   thinkingLevel?: ChatThinkingLevel;
   speedMode?: ChatSpeedMode;
   subagentPolicy?: ChatSubagentPolicy;
+  /**
+   * Runs this turn through the governed, read-only Assembly model council.
+   * Clients cannot name participants or widen the frozen capability profile.
+   */
+  modelCouncil?: ChatModelCouncilRequest;
   normalizationProfile?: ChatNormalizationProfile;
   commandText?: string;
   prefsOverride?: ChatSessionPrefsPatch;
@@ -1686,14 +1858,26 @@ export type RoutingPreflightRuntimeClass = "local" | "cloud" | "unknown";
 export interface RoutingPreflightRequest {
   action: RoutingPreflightAction;
   turnId?: string;
+  /** Current draft content used to resolve the exact capability upper bound. */
+  content?: string;
   providerId?: string;
   model?: string;
   mode?: ChatMode;
   webMode?: ChatWebMode;
+  memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
   speedMode?: ChatSpeedMode;
   subagentPolicy?: ChatSubagentPolicy;
   prefsOverride?: ChatSessionPrefsPatch;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
+  fullWebAccess?: boolean;
+  /** Server-stamped actor context; client schemas must not accept these fields. */
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
 }
 
 export interface RoutingDecisionSnapshot {
@@ -1713,6 +1897,10 @@ export interface RoutingDecisionSnapshot {
   runtimeClass: RoutingPreflightRuntimeClass;
   blockedReason?: string;
   degradedReason?: string;
+  capabilityFingerprint?: string;
+  capabilityContentHash?: string;
+  capabilityProfileSchemaVersion?: typeof import("./chat-capability-profile.js").CHAT_TURN_CAPABILITY_PROFILE_VERSION;
+  capabilityCompactionDimensionHash?: string;
   fingerprint: string;
 }
 
@@ -1729,6 +1917,7 @@ export interface RoutingPreflightResult {
   runtimeClass: RoutingPreflightRuntimeClass;
   blockedReason?: string;
   degradedReason?: string;
+  capabilityProfile?: import("./chat-capability-profile.js").ChatTurnCapabilityProfilePreview;
   decision: RoutingDecisionSnapshot;
 }
 
@@ -1906,6 +2095,8 @@ export interface ChatStreamUsageChunk extends ChatStreamChunkBase {
   turnId: string;
   messageId?: string;
   usage: ChatStreamUsageRecord;
+  /** Canonical provider-attempt references accumulated for this turn. */
+  modelUsageEventIds?: string[];
 }
 
 export interface ChatStreamMessageDoneChunk extends ChatStreamChunkBase {
@@ -1923,6 +2114,22 @@ export interface ChatStreamToolStartChunk extends ChatStreamChunkBase {
   type: "tool_start";
   turnId: string;
   toolRun: ChatToolRunRecord;
+}
+
+/**
+ * Retained liveness evidence emitted while a started tool call is still
+ * awaiting settlement. This proves the Gateway wait loop is alive; it does
+ * not claim that the tool made progress or reset a provider-stream timeout.
+ */
+export interface ChatStreamToolActivityChunk extends ChatStreamChunkBase {
+  type: "tool_activity";
+  turnId: string;
+  toolRunId: string;
+  toolName: string;
+  startedAt: string;
+  activityAt: string;
+  activitySequence: number;
+  elapsedMs: number;
 }
 
 export interface ChatStreamToolResultChunk extends ChatStreamChunkBase {
@@ -1993,6 +2200,7 @@ export type ChatStreamChunk =
   | ChatStreamUsageChunk
   | ChatStreamMessageDoneChunk
   | ChatStreamToolStartChunk
+  | ChatStreamToolActivityChunk
   | ChatStreamToolResultChunk
   | ChatStreamApprovalRequiredChunk
   | ChatStreamUserInputRequiredChunk
@@ -2021,10 +2229,12 @@ export interface ChatSteerResponse {
 export interface ChatGoalRequest {
   goal: string;
   turnBudget?: number;
+  expectedRevision?: number;
 }
 
 export interface ChatGoalStatusResponse {
   sessionId: string;
+  revision: number;
   goal: string | null;
   turnBudget: number | null;
   turnsUsed: number;

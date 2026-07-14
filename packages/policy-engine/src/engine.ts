@@ -47,7 +47,13 @@ import {
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { classifyArgumentRisk } from "./sandbox/argument-risk-gate.js";
 import { HttpMutationOutcomeUnknownError } from "./sandbox/http-request-policy.js";
-import { executeTool, resolveFixedOutboundHostsForTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
+import {
+  executeTool,
+  resolveFixedOutboundHostsForTool,
+  ToolBeforeProcessSpawnError,
+  type ToolExecutorRuntimeHooks,
+  type ToolProcessSpawnBoundary,
+} from "./tool-executor.js";
 import {
   buildInternalToolCall,
   buildInternalToolResult,
@@ -215,11 +221,22 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
  * wire API.
  */
 export interface ToolPolicyInvokeOptions {
-  beforeExecute?: () => void;
+  beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void>;
   externalSideEffect?: {
     markStarted(): void;
     markNotRequired(): void;
   };
+}
+
+/** Explicit fail-closed result from a process-local execution precondition. */
+export class ToolExecutionPreconditionError extends Error {
+  public constructor(
+    message: string,
+    public readonly result?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ToolExecutionPreconditionError";
+  }
 }
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
@@ -630,7 +647,7 @@ export class ToolPolicyEngine {
     options?: {
       deferResolution?: boolean;
       externalRuntimeReplay?: boolean;
-      beforeExecute?: () => void;
+      beforeExecute?: ToolPolicyInvokeOptions["beforeExecute"];
       externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
     },
   ): Promise<ToolInvokeResult | undefined> {
@@ -1636,11 +1653,13 @@ export class ToolPolicyEngine {
         }),
       };
     }
-    // This is the last process-local authority check before the concrete tool
-    // executor starts. Keep it outside the execution catch so lease loss
-    // interrupts the stale worker instead of being normalized into an ordinary
-    // tool failure that could let the turn continue.
-    options.beforeExecute?.();
+    const hasDeepProcessBoundary = isDeepProcessBoundaryTool(executionRequest.toolName);
+    if (!hasDeepProcessBoundary) {
+      // Non-process tools retain the historical boundary and propagation
+      // semantics. Process tools invoke the same callback inside the executor,
+      // after cwd/command resolution and immediately before spawn.
+      await options.beforeExecute?.();
+    }
     let externalSideEffectStarted = false;
     const markExternalSideEffectStarted = () => {
       if (externalSideEffectStarted) {
@@ -1649,7 +1668,7 @@ export class ToolPolicyEngine {
       options.externalSideEffect?.markStarted();
       externalSideEffectStarted = true;
     };
-    const executorRuntimeHooks = options.externalSideEffect
+    let executorRuntimeHooks: ToolExecutorRuntimeHooks = options.externalSideEffect
       ? {
           ...this.runtimeHooks,
           beforeExternalSideEffect: () => {
@@ -1658,6 +1677,16 @@ export class ToolPolicyEngine {
           },
         }
       : this.runtimeHooks;
+    if (hasDeepProcessBoundary && options.beforeExecute) {
+      const baseRuntimeHooks = executorRuntimeHooks;
+      executorRuntimeHooks = {
+        ...baseRuntimeHooks,
+        beforeProcessSpawn: async (boundary) => {
+          await baseRuntimeHooks.beforeProcessSpawn?.(boundary);
+          await options.beforeExecute?.(boundary);
+        },
+      };
+    }
     if (
       options.externalSideEffect &&
       isMutationTool(this.registry.get(executionRequest.toolName)) &&
@@ -1703,9 +1732,22 @@ export class ToolPolicyEngine {
           approvalMode: evaluation?.approvalMode,
         }),
       };
-    } catch (error) {
+    } catch (caughtError) {
       if (options.externalSideEffect && !externalSideEffectStarted) {
         options.externalSideEffect.markNotRequired();
+      }
+      let error: unknown = caughtError;
+      if (error instanceof ToolBeforeProcessSpawnError) {
+        if (error.cancelled) {
+          error = new ToolExecutionPreconditionError("tool invocation was cancelled before process spawn");
+        } else if (error.boundaryCause instanceof ToolExecutionPreconditionError) {
+          error = error.boundaryCause;
+        } else {
+          // Preserve the old beforeExecute contract: lease/fence failures
+          // interrupt the caller and are never normalized into an ordinary tool
+          // result merely because this tool has a deeper spawn boundary.
+          throw error.boundaryCause;
+        }
       }
       if (error instanceof HttpMutationOutcomeUnknownError) {
         const reason = `execution outcome unknown: ${error.message}`;
@@ -1748,7 +1790,10 @@ export class ToolPolicyEngine {
           }),
         };
       }
-      const reason = `execution error: ${(error as Error).message}`;
+      const preconditionError = error instanceof ToolExecutionPreconditionError ? error : undefined;
+      const reason = preconditionError
+        ? `blocked: ${preconditionError.message}`
+        : `execution error: ${(error as Error).message}`;
       await this.recordBlocked(auditEventId, request, reason, {
         error: (error as Error).message,
         matchedGrantId,
@@ -1762,11 +1807,12 @@ export class ToolPolicyEngine {
         outcome: "blocked",
         policyReason: reason,
         auditEventId,
+        ...(preconditionError?.result ? { result: preconditionError.result } : {}),
         internalCall,
         internalResult: buildInternalToolResult({
           toolName: request.toolName,
           outcome: "blocked",
-          errorKind: "execution_error",
+          errorKind: preconditionError ? "policy_block" : "execution_error",
           completedAt,
         }),
         audit: buildToolAuditRecord({
@@ -1782,7 +1828,7 @@ export class ToolPolicyEngine {
           permissionProfileId: evaluation?.permissionProfileId,
           localOperatorOverrideId: evaluation?.localOperatorOverrideId,
           approvalMode: evaluation?.approvalMode,
-          errorKind: "execution_error",
+          errorKind: preconditionError ? "policy_block" : "execution_error",
         }),
       };
     }
@@ -2025,6 +2071,16 @@ export class ToolPolicyEngine {
       targets: publicTargets,
     });
   }
+}
+
+function isDeepProcessBoundaryTool(toolName: string): boolean {
+  return (
+    toolName === "shell.exec" ||
+    toolName === "shell.exec_background" ||
+    toolName === "tests.run" ||
+    toolName === "lint.run" ||
+    toolName === "build.run"
+  );
 }
 
 type ScopeCandidate = {

@@ -49,13 +49,15 @@ describe("ChatSessionProjectRepository", () => {
     const first = repo.assign("session-a", projectId, "2026-03-26T00:00:01.000Z");
     assert.deepEqual(first, {
       sessionId: "session-a",
+      revision: 2,
       projectId,
       assignedAt: "2026-03-26T00:00:01.000Z",
     });
     assert.deepEqual(repo.get("session-a"), first);
 
     const replaced = repo.assign("session-a", projectId, "2026-03-26T00:00:02.000Z");
-    assert.equal(replaced.assignedAt, "2026-03-26T00:00:02.000Z");
+    assert.equal(replaced.assignedAt, "2026-03-26T00:00:01.000Z");
+    assert.equal(replaced.revision, 2);
     assert.deepEqual(repo.listBySessionIds([]), new Map());
     assert.deepEqual(repo.listBySessionIds(["session-a", "missing"]).get("session-a"), replaced);
 

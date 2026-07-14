@@ -1,11 +1,12 @@
 /* eslint-disable max-lines */
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { backup, DatabaseSync } from "node:sqlite";
 import { clampInt } from "@goatcitadel/contracts";
 import {
   assertSynchronousTransactionResult,
   type DatabaseClient,
+  type DatabaseOnlineBackupOptions,
   type DbStatement,
   type DbTransactionMode,
 } from "./db.js";
@@ -46,6 +47,7 @@ import {
   createRuntimeEvidenceEnvelopeSchema,
 } from "./sqlite/runtime-observability-schema.js";
 import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schema.js";
+import { createChannelCronDurabilitySchema } from "./sqlite/channel-cron-durability-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -122,6 +124,44 @@ class SqliteDatabaseClient implements DatabaseClient {
     }
   }
 
+  public async backupTo(destinationPath: string, options: DatabaseOnlineBackupOptions = {}): Promise<void> {
+    const normalizedDestination = destinationPath.trim();
+    if (!normalizedDestination) {
+      throw new TypeError("SQLite backup destination path is required");
+    }
+    const resolvedDestination = path.resolve(normalizedDestination);
+    const sourceLocation = this.db.location("main");
+    if (sourceLocation && pathsReferToSameFile(path.resolve(sourceLocation), resolvedDestination)) {
+      throw new Error("SQLite backup destination must differ from the live database path");
+    }
+    if (fs.existsSync(resolvedDestination)) {
+      throw new Error(`SQLite backup destination already exists: ${resolvedDestination}`);
+    }
+    const pagesPerBatch = options.pagesPerBatch ?? 100;
+    if (!Number.isSafeInteger(pagesPerBatch) || pagesPerBatch <= 0) {
+      throw new TypeError("SQLite backup pagesPerBatch must be a positive safe integer");
+    }
+
+    ensureParentDir(resolvedDestination);
+    try {
+      await backup(this.db, resolvedDestination, {
+        rate: pagesPerBatch,
+        progress: options.onProgress,
+      });
+      makeSqliteSnapshotSelfContained(resolvedDestination);
+    } catch (error) {
+      for (const candidate of [resolvedDestination, `${resolvedDestination}-wal`, `${resolvedDestination}-shm`]) {
+        try {
+          fs.rmSync(candidate, { force: true });
+        } catch {
+          // Preserve the original backup failure; best-effort cleanup is retried
+          // by the caller's private staging-directory cleanup.
+        }
+      }
+      throw error;
+    }
+  }
+
   public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
     if (this.transactionDepth > 0) {
       const savepointName = `gc_nested_${(this.savepointCounter += 1)}`;
@@ -155,6 +195,22 @@ class SqliteDatabaseClient implements DatabaseClient {
     } finally {
       this.transactionDepth = 0;
     }
+  }
+}
+
+function pathsReferToSameFile(left: string, right: string): boolean {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function makeSqliteSnapshotSelfContained(snapshotPath: string): void {
+  const snapshot = new DatabaseSync(snapshotPath);
+  try {
+    const result = snapshot.prepare("PRAGMA journal_mode = DELETE").get() as { journal_mode?: unknown } | undefined;
+    if (String(result?.journal_mode ?? "").toLowerCase() !== "delete") {
+      throw new Error("SQLite online snapshot could not be finalized as a self-contained database");
+    }
+  } finally {
+    snapshot.close();
   }
 }
 
@@ -1746,6 +1802,2761 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
             "details_json",
             "outcome",
           ]);
+        },
+      },
+      {
+        version: 144,
+        name: "orchestration_worktree_generation_leases",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_lease_owner_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_lease_generation", "INTEGER");
+          addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_lease_expires_at", "TEXT");
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS orchestration_worktree_leases (
+              worktree_path TEXT PRIMARY KEY,
+              run_id TEXT NOT NULL,
+              owner_id TEXT NOT NULL,
+              generation INTEGER NOT NULL DEFAULT 1,
+              lease_expires_at TEXT NOT NULL,
+              released_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_orchestration_worktree_leases_run
+              ON orchestration_worktree_leases(run_id, generation DESC);
+            CREATE INDEX IF NOT EXISTS idx_orchestration_worktree_leases_expiry
+              ON orchestration_worktree_leases(released_at, lease_expires_at);
+          `);
+        },
+      },
+      {
+        version: 145,
+        name: "operator_resource_revision_cas_foundation",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "workspaces", "revision", "INTEGER NOT NULL DEFAULT 1");
+          addColumnIfMissingIfTableExists(db, "chat_projects", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 146,
+        name: "chat_session_aggregate_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_session_meta", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 147,
+        name: "cron_job_spec_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "cron_jobs", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 148,
+        name: "task_resource_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "tasks", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 149,
+        name: "channel_acceptance_and_cron_run_durability",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "cron_jobs", "execution_generation", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissingIfTableExists(db, "cron_jobs", "active_run_id", "TEXT");
+          createChannelCronDurabilitySchema(db);
+          if (tableExists(db, "cron_jobs")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_cron_jobs_active_run
+                ON cron_jobs(active_run_id, execution_generation);
+            `);
+          }
+        },
+      },
+      {
+        version: 150,
+        name: "inbound_channel_admission_settlement",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "bot_loop_decision", "TEXT");
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "bot_loop_reason", "TEXT");
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "command_operation_key", "TEXT");
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "command_result_text", "TEXT");
+        },
+      },
+      {
+        version: 151,
+        name: "code_mode_verification_ledger",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "trusted_code_write_verification_json", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "code_mode_runs",
+            "verification_status",
+            "TEXT NOT NULL DEFAULT 'not_applicable'",
+          );
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_evidence_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_subject_hash", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_reason", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_updated_at", "TEXT");
+          if (tableExists(db, "code_mode_runs")) {
+            db.exec(`
+              UPDATE code_mode_runs
+              SET verification_status = CASE
+                    WHEN status = 'completed' THEN 'completed_unverified'
+                    ELSE 'not_applicable'
+                  END,
+                  verification_updated_at = COALESCE(finished_at, started_at, created_at)
+              WHERE verification_evidence_id IS NULL;
+            `);
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS code_mode_verification_evidence (
+              sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+              evidence_id TEXT NOT NULL UNIQUE,
+              run_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              subject_hash TEXT NOT NULL,
+              command_name TEXT NOT NULL,
+              command_label TEXT NOT NULL,
+              scope TEXT NOT NULL,
+              evidence_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(run_id) REFERENCES code_mode_runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_code_mode_verification_evidence_run
+              ON code_mode_verification_evidence(run_id, sequence DESC);
+            CREATE TRIGGER IF NOT EXISTS reject_code_mode_verification_evidence_update
+              BEFORE UPDATE ON code_mode_verification_evidence
+              BEGIN
+                SELECT RAISE(ABORT, 'code_mode_verification_evidence is append-only');
+              END;
+            CREATE TRIGGER IF NOT EXISTS reject_code_mode_verification_evidence_delete
+              BEFORE DELETE ON code_mode_verification_evidence
+              BEGIN
+                SELECT RAISE(ABORT, 'code_mode_verification_evidence is append-only');
+              END;
+          `);
+        },
+      },
+      {
+        version: 152,
+        name: "durable_child_watchers",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "durable_run_events", "sequence", "INTEGER");
+          if (tableExists(db, "durable_run_events") && tableExists(db, "durable_runs")) {
+            db.exec(`
+            WITH ranked AS (
+              SELECT
+                event_id,
+                ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created_at ASC, event_id ASC) AS run_sequence
+              FROM durable_run_events
+            )
+            UPDATE durable_run_events
+            SET sequence = (
+              SELECT ranked.run_sequence
+              FROM ranked
+              WHERE ranked.event_id = durable_run_events.event_id
+            )
+            WHERE sequence IS NULL;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_run_events_run_sequence
+              ON durable_run_events(run_id, sequence);
+            CREATE INDEX IF NOT EXISTS idx_durable_run_events_run_sequence_scan
+              ON durable_run_events(run_id, sequence ASC);
+            CREATE TRIGGER IF NOT EXISTS reject_durable_run_event_without_sequence
+              BEFORE INSERT ON durable_run_events
+              WHEN NEW.sequence IS NULL OR NEW.sequence < 1
+              BEGIN
+                SELECT RAISE(ABORT, 'durable_run_events.sequence must be a positive per-run sequence');
+              END;
+            CREATE TRIGGER IF NOT EXISTS reject_durable_run_event_sequence_clear
+              BEFORE UPDATE OF sequence ON durable_run_events
+              WHEN NEW.sequence IS NULL OR NEW.sequence < 1
+              BEGIN
+                SELECT RAISE(ABORT, 'durable_run_events.sequence must be a positive per-run sequence');
+              END;
+
+            CREATE TABLE IF NOT EXISTS durable_run_event_sequences (
+              run_id TEXT PRIMARY KEY,
+              last_sequence INTEGER NOT NULL,
+              FOREIGN KEY(run_id) REFERENCES durable_runs(run_id) ON DELETE CASCADE
+            );
+
+            INSERT INTO durable_run_event_sequences (run_id, last_sequence)
+            SELECT run_id, MAX(sequence)
+            FROM durable_run_events
+            GROUP BY run_id
+            ON CONFLICT(run_id) DO UPDATE SET
+              last_sequence = MAX(durable_run_event_sequences.last_sequence, excluded.last_sequence);
+
+            CREATE TABLE IF NOT EXISTS durable_child_watcher_scan_state (
+              scan_key TEXT PRIMARY KEY,
+              last_watcher_id TEXT NOT NULL DEFAULT '',
+              updated_at TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO durable_child_watcher_scan_state (
+              scan_key, last_watcher_id, updated_at
+            ) VALUES ('global', '', '1970-01-01T00:00:00.000Z');
+
+            CREATE TABLE IF NOT EXISTS durable_child_watchers (
+              watcher_id TEXT PRIMARY KEY,
+              parent_run_id TEXT NOT NULL,
+              child_run_id TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'attached'
+                CHECK(state IN ('attached', 'detached', 'closed')),
+              next_sequence INTEGER NOT NULL DEFAULT 1,
+              last_consumed_sequence INTEGER NOT NULL DEFAULT 0,
+              projected_notice_count INTEGER NOT NULL DEFAULT 0,
+              source TEXT,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              detached_at TEXT,
+              reattached_at TEXT,
+              closed_at TEXT,
+              FOREIGN KEY(parent_run_id) REFERENCES durable_runs(run_id) ON DELETE CASCADE,
+              FOREIGN KEY(child_run_id) REFERENCES durable_runs(run_id) ON DELETE CASCADE,
+              UNIQUE(parent_run_id, child_run_id),
+              CHECK(parent_run_id <> child_run_id),
+              CHECK(next_sequence = last_consumed_sequence + 1)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_durable_child_watchers_parent
+              ON durable_child_watchers(parent_run_id, state, created_at, watcher_id);
+            CREATE INDEX IF NOT EXISTS idx_durable_child_watchers_child_attached
+              ON durable_child_watchers(child_run_id, state, watcher_id);
+            `);
+          }
+        },
+      },
+      {
+        version: 153,
+        name: "code_mode_interruption_recovery",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_generation", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissingIfTableExists(
+            db,
+            "code_mode_runs",
+            "execution_phase",
+            "TEXT NOT NULL DEFAULT 'legacy_unknown'",
+          );
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "recovery_disposition", "TEXT NOT NULL DEFAULT 'none'");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_boundary_crossed_at", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "interrupted_at", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "interruption_reason", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "final_transcript_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "final_transcript_enqueued_at", "TEXT");
+          if (tableExists(db, "code_mode_runs")) {
+            db.exec(`
+              UPDATE code_mode_runs
+              SET execution_phase = CASE
+                    WHEN status IN ('completed', 'failed', 'rejected', 'expired') THEN 'terminal'
+                    WHEN status IN ('approval_pending', 'queued') THEN 'not_started'
+                    ELSE 'legacy_unknown'
+                  END,
+                  recovery_disposition = CASE
+                    WHEN status IN ('completed', 'failed', 'rejected', 'expired') THEN 'terminal'
+                    WHEN status = 'running' THEN 'manual_reconciliation'
+                    ELSE 'none'
+                  END,
+                  final_transcript_event_id = CASE
+                    WHEN session_id IS NOT NULL AND TRIM(session_id) <> ''
+                    THEN 'code-mode-final:' || run_id
+                    ELSE final_transcript_event_id
+                  END;
+
+              CREATE INDEX IF NOT EXISTS idx_code_mode_runs_pending_final_transcript
+                ON code_mode_runs(finished_at, run_id)
+                WHERE session_id IS NOT NULL
+                  AND status IN ('completed', 'failed')
+                  AND final_transcript_enqueued_at IS NULL;
+            `);
+          }
+        },
+      },
+      {
+        version: 154,
+        name: "chat_turn_capability_profiles",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "capability_snapshot_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "capability_profile_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "capability_profile_hash", "TEXT");
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_turn_capability_profiles (
+              profile_id TEXT PRIMARY KEY,
+              turn_id TEXT NOT NULL UNIQUE,
+              session_id TEXT NOT NULL,
+              workspace_id TEXT NOT NULL,
+              durable_run_id TEXT UNIQUE,
+              operator_id TEXT,
+              auth_actor_id TEXT,
+              schema_version TEXT NOT NULL,
+              profile_hash TEXT NOT NULL,
+              catalog_snapshot_id TEXT NOT NULL,
+              inspectable_hash TEXT NOT NULL,
+              callable_hash TEXT NOT NULL,
+              selection_hash TEXT NOT NULL,
+              governance_hash TEXT NOT NULL,
+              preflight_fingerprint TEXT NOT NULL,
+              profile_json TEXT NOT NULL CHECK(length(profile_json) <= 524288),
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_turn_capability_profiles_session_created
+              ON chat_turn_capability_profiles(session_id, created_at, profile_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_turn_capability_profiles_workspace_created
+              ON chat_turn_capability_profiles(workspace_id, created_at, profile_id);
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_turn_capability_profiles_no_update
+            BEFORE UPDATE ON chat_turn_capability_profiles
+            BEGIN
+              SELECT RAISE(ABORT, 'chat turn capability profiles are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_turn_capability_profiles_no_delete
+            BEFORE DELETE ON chat_turn_capability_profiles
+            BEGIN
+              SELECT RAISE(ABORT, 'chat turn capability profiles are immutable');
+            END;
+          `);
+        },
+      },
+      {
+        version: 155,
+        name: "chat_compaction_hysteresis_state",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_conversation_summaries", "window_key", "TEXT");
+          if (tableExists(db, "chat_conversation_summaries")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_conversation_summaries_window_key
+                ON chat_conversation_summaries(window_key)
+                WHERE window_key IS NOT NULL;
+            `);
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_compaction_states (
+              state_key TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              dimension_hash TEXT NOT NULL,
+              provider_id TEXT,
+              model TEXT,
+              profile_fingerprint TEXT,
+              boundary_turn_ids_json TEXT NOT NULL CHECK(length(boundary_turn_ids_json) <= 131072),
+              boundary_source_hash TEXT NOT NULL,
+              baseline_input_tokens INTEGER NOT NULL,
+              last_observed_input_tokens INTEGER NOT NULL,
+              observed_turn_count INTEGER NOT NULL,
+              armed INTEGER NOT NULL CHECK(armed IN (0, 1)),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_states_session_dimension
+              ON chat_compaction_states(session_id, dimension_hash, observed_turn_count DESC, updated_at DESC);
+          `);
+        },
+      },
+      {
+        version: 156,
+        name: "durable_child_watcher_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(
+            db,
+            "durable_child_watchers",
+            "revision",
+            "INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1)",
+          );
+        },
+      },
+      {
+        version: 157,
+        name: "chat_tool_effect_truth",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_potential", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_disposition", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_outcome_kind", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_evidence_json", "TEXT");
+          // Existing rows intentionally remain NULL. The repository derives a
+          // conservative public projection from trusted legacy status instead
+          // of treating a migration-authored marker as runtime evidence.
+        },
+      },
+      {
+        version: 158,
+        name: "model_usage_events",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS model_usage_events (
+              event_id TEXT PRIMARY KEY,
+              idempotency_key TEXT NOT NULL UNIQUE,
+              source TEXT NOT NULL CHECK(source IN ('llm_service', 'embedding_runtime', 'manual_test')),
+              call_kind TEXT NOT NULL,
+              requested_provider_id TEXT,
+              requested_model_id TEXT,
+              requested_reasoning_level TEXT,
+              dispatched_reasoning_effort TEXT,
+              reasoning_disposition TEXT
+                CHECK(reasoning_disposition IS NULL OR reasoning_disposition IN (
+                  'honored', 'downgraded', 'unsupported_blocked', 'provider_default'
+                )),
+              reasoning_reason_code TEXT,
+              dispatched_model_id TEXT,
+              effective_provider_id TEXT,
+              effective_model_id TEXT,
+              effective_api_style TEXT,
+              route_decision_id TEXT,
+              context_snapshot_id TEXT,
+              context_intent_hash TEXT,
+              context_entry_ref_id TEXT,
+              context_resolution_hash TEXT,
+              operation_id TEXT NOT NULL,
+              parent_operation_id TEXT,
+              dispatch_generation TEXT NOT NULL,
+              attempt_index INTEGER NOT NULL DEFAULT 0 CHECK(attempt_index >= 0),
+              transport_attempt_index INTEGER NOT NULL DEFAULT 0 CHECK(transport_attempt_index >= 0),
+              transport_status TEXT NOT NULL DEFAULT 'intent'
+                CHECK(transport_status IN ('intent', 'accepted', 'dispatch_unknown')),
+              dispatch_owner_id TEXT NOT NULL,
+              dispatch_lease_expires_at TEXT NOT NULL,
+              dispatch_uncertain_at TEXT,
+              dispatch_uncertainty_reason TEXT,
+              dispatch_reconciled_at TEXT,
+              dispatch_reconciled_by TEXT,
+              dispatch_reconciliation TEXT
+                CHECK(dispatch_reconciliation IS NULL OR dispatch_reconciliation IN (
+                  'confirmed_not_dispatched',
+                  'confirmed_dispatched_usage_unknown',
+                  'superseded_by_new_generation'
+                )),
+              dispatch_reconciliation_evidence TEXT,
+              fallback_index INTEGER NOT NULL DEFAULT 0 CHECK(fallback_index >= 0),
+              repair_index INTEGER NOT NULL DEFAULT 0 CHECK(repair_index >= 0),
+              workspace_id TEXT,
+              session_id TEXT,
+              turn_id TEXT,
+              durable_run_id TEXT,
+              task_id TEXT,
+              agent_id TEXT,
+              assembly_run_id TEXT,
+              assembly_round_index INTEGER CHECK(assembly_round_index IS NULL OR assembly_round_index >= 0),
+              assembly_stage TEXT,
+              worker_id TEXT,
+              utility_kind TEXT,
+              credential_type TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(credential_type IN ('api_key', 'oauth', 'service_account', 'adc', 'unknown')),
+              usage_pool TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(usage_pool IN ('standard', 'subscription', 'local', 'unknown')),
+              credential_source TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(credential_source IN ('inline', 'env', 'keychain', 'oauth', 'adc', 'none', 'unknown')),
+              credential_config_fingerprint TEXT,
+              pricing_source TEXT NOT NULL DEFAULT 'not_available'
+                CHECK(pricing_source IN ('provider_reported', 'gateway_estimate', 'not_available')),
+              cost_source TEXT NOT NULL DEFAULT 'not_available'
+                CHECK(cost_source IN ('provider_reported', 'gateway_estimate', 'not_available')),
+              pricing_catalog_version TEXT,
+              pricing_catalog_hash TEXT,
+              input_rate_usd_per_million REAL CHECK(input_rate_usd_per_million IS NULL OR input_rate_usd_per_million >= 0),
+              output_rate_usd_per_million REAL CHECK(output_rate_usd_per_million IS NULL OR output_rate_usd_per_million >= 0),
+              cached_input_rate_usd_per_million REAL CHECK(cached_input_rate_usd_per_million IS NULL OR cached_input_rate_usd_per_million >= 0),
+              input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+              output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
+              cached_input_tokens INTEGER CHECK(cached_input_tokens IS NULL OR cached_input_tokens >= 0),
+              cost_usd REAL CHECK(cost_usd IS NULL OR cost_usd >= 0),
+              availability TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(availability IN ('tracked', 'unknown')),
+              terminal_outcome TEXT NOT NULL DEFAULT 'in_flight'
+                CHECK(terminal_outcome IN (
+                  'in_flight', 'succeeded', 'failed_before_usage', 'failed_after_usage',
+                  'interrupted_after_dispatch', 'cancelled'
+                )),
+              error_code TEXT,
+              started_at TEXT NOT NULL,
+              finished_at TEXT,
+              duration_ms INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
+              compatibility_projected_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_workspace_started
+              ON model_usage_events(workspace_id, started_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_session_started
+              ON model_usage_events(session_id, started_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_turn_started
+              ON model_usage_events(turn_id, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_durable_started
+              ON model_usage_events(durable_run_id, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_task_started
+              ON model_usage_events(task_id, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_assembly_started
+              ON model_usage_events(assembly_run_id, assembly_round_index, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_operation_attempt
+              ON model_usage_events(operation_id, dispatch_generation, fallback_index, repair_index, attempt_index, transport_attempt_index);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_outcome_started
+              ON model_usage_events(transport_status, terminal_outcome, availability, started_at DESC);
+          `);
+
+          addColumnIfMissingIfTableExists(db, "cost_ledger", "canonical_usage_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "cost_ledger", "usage_known_mask", "TEXT");
+          if (tableExists(db, "cost_ledger")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_ledger_canonical_usage_event
+                ON cost_ledger(canonical_usage_event_id);
+            `);
+          }
+        },
+      },
+      {
+        version: 159,
+        name: "chat_routed_context_snapshots",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_routed_context_snapshots (
+              snapshot_id TEXT PRIMARY KEY CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'chat.routed-context-snapshot.v1'),
+              turn_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(turn_id)) BETWEEN 1 AND 256),
+              session_id TEXT NOT NULL CHECK(length(TRIM(session_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 80),
+              capability_profile_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(capability_profile_id)) BETWEEN 1 AND 256),
+              capability_profile_hash TEXT NOT NULL CHECK(
+                length(capability_profile_hash) = 64 AND capability_profile_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              source_request_hash TEXT NOT NULL CHECK(
+                length(source_request_hash) = 64 AND source_request_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              content_hash TEXT NOT NULL CHECK(
+                length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              snapshot_hash TEXT NOT NULL UNIQUE CHECK(
+                length(snapshot_hash) = 64 AND snapshot_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              effective_provider_id TEXT NOT NULL CHECK(length(TRIM(effective_provider_id)) BETWEEN 1 AND 128),
+              effective_model TEXT NOT NULL CHECK(length(TRIM(effective_model)) BETWEEN 1 AND 256),
+              context_window_tokens INTEGER NOT NULL CHECK(context_window_tokens > 0),
+              prompt_reserved_tokens INTEGER NOT NULL CHECK(prompt_reserved_tokens >= 0),
+              output_reserved_tokens INTEGER NOT NULL CHECK(output_reserved_tokens > 0),
+              hard_cap_tokens INTEGER NOT NULL CHECK(hard_cap_tokens > 0),
+              effective_budget_tokens INTEGER NOT NULL CHECK(
+                effective_budget_tokens >= 0 AND effective_budget_tokens <= hard_cap_tokens
+              ),
+              used_tokens INTEGER NOT NULL CHECK(used_tokens >= 0 AND used_tokens <= effective_budget_tokens),
+              source_count INTEGER NOT NULL CHECK(source_count BETWEEN 0 AND 16),
+              included_count INTEGER NOT NULL CHECK(included_count >= 0),
+              truncated_count INTEGER NOT NULL CHECK(truncated_count >= 0),
+              omitted_count INTEGER NOT NULL CHECK(omitted_count >= 0),
+              already_attached_count INTEGER NOT NULL CHECK(already_attached_count >= 0),
+              estimator_version TEXT NOT NULL CHECK(estimator_version = 'gc-approx-tokens.v1'),
+              budget_policy_version TEXT NOT NULL CHECK(budget_policy_version = 'chat.routed-context-budget.v1'),
+              snapshot_json TEXT NOT NULL CHECK(length(CAST(snapshot_json AS BLOB)) <= 1048576),
+              created_at TEXT NOT NULL,
+              CHECK(prompt_reserved_tokens + output_reserved_tokens <= context_window_tokens),
+              CHECK(used_tokens + prompt_reserved_tokens + output_reserved_tokens <= context_window_tokens),
+              CHECK(included_count + truncated_count + omitted_count + already_attached_count = source_count)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_routed_context_snapshots_session_created
+              ON chat_routed_context_snapshots(session_id, created_at, snapshot_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_routed_context_snapshots_workspace_created
+              ON chat_routed_context_snapshots(workspace_id, created_at, snapshot_id);
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_routed_context_snapshots_no_update
+            BEFORE UPDATE ON chat_routed_context_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'chat routed context snapshots are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_routed_context_snapshots_no_delete
+            BEFORE DELETE ON chat_routed_context_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'chat routed context snapshots are immutable');
+            END;
+          `);
+        },
+      },
+      {
+        version: 160,
+        name: "assembly_model_council_recovery",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "source_turn_id", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "assembly_runs",
+            "run_kind",
+            "TEXT NOT NULL DEFAULT 'assembly' CHECK(run_kind IN ('assembly', 'chat_model_council'))",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "assembly_runs",
+            "generation",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0)",
+          );
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "lease_owner_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "lease_expires_at", "TEXT");
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "council_resolution_json", "TEXT");
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "council_evidence_json", "TEXT");
+          if (tableExists(db, "assembly_runs")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_assembly_runs_council_source_turn
+                ON assembly_runs(run_kind, source_turn_id)
+                WHERE run_kind = 'chat_model_council' AND source_turn_id IS NOT NULL;
+              CREATE INDEX IF NOT EXISTS idx_assembly_runs_council_lease
+                ON assembly_runs(run_kind, status, lease_expires_at, updated_at DESC);
+            `);
+          }
+        },
+      },
+      {
+        version: 161,
+        name: "skill_governance_journey_foundation",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "workspace_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "source_fingerprint", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "upstream_snapshot_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "supersedes_version_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "created_by_actor_id", "TEXT");
+
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS skill_hub_version_claims (
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              canonical_source_key TEXT NOT NULL CHECK(length(TRIM(canonical_source_key)) BETWEEN 1 AND 1024),
+              version_kind TEXT NOT NULL CHECK(version_kind IN ('declared', 'resolved')),
+              version_value TEXT NOT NULL CHECK(length(TRIM(version_value)) BETWEEN 1 AND 512),
+              first_tree_sha256 TEXT NOT NULL CHECK(
+                length(first_tree_sha256) = 64 AND first_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              first_snapshot_id TEXT NOT NULL CHECK(length(TRIM(first_snapshot_id)) BETWEEN 1 AND 256),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (workspace_id, canonical_source_key, version_kind, version_value)
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_hub_audit_floors (
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              canonical_source_key TEXT NOT NULL CHECK(length(TRIM(canonical_source_key)) BETWEEN 1 AND 1024),
+              floor_json TEXT NOT NULL CHECK(
+                json_valid(floor_json) AND length(CAST(floor_json AS BLOB)) <= 16384
+              ),
+              floor_sha256 TEXT NOT NULL CHECK(
+                length(floor_sha256) = 64 AND floor_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              updated_by_snapshot_id TEXT NOT NULL CHECK(length(TRIM(updated_by_snapshot_id)) BETWEEN 1 AND 256),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (workspace_id, canonical_source_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_hub_snapshots (
+              snapshot_id TEXT PRIMARY KEY CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              operation TEXT NOT NULL CHECK(operation IN ('review', 'install', 'update_check', 'update_stage', 'rollback_check')),
+              source_provider TEXT NOT NULL CHECK(length(TRIM(source_provider)) BETWEEN 1 AND 128),
+              source_type TEXT NOT NULL CHECK(length(TRIM(source_type)) BETWEEN 1 AND 128),
+              source_ref TEXT NOT NULL CHECK(length(TRIM(source_ref)) BETWEEN 1 AND 2048),
+              canonical_source_key TEXT NOT NULL CHECK(length(TRIM(canonical_source_key)) BETWEEN 1 AND 1024),
+              declared_version TEXT CHECK(declared_version IS NULL OR length(TRIM(declared_version)) BETWEEN 1 AND 512),
+              resolved_version TEXT CHECK(resolved_version IS NULL OR length(TRIM(resolved_version)) BETWEEN 1 AND 512),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              provenance_json TEXT NOT NULL CHECK(length(CAST(provenance_json AS BLOB)) <= 16384),
+              audit_json TEXT NOT NULL CHECK(length(CAST(audit_json AS BLOB)) <= 16384),
+              audit_sha256 TEXT NOT NULL CHECK(
+                length(audit_sha256) = 64 AND audit_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              audit_floor_json TEXT NOT NULL CHECK(
+                json_valid(audit_floor_json) AND length(CAST(audit_floor_json AS BLOB)) <= 16384
+              ),
+              audit_floor_sha256 TEXT NOT NULL CHECK(
+                length(audit_floor_sha256) = 64 AND audit_floor_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              permission_envelope_json TEXT NOT NULL CHECK(length(CAST(permission_envelope_json AS BLOB)) <= 16384),
+              permission_envelope_sha256 TEXT NOT NULL CHECK(
+                length(permission_envelope_sha256) = 64 AND permission_envelope_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              permission_diff_json TEXT NOT NULL CHECK(length(CAST(permission_diff_json AS BLOB)) <= 16384),
+              compatibility_json TEXT NOT NULL CHECK(length(CAST(compatibility_json AS BLOB)) <= 16384),
+              risk_level TEXT NOT NULL CHECK(risk_level IN ('low', 'medium', 'high', 'unknown')),
+              trust_disposition TEXT NOT NULL CHECK(trust_disposition IN ('review_only', 'candidate', 'blocked', 'revoked')),
+              prior_snapshot_id TEXT CHECK(prior_snapshot_id IS NULL OR length(TRIM(prior_snapshot_id)) BETWEEN 1 AND 256),
+              blocker_codes_json TEXT NOT NULL CHECK(length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              created_at TEXT NOT NULL,
+              CHECK(declared_version IS NOT NULL OR resolved_version IS NOT NULL)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshots_source_created
+              ON skill_hub_snapshots(workspace_id, canonical_source_key, created_at DESC, snapshot_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshots_declared_version
+              ON skill_hub_snapshots(workspace_id, canonical_source_key, declared_version)
+              WHERE declared_version IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshots_resolved_version
+              ON skill_hub_snapshots(workspace_id, canonical_source_key, resolved_version)
+              WHERE resolved_version IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS skill_learning_evidence (
+              evidence_id TEXT PRIMARY KEY CHECK(length(TRIM(evidence_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              target_key TEXT NOT NULL CHECK(length(TRIM(target_key)) BETWEEN 1 AND 256),
+              fingerprint TEXT NOT NULL CHECK(length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+              source_kind TEXT NOT NULL CHECK(source_kind IN ('chat_turn', 'library_text')),
+              source_session_id TEXT,
+              source_turn_id TEXT,
+              source_message_id TEXT,
+              correction_action_id TEXT NOT NULL CHECK(length(TRIM(correction_action_id)) BETWEEN 1 AND 256),
+              actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+              source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64 AND source_sha256 NOT GLOB '*[^0-9a-f]*'),
+              correction_sha256 TEXT NOT NULL CHECK(length(correction_sha256) = 64 AND correction_sha256 NOT GLOB '*[^0-9a-f]*'),
+              source_artifact_json TEXT CHECK(source_artifact_json IS NULL OR length(CAST(source_artifact_json AS BLOB)) <= 2048),
+              correction_artifact_json TEXT CHECK(correction_artifact_json IS NULL OR length(CAST(correction_artifact_json AS BLOB)) <= 2048),
+              provenance_json TEXT NOT NULL CHECK(length(CAST(provenance_json AS BLOB)) <= 16384),
+              poisoning_status TEXT NOT NULL CHECK(poisoning_status IN ('clean', 'blocked', 'quarantined', 'conflicting')),
+              blocker_codes_json TEXT NOT NULL CHECK(length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              created_at TEXT NOT NULL,
+              CHECK(
+                (source_kind = 'chat_turn' AND source_session_id IS NOT NULL AND source_turn_id IS NOT NULL AND source_message_id IS NOT NULL)
+                OR (source_kind = 'library_text' AND source_session_id IS NULL AND source_turn_id IS NULL AND source_message_id IS NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_learning_evidence_recurrence
+              ON skill_learning_evidence(workspace_id, target_key, fingerprint, poisoning_status, source_session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_skill_learning_evidence_target_created
+              ON skill_learning_evidence(workspace_id, target_key, created_at DESC, evidence_id DESC);
+
+            CREATE TABLE IF NOT EXISTS governance_journey_events (
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.journey-event.v1'),
+              event_id TEXT PRIMARY KEY CHECK(length(TRIM(event_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              scope_kind TEXT NOT NULL CHECK(scope_kind IN ('workspace', 'global')),
+              workspace_id TEXT,
+              event_type TEXT NOT NULL CHECK(length(TRIM(event_type)) BETWEEN 1 AND 128),
+              subject_kind TEXT NOT NULL CHECK(length(TRIM(subject_kind)) BETWEEN 1 AND 128),
+              subject_id TEXT NOT NULL CHECK(length(TRIM(subject_id)) BETWEEN 1 AND 256),
+              action TEXT NOT NULL CHECK(length(TRIM(action)) BETWEEN 1 AND 128),
+              actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+              actor_type TEXT NOT NULL CHECK(actor_type IN ('operator', 'system', 'approval_effect')),
+              session_id TEXT,
+              turn_id TEXT,
+              approval_id TEXT,
+              fingerprint TEXT CHECK(fingerprint IS NULL OR (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*')),
+              source_kind TEXT,
+              source_id TEXT,
+              trust_disposition TEXT,
+              poisoning_status TEXT CHECK(poisoning_status IS NULL OR poisoning_status IN ('clean', 'blocked', 'quarantined', 'conflicting')),
+              evidence_refs_json TEXT NOT NULL CHECK(length(CAST(evidence_refs_json AS BLOB)) <= 16384),
+              provenance_json TEXT NOT NULL CHECK(length(CAST(provenance_json AS BLOB)) <= 16384),
+              summary_json TEXT NOT NULL CHECK(length(CAST(summary_json AS BLOB)) <= 16384),
+              occurred_at TEXT NOT NULL,
+              recorded_at TEXT NOT NULL,
+              CHECK(
+                (scope_kind = 'workspace' AND workspace_id IS NOT NULL AND length(TRIM(workspace_id)) BETWEEN 1 AND 256)
+                OR (scope_kind = 'global' AND workspace_id IS NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_governance_journey_workspace_recorded
+              ON governance_journey_events(workspace_id, recorded_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_governance_journey_subject_recorded
+              ON governance_journey_events(subject_kind, subject_id, recorded_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_governance_journey_fingerprint_session
+              ON governance_journey_events(fingerprint, session_id, recorded_at DESC, event_id DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_version_claims_no_update
+            BEFORE UPDATE ON skill_hub_version_claims BEGIN SELECT RAISE(ABORT, 'skill Hub version claims are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_version_claims_no_delete
+            BEFORE DELETE ON skill_hub_version_claims BEGIN SELECT RAISE(ABORT, 'skill Hub version claims are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_audit_floors_identity_guard
+            BEFORE UPDATE ON skill_hub_audit_floors
+            WHEN NEW.workspace_id IS NOT OLD.workspace_id
+              OR NEW.canonical_source_key IS NOT OLD.canonical_source_key
+              OR NEW.created_at IS NOT OLD.created_at
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub audit floor identity is immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_audit_floors_monotonic_guard
+            BEFORE UPDATE ON skill_hub_audit_floors
+            WHEN json_extract(NEW.floor_json, '$.policyId') IS NOT json_extract(OLD.floor_json, '$.policyId')
+              OR CAST(json_extract(NEW.floor_json, '$.policyRevision') AS INTEGER)
+                < CAST(json_extract(OLD.floor_json, '$.policyRevision') AS INTEGER)
+              OR (
+                json_extract(NEW.floor_json, '$.policyVersion') IS NOT json_extract(OLD.floor_json, '$.policyVersion')
+                AND CAST(json_extract(NEW.floor_json, '$.policyRevision') AS INTEGER)
+                  <= CAST(json_extract(OLD.floor_json, '$.policyRevision') AS INTEGER)
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM json_each(OLD.floor_json, '$.effectiveBlockerCodes') AS old_blocker
+                WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(NEW.floor_json, '$.effectiveBlockerCodes') AS new_blocker
+                  WHERE new_blocker.value = old_blocker.value
+                )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM json_each(OLD.floor_json, '$.scanners') AS old_scanner
+                WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(NEW.floor_json, '$.scanners') AS new_scanner
+                  WHERE json_extract(new_scanner.value, '$.scannerId') = json_extract(old_scanner.value, '$.scannerId')
+                    AND CAST(json_extract(new_scanner.value, '$.revision') AS INTEGER)
+                      >= CAST(json_extract(old_scanner.value, '$.revision') AS INTEGER)
+                    AND (
+                      json_extract(new_scanner.value, '$.scannerVersion') = json_extract(old_scanner.value, '$.scannerVersion')
+                      OR CAST(json_extract(new_scanner.value, '$.revision') AS INTEGER)
+                        > CAST(json_extract(old_scanner.value, '$.revision') AS INTEGER)
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM json_each(old_scanner.value, '$.coverageIds') AS old_coverage
+                      WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(new_scanner.value, '$.coverageIds') AS new_coverage
+                        WHERE new_coverage.value = old_coverage.value
+                      )
+                    )
+                )
+              )
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub audit floors are monotonic');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_audit_floors_no_delete
+            BEFORE DELETE ON skill_hub_audit_floors BEGIN SELECT RAISE(ABORT, 'skill Hub audit floors cannot be deleted'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshots_no_update
+            BEFORE UPDATE ON skill_hub_snapshots BEGIN SELECT RAISE(ABORT, 'skill Hub snapshots are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshots_no_delete
+            BEFORE DELETE ON skill_hub_snapshots BEGIN SELECT RAISE(ABORT, 'skill Hub snapshots are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_learning_evidence_no_update
+            BEFORE UPDATE ON skill_learning_evidence BEGIN SELECT RAISE(ABORT, 'skill learning evidence is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_learning_evidence_no_delete
+            BEFORE DELETE ON skill_learning_evidence BEGIN SELECT RAISE(ABORT, 'skill learning evidence is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_governance_journey_events_no_update
+            BEFORE UPDATE ON governance_journey_events BEGIN SELECT RAISE(ABORT, 'governance Journey events are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_governance_journey_events_no_delete
+            BEFORE DELETE ON governance_journey_events BEGIN SELECT RAISE(ABORT, 'governance Journey events are immutable'); END;
+          `);
+          if (tableExists(db, "candidate_skill_versions")) {
+            db.exec(`
+              CREATE TABLE IF NOT EXISTS candidate_skill_evidence_links (
+                version_id TEXT NOT NULL REFERENCES candidate_skill_versions(version_id) ON DELETE RESTRICT,
+                evidence_id TEXT NOT NULL REFERENCES skill_learning_evidence(evidence_id) ON DELETE RESTRICT,
+                linked_at TEXT NOT NULL,
+                PRIMARY KEY (version_id, evidence_id)
+              );
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_versions_inactive_insert
+              BEFORE INSERT ON candidate_skill_versions
+              WHEN NEW.lifecycle_state NOT IN ('draft', 'candidate')
+              BEGIN
+                SELECT RAISE(ABORT, 'candidate skill versions must be inserted inactive');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_versions_immutable_content
+              BEFORE UPDATE ON candidate_skill_versions
+              WHEN NEW.version_id IS NOT OLD.version_id
+                OR NEW.candidate_id IS NOT OLD.candidate_id
+                OR NEW.source_kind IS NOT OLD.source_kind
+                OR NEW.title IS NOT OLD.title
+                OR NEW.summary IS NOT OLD.summary
+                OR NEW.bundle_root IS NOT OLD.bundle_root
+                OR NEW.originating_run_id IS NOT OLD.originating_run_id
+                OR NEW.wrapper_manifest_hash IS NOT OLD.wrapper_manifest_hash
+                OR NEW.manifest_artifact_json IS NOT OLD.manifest_artifact_json
+                OR NEW.instruction_artifact_json IS NOT OLD.instruction_artifact_json
+                OR NEW.proof_artifact_json IS NOT OLD.proof_artifact_json
+                OR NEW.program_artifact_json IS NOT OLD.program_artifact_json
+                OR NEW.schema_artifact_json IS NOT OLD.schema_artifact_json
+                OR NEW.created_at IS NOT OLD.created_at
+                OR NEW.workspace_id IS NOT OLD.workspace_id
+                OR NEW.source_fingerprint IS NOT OLD.source_fingerprint
+                OR NEW.upstream_snapshot_id IS NOT OLD.upstream_snapshot_id
+                OR NEW.supersedes_version_id IS NOT OLD.supersedes_version_id
+                OR NEW.created_by_actor_id IS NOT OLD.created_by_actor_id
+              BEGIN
+                SELECT RAISE(ABORT, 'candidate skill version content and provenance are immutable');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_versions_no_delete
+              BEFORE DELETE ON candidate_skill_versions
+              BEGIN
+                SELECT RAISE(ABORT, 'candidate skill versions are immutable');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_evidence_links_no_update
+              BEFORE UPDATE ON candidate_skill_evidence_links BEGIN SELECT RAISE(ABORT, 'candidate skill evidence links are immutable'); END;
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_evidence_links_no_delete
+              BEFORE DELETE ON candidate_skill_evidence_links BEGIN SELECT RAISE(ABORT, 'candidate skill evidence links are immutable'); END;
+            `);
+          }
+        },
+      },
+      {
+        version: 162,
+        name: "workspace_path_bridge_snapshots",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS workspace_path_bridge_snapshots (
+              snapshot_id TEXT PRIMARY KEY CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.workspace-path-bridge-snapshot.v1'),
+              request_hash TEXT NOT NULL CHECK(length(request_hash) = 64 AND request_hash NOT GLOB '*[^0-9a-f]*'),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              input_flavor TEXT NOT NULL CHECK(input_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              target_flavor TEXT NOT NULL CHECK(target_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              git_identity_required INTEGER NOT NULL CHECK(git_identity_required IN (0, 1)),
+              input_path_hash TEXT NOT NULL CHECK(length(input_path_hash) = 64 AND input_path_hash NOT GLOB '*[^0-9a-f]*'),
+              allowed_roots_hash TEXT NOT NULL CHECK(length(allowed_roots_hash) = 64 AND allowed_roots_hash NOT GLOB '*[^0-9a-f]*'),
+              canonical_host_path TEXT CHECK(
+                canonical_host_path IS NULL OR length(TRIM(canonical_host_path)) BETWEEN 1 AND 2048
+              ),
+              canonical_target_path TEXT CHECK(
+                canonical_target_path IS NULL OR length(TRIM(canonical_target_path)) BETWEEN 1 AND 2048
+              ),
+              distro TEXT CHECK(distro IS NULL OR length(TRIM(distro)) BETWEEN 1 AND 64),
+              round_trip_json TEXT NOT NULL CHECK(
+                json_valid(round_trip_json) AND length(CAST(round_trip_json AS BLOB)) <= 8192
+              ),
+              git_identity_json TEXT NOT NULL CHECK(
+                json_valid(git_identity_json) AND length(CAST(git_identity_json AS BLOB)) <= 16384
+              ),
+              status TEXT NOT NULL CHECK(status IN ('verified', 'blocked', 'unavailable')),
+              reason_code TEXT CHECK(reason_code IS NULL OR reason_code IN (
+                'invalid_path', 'outside_jail', 'canonicalization_failed', 'symlink_escape',
+                'round_trip_mismatch', 'wsl_unavailable', 'wsl_conversion_failed',
+                'git_not_repository', 'git_unavailable', 'git_verification_failed', 'git_identity_mismatch'
+              )),
+              callable INTEGER NOT NULL CHECK(callable IN (0, 1)),
+              snapshot_json TEXT NOT NULL CHECK(
+                json_valid(snapshot_json) AND length(CAST(snapshot_json AS BLOB)) <= 65536
+              ),
+              snapshot_sha256 TEXT NOT NULL CHECK(
+                length(snapshot_sha256) = 64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              created_at TEXT NOT NULL,
+              CHECK(
+                (status = 'verified' AND reason_code IS NULL AND callable = 1
+                  AND canonical_host_path IS NOT NULL AND canonical_target_path IS NOT NULL)
+                OR (status <> 'verified' AND reason_code IS NOT NULL AND callable = 0)
+              ),
+              CHECK(
+                ((input_flavor = 'wsl' OR target_flavor = 'wsl') AND distro IS NOT NULL)
+                OR (input_flavor <> 'wsl' AND target_flavor <> 'wsl' AND distro IS NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_workspace_path_bridge_workspace_created
+              ON workspace_path_bridge_snapshots(workspace_id, created_at DESC, snapshot_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_workspace_path_bridge_workspace_request
+              ON workspace_path_bridge_snapshots(workspace_id, request_hash);
+
+            CREATE TRIGGER IF NOT EXISTS trg_workspace_path_bridge_snapshots_no_update
+            BEFORE UPDATE ON workspace_path_bridge_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'workspace path bridge snapshots are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_workspace_path_bridge_snapshots_no_delete
+            BEFORE DELETE ON workspace_path_bridge_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'workspace path bridge snapshots are immutable');
+            END;
+          `);
+        },
+      },
+      {
+        version: 163,
+        name: "context_pressure_recovery_truth",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "requested_output_token_cap",
+            "INTEGER CHECK(requested_output_token_cap IS NULL OR requested_output_token_cap > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "effective_output_token_cap",
+            "INTEGER CHECK(effective_output_token_cap IS NULL OR effective_output_token_cap > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_disposition",
+            "TEXT CHECK(output_cap_disposition IS NULL OR output_cap_disposition IN ('initial', 'preserved_retry', 'reduced_retry'))",
+          );
+          addColumnIfMissingIfTableExists(db, "model_usage_events", "output_cap_recovery_source_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_recovery_reason_code",
+            "TEXT CHECK(output_cap_recovery_reason_code IS NULL OR output_cap_recovery_reason_code = 'safe_lower_cap')",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_provider_available_tokens",
+            "INTEGER CHECK(output_cap_provider_available_tokens IS NULL OR output_cap_provider_available_tokens > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_provider_minimum_tokens",
+            "INTEGER CHECK(output_cap_provider_minimum_tokens IS NULL OR output_cap_provider_minimum_tokens > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_request_input_estimate",
+            "INTEGER CHECK(output_cap_request_input_estimate IS NULL OR output_cap_request_input_estimate > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_configured_context_window_tokens",
+            "INTEGER CHECK(output_cap_configured_context_window_tokens IS NULL OR output_cap_configured_context_window_tokens > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_safety_margin_tokens",
+            "INTEGER CHECK(output_cap_safety_margin_tokens IS NULL OR output_cap_safety_margin_tokens >= 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_evidence_format",
+            "TEXT CHECK(output_cap_evidence_format IS NULL OR output_cap_evidence_format IN ('anthropic_equation', 'bounded_range', 'context_breakdown', 'character_prompt', 'vllm_context'))",
+          );
+          addColumnIfMissingIfTableExists(db, "model_usage_events", "transport_retry_parent_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "transport_retry_reason",
+            "TEXT CHECK(transport_retry_reason IS NULL OR transport_retry_reason IN ('output_cap_recovery', 'metadata_compatibility'))",
+          );
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_compaction_breakers (
+              session_id TEXT NOT NULL,
+              dimension_hash TEXT NOT NULL,
+              provider_id TEXT,
+              model TEXT,
+              profile_fingerprint TEXT,
+              status TEXT NOT NULL DEFAULT 'closed'
+                CHECK(status IN ('closed', 'awaiting_evidence', 'tripped', 'blocked_corrupt')),
+              fallback_streak INTEGER NOT NULL DEFAULT 0 CHECK(fallback_streak BETWEEN 0 AND 2),
+              ineffective_streak INTEGER NOT NULL DEFAULT 0 CHECK(ineffective_streak BETWEEN 0 AND 2),
+              pending_attempt_id TEXT,
+              pending_state_key TEXT,
+              quarantined_state_key TEXT,
+              pending_branch_head_turn_id TEXT,
+              pending_observed_turn_count INTEGER CHECK(pending_observed_turn_count IS NULL OR pending_observed_turn_count >= 0),
+              pending_disposition TEXT CHECK(pending_disposition IS NULL OR pending_disposition IN ('structured', 'fallback', 'no_progress')),
+              pending_started_at TEXT,
+              last_attempt_id TEXT,
+              last_evidence_turn_id TEXT,
+              last_evidence_input_tokens INTEGER CHECK(last_evidence_input_tokens IS NULL OR last_evidence_input_tokens >= 0),
+              last_outcome TEXT NOT NULL DEFAULT 'unverified'
+                CHECK(last_outcome IN ('healthy', 'ineffective', 'fallback', 'no_progress', 'unverified')),
+              revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+              last_repaired_at TEXT,
+              last_repair_reason TEXT,
+              last_repaired_actor_hash TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(session_id, dimension_hash),
+              FOREIGN KEY(pending_state_key) REFERENCES chat_compaction_states(state_key) ON DELETE RESTRICT,
+              CHECK (
+                (
+                  pending_attempt_id IS NULL AND pending_state_key IS NULL
+                  AND pending_branch_head_turn_id IS NULL AND pending_observed_turn_count IS NULL
+                  AND pending_disposition IS NULL AND pending_started_at IS NULL
+                  AND status <> 'awaiting_evidence'
+                ) OR (
+                  pending_attempt_id IS NOT NULL AND pending_state_key IS NOT NULL
+                  AND pending_branch_head_turn_id IS NOT NULL AND pending_observed_turn_count IS NOT NULL
+                  AND pending_disposition IS NOT NULL AND pending_started_at IS NOT NULL
+                  AND status = 'awaiting_evidence'
+                )
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breakers_pending_state
+              ON chat_compaction_breakers(pending_state_key)
+              WHERE pending_state_key IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breakers_session_status
+              ON chat_compaction_breakers(session_id, status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS chat_compaction_breaker_actions (
+              action_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              dimension_hash TEXT NOT NULL,
+              action_kind TEXT NOT NULL CHECK(action_kind IN ('force', 'repair')),
+              expected_breaker_revision INTEGER NOT NULL CHECK(expected_breaker_revision >= 0),
+              actor_hash TEXT NOT NULL,
+              request_evidence_hash TEXT NOT NULL,
+              policy_decision_hash TEXT NOT NULL,
+              audit_evidence_hash TEXT NOT NULL,
+              approval_id TEXT,
+              reason TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('pending', 'consumed', 'expired', 'rejected')),
+              rejection_reason TEXT,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              consumed_at TEXT,
+              resulting_attempt_id TEXT,
+              resulting_breaker_revision INTEGER CHECK(resulting_breaker_revision IS NULL OR resulting_breaker_revision >= 0),
+              quarantined_state_key TEXT,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(session_id, dimension_hash)
+                REFERENCES chat_compaction_breakers(session_id, dimension_hash) ON DELETE CASCADE,
+              CHECK (
+                (
+                  status = 'pending'
+                  AND rejection_reason IS NULL AND consumed_at IS NULL
+                  AND resulting_attempt_id IS NULL AND resulting_breaker_revision IS NULL
+                  AND quarantined_state_key IS NULL
+                ) OR (
+                  status = 'consumed'
+                  AND rejection_reason IS NULL AND consumed_at IS NOT NULL
+                  AND resulting_breaker_revision IS NOT NULL
+                  AND (
+                    (action_kind = 'force' AND resulting_attempt_id IS NOT NULL AND quarantined_state_key IS NULL)
+                    OR (action_kind = 'repair' AND resulting_attempt_id IS NULL)
+                  )
+                ) OR (
+                  status = 'expired'
+                  AND rejection_reason IS NULL AND consumed_at IS NULL
+                  AND resulting_attempt_id IS NULL AND resulting_breaker_revision IS NULL
+                  AND quarantined_state_key IS NULL
+                ) OR (
+                  status = 'rejected'
+                  AND rejection_reason IS NOT NULL AND consumed_at IS NULL
+                  AND resulting_attempt_id IS NULL AND resulting_breaker_revision IS NULL
+                  AND quarantined_state_key IS NULL
+                )
+              )
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_compaction_breaker_actions_pending
+              ON chat_compaction_breaker_actions(session_id, dimension_hash, action_kind)
+              WHERE status = 'pending';
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breaker_actions_session_created
+              ON chat_compaction_breaker_actions(session_id, created_at DESC, action_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breaker_actions_status_expiry
+              ON chat_compaction_breaker_actions(status, expires_at);
+
+            DROP TRIGGER IF EXISTS trg_chat_compaction_breaker_actions_immutable;
+            CREATE TRIGGER trg_chat_compaction_breaker_actions_immutable
+            BEFORE UPDATE ON chat_compaction_breaker_actions
+            WHEN OLD.action_id IS NOT NEW.action_id
+              OR OLD.session_id IS NOT NEW.session_id
+              OR OLD.dimension_hash IS NOT NEW.dimension_hash
+              OR OLD.action_kind IS NOT NEW.action_kind
+              OR OLD.expected_breaker_revision IS NOT NEW.expected_breaker_revision
+              OR OLD.actor_hash IS NOT NEW.actor_hash
+              OR OLD.request_evidence_hash IS NOT NEW.request_evidence_hash
+              OR OLD.policy_decision_hash IS NOT NEW.policy_decision_hash
+              OR OLD.audit_evidence_hash IS NOT NEW.audit_evidence_hash
+              OR OLD.approval_id IS NOT NEW.approval_id
+              OR OLD.reason IS NOT NEW.reason
+              OR OLD.created_at IS NOT NEW.created_at
+              OR OLD.expires_at IS NOT NEW.expires_at
+            BEGIN
+              SELECT RAISE(ABORT, 'chat compaction breaker action identity is immutable');
+            END;
+
+            DROP TRIGGER IF EXISTS trg_chat_compaction_breaker_actions_transition;
+            CREATE TRIGGER trg_chat_compaction_breaker_actions_transition
+            BEFORE UPDATE ON chat_compaction_breaker_actions
+            WHEN OLD.status IS NOT 'pending'
+              OR (
+                NEW.status IS NOT 'consumed'
+                AND NEW.status IS NOT 'expired'
+                AND NEW.status IS NOT 'rejected'
+              )
+            BEGIN
+              SELECT RAISE(ABORT, 'chat compaction breaker action lifecycle is immutable');
+            END;
+          `);
+          addColumnIfMissingIfTableExists(db, "chat_compaction_breakers", "quarantined_state_key", "TEXT");
+          if (tableExists(db, "model_usage_events")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_model_usage_events_output_cap_source
+                ON model_usage_events(output_cap_recovery_source_event_id)
+                WHERE output_cap_recovery_source_event_id IS NOT NULL;
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_model_usage_events_transport_retry_parent
+                ON model_usage_events(transport_retry_parent_event_id)
+                WHERE transport_retry_parent_event_id IS NOT NULL;
+
+              CREATE TRIGGER IF NOT EXISTS trg_model_usage_events_cap_lineage_insert
+              BEFORE INSERT ON model_usage_events
+              WHEN NOT (
+                (
+                  NEW.requested_output_token_cap IS NULL
+                  AND NEW.effective_output_token_cap IS NULL
+                  AND NEW.output_cap_disposition IS NULL
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND (NEW.transport_retry_reason IS NULL OR NEW.transport_retry_reason = 'metadata_compatibility')
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap = NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'initial'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NULL
+                  AND NEW.transport_retry_reason IS NULL
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'preserved_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason = 'metadata_compatibility'
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap < NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'reduced_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NOT NULL
+                  AND NEW.output_cap_recovery_reason_code = 'safe_lower_cap'
+                  AND NEW.output_cap_provider_available_tokens IS NOT NULL
+                  AND (NEW.output_cap_provider_minimum_tokens IS NULL OR NEW.effective_output_token_cap >= NEW.output_cap_provider_minimum_tokens)
+                  AND NEW.output_cap_request_input_estimate IS NOT NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NOT NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_provider_available_tokens - NEW.output_cap_safety_margin_tokens
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_configured_context_window_tokens - NEW.output_cap_request_input_estimate - NEW.output_cap_safety_margin_tokens
+                  AND NEW.output_cap_evidence_format IS NOT NULL
+                  AND NEW.transport_retry_parent_event_id = NEW.output_cap_recovery_source_event_id
+                  AND NEW.transport_retry_reason = 'output_cap_recovery'
+                )
+              ) OR NOT (
+                (NEW.transport_retry_parent_event_id IS NULL AND NEW.transport_retry_reason IS NULL)
+                OR (
+                  NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason IN ('output_cap_recovery', 'metadata_compatibility')
+                )
+              )
+              BEGIN
+                SELECT RAISE(ABORT, 'invalid model usage output-cap retry lineage');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_model_usage_events_cap_lineage_update
+              BEFORE UPDATE OF
+                requested_output_token_cap, effective_output_token_cap, output_cap_disposition,
+                output_cap_recovery_source_event_id, output_cap_recovery_reason_code,
+                output_cap_provider_available_tokens, output_cap_provider_minimum_tokens,
+                output_cap_request_input_estimate, output_cap_configured_context_window_tokens,
+                output_cap_safety_margin_tokens, output_cap_evidence_format,
+                transport_retry_parent_event_id, transport_retry_reason
+              ON model_usage_events
+              WHEN NOT (
+                (
+                  NEW.requested_output_token_cap IS NULL
+                  AND NEW.effective_output_token_cap IS NULL
+                  AND NEW.output_cap_disposition IS NULL
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND (NEW.transport_retry_reason IS NULL OR NEW.transport_retry_reason = 'metadata_compatibility')
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap = NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'initial'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NULL
+                  AND NEW.transport_retry_reason IS NULL
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'preserved_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason = 'metadata_compatibility'
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap < NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'reduced_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NOT NULL
+                  AND NEW.output_cap_recovery_reason_code = 'safe_lower_cap'
+                  AND NEW.output_cap_provider_available_tokens IS NOT NULL
+                  AND (NEW.output_cap_provider_minimum_tokens IS NULL OR NEW.effective_output_token_cap >= NEW.output_cap_provider_minimum_tokens)
+                  AND NEW.output_cap_request_input_estimate IS NOT NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NOT NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_provider_available_tokens - NEW.output_cap_safety_margin_tokens
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_configured_context_window_tokens - NEW.output_cap_request_input_estimate - NEW.output_cap_safety_margin_tokens
+                  AND NEW.output_cap_evidence_format IS NOT NULL
+                  AND NEW.transport_retry_parent_event_id = NEW.output_cap_recovery_source_event_id
+                  AND NEW.transport_retry_reason = 'output_cap_recovery'
+                )
+              ) OR NOT (
+                (NEW.transport_retry_parent_event_id IS NULL AND NEW.transport_retry_reason IS NULL)
+                OR (
+                  NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason IN ('output_cap_recovery', 'metadata_compatibility')
+                )
+              )
+              BEGIN
+                SELECT RAISE(ABORT, 'invalid model usage output-cap retry lineage');
+              END;
+            `);
+          }
+        },
+      },
+      {
+        version: 164,
+        name: "skill_aggregate_revision_cas",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS skill_aggregate_revisions (
+              aggregate_kind TEXT NOT NULL CHECK(
+                aggregate_kind IN ('runtime_skill', 'candidate_skill', 'activation_policy')
+              ),
+              aggregate_id TEXT NOT NULL CHECK(
+                aggregate_id = TRIM(aggregate_id) AND length(aggregate_id) BETWEEN 1 AND 256
+              ),
+              revision INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              updated_at TEXT NOT NULL CHECK(length(TRIM(updated_at)) > 0),
+              PRIMARY KEY (aggregate_kind, aggregate_id)
+            );
+          `);
+          backfillSkillAggregateRevisions(db);
+        },
+      },
+      {
+        version: 165,
+        name: "skill_hub_lifecycle_foundation",
+        up: (db) => {
+          if (tableExists(db, "skill_hub_snapshots")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_hub_snapshots_workspace_id_tree
+                ON skill_hub_snapshots(workspace_id, snapshot_id, content_tree_sha256);
+            `);
+          }
+          if (tableExists(db, "runtime_evidence_envelopes")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_evidence_skill_hub_identity
+                ON runtime_evidence_envelopes(envelope_id, workspace_id, approval_id);
+            `);
+          }
+          if (tableExists(db, "governance_journey_events")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_governance_journey_skill_hub_identity
+                ON governance_journey_events(event_id, workspace_id, approval_id);
+            `);
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS skill_hub_snapshot_artifacts (
+              artifact_id TEXT PRIMARY KEY CHECK(length(TRIM(artifact_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              snapshot_id TEXT NOT NULL CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              bundle_rel_path TEXT NOT NULL CHECK(length(TRIM(bundle_rel_path)) BETWEEN 1 AND 1024),
+              manifest_version TEXT NOT NULL CHECK(manifest_version = 'goatcitadel.skill-tree.v1'),
+              manifest_json TEXT NOT NULL CHECK(
+                json_valid(manifest_json)
+                AND json_type(manifest_json) = 'object'
+                AND length(CAST(manifest_json AS BLOB)) <= 262144
+              ),
+              manifest_sha256 TEXT NOT NULL CHECK(
+                length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              file_count INTEGER NOT NULL CHECK(
+                typeof(file_count) = 'integer' AND file_count BETWEEN 0 AND 96
+              ),
+              total_bytes INTEGER NOT NULL CHECK(
+                typeof(total_bytes) = 'integer' AND total_bytes BETWEEN 0 AND 4194304
+              ),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              UNIQUE(workspace_id, snapshot_id),
+              UNIQUE(workspace_id, snapshot_id, content_tree_sha256),
+              FOREIGN KEY(workspace_id, snapshot_id, content_tree_sha256)
+                REFERENCES skill_hub_snapshots(workspace_id, snapshot_id, content_tree_sha256) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshot_artifacts_tree
+              ON skill_hub_snapshot_artifacts(workspace_id, content_tree_sha256, created_at DESC, artifact_id DESC);
+
+            CREATE TABLE IF NOT EXISTS skill_hub_operation_intents (
+              operation_id TEXT PRIMARY KEY CHECK(length(TRIM(operation_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              operation_kind TEXT NOT NULL CHECK(operation_kind IN (
+                'install_inactive', 'stage_update_candidate', 'stage_rollback_candidate', 'activate', 'revoke'
+              )),
+              approval_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+              snapshot_id TEXT NOT NULL CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              skill_id TEXT NOT NULL CHECK(length(TRIM(skill_id)) BETWEEN 1 AND 256),
+              target_candidate_id TEXT CHECK(
+                target_candidate_id IS NULL OR length(TRIM(target_candidate_id)) BETWEEN 1 AND 256
+              ),
+              target_version_id TEXT CHECK(
+                target_version_id IS NULL OR length(TRIM(target_version_id)) BETWEEN 1 AND 256
+              ),
+              supersedes_version_id TEXT CHECK(
+                supersedes_version_id IS NULL OR length(TRIM(supersedes_version_id)) BETWEEN 1 AND 256
+              ),
+              expected_candidate_revision INTEGER CHECK(
+                expected_candidate_revision IS NULL
+                OR (typeof(expected_candidate_revision) = 'integer' AND expected_candidate_revision > 0)
+              ),
+              expected_runtime_revision INTEGER CHECK(
+                expected_runtime_revision IS NULL
+                OR (typeof(expected_runtime_revision) = 'integer' AND expected_runtime_revision > 0)
+              ),
+              expected_candidate_absent INTEGER NOT NULL CHECK(expected_candidate_absent IN (0, 1)),
+              expected_runtime_absent INTEGER NOT NULL CHECK(expected_runtime_absent IN (0, 1)),
+              actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+              session_id TEXT CHECK(session_id IS NULL OR length(TRIM(session_id)) BETWEEN 1 AND 256),
+              turn_id TEXT CHECK(turn_id IS NULL OR length(TRIM(turn_id)) BETWEEN 1 AND 256),
+              request_sha256 TEXT NOT NULL CHECK(
+                length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, snapshot_id, content_tree_sha256)
+                REFERENCES skill_hub_snapshot_artifacts(workspace_id, snapshot_id, content_tree_sha256) ON DELETE RESTRICT,
+              CHECK(turn_id IS NULL OR session_id IS NOT NULL),
+              CHECK(
+                (expected_candidate_absent = 1 AND expected_candidate_revision IS NULL)
+                OR (expected_candidate_absent = 0 AND expected_candidate_revision IS NOT NULL)
+              ),
+              CHECK(
+                (expected_runtime_absent = 1 AND expected_runtime_revision IS NULL)
+                OR (expected_runtime_absent = 0 AND expected_runtime_revision IS NOT NULL)
+              ),
+              CHECK(target_candidate_id IS NOT NULL AND target_version_id IS NOT NULL),
+              CHECK(
+                (operation_kind = 'install_inactive'
+                  AND expected_candidate_absent = 1
+                  AND expected_runtime_absent = 1
+                  AND supersedes_version_id IS NULL)
+                OR (operation_kind IN ('stage_update_candidate', 'stage_rollback_candidate')
+                  AND expected_candidate_absent = 0
+                  AND expected_runtime_absent = 0
+                  AND supersedes_version_id IS NOT NULL)
+                OR (operation_kind = 'activate' AND expected_candidate_absent = 0)
+                OR (operation_kind = 'revoke'
+                  AND expected_candidate_absent = 0
+                  AND expected_runtime_absent = 0)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_intents_workspace_skill_created
+              ON skill_hub_operation_intents(workspace_id, skill_id, created_at DESC, operation_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_intents_snapshot
+              ON skill_hub_operation_intents(workspace_id, snapshot_id, created_at DESC, operation_id DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_hub_operation_intents_terminal_identity
+              ON skill_hub_operation_intents(operation_id, workspace_id, approval_id, content_tree_sha256);
+
+            CREATE TABLE IF NOT EXISTS skill_hub_operation_settlements (
+              settlement_id TEXT PRIMARY KEY CHECK(length(TRIM(settlement_id)) BETWEEN 1 AND 256),
+              operation_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(operation_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              approval_id TEXT NOT NULL CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              disposition TEXT NOT NULL CHECK(disposition IN ('applied', 'blocked', 'manual_reconciliation')),
+              observed_tree_sha256 TEXT NOT NULL CHECK(
+                length(observed_tree_sha256) = 64 AND observed_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              candidate_version_id TEXT REFERENCES candidate_skill_versions(version_id) ON DELETE RESTRICT,
+              runtime_skill_id TEXT CHECK(
+                runtime_skill_id IS NULL OR length(TRIM(runtime_skill_id)) BETWEEN 1 AND 256
+              ),
+              candidate_revision INTEGER CHECK(
+                candidate_revision IS NULL OR (typeof(candidate_revision) = 'integer' AND candidate_revision > 0)
+              ),
+              runtime_revision INTEGER CHECK(
+                runtime_revision IS NULL OR (typeof(runtime_revision) = 'integer' AND runtime_revision > 0)
+              ),
+              evidence_envelope_id TEXT NOT NULL,
+              journey_event_id TEXT NOT NULL,
+              result_json TEXT NOT NULL CHECK(
+                json_valid(result_json)
+                AND json_type(result_json) = 'object'
+                AND length(CAST(result_json AS BLOB)) <= 16384
+              ),
+              result_sha256 TEXT NOT NULL CHECK(
+                length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              settled_at TEXT NOT NULL CHECK(length(TRIM(settled_at)) > 0),
+              FOREIGN KEY(operation_id, workspace_id, approval_id, content_tree_sha256)
+                REFERENCES skill_hub_operation_intents(
+                  operation_id, workspace_id, approval_id, content_tree_sha256
+                ) ON DELETE RESTRICT,
+              FOREIGN KEY(evidence_envelope_id, workspace_id, approval_id)
+                REFERENCES runtime_evidence_envelopes(envelope_id, workspace_id, approval_id) ON DELETE RESTRICT,
+              FOREIGN KEY(journey_event_id, workspace_id, approval_id)
+                REFERENCES governance_journey_events(event_id, workspace_id, approval_id) ON DELETE RESTRICT,
+              CHECK(disposition <> 'applied' OR observed_tree_sha256 = content_tree_sha256)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_settlements_evidence
+              ON skill_hub_operation_settlements(evidence_envelope_id, settled_at DESC, settlement_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_settlements_journey
+              ON skill_hub_operation_settlements(journey_event_id, settled_at DESC, settlement_id DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_intents_approval_binding
+            BEFORE INSERT ON skill_hub_operation_intents
+            WHEN NOT EXISTS (
+              SELECT 1
+              FROM approvals AS approval
+              WHERE approval.approval_id = NEW.approval_id
+                AND approval.status = 'approved'
+                AND approval.kind = 'skill_hub.lifecycle'
+                AND json_valid(approval.payload_json)
+                AND json_type(approval.payload_json) = 'object'
+                AND json_extract(approval.payload_json, '$.operationId') IS NEW.operation_id
+                AND json_extract(approval.payload_json, '$.requestSha256') IS NEW.request_sha256
+                AND json_extract(approval.payload_json, '$.workspaceId') IS NEW.workspace_id
+                AND json_extract(approval.payload_json, '$.operationKind') IS NEW.operation_kind
+                AND json_extract(approval.payload_json, '$.skillId') IS NEW.skill_id
+                AND json_extract(approval.payload_json, '$.snapshotId') IS NEW.snapshot_id
+                AND json_extract(approval.payload_json, '$.contentTreeSha256') IS NEW.content_tree_sha256
+                AND (SELECT COUNT(*) FROM json_each(approval.payload_json)) = 7
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(approval.payload_json) AS payload_field
+                  WHERE payload_field.key NOT IN (
+                    'operationId', 'requestSha256', 'workspaceId', 'operationKind',
+                    'skillId', 'snapshotId', 'contentTreeSha256'
+                  )
+                )
+                AND approval.linkage_json IS NOT NULL
+                AND json_valid(approval.linkage_json)
+                AND json_type(approval.linkage_json) = 'object'
+                AND json_extract(approval.linkage_json, '$.workspaceId') IS NEW.workspace_id
+                AND (NEW.session_id IS NULL OR json_extract(approval.linkage_json, '$.sessionId') IS NEW.session_id)
+                AND (NEW.turn_id IS NULL OR json_extract(approval.linkage_json, '$.turnId') IS NEW.turn_id)
+                AND (SELECT COUNT(*) FROM json_each(approval.linkage_json)) =
+                  1
+                  + CASE WHEN NEW.session_id IS NULL THEN 0 ELSE 1 END
+                  + CASE WHEN NEW.turn_id IS NULL THEN 0 ELSE 1 END
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(approval.linkage_json) AS linkage_field
+                  WHERE linkage_field.key NOT IN ('workspaceId', 'sessionId', 'turnId')
+                )
+            )
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub operation approval does not match the immutable intent');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_settlements_semantic_binding
+            BEFORE INSERT ON skill_hub_operation_settlements
+            WHEN NOT EXISTS (
+              SELECT 1
+              FROM skill_hub_operation_intents AS intent
+              JOIN skill_hub_snapshot_artifacts AS artifact
+                ON artifact.workspace_id = intent.workspace_id
+                AND artifact.snapshot_id = intent.snapshot_id
+                AND artifact.content_tree_sha256 = intent.content_tree_sha256
+              JOIN runtime_evidence_envelopes AS evidence
+                ON evidence.envelope_id = NEW.evidence_envelope_id
+                AND evidence.workspace_id = intent.workspace_id
+                AND evidence.approval_id = intent.approval_id
+              JOIN governance_journey_events AS journey
+                ON journey.event_id = NEW.journey_event_id
+                AND journey.workspace_id = intent.workspace_id
+                AND journey.approval_id = intent.approval_id
+              WHERE intent.operation_id = NEW.operation_id
+                AND intent.workspace_id = NEW.workspace_id
+                AND intent.approval_id = NEW.approval_id
+                AND intent.content_tree_sha256 = NEW.content_tree_sha256
+                AND (NEW.disposition <> 'applied' OR NEW.observed_tree_sha256 = intent.content_tree_sha256)
+                AND evidence.event_kind = 'approval_resolution'
+                AND evidence.payload_hash = NEW.result_sha256
+                AND json_valid(evidence.metadata_json)
+                AND json_type(evidence.metadata_json) = 'object'
+                AND json_extract(evidence.metadata_json, '$.operationId') IS intent.operation_id
+                AND json_extract(evidence.metadata_json, '$.action') IS intent.operation_kind
+                AND json_extract(evidence.metadata_json, '$.subjectKind') = 'skill'
+                AND json_extract(evidence.metadata_json, '$.subjectId') IS intent.skill_id
+                AND json_extract(evidence.metadata_json, '$.sourceKind') = 'upstream_snapshot'
+                AND json_extract(evidence.metadata_json, '$.sourceId') IS intent.snapshot_id
+                AND json_extract(evidence.metadata_json, '$.contentTreeSha256') IS intent.content_tree_sha256
+                AND json_extract(evidence.metadata_json, '$.requestSha256') IS intent.request_sha256
+                AND json_extract(evidence.metadata_json, '$.resultSha256') IS NEW.result_sha256
+                AND journey.scope_kind = 'workspace'
+                AND journey.event_type = 'skill_hub_lifecycle'
+                AND journey.subject_kind = 'skill'
+                AND journey.subject_id = intent.skill_id
+                AND journey.action = intent.operation_kind
+                AND journey.actor_type = 'approval_effect'
+                AND journey.fingerprint = intent.request_sha256
+                AND journey.source_kind = 'upstream_snapshot'
+                AND journey.source_id = intent.snapshot_id
+                AND json_valid(journey.evidence_refs_json)
+                AND json_type(journey.evidence_refs_json) = 'array'
+                AND EXISTS (
+                  SELECT 1 FROM json_each(journey.evidence_refs_json) AS ref
+                  WHERE json_extract(ref.value, '$.owner') = 'approval'
+                    AND json_extract(ref.value, '$.refId') = intent.approval_id
+                )
+                AND EXISTS (
+                  SELECT 1 FROM json_each(journey.evidence_refs_json) AS ref
+                  WHERE json_extract(ref.value, '$.owner') = 'upstream_snapshot'
+                    AND json_extract(ref.value, '$.refId') = intent.snapshot_id
+                )
+                AND EXISTS (
+                  SELECT 1 FROM json_each(journey.evidence_refs_json) AS ref
+                  WHERE json_extract(ref.value, '$.owner') = 'artifact'
+                    AND json_extract(ref.value, '$.refId') = artifact.artifact_id
+                )
+                AND json_valid(journey.provenance_json)
+                AND json_extract(journey.provenance_json, '$.approvalRequired') = 1
+                AND json_extract(journey.provenance_json, '$.sourceRequired') = 1
+                AND json_valid(journey.summary_json)
+                AND json_extract(journey.summary_json, '$.operationId') IS intent.operation_id
+                AND json_extract(journey.summary_json, '$.requestSha256') IS intent.request_sha256
+                AND json_extract(journey.summary_json, '$.contentTreeSha256') IS intent.content_tree_sha256
+                AND json_extract(journey.summary_json, '$.resultSha256') IS NEW.result_sha256
+            )
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub settlement evidence or Journey binding does not match the operation');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshot_artifacts_no_update
+            BEFORE UPDATE ON skill_hub_snapshot_artifacts
+            BEGIN SELECT RAISE(ABORT, 'skill Hub snapshot artifacts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshot_artifacts_no_delete
+            BEFORE DELETE ON skill_hub_snapshot_artifacts
+            BEGIN SELECT RAISE(ABORT, 'skill Hub snapshot artifacts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_intents_no_update
+            BEFORE UPDATE ON skill_hub_operation_intents
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_intents_no_delete
+            BEFORE DELETE ON skill_hub_operation_intents
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_settlements_no_update
+            BEFORE UPDATE ON skill_hub_operation_settlements
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_settlements_no_delete
+            BEFORE DELETE ON skill_hub_operation_settlements
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation settlements are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 166,
+        name: "governed_external_sources_foundation",
+        up: (db) => {
+          const requiredAuthorityTables = [
+            "workspaces",
+            "workspace_path_bridge_snapshots",
+            "chat_session_meta",
+            "approvals",
+            "knowledge_documents",
+            "chat_thread_knowledge_attachments",
+          ];
+          if (requiredAuthorityTables.some((tableName) => !tableExists(db, tableName))) {
+            // Synthetic and repair-oriented sparse databases may legitimately
+            // contain only one historic owner slice. Do not invent competing
+            // parent schemas or backfill them from this additive feature lane.
+            return;
+          }
+          db.exec(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_path_bridge_workspace_snapshot_hash
+              ON workspace_path_bridge_snapshots(workspace_id, snapshot_id, snapshot_sha256);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_meta_workspace_session
+              ON chat_session_meta(workspace_id, session_id);
+
+            CREATE TABLE IF NOT EXISTS external_source_configs (
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL CHECK(length(TRIM(source_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              kind TEXT NOT NULL CHECK(kind IN ('codex_sessions', 'codex_memory', 'claude_sessions', 'claude_memory')),
+              label TEXT NOT NULL CHECK(length(TRIM(label)) BETWEEN 1 AND 256),
+              owner_actor_id TEXT NOT NULL CHECK(length(TRIM(owner_actor_id)) BETWEEN 1 AND 256),
+              auth_actor_id TEXT NOT NULL CHECK(length(TRIM(auth_actor_id)) BETWEEN 1 AND 256),
+              auth_actor_source TEXT NOT NULL CHECK(auth_actor_source IN ('token', 'basic', 'loopback', 'device_grant', 'none')),
+              canonical_root_path TEXT NOT NULL CHECK(
+                length(TRIM(canonical_root_path)) > 1 AND length(CAST(canonical_root_path AS BLOB)) <= 2048
+              ),
+              root_identity_sha256 TEXT NOT NULL CHECK(length(root_identity_sha256) = 64 AND root_identity_sha256 NOT GLOB '*[^0-9a-f]*'),
+              path_bridge_snapshot_id TEXT NOT NULL CHECK(length(TRIM(path_bridge_snapshot_id)) BETWEEN 1 AND 256),
+              path_bridge_snapshot_sha256 TEXT NOT NULL CHECK(length(path_bridge_snapshot_sha256) = 64 AND path_bridge_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+              allowed_roots_sha256 TEXT NOT NULL CHECK(length(allowed_roots_sha256) = 64 AND allowed_roots_sha256 NOT GLOB '*[^0-9a-f]*'),
+              input_flavor TEXT NOT NULL CHECK(input_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              target_flavor TEXT NOT NULL CHECK(target_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              distro TEXT CHECK(distro IS NULL OR length(TRIM(distro)) BETWEEN 1 AND 64),
+              require_git_identity INTEGER NOT NULL CHECK(require_git_identity IN (0, 1)),
+              git_identity_sha256 TEXT CHECK(git_identity_sha256 IS NULL OR (length(git_identity_sha256) = 64 AND git_identity_sha256 NOT GLOB '*[^0-9a-f]*')),
+              root_grant_approval_id TEXT CHECK(root_grant_approval_id IS NULL OR length(TRIM(root_grant_approval_id)) BETWEEN 1 AND 256),
+              ownership_attestation_sha256 TEXT NOT NULL CHECK(length(ownership_attestation_sha256) = 64 AND ownership_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              adapter_policy_json TEXT NOT NULL CHECK(json_valid(adapter_policy_json) AND json_type(adapter_policy_json) = 'object' AND length(CAST(adapter_policy_json AS BLOB)) <= 16384),
+              revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              status TEXT NOT NULL CHECK(status IN ('active', 'disabled', 'revoked')),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              updated_at TEXT NOT NULL CHECK(length(TRIM(updated_at)) > 0),
+              PRIMARY KEY(workspace_id, source_id),
+              UNIQUE(workspace_id, source_id, revision, config_sha256),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, path_bridge_snapshot_id, path_bridge_snapshot_sha256)
+                REFERENCES workspace_path_bridge_snapshots(workspace_id, snapshot_id, snapshot_sha256) ON DELETE RESTRICT,
+              CHECK((require_git_identity = 1 AND git_identity_sha256 IS NOT NULL) OR (require_git_identity = 0 AND git_identity_sha256 IS NULL)),
+              CHECK(((input_flavor = 'wsl' OR target_flavor = 'wsl') AND distro IS NOT NULL) OR (input_flavor <> 'wsl' AND target_flavor <> 'wsl' AND distro IS NULL))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_external_source_configs_active_identity
+              ON external_source_configs(workspace_id, kind, root_identity_sha256) WHERE status = 'active';
+            CREATE INDEX IF NOT EXISTS idx_external_source_configs_workspace_status
+              ON external_source_configs(workspace_id, status, updated_at DESC, source_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_scans (
+              workspace_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL CHECK(length(TRIM(scan_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL CHECK(length(TRIM(source_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              config_revision INTEGER NOT NULL CHECK(typeof(config_revision) = 'integer' AND config_revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              root_identity_sha256 TEXT NOT NULL CHECK(length(root_identity_sha256) = 64 AND root_identity_sha256 NOT GLOB '*[^0-9a-f]*'),
+              path_bridge_snapshot_sha256 TEXT NOT NULL CHECK(length(path_bridge_snapshot_sha256) = 64 AND path_bridge_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              high_water_mtime_ns TEXT CHECK(high_water_mtime_ns IS NULL OR (length(high_water_mtime_ns) = 20 AND high_water_mtime_ns NOT GLOB '*[^0-9]*')),
+              high_water_item_id TEXT CHECK(high_water_item_id IS NULL OR length(TRIM(high_water_item_id)) BETWEEN 1 AND 256),
+              examined_entry_count INTEGER NOT NULL CHECK(typeof(examined_entry_count) = 'integer' AND examined_entry_count BETWEEN 0 AND 10000),
+              item_count INTEGER NOT NULL CHECK(typeof(item_count) = 'integer' AND item_count BETWEEN 0 AND 5000),
+              supported_item_count INTEGER NOT NULL CHECK(typeof(supported_item_count) = 'integer' AND supported_item_count BETWEEN 0 AND 5000),
+              quarantined_item_count INTEGER NOT NULL CHECK(typeof(quarantined_item_count) = 'integer' AND quarantined_item_count BETWEEN 0 AND 5000),
+              blocker_codes_json TEXT NOT NULL CHECK(json_valid(blocker_codes_json) AND json_type(blocker_codes_json) = 'array' AND length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              status TEXT NOT NULL CHECK(status IN ('sealed', 'blocked')),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              started_at TEXT NOT NULL,
+              completed_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, scan_id),
+              UNIQUE(workspace_id, scan_id, source_id),
+              FOREIGN KEY(workspace_id, source_id) REFERENCES external_source_configs(workspace_id, source_id) ON DELETE RESTRICT,
+              CHECK((item_count = 0 AND high_water_mtime_ns IS NULL AND high_water_item_id IS NULL) OR (item_count > 0 AND high_water_mtime_ns IS NOT NULL AND high_water_item_id IS NOT NULL)),
+              CHECK(supported_item_count + quarantined_item_count <= item_count)
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_scans_source_completed
+              ON external_source_scans(workspace_id, source_id, completed_at DESC, scan_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_catalog_items (
+              workspace_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+              item_id TEXT NOT NULL CHECK(length(TRIM(item_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              normalized_relative_path TEXT NOT NULL CHECK(length(TRIM(normalized_relative_path)) BETWEEN 1 AND 2048),
+              alias_paths_json TEXT NOT NULL CHECK(json_valid(alias_paths_json) AND json_type(alias_paths_json) = 'array' AND length(CAST(alias_paths_json AS BLOB)) <= 16384),
+              foreign_id_sha256 TEXT NOT NULL CHECK(length(foreign_id_sha256) = 64 AND foreign_id_sha256 NOT GLOB '*[^0-9a-f]*'),
+              producer_version TEXT CHECK(producer_version IS NULL OR length(TRIM(producer_version)) BETWEEN 1 AND 128),
+              observed_mtime_ns TEXT NOT NULL CHECK(length(observed_mtime_ns) = 20 AND observed_mtime_ns NOT GLOB '*[^0-9]*'),
+              file_identity_sha256 TEXT NOT NULL CHECK(length(file_identity_sha256) = 64 AND file_identity_sha256 NOT GLOB '*[^0-9a-f]*'),
+              stat_fingerprint_sha256 TEXT NOT NULL CHECK(length(stat_fingerprint_sha256) = 64 AND stat_fingerprint_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_sha256 TEXT NOT NULL CHECK(length(raw_sha256) = 64 AND raw_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_byte_count INTEGER NOT NULL CHECK(typeof(raw_byte_count) = 'integer' AND raw_byte_count BETWEEN 0 AND 16777216),
+              message_count INTEGER NOT NULL CHECK(typeof(message_count) = 'integer' AND message_count BETWEEN 0 AND 10000),
+              lineage_node_count INTEGER NOT NULL CHECK(typeof(lineage_node_count) = 'integer' AND lineage_node_count BETWEEN 0 AND 10000),
+              lineage_depth INTEGER NOT NULL CHECK(typeof(lineage_depth) = 'integer' AND lineage_depth BETWEEN 0 AND 64),
+              lineage_sha256 TEXT NOT NULL CHECK(length(lineage_sha256) = 64 AND lineage_sha256 NOT GLOB '*[^0-9a-f]*'),
+              disposition TEXT NOT NULL CHECK(disposition IN ('supported', 'unsupported_variant', 'quarantined', 'conflicting', 'blocked')),
+              reason_codes_json TEXT NOT NULL CHECK(json_valid(reason_codes_json) AND json_type(reason_codes_json) = 'array' AND length(CAST(reason_codes_json AS BLOB)) <= 8192),
+              catalog_item_sha256 TEXT NOT NULL CHECK(length(catalog_item_sha256) = 64 AND catalog_item_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              PRIMARY KEY(workspace_id, scan_id, item_id),
+              UNIQUE(workspace_id, scan_id, item_id, raw_sha256),
+              FOREIGN KEY(workspace_id, scan_id, source_id) REFERENCES external_source_scans(workspace_id, scan_id, source_id) ON DELETE RESTRICT,
+              CHECK(disposition <> 'supported' OR reason_codes_json = '[]')
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_catalog_page
+              ON external_source_catalog_items(workspace_id, scan_id, observed_mtime_ns DESC, item_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_external_source_catalog_foreign_identity
+              ON external_source_catalog_items(workspace_id, source_id, foreign_id_sha256, raw_sha256);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_plans (
+              workspace_id TEXT NOT NULL,
+              plan_id TEXT NOT NULL CHECK(length(TRIM(plan_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              config_revision INTEGER NOT NULL CHECK(typeof(config_revision) = 'integer' AND config_revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_versions_json TEXT NOT NULL CHECK(json_valid(adapter_versions_json) AND json_type(adapter_versions_json) = 'array' AND length(CAST(adapter_versions_json AS BLOB)) <= 8192),
+              selected_item_ids_json TEXT NOT NULL CHECK(json_valid(selected_item_ids_json) AND json_type(selected_item_ids_json) = 'array' AND json_array_length(selected_item_ids_json) BETWEEN 1 AND 100 AND length(CAST(selected_item_ids_json AS BLOB)) <= 32768),
+              selected_item_set_sha256 TEXT NOT NULL CHECK(length(selected_item_set_sha256) = 64 AND selected_item_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_set_sha256 TEXT NOT NULL CHECK(length(raw_set_sha256) = 64 AND raw_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_byte_count INTEGER NOT NULL CHECK(typeof(raw_byte_count) = 'integer' AND raw_byte_count BETWEEN 0 AND 26214400),
+              normalized_set_sha256 TEXT NOT NULL CHECK(length(normalized_set_sha256) = 64 AND normalized_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              normalized_byte_count INTEGER NOT NULL CHECK(typeof(normalized_byte_count) = 'integer' AND normalized_byte_count BETWEEN 0 AND 26214400),
+              message_count INTEGER NOT NULL CHECK(typeof(message_count) = 'integer' AND message_count BETWEEN 0 AND 50000),
+              blocker_codes_json TEXT NOT NULL CHECK(json_valid(blocker_codes_json) AND json_type(blocker_codes_json) = 'array' AND length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              staging_lease_id TEXT NOT NULL CHECK(length(TRIM(staging_lease_id)) BETWEEN 1 AND 256),
+              staging_expires_at TEXT NOT NULL,
+              plan_sha256 TEXT NOT NULL CHECK(length(plan_sha256) = 64 AND plan_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, plan_id),
+              UNIQUE(workspace_id, plan_id, plan_sha256),
+              FOREIGN KEY(workspace_id, scan_id, source_id) REFERENCES external_source_scans(workspace_id, scan_id, source_id) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_import_plans_source_created
+              ON external_source_import_plans(workspace_id, source_id, created_at DESC, plan_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_intents (
+              workspace_id TEXT NOT NULL,
+              import_id TEXT NOT NULL CHECK(length(TRIM(import_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              source_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              plan_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              config_revision INTEGER NOT NULL CHECK(typeof(config_revision) = 'integer' AND config_revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              plan_sha256 TEXT NOT NULL CHECK(length(plan_sha256) = 64 AND plan_sha256 NOT GLOB '*[^0-9a-f]*'),
+              selected_item_set_sha256 TEXT NOT NULL CHECK(length(selected_item_set_sha256) = 64 AND selected_item_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_versions_json TEXT NOT NULL CHECK(json_valid(adapter_versions_json) AND json_type(adapter_versions_json) = 'array' AND length(CAST(adapter_versions_json AS BLOB)) <= 8192),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              admitted_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, import_id),
+              UNIQUE(workspace_id, idempotency_key),
+              UNIQUE(workspace_id, import_id, source_id),
+              UNIQUE(workspace_id, import_id, scan_id),
+              UNIQUE(workspace_id, import_id, source_id, scan_id),
+              FOREIGN KEY(workspace_id, plan_id, plan_sha256) REFERENCES external_source_import_plans(workspace_id, plan_id, plan_sha256) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_import_intents_source_admitted
+              ON external_source_import_intents(workspace_id, source_id, admitted_at DESC, import_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_items (
+              workspace_id TEXT NOT NULL,
+              import_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              ordinal INTEGER NOT NULL CHECK(typeof(ordinal) = 'integer' AND ordinal BETWEEN 0 AND 99),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              producer_version TEXT CHECK(producer_version IS NULL OR length(TRIM(producer_version)) BETWEEN 1 AND 128),
+              raw_sha256 TEXT NOT NULL CHECK(length(raw_sha256) = 64 AND raw_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_byte_count INTEGER NOT NULL CHECK(typeof(raw_byte_count) = 'integer' AND raw_byte_count BETWEEN 0 AND 16777216),
+              normalized_artifact_sha256 TEXT NOT NULL CHECK(length(normalized_artifact_sha256) = 64 AND normalized_artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+              normalized_byte_count INTEGER NOT NULL CHECK(typeof(normalized_byte_count) = 'integer' AND normalized_byte_count BETWEEN 0 AND 8388608),
+              artifact_relative_key TEXT NOT NULL CHECK(length(TRIM(artifact_relative_key)) BETWEEN 1 AND 2048 AND artifact_relative_key LIKE 'external-sources/sha256/%'),
+              provenance_sha256 TEXT NOT NULL CHECK(length(provenance_sha256) = 64 AND provenance_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, import_id, item_id),
+              UNIQUE(workspace_id, import_id, ordinal),
+              UNIQUE(workspace_id, import_id, item_id, normalized_artifact_sha256),
+              FOREIGN KEY(workspace_id, import_id) REFERENCES external_source_import_intents(workspace_id, import_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, scan_id, item_id, raw_sha256) REFERENCES external_source_catalog_items(workspace_id, scan_id, item_id, raw_sha256) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_import_items_artifact
+              ON external_source_import_items(workspace_id, normalized_artifact_sha256, import_id, ordinal);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_settlements (
+              workspace_id TEXT NOT NULL,
+              settlement_id TEXT NOT NULL CHECK(length(TRIM(settlement_id)) BETWEEN 1 AND 256),
+              import_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              disposition TEXT NOT NULL CHECK(disposition IN ('applied', 'blocked', 'manual_reconciliation')),
+              artifact_set_sha256 TEXT CHECK(artifact_set_sha256 IS NULL OR (length(artifact_set_sha256) = 64 AND artifact_set_sha256 NOT GLOB '*[^0-9a-f]*')),
+              artifacts_verified_at TEXT,
+              blocker_codes_json TEXT NOT NULL CHECK(json_valid(blocker_codes_json) AND json_type(blocker_codes_json) = 'array' AND length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              result_sha256 TEXT NOT NULL CHECK(length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*'),
+              journey_event_id TEXT CHECK(journey_event_id IS NULL OR length(TRIM(journey_event_id)) BETWEEN 1 AND 256),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              settled_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, settlement_id),
+              UNIQUE(workspace_id, import_id),
+              FOREIGN KEY(workspace_id, import_id) REFERENCES external_source_import_intents(workspace_id, import_id) ON DELETE RESTRICT,
+              CHECK((disposition = 'applied' AND artifact_set_sha256 IS NOT NULL AND artifacts_verified_at IS NOT NULL AND blocker_codes_json = '[]') OR (disposition <> 'applied' AND artifact_set_sha256 IS NULL AND artifacts_verified_at IS NULL AND blocker_codes_json <> '[]'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_external_source_attachments (
+              workspace_id TEXT NOT NULL,
+              attachment_id TEXT NOT NULL CHECK(length(TRIM(attachment_id)) BETWEEN 1 AND 256),
+              session_id TEXT NOT NULL CHECK(length(TRIM(session_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL CHECK(length(TRIM(source_id)) BETWEEN 1 AND 256),
+              import_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              normalized_artifact_sha256 TEXT NOT NULL CHECK(length(normalized_artifact_sha256) = 64 AND normalized_artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              mode TEXT NOT NULL CHECK(mode = 'read_only_external'),
+              status TEXT NOT NULL CHECK(status IN ('attached', 'detached')),
+              revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+              attached_by_actor_id TEXT NOT NULL CHECK(length(TRIM(attached_by_actor_id)) BETWEEN 1 AND 256),
+              attached_at TEXT NOT NULL,
+              detached_by_actor_id TEXT,
+              detached_at TEXT,
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              PRIMARY KEY(workspace_id, attachment_id),
+              UNIQUE(workspace_id, session_id, import_id, item_id),
+              FOREIGN KEY(workspace_id, session_id) REFERENCES chat_session_meta(workspace_id, session_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, import_id, source_id) REFERENCES external_source_import_intents(workspace_id, import_id, source_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, import_id, item_id, normalized_artifact_sha256) REFERENCES external_source_import_items(workspace_id, import_id, item_id, normalized_artifact_sha256) ON DELETE RESTRICT,
+              CHECK((status = 'attached' AND detached_by_actor_id IS NULL AND detached_at IS NULL) OR (status = 'detached' AND detached_by_actor_id IS NOT NULL AND length(TRIM(detached_by_actor_id)) BETWEEN 1 AND 256 AND detached_at IS NOT NULL))
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_external_source_attachments_session_status
+              ON chat_external_source_attachments(workspace_id, session_id, status, attached_at DESC, attachment_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_knowledge_links (
+              workspace_id TEXT NOT NULL,
+              link_id TEXT NOT NULL CHECK(length(TRIM(link_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL,
+              import_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              normalized_artifact_sha256 TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              approval_id TEXT NOT NULL CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+              knowledge_document_id TEXT NOT NULL CHECK(length(TRIM(knowledge_document_id)) BETWEEN 1 AND 256),
+              thread_knowledge_attachment_id TEXT CHECK(thread_knowledge_attachment_id IS NULL OR length(TRIM(thread_knowledge_attachment_id)) BETWEEN 1 AND 256),
+              provenance_sha256 TEXT NOT NULL CHECK(length(provenance_sha256) = 64 AND provenance_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, link_id),
+              UNIQUE(workspace_id, approval_id, import_id, item_id),
+              UNIQUE(workspace_id, import_id, item_id, knowledge_document_id),
+              FOREIGN KEY(workspace_id, import_id, source_id) REFERENCES external_source_import_intents(workspace_id, import_id, source_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, import_id, item_id, normalized_artifact_sha256) REFERENCES external_source_import_items(workspace_id, import_id, item_id, normalized_artifact_sha256) ON DELETE RESTRICT,
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT,
+              FOREIGN KEY(knowledge_document_id) REFERENCES knowledge_documents(doc_id) ON DELETE RESTRICT,
+              FOREIGN KEY(thread_knowledge_attachment_id) REFERENCES chat_thread_knowledge_attachments(attachment_id) ON DELETE RESTRICT
+            );
+
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_active_cap_insert
+            BEFORE INSERT ON external_source_configs WHEN NEW.status = 'active'
+            AND NOT EXISTS (
+              SELECT 1 FROM external_source_configs
+              WHERE workspace_id = NEW.workspace_id AND source_id = NEW.source_id
+            ) AND (
+              SELECT COUNT(*) FROM external_source_configs WHERE workspace_id = NEW.workspace_id AND status = 'active'
+            ) >= 16 BEGIN SELECT RAISE(ABORT, 'external source active-root limit exceeded'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_active_cap_update
+            BEFORE UPDATE ON external_source_configs WHEN OLD.status <> 'active' AND NEW.status = 'active' AND (
+              SELECT COUNT(*) FROM external_source_configs WHERE workspace_id = NEW.workspace_id AND status = 'active'
+            ) >= 16 BEGIN SELECT RAISE(ABORT, 'external source active-root limit exceeded'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_cas
+            BEFORE UPDATE ON external_source_configs WHEN
+              NEW.workspace_id IS NOT OLD.workspace_id OR NEW.source_id IS NOT OLD.source_id OR NEW.kind IS NOT OLD.kind OR
+              NEW.owner_actor_id IS NOT OLD.owner_actor_id OR NEW.auth_actor_id IS NOT OLD.auth_actor_id OR
+              NEW.auth_actor_source IS NOT OLD.auth_actor_source OR NEW.canonical_root_path IS NOT OLD.canonical_root_path OR
+              NEW.root_identity_sha256 IS NOT OLD.root_identity_sha256 OR NEW.path_bridge_snapshot_id IS NOT OLD.path_bridge_snapshot_id OR
+              NEW.path_bridge_snapshot_sha256 IS NOT OLD.path_bridge_snapshot_sha256 OR NEW.allowed_roots_sha256 IS NOT OLD.allowed_roots_sha256 OR
+              NEW.input_flavor IS NOT OLD.input_flavor OR NEW.target_flavor IS NOT OLD.target_flavor OR NEW.distro IS NOT OLD.distro OR
+              NEW.require_git_identity IS NOT OLD.require_git_identity OR NEW.git_identity_sha256 IS NOT OLD.git_identity_sha256 OR
+              NEW.root_grant_approval_id IS NOT OLD.root_grant_approval_id OR NEW.ownership_attestation_sha256 IS NOT OLD.ownership_attestation_sha256 OR
+              NEW.adapter_id IS NOT OLD.adapter_id OR NEW.created_at IS NOT OLD.created_at OR NEW.revision <> OLD.revision + 1 OR OLD.status = 'revoked'
+            BEGIN SELECT RAISE(ABORT, 'external source config CAS or immutable identity violated'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_no_delete BEFORE DELETE ON external_source_configs
+            BEGIN SELECT RAISE(ABORT, 'external source configs cannot be deleted'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_scans_no_update BEFORE UPDATE ON external_source_scans BEGIN SELECT RAISE(ABORT, 'external source scans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_scans_no_delete BEFORE DELETE ON external_source_scans BEGIN SELECT RAISE(ABORT, 'external source scans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_catalog_no_update BEFORE UPDATE ON external_source_catalog_items BEGIN SELECT RAISE(ABORT, 'external source catalog items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_catalog_no_delete BEFORE DELETE ON external_source_catalog_items BEGIN SELECT RAISE(ABORT, 'external source catalog items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_plans_no_update BEFORE UPDATE ON external_source_import_plans BEGIN SELECT RAISE(ABORT, 'external source import plans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_plans_no_delete BEFORE DELETE ON external_source_import_plans BEGIN SELECT RAISE(ABORT, 'external source import plans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_intents_no_update BEFORE UPDATE ON external_source_import_intents BEGIN SELECT RAISE(ABORT, 'external source import intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_intents_no_delete BEFORE DELETE ON external_source_import_intents BEGIN SELECT RAISE(ABORT, 'external source import intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_items_no_update BEFORE UPDATE ON external_source_import_items BEGIN SELECT RAISE(ABORT, 'external source import items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_items_no_delete BEFORE DELETE ON external_source_import_items BEGIN SELECT RAISE(ABORT, 'external source import items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_settlements_no_update BEFORE UPDATE ON external_source_import_settlements BEGIN SELECT RAISE(ABORT, 'external source import settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_settlements_no_delete BEFORE DELETE ON external_source_import_settlements BEGIN SELECT RAISE(ABORT, 'external source import settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_knowledge_links_no_update BEFORE UPDATE ON external_source_knowledge_links BEGIN SELECT RAISE(ABORT, 'external source knowledge links are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_knowledge_links_no_delete BEFORE DELETE ON external_source_knowledge_links BEGIN SELECT RAISE(ABORT, 'external source knowledge links are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_chat_external_source_attachments_cas
+            BEFORE UPDATE ON chat_external_source_attachments WHEN
+              OLD.status <> 'attached' OR NEW.status <> 'detached' OR NEW.revision <> OLD.revision + 1 OR
+              NEW.workspace_id IS NOT OLD.workspace_id OR NEW.attachment_id IS NOT OLD.attachment_id OR
+              NEW.session_id IS NOT OLD.session_id OR NEW.source_id IS NOT OLD.source_id OR NEW.import_id IS NOT OLD.import_id OR
+              NEW.item_id IS NOT OLD.item_id OR NEW.normalized_artifact_sha256 IS NOT OLD.normalized_artifact_sha256 OR
+              NEW.mode IS NOT OLD.mode OR NEW.attached_by_actor_id IS NOT OLD.attached_by_actor_id OR NEW.attached_at IS NOT OLD.attached_at
+            BEGIN SELECT RAISE(ABORT, 'external source attachment transition is invalid'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_chat_external_source_attachments_no_delete BEFORE DELETE ON chat_external_source_attachments
+            BEGIN SELECT RAISE(ABORT, 'external source attachments cannot be deleted'); END;
+          `);
+        },
+      },
+      {
+        version: 167,
+        name: "trusted_ops_saved_boards",
+        up: (db) => {
+          if (!tableExists(db, "workspaces")) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS ops_saved_boards (
+              workspace_id TEXT NOT NULL CHECK(
+                workspace_id = TRIM(workspace_id) AND length(workspace_id) BETWEEN 1 AND 256
+                AND instr(workspace_id, char(0)) = 0
+                AND workspace_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              board_id TEXT NOT NULL CHECK(
+                board_id = TRIM(board_id) AND length(board_id) BETWEEN 1 AND 256
+                AND instr(board_id, char(0)) = 0
+                AND board_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.ops-board.v1'),
+              name TEXT NOT NULL CHECK(
+                name = TRIM(name) AND length(name) BETWEEN 1 AND 120
+                AND instr(name, char(0)) = 0
+                AND name NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              description TEXT CHECK(
+                description IS NULL OR (
+                  description = TRIM(description) AND length(description) BETWEEN 1 AND 500
+                  AND instr(description, char(0)) = 0
+                  AND description NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+                )
+              ),
+              layout_json TEXT NOT NULL CHECK(
+                json_valid(layout_json)
+                AND json_type(layout_json) = 'array'
+                AND json_array_length(layout_json) BETWEEN 1 AND 12
+                AND length(CAST(layout_json AS BLOB)) <= 16384
+              ),
+              status TEXT NOT NULL CHECK(status IN ('active', 'archived')),
+              revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+              created_by_actor_id TEXT NOT NULL CHECK(
+                created_by_actor_id = TRIM(created_by_actor_id) AND length(created_by_actor_id) BETWEEN 1 AND 256
+                AND instr(created_by_actor_id, char(0)) = 0
+                AND created_by_actor_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              updated_by_actor_id TEXT NOT NULL CHECK(
+                updated_by_actor_id = TRIM(updated_by_actor_id) AND length(updated_by_actor_id) BETWEEN 1 AND 256
+                AND instr(updated_by_actor_id, char(0)) = 0
+                AND updated_by_actor_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              updated_at TEXT NOT NULL CHECK(length(TRIM(updated_at)) > 0),
+              archived_by_actor_id TEXT CHECK(
+                archived_by_actor_id IS NULL OR (
+                  archived_by_actor_id = TRIM(archived_by_actor_id)
+                  AND length(archived_by_actor_id) BETWEEN 1 AND 256
+                  AND instr(archived_by_actor_id, char(0)) = 0
+                  AND archived_by_actor_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+                )
+              ),
+              archived_at TEXT CHECK(archived_at IS NULL OR length(TRIM(archived_at)) > 0),
+              idempotency_key TEXT NOT NULL CHECK(
+                idempotency_key = TRIM(idempotency_key) AND length(idempotency_key) BETWEEN 1 AND 512
+                AND instr(idempotency_key, char(0)) = 0
+                AND idempotency_key NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              request_sha256 TEXT NOT NULL CHECK(
+                length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              PRIMARY KEY(workspace_id, board_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              CHECK(
+                (status = 'active' AND archived_by_actor_id IS NULL AND archived_at IS NULL)
+                OR (status = 'archived' AND archived_by_actor_id IS NOT NULL AND archived_at IS NOT NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ops_saved_boards_workspace_status_updated
+              ON ops_saved_boards(workspace_id, status, updated_at DESC, board_id DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_insert_invariant
+            BEFORE INSERT ON ops_saved_boards
+            WHEN
+              NEW.status <> 'active'
+              OR NEW.revision <> 1
+              OR NEW.created_by_actor_id IS NOT NEW.updated_by_actor_id
+              OR NEW.created_at IS NOT NEW.updated_at
+              OR NEW.archived_by_actor_id IS NOT NULL
+              OR NEW.archived_at IS NOT NULL
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved board insert invariant violated');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_cap_insert
+            BEFORE INSERT ON ops_saved_boards
+            WHEN NOT EXISTS (
+              SELECT 1 FROM ops_saved_boards
+              WHERE workspace_id = NEW.workspace_id AND idempotency_key = NEW.idempotency_key
+            ) AND (
+              SELECT COUNT(*) FROM ops_saved_boards WHERE workspace_id = NEW.workspace_id
+            ) >= 64
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved board workspace limit exceeded');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_cas_update
+            BEFORE UPDATE ON ops_saved_boards
+            WHEN
+              NEW.workspace_id IS NOT OLD.workspace_id
+              OR NEW.board_id IS NOT OLD.board_id
+              OR NEW.schema_version IS NOT OLD.schema_version
+              OR NEW.created_by_actor_id IS NOT OLD.created_by_actor_id
+              OR NEW.created_at IS NOT OLD.created_at
+              OR NEW.idempotency_key IS NOT OLD.idempotency_key
+              OR NEW.request_sha256 IS NOT OLD.request_sha256
+              OR NEW.revision <> OLD.revision + 1
+              OR NEW.updated_at < OLD.updated_at
+              OR NOT (
+                (
+                  OLD.status = 'active' AND NEW.status = 'active'
+                  AND NEW.archived_by_actor_id IS NULL AND NEW.archived_at IS NULL
+                ) OR (
+                  OLD.status = 'active' AND NEW.status = 'archived'
+                  AND NEW.name IS OLD.name AND NEW.description IS OLD.description AND NEW.layout_json IS OLD.layout_json
+                  AND NEW.archived_by_actor_id IS NEW.updated_by_actor_id
+                  AND NEW.archived_at IS NEW.updated_at
+                ) OR (
+                  OLD.status = 'archived' AND NEW.status = 'active'
+                  AND NEW.name IS OLD.name AND NEW.description IS OLD.description AND NEW.layout_json IS OLD.layout_json
+                  AND NEW.archived_by_actor_id IS NULL AND NEW.archived_at IS NULL
+                )
+              )
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved board CAS or transition invariant violated');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_no_delete
+            BEFORE DELETE ON ops_saved_boards
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved boards cannot be deleted');
+            END;
+          `);
+        },
+      },
+      {
+        version: 168,
+        name: "governed_mesh_capability_publication",
+        up: (db) => {
+          if (!tableExists(db, "workspaces") || !tableExists(db, "mesh_nodes") || !tableExists(db, "mesh_leases")) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS mesh_capability_publishers (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              publisher_generation INTEGER NOT NULL CHECK(typeof(publisher_generation) = 'integer' AND publisher_generation > 0),
+              mtls_required INTEGER NOT NULL CHECK(mtls_required IN (0, 1)),
+              tls_fingerprint TEXT,
+              publication_lease_key TEXT NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL CHECK(typeof(publication_lease_fencing_token) = 'integer' AND publication_lease_fencing_token > 0),
+              publication_lease_expires_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, publisher_generation),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(node_id) REFERENCES mesh_nodes(node_id) ON DELETE RESTRICT,
+              CHECK((mtls_required = 0) OR (tls_fingerprint IS NOT NULL AND length(TRIM(tls_fingerprint)) > 0))
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_publisher_health (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              health_generation INTEGER NOT NULL CHECK(typeof(health_generation) = 'integer' AND health_generation > 0),
+              status TEXT NOT NULL CHECK(status IN ('online', 'suspect', 'offline', 'revoked')),
+              publication_lease_fencing_token INTEGER NOT NULL CHECK(typeof(publication_lease_fencing_token) = 'integer' AND publication_lease_fencing_token > 0),
+              publication_lease_expires_at TEXT NOT NULL,
+              tls_fingerprint TEXT,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, publisher_generation),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation)
+                REFERENCES mesh_capability_publishers(workspace_id, node_id, publisher_generation) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_manifests (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              publisher_generation INTEGER NOT NULL,
+              publication_key TEXT NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL CHECK(typeof(publication_lease_fencing_token) = 'integer' AND publication_lease_fencing_token > 0),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              supersedes_manifest_sha256 TEXT,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.mesh-capability-manifest.v1'),
+              entry_count INTEGER NOT NULL CHECK(typeof(entry_count) = 'integer' AND entry_count BETWEEN 1 AND 128),
+              canonical_json TEXT NOT NULL CHECK(json_valid(canonical_json) AND json_type(canonical_json) = 'object' AND length(CAST(canonical_json AS BLOB)) <= 524288),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, publisher_generation, manifest_sha256),
+              UNIQUE(workspace_id, publication_key),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation)
+                REFERENCES mesh_capability_publishers(workspace_id, node_id, publisher_generation) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, node_id, publisher_generation, supersedes_manifest_sha256)
+                REFERENCES mesh_capability_manifests(workspace_id, node_id, publisher_generation, manifest_sha256) ON DELETE RESTRICT,
+              CHECK(supersedes_manifest_sha256 IS NULL OR supersedes_manifest_sha256 <> manifest_sha256)
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_manifest_entries (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              manifest_sha256 TEXT NOT NULL,
+              capability_id TEXT NOT NULL,
+              local_id TEXT NOT NULL,
+              kind TEXT NOT NULL CHECK(kind IN ('tool', 'mcp_server', 'skill')),
+              descriptor_sha256 TEXT NOT NULL CHECK(length(descriptor_sha256) = 64 AND descriptor_sha256 NOT GLOB '*[^0-9a-f]*'),
+              permission_envelope_sha256 TEXT NOT NULL CHECK(length(permission_envelope_sha256) = 64 AND permission_envelope_sha256 NOT GLOB '*[^0-9a-f]*'),
+              entry_sha256 TEXT NOT NULL CHECK(length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
+              effect_posture TEXT NOT NULL CHECK(effect_posture IN ('none', 'read_only', 'write_local', 'external_side_effect', 'unknown')),
+              canonical_json TEXT NOT NULL CHECK(json_valid(canonical_json) AND json_type(canonical_json) = 'object' AND length(CAST(canonical_json AS BLOB)) <= 65536),
+              PRIMARY KEY(workspace_id, node_id, publisher_generation, manifest_sha256, capability_id),
+              UNIQUE(workspace_id, node_id, publisher_generation, manifest_sha256, kind, local_id),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation, manifest_sha256)
+                REFERENCES mesh_capability_manifests(workspace_id, node_id, publisher_generation, manifest_sha256) ON DELETE RESTRICT,
+              CHECK(capability_id = 'mesh:' || node_id || ':' || kind || ':' || local_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_activations (
+              workspace_id TEXT NOT NULL,
+              activation_id TEXT NOT NULL,
+              activation_revision INTEGER NOT NULL CHECK(typeof(activation_revision) = 'integer' AND activation_revision > 0),
+              capability_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              health_generation INTEGER NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL,
+              manifest_sha256 TEXT NOT NULL,
+              entry_sha256 TEXT NOT NULL CHECK(length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
+              descriptor_sha256 TEXT NOT NULL,
+              permission_envelope_sha256 TEXT NOT NULL,
+              effect_posture TEXT NOT NULL,
+              permission_diff_json TEXT NOT NULL CHECK(json_valid(permission_diff_json) AND json_type(permission_diff_json) = 'object'),
+              effect_diff_json TEXT NOT NULL CHECK(json_valid(effect_diff_json) AND json_type(effect_diff_json) = 'object'),
+              approval_id TEXT NOT NULL,
+              actor_id TEXT NOT NULL,
+              session_id TEXT,
+              turn_id TEXT,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, activation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation, manifest_sha256, capability_id)
+                REFERENCES mesh_capability_manifest_entries(workspace_id, node_id, publisher_generation, manifest_sha256, capability_id) ON DELETE RESTRICT,
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_activation_revocations (
+              workspace_id TEXT NOT NULL,
+              activation_id TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              actor_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              revoked_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, activation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, activation_id)
+                REFERENCES mesh_capability_activations(workspace_id, activation_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_invocation_intents (
+              workspace_id TEXT NOT NULL,
+              invocation_id TEXT NOT NULL,
+              activation_id TEXT NOT NULL,
+              activation_revision INTEGER NOT NULL CHECK(typeof(activation_revision) = 'integer' AND activation_revision > 0),
+              capability_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              health_generation INTEGER NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL,
+              manifest_sha256 TEXT NOT NULL,
+              entry_sha256 TEXT NOT NULL CHECK(length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
+              descriptor_sha256 TEXT NOT NULL,
+              permission_envelope_sha256 TEXT NOT NULL,
+              execution_profile_sha256 TEXT NOT NULL CHECK(length(execution_profile_sha256) = 64 AND execution_profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+              input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64 AND input_sha256 NOT GLOB '*[^0-9a-f]*'),
+              session_id TEXT NOT NULL,
+              turn_id TEXT NOT NULL,
+              run_id TEXT,
+              approval_id TEXT,
+              deadline_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, invocation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, activation_id)
+                REFERENCES mesh_capability_activations(workspace_id, activation_id) ON DELETE RESTRICT,
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_invocation_settlements (
+              workspace_id TEXT NOT NULL,
+              invocation_id TEXT NOT NULL,
+              disposition TEXT NOT NULL CHECK(disposition IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'unknown')),
+              output_sha256 TEXT,
+              error_code TEXT,
+              settlement_sha256 TEXT NOT NULL CHECK(length(settlement_sha256) = 64 AND settlement_sha256 NOT GLOB '*[^0-9a-f]*'),
+              effective_cost_attribution_sha256 TEXT,
+              publisher_generation INTEGER NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              settled_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, invocation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, invocation_id)
+                REFERENCES mesh_capability_invocation_intents(workspace_id, invocation_id) ON DELETE RESTRICT,
+              CHECK(output_sha256 IS NULL OR (length(output_sha256) = 64 AND output_sha256 NOT GLOB '*[^0-9a-f]*')),
+              CHECK(effective_cost_attribution_sha256 IS NULL OR (
+                length(effective_cost_attribution_sha256) = 64
+                AND effective_cost_attribution_sha256 NOT GLOB '*[^0-9a-f]*'
+              ))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_manifests_publisher_created
+              ON mesh_capability_manifests(workspace_id, node_id, publisher_generation, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_entries_capability
+              ON mesh_capability_manifest_entries(workspace_id, capability_id, manifest_sha256);
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_activations_capability_created
+              ON mesh_capability_activations(workspace_id, capability_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_intents_activation_created
+              ON mesh_capability_invocation_intents(workspace_id, activation_id, created_at DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_insert_guard
+            BEFORE INSERT ON mesh_capability_publishers
+            WHEN
+              EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND publisher_generation >= NEW.publisher_generation
+              )
+              OR EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND admission_generation > NEW.admission_generation
+              )
+              OR (
+                NOT EXISTS (SELECT 1 FROM mesh_capability_publishers WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id)
+                AND (SELECT COUNT(DISTINCT node_id) FROM mesh_capability_publishers WHERE workspace_id = NEW.workspace_id) >= 16
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_nodes node
+                JOIN mesh_leases lease ON lease.lease_key = NEW.publication_lease_key
+                WHERE node.node_id = NEW.node_id AND node.status = 'online'
+                  AND lease.holder_node_id = NEW.node_id
+                  AND lease.fencing_token = NEW.publication_lease_fencing_token
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND lease.expires_at = NEW.publication_lease_expires_at
+                  AND (NEW.mtls_required = 0 OR node.tls_fingerprint = NEW.tls_fingerprint)
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generation or live database-clock lease invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_health_insert_guard
+            BEFORE INSERT ON mesh_capability_publisher_health
+            WHEN NEW.health_generation <> 1 OR NEW.status <> 'online' OR NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND publisher.publication_lease_expires_at = NEW.publication_lease_expires_at
+                AND publisher.tls_fingerprint IS NEW.tls_fingerprint
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher health insert invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_health_cas
+            BEFORE UPDATE ON mesh_capability_publisher_health
+            WHEN NEW.workspace_id IS NOT OLD.workspace_id OR NEW.node_id IS NOT OLD.node_id
+              OR NEW.publisher_generation IS NOT OLD.publisher_generation
+              OR OLD.status IN ('offline', 'revoked')
+              OR NOT (
+                (
+                  NEW.health_generation = OLD.health_generation
+                  AND NEW.status = 'online' AND OLD.status = 'online'
+                  AND NEW.publication_lease_fencing_token = OLD.publication_lease_fencing_token
+                  AND NEW.publication_lease_expires_at > OLD.publication_lease_expires_at
+                  AND NEW.tls_fingerprint IS OLD.tls_fingerprint
+                  AND NEW.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND EXISTS (
+                    SELECT 1 FROM mesh_capability_publishers publisher
+                    JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+                    WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                      AND publisher.publisher_generation = NEW.publisher_generation
+                      AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                      AND publisher.tls_fingerprint IS NEW.tls_fingerprint
+                      AND lease.holder_node_id = NEW.node_id
+                      AND lease.fencing_token = NEW.publication_lease_fencing_token
+                      AND lease.expires_at = NEW.publication_lease_expires_at
+                      AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  )
+                ) OR (
+                  NEW.health_generation = OLD.health_generation + 1
+                  AND NEW.publication_lease_fencing_token = OLD.publication_lease_fencing_token
+                  AND NEW.tls_fingerprint IS OLD.tls_fingerprint
+                  AND (
+                    NEW.status <> 'online' OR (
+                      NEW.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                      AND EXISTS (
+                        SELECT 1 FROM mesh_capability_publishers publisher
+                        JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+                        WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                          AND publisher.publisher_generation = NEW.publisher_generation
+                          AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                          AND publisher.tls_fingerprint IS NEW.tls_fingerprint
+                          AND lease.holder_node_id = NEW.node_id
+                          AND lease.fencing_token = NEW.publication_lease_fencing_token
+                          AND lease.expires_at = NEW.publication_lease_expires_at
+                          AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                      )
+                    )
+                  )
+                )
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher health CAS invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifest_insert_guard
+            BEFORE INSERT ON mesh_capability_manifests
+            WHEN
+              NOT EXISTS (
+                SELECT 1 FROM mesh_capability_publishers publisher
+                JOIN mesh_capability_publisher_health health
+                  ON health.workspace_id = publisher.workspace_id AND health.node_id = publisher.node_id
+                 AND health.publisher_generation = publisher.publisher_generation
+                WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                  AND publisher.publisher_generation = NEW.publisher_generation
+                  AND publisher.admission_generation = NEW.admission_generation
+                  AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND health.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND health.status = 'online'
+                  AND health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND json_extract(NEW.canonical_json, '$.workspaceId') = NEW.workspace_id
+                  AND json_extract(NEW.canonical_json, '$.nodeId') = NEW.node_id
+                  AND json_extract(NEW.canonical_json, '$.admissionGeneration') = NEW.admission_generation
+                  AND json_extract(NEW.canonical_json, '$.publisherGeneration') = NEW.publisher_generation
+                  AND json_extract(NEW.canonical_json, '$.publicationKey') = NEW.publication_key
+                  AND json_extract(NEW.canonical_json, '$.publicationLeaseFencingToken') = NEW.publication_lease_fencing_token
+                  AND json_extract(NEW.canonical_json, '$.manifestSha256') = NEW.manifest_sha256
+                  AND json_extract(NEW.canonical_json, '$.supersedesManifestSha256') IS NEW.supersedes_manifest_sha256
+                  AND json_extract(NEW.canonical_json, '$.schemaVersion') = NEW.schema_version
+                  AND json_extract(NEW.canonical_json, '$.createdAt') = NEW.created_at
+                  AND json_array_length(json_extract(NEW.canonical_json, '$.entries')) = NEW.entry_count
+              )
+              OR (
+                NEW.supersedes_manifest_sha256 IS NOT NULL AND (
+                  NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_manifests prior
+                    WHERE prior.workspace_id = NEW.workspace_id AND prior.node_id = NEW.node_id
+                      AND prior.publisher_generation = NEW.publisher_generation
+                      AND prior.manifest_sha256 = NEW.supersedes_manifest_sha256
+                  )
+                  OR EXISTS (
+                    SELECT 1 FROM mesh_capability_manifests child
+                    WHERE child.workspace_id = NEW.workspace_id AND child.node_id = NEW.node_id
+                      AND child.publisher_generation = NEW.publisher_generation
+                      AND child.supersedes_manifest_sha256 = NEW.supersedes_manifest_sha256
+                  )
+                )
+              )
+              OR (
+                NEW.supersedes_manifest_sha256 IS NULL AND (
+                  SELECT COUNT(*) FROM mesh_capability_manifests head
+                  WHERE head.workspace_id = NEW.workspace_id AND head.node_id = NEW.node_id
+                    AND head.publisher_generation = NEW.publisher_generation
+                    AND NOT EXISTS (
+                      SELECT 1 FROM mesh_capability_manifests child
+                      WHERE child.workspace_id = head.workspace_id AND child.node_id = head.node_id
+                        AND child.publisher_generation = head.publisher_generation
+                        AND child.supersedes_manifest_sha256 = head.manifest_sha256
+                    )
+                ) >= 32
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability manifest generation, supersession, health, or cap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_entries_cap
+            BEFORE INSERT ON mesh_capability_manifest_entries
+            WHEN json_extract(NEW.canonical_json, '$.localId') IS NOT NEW.local_id
+              OR json_extract(NEW.canonical_json, '$.kind') IS NOT NEW.kind
+              OR json_extract(NEW.canonical_json, '$.capabilityId') IS NOT NEW.capability_id
+              OR json_extract(NEW.canonical_json, '$.descriptorSha256') IS NOT NEW.descriptor_sha256
+              OR json_extract(NEW.canonical_json, '$.permissionEnvelopeSha256') IS NOT NEW.permission_envelope_sha256
+              OR json_extract(NEW.canonical_json, '$.entrySha256') IS NOT NEW.entry_sha256
+              OR json_extract(NEW.canonical_json, '$.descriptor.effectPosture') IS NOT NEW.effect_posture
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_capability_manifests manifest,
+                  json_each(manifest.canonical_json, '$.entries') manifest_entry
+                WHERE manifest.workspace_id = NEW.workspace_id AND manifest.node_id = NEW.node_id
+                  AND manifest.publisher_generation = NEW.publisher_generation
+                  AND manifest.manifest_sha256 = NEW.manifest_sha256
+                  AND manifest_entry.value = NEW.canonical_json
+              )
+              OR (SELECT COUNT(*) FROM mesh_capability_manifest_entries entry
+                  WHERE entry.workspace_id = NEW.workspace_id AND entry.node_id = NEW.node_id
+                    AND entry.publisher_generation = NEW.publisher_generation AND entry.manifest_sha256 = NEW.manifest_sha256)
+                 >= (SELECT entry_count FROM mesh_capability_manifests manifest
+                     WHERE manifest.workspace_id = NEW.workspace_id AND manifest.node_id = NEW.node_id
+                       AND manifest.publisher_generation = NEW.publisher_generation AND manifest.manifest_sha256 = NEW.manifest_sha256)
+            BEGIN SELECT RAISE(ABORT, 'mesh capability manifest entry count exceeded'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activation_guard
+            BEFORE INSERT ON mesh_capability_activations
+            WHEN
+              (SELECT COUNT(*) FROM mesh_capability_activations activation
+               JOIN mesh_capability_publishers cap_publisher
+                 ON cap_publisher.workspace_id = activation.workspace_id AND cap_publisher.node_id = activation.node_id
+                AND cap_publisher.publisher_generation = activation.publisher_generation
+               JOIN mesh_capability_publisher_health cap_health
+                 ON cap_health.workspace_id = activation.workspace_id AND cap_health.node_id = activation.node_id
+                AND cap_health.publisher_generation = activation.publisher_generation
+               JOIN mesh_nodes cap_node ON cap_node.node_id = activation.node_id
+               JOIN mesh_leases cap_lease ON cap_lease.lease_key = cap_publisher.publication_lease_key
+               WHERE activation.workspace_id = NEW.workspace_id
+                 AND activation.capability_id <> NEW.capability_id
+                 AND activation.activation_revision = (
+                   SELECT MAX(latest.activation_revision) FROM mesh_capability_activations latest
+                   WHERE latest.workspace_id = activation.workspace_id AND latest.capability_id = activation.capability_id
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM mesh_capability_activation_revocations revoked
+                   WHERE revoked.workspace_id = activation.workspace_id AND revoked.activation_id = activation.activation_id
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM mesh_capability_manifests child
+                   WHERE child.workspace_id = activation.workspace_id AND child.node_id = activation.node_id
+                     AND child.publisher_generation = activation.publisher_generation
+                     AND child.supersedes_manifest_sha256 = activation.manifest_sha256
+                 )
+                 AND cap_health.status = 'online' AND cap_health.health_generation = activation.health_generation
+                 AND cap_health.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                 AND cap_publisher.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                 AND cap_health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 AND activation.publisher_generation = (
+                   SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+                   WHERE current.workspace_id = activation.workspace_id AND current.node_id = activation.node_id
+                 )
+                 AND cap_node.status = 'online'
+                 AND (cap_publisher.mtls_required = 0 OR (
+                   cap_node.tls_fingerprint = cap_health.tls_fingerprint
+                   AND cap_publisher.tls_fingerprint = cap_health.tls_fingerprint
+                 ))
+                 AND cap_lease.holder_node_id = activation.node_id
+                 AND cap_lease.fencing_token = activation.publication_lease_fencing_token
+                 AND cap_lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) >= 256
+              OR NEW.activation_revision <> 1 + COALESCE((
+                SELECT MAX(prior.activation_revision) FROM mesh_capability_activations prior
+                WHERE prior.workspace_id = NEW.workspace_id AND prior.capability_id = NEW.capability_id
+              ), 0)
+              OR NOT EXISTS (
+                SELECT 1
+                FROM mesh_capability_manifest_entries entry
+                JOIN mesh_capability_publisher_health health
+                  ON health.workspace_id = entry.workspace_id AND health.node_id = entry.node_id
+                 AND health.publisher_generation = entry.publisher_generation
+                JOIN mesh_capability_publishers publisher
+                  ON publisher.workspace_id = entry.workspace_id AND publisher.node_id = entry.node_id
+                 AND publisher.publisher_generation = entry.publisher_generation
+                JOIN mesh_nodes node ON node.node_id = entry.node_id
+                JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+                JOIN approvals approval ON approval.approval_id = NEW.approval_id
+                WHERE entry.workspace_id = NEW.workspace_id AND entry.capability_id = NEW.capability_id
+                  AND entry.node_id = NEW.node_id AND entry.publisher_generation = NEW.publisher_generation
+                  AND entry.manifest_sha256 = NEW.manifest_sha256 AND entry.kind IN ('tool', 'mcp_server')
+                  AND entry.entry_sha256 = NEW.entry_sha256
+                  AND entry.descriptor_sha256 = NEW.descriptor_sha256
+                  AND entry.permission_envelope_sha256 = NEW.permission_envelope_sha256
+                  AND entry.effect_posture = NEW.effect_posture
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_manifests child
+                    WHERE child.workspace_id = entry.workspace_id AND child.node_id = entry.node_id
+                      AND child.publisher_generation = entry.publisher_generation
+                      AND child.supersedes_manifest_sha256 = entry.manifest_sha256
+                  )
+                  AND health.health_generation = NEW.health_generation AND health.status = 'online'
+                  AND health.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND publisher.publisher_generation = (
+                    SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+                    WHERE current.workspace_id = NEW.workspace_id AND current.node_id = NEW.node_id
+                  )
+                  AND node.status = 'online'
+                  AND (publisher.mtls_required = 0 OR (
+                    node.tls_fingerprint = health.tls_fingerprint
+                    AND publisher.tls_fingerprint = health.tls_fingerprint
+                  ))
+                  AND lease.holder_node_id = NEW.node_id
+                  AND lease.fencing_token = NEW.publication_lease_fencing_token
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND approval.kind = 'mesh.capability.activate' AND approval.status = 'approved'
+                  AND approval.resolved_at IS NOT NULL
+                  AND (
+                    approval.expires_at IS NULL OR (
+                      julianday(approval.expires_at) IS NOT NULL
+                      AND julianday(approval.expires_at) > julianday('now')
+                    )
+                  )
+                  AND json_valid(approval.payload_json) AND json_type(approval.payload_json) = 'object'
+                  AND json_extract(approval.payload_json, '$.workspaceId') = NEW.workspace_id
+                  AND json_extract(approval.payload_json, '$.activationId') = NEW.activation_id
+                  AND json_extract(approval.payload_json, '$.activationRevision') = NEW.activation_revision
+                  AND json_extract(approval.payload_json, '$.requestSha256') = NEW.request_sha256
+                  AND json_extract(approval.payload_json, '$.capabilityId') = NEW.capability_id
+                  AND json_extract(approval.payload_json, '$.manifestSha256') = NEW.manifest_sha256
+                  AND json_extract(approval.payload_json, '$.entrySha256') = NEW.entry_sha256
+                  AND json_extract(approval.payload_json, '$.descriptorSha256') = NEW.descriptor_sha256
+                  AND json_extract(approval.payload_json, '$.permissionEnvelopeSha256') = NEW.permission_envelope_sha256
+                  AND json_extract(approval.payload_json, '$.effectPosture') = NEW.effect_posture
+                  AND (SELECT COUNT(*) FROM json_each(approval.payload_json)) = 10
+                  AND approval.linkage_json IS NOT NULL AND json_valid(approval.linkage_json)
+                  AND json_extract(approval.linkage_json, '$.workspaceId') = NEW.workspace_id
+                  AND (NEW.session_id IS NULL OR json_extract(approval.linkage_json, '$.sessionId') = NEW.session_id)
+                  AND (NEW.turn_id IS NULL OR json_extract(approval.linkage_json, '$.turnId') = NEW.turn_id)
+                  AND (SELECT COUNT(*) FROM json_each(approval.linkage_json)) =
+                    1 + CASE WHEN NEW.session_id IS NULL THEN 0 ELSE 1 END + CASE WHEN NEW.turn_id IS NULL THEN 0 ELSE 1 END
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(approval.linkage_json) linkage_field
+                    WHERE linkage_field.key NOT IN ('workspaceId', 'sessionId', 'turnId')
+                  )
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability activation binding, approval, health, lease, or cap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intent_guard
+            BEFORE INSERT ON mesh_capability_invocation_intents
+            WHEN julianday(NEW.deadline_at) IS NULL
+              OR NEW.deadline_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') OR NOT EXISTS (
+              SELECT 1 FROM mesh_capability_activations activation
+              JOIN mesh_capability_manifest_entries entry
+                ON entry.workspace_id = activation.workspace_id AND entry.node_id = activation.node_id
+               AND entry.publisher_generation = activation.publisher_generation
+               AND entry.manifest_sha256 = activation.manifest_sha256
+               AND entry.capability_id = activation.capability_id
+              JOIN mesh_capability_publisher_health health
+                ON health.workspace_id = activation.workspace_id AND health.node_id = activation.node_id
+               AND health.publisher_generation = activation.publisher_generation
+              JOIN mesh_capability_publishers publisher
+                ON publisher.workspace_id = activation.workspace_id AND publisher.node_id = activation.node_id
+               AND publisher.publisher_generation = activation.publisher_generation
+              JOIN mesh_nodes node ON node.node_id = activation.node_id
+              JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+              WHERE activation.workspace_id = NEW.workspace_id AND activation.activation_id = NEW.activation_id
+                AND activation.capability_id = NEW.capability_id AND activation.node_id = NEW.node_id
+                AND activation.activation_revision = (
+                  SELECT MAX(latest.activation_revision) FROM mesh_capability_activations latest
+                  WHERE latest.workspace_id = activation.workspace_id AND latest.capability_id = activation.capability_id
+                )
+                AND activation.publisher_generation = NEW.publisher_generation
+                AND activation.activation_revision = NEW.activation_revision
+                AND activation.health_generation = NEW.health_generation
+                AND activation.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND activation.manifest_sha256 = NEW.manifest_sha256
+                AND activation.entry_sha256 = NEW.entry_sha256
+                AND activation.descriptor_sha256 = NEW.descriptor_sha256
+                AND activation.permission_envelope_sha256 = NEW.permission_envelope_sha256
+                AND julianday(NEW.deadline_at) <= julianday('now')
+                  + CAST(json_extract(entry.canonical_json, '$.descriptor.resourceLimits.timeoutMs') AS REAL) / 86400000.0
+                AND NOT EXISTS (SELECT 1 FROM mesh_capability_activation_revocations revoked
+                                WHERE revoked.workspace_id = activation.workspace_id AND revoked.activation_id = activation.activation_id)
+                AND NOT EXISTS (SELECT 1 FROM mesh_capability_manifests child
+                                WHERE child.workspace_id = activation.workspace_id AND child.node_id = activation.node_id
+                                  AND child.publisher_generation = activation.publisher_generation
+                                  AND child.supersedes_manifest_sha256 = activation.manifest_sha256)
+                AND health.health_generation = activation.health_generation AND health.status = 'online'
+                AND health.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                AND publisher.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                AND health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                AND activation.publisher_generation = (SELECT MAX(current.publisher_generation)
+                  FROM mesh_capability_publishers current
+                  WHERE current.workspace_id = activation.workspace_id AND current.node_id = activation.node_id)
+                AND node.status = 'online'
+                AND (publisher.mtls_required = 0 OR (
+                  node.tls_fingerprint = health.tls_fingerprint
+                  AND publisher.tls_fingerprint = health.tls_fingerprint
+                ))
+                AND lease.holder_node_id = activation.node_id
+                AND lease.fencing_token = activation.publication_lease_fencing_token
+                AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intent is not currently callable'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_settlement_guard
+            BEFORE INSERT ON mesh_capability_invocation_settlements
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_invocation_intents intent
+              JOIN mesh_capability_publishers publisher
+                ON publisher.workspace_id = intent.workspace_id AND publisher.node_id = intent.node_id
+               AND publisher.publisher_generation = intent.publisher_generation
+              WHERE intent.workspace_id = NEW.workspace_id AND intent.invocation_id = NEW.invocation_id
+                AND intent.publisher_generation = NEW.publisher_generation
+                AND intent.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND intent.publisher_generation = (
+                  SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+                  WHERE current.workspace_id = intent.workspace_id AND current.node_id = intent.node_id
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability settlement generation binding violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_no_update BEFORE UPDATE ON mesh_capability_publishers BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_no_delete BEFORE DELETE ON mesh_capability_publishers BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_health_no_delete BEFORE DELETE ON mesh_capability_publisher_health BEGIN SELECT RAISE(ABORT, 'mesh capability health records cannot be deleted'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifests_no_update BEFORE UPDATE ON mesh_capability_manifests BEGIN SELECT RAISE(ABORT, 'mesh capability manifests are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifests_no_delete BEFORE DELETE ON mesh_capability_manifests BEGIN SELECT RAISE(ABORT, 'mesh capability manifests are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_entries_no_update BEFORE UPDATE ON mesh_capability_manifest_entries BEGIN SELECT RAISE(ABORT, 'mesh capability entries are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_entries_no_delete BEFORE DELETE ON mesh_capability_manifest_entries BEGIN SELECT RAISE(ABORT, 'mesh capability entries are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activations_no_update BEFORE UPDATE ON mesh_capability_activations BEGIN SELECT RAISE(ABORT, 'mesh capability activations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activations_no_delete BEFORE DELETE ON mesh_capability_activations BEGIN SELECT RAISE(ABORT, 'mesh capability activations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_revocations_no_update BEFORE UPDATE ON mesh_capability_activation_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability revocations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_revocations_no_delete BEFORE DELETE ON mesh_capability_activation_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability revocations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intents_no_update BEFORE UPDATE ON mesh_capability_invocation_intents BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intents_no_delete BEFORE DELETE ON mesh_capability_invocation_intents BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_settlements_no_update BEFORE UPDATE ON mesh_capability_invocation_settlements BEGIN SELECT RAISE(ABORT, 'mesh capability invocation settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_settlements_no_delete BEFORE DELETE ON mesh_capability_invocation_settlements BEGIN SELECT RAISE(ABORT, 'mesh capability invocation settlements are immutable'); END;
+          `);
         },
       },
     ],
@@ -5007,6 +7818,59 @@ function addColumnIfMissingIfTableExists(
     return;
   }
   addColumnIfMissing(db, tableName, columnName, columnSql);
+}
+
+function backfillSkillAggregateRevisions(db: DatabaseSync): void {
+  const runtimeSources: string[] = [];
+  if (tableExists(db, "skill_lifecycle")) {
+    runtimeSources.push(`
+      SELECT skill_id, created_at, updated_at
+      FROM skill_lifecycle
+      WHERE length(TRIM(created_at)) > 0 AND length(TRIM(updated_at)) > 0
+    `);
+  }
+  if (tableExists(db, "skill_state")) {
+    runtimeSources.push(`
+      SELECT skill_id, updated_at AS created_at, updated_at
+      FROM skill_state
+      WHERE length(TRIM(updated_at)) > 0
+    `);
+  }
+  if (runtimeSources.length > 0) {
+    db.exec(`
+      INSERT OR IGNORE INTO skill_aggregate_revisions (
+        aggregate_kind, aggregate_id, revision, created_at, updated_at
+      )
+      SELECT 'runtime_skill', TRIM(source.skill_id), 1, MIN(source.created_at), MAX(source.updated_at)
+      FROM (${runtimeSources.join(" UNION ALL ")}) AS source
+      WHERE length(TRIM(source.skill_id)) BETWEEN 1 AND 256
+      GROUP BY TRIM(source.skill_id);
+    `);
+  }
+  if (tableExists(db, "candidate_skill_versions")) {
+    db.exec(`
+      INSERT OR IGNORE INTO skill_aggregate_revisions (
+        aggregate_kind, aggregate_id, revision, created_at, updated_at
+      )
+      SELECT 'candidate_skill', TRIM(candidate_id), 1, MIN(created_at), MAX(updated_at)
+      FROM candidate_skill_versions
+      WHERE length(TRIM(candidate_id)) BETWEEN 1 AND 256
+        AND length(TRIM(created_at)) > 0
+        AND length(TRIM(updated_at)) > 0
+      GROUP BY TRIM(candidate_id);
+    `);
+  }
+  if (tableExists(db, "system_settings")) {
+    db.exec(`
+      INSERT OR IGNORE INTO skill_aggregate_revisions (
+        aggregate_kind, aggregate_id, revision, created_at, updated_at
+      )
+      SELECT 'activation_policy', 'global', 1, updated_at, updated_at
+      FROM system_settings
+      WHERE setting_key = 'skill_activation_policy_v1'
+        AND length(TRIM(updated_at)) > 0;
+    `);
+  }
 }
 
 function tableExists(db: DatabaseSync, tableName: string): boolean {

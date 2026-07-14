@@ -154,8 +154,22 @@ export const LlmProviderCapabilitiesSchema = z
     jsonMode: z.boolean(),
     webSearch: z.boolean().optional(),
     reasoning: z.boolean().optional(),
+    reasoningEfforts: z
+      .array(z.enum(["none", "low", "medium", "high", "xhigh", "max", "ultra"]))
+      .min(1)
+      .optional(),
   })
   .passthrough();
+
+export const LlmProviderGoogleCloudConfigSchema = z
+  .object({
+    projectId: z.string().min(1).max(128).optional(),
+    projectIdEnv: z.string().min(1).max(128).optional(),
+    location: z.string().min(1).max(64).optional(),
+    locationEnv: z.string().min(1).max(128).optional(),
+    endpointId: z.string().min(1).max(128).optional(),
+  })
+  .strict();
 
 export const LlmProviderRequestAuthSchema = z.discriminatedUnion("type", [
   z.object({
@@ -250,9 +264,12 @@ export const LlmProviderConfigSchema = z
       "bedrock-messages",
     ]),
     defaultModel: z.string(),
-    authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
+    authMode: z
+      .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
+      .optional(),
     apiKey: z.string().optional(),
     apiKeyEnv: z.string().optional(),
+    googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
     request: LlmProviderRequestConfigSchema.optional(),
     headers: z.record(z.string(), z.string()).optional(),
     capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
@@ -707,9 +724,9 @@ export const AssistantConfigInputSchema = z
         // audio → transcription → governed turn). Absent/false (default) ⇒
         // byte-identical: parsers keep emitting placeholders / dropping voice.
         channelVoiceInboundV1Enabled: z.boolean().optional(),
-        // Signal inbound poller (competitive-gap phase B1b): gates the governed
-        // poll loop against the local signal-cli bridge. Absent/false (default)
-        // ⇒ Signal stays outbound-only and behavior is byte-identical to today.
+        // Deprecated compatibility input. True is accepted for migration
+        // evidence but never enables Signal receive; the current bridge lacks
+        // an acknowledgement/replay contract.
         signalInboundV1Enabled: z.boolean().optional(),
         // Weekly governed memory consolidation: mines completed run traces and
         // PROPOSES memory candidates (approval-gated, never auto-applied).
@@ -759,6 +776,7 @@ export const CronJobSchema = z
         "update_review",
         "watchdog",
         "no_agent",
+        "agent_turn",
       ])
       .default("task"),
     actionConfig: z.record(z.string(), z.unknown()).optional(),

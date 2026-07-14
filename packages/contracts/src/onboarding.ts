@@ -79,6 +79,7 @@ export interface OnboardingState {
   firstRunChecklist?: OnboardingFirstRunChecklistItem[];
   setupReadiness?: OnboardingSetupReadiness;
   settings: {
+    revision: number;
     toolApprovalMode: ToolApprovalMode;
     defaultToolProfile: string;
     budgetMode: "saver" | "balanced" | "power";
@@ -120,6 +121,7 @@ export interface OnboardingStartupState {
 }
 
 export interface OnboardingBootstrapInput {
+  expectedRevision: number;
   toolApprovalMode?: ToolApprovalMode;
   defaultToolProfile?: ToolProfile;
   budgetMode?: "saver" | "balanced" | "power";
