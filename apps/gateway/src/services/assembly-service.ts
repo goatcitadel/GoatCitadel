@@ -36,6 +36,7 @@ import type {
   ModelCouncilSynthesisArtifact,
   ModelReputation,
   ModelUsageEventRecord,
+  LlmApiStyle,
   PeerReview,
 } from "@goatcitadel/contracts";
 import { canonicalJsonString } from "@goatcitadel/contracts";
@@ -43,6 +44,8 @@ import type { AssemblyParticipantModel, AssemblyStage } from "@goatcitadel/contr
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
+import { resolveAnthropicEffort, resolveAnthropicMaxTokensForVisibleOutput } from "./anthropic-reasoning-budget.js";
+import { resolveChatReasoningEffort } from "./chat-reasoning-controls.js";
 
 interface StructuredInvocationInput {
   participant: AssemblyParticipantModel;
@@ -85,6 +88,7 @@ interface AssemblyServiceOptions {
 export interface ModelCouncilProviderCandidate {
   providerId: string;
   model: string;
+  apiStyle?: LlmApiStyle;
   contextWindowTokens: number;
   routeConfigFingerprint: string;
 }
@@ -106,6 +110,13 @@ const MODEL_COUNCIL_LEASE_HEARTBEAT_MS = 10_000;
 const MODEL_COUNCIL_MAX_PARTICIPANTS = 3;
 const MODEL_COUNCIL_PARTICIPANT_MAX_TOKENS = 1_200;
 const MODEL_COUNCIL_SYNTHESIS_MAX_TOKENS = 1_600;
+const MODEL_COUNCIL_API_STYLES = new Set<LlmApiStyle>([
+  "openai-chat-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "bedrock-messages",
+]);
 const MODEL_COUNCIL_PARTICIPANT_INSTRUCTION =
   "You are an advisory member of a read-only model council. Answer independently. " +
   "Do not request or imply tool use, mutations, approvals, memory promotion, or external actions.";
@@ -1636,6 +1647,7 @@ class ModelCouncilExecutor {
       if (run.status === "completed") {
         return buildCompletedModelCouncilResult(this.options.storage, run);
       }
+      assertLegacyCouncilReasoningRecoverySafe(this.options.storage, run, input);
     }
     const leaseOwnerId = `model-council:${randomUUID()}`;
     const now = new Date().toISOString();
@@ -1672,6 +1684,12 @@ class ModelCouncilExecutor {
       model: participant.model,
       label: participant.role,
     }));
+    const synthesisParticipant = resolution.participants.find(
+      (participant) => participant.participantId === resolution.synthesisParticipantId,
+    );
+    if (!synthesisParticipant) {
+      throw new Error(`Model council ${runId} has no immutable synthesis participant.`);
+    }
     return this.options.storage.assembly.createRun({
       runId,
       runKind: "chat_model_council",
@@ -1704,7 +1722,14 @@ class ModelCouncilExecutor {
         convergenceThreshold: 1,
         stagnationWindow: 1,
         timeBudgetMs: 120_000,
-        tokenBudget: participants.length * MODEL_COUNCIL_PARTICIPANT_MAX_TOKENS + MODEL_COUNCIL_SYNTHESIS_MAX_TOKENS,
+        tokenBudget:
+          participants.length * MODEL_COUNCIL_PARTICIPANT_MAX_TOKENS +
+          buildModelCouncilSynthesisThinkingOptions(
+            synthesisParticipant.providerId,
+            synthesisParticipant.apiStyle,
+            synthesisParticipant.model,
+            input.capabilityProfile.selection.thinkingLevel,
+          ).max_tokens!,
         costBudgetUsd: 0,
         domainPreset: "analysis",
         synthesisStyle: "balanced",
@@ -1927,6 +1952,12 @@ class ModelCouncilExecutor {
       );
       let observedResponse: ChatCompletionResponse | undefined;
       let providerInvocationStarted = false;
+      const synthesisThinkingOptions = buildModelCouncilSynthesisThinkingOptions(
+        synthesisParticipant.providerId,
+        resolveCouncilExecutionApiStyle(synthesisParticipant, input),
+        synthesisParticipant.model,
+        input.capabilityProfile.selection.thinkingLevel,
+      );
       const request: ChatCompletionRequest = {
         providerId: synthesisParticipant.providerId,
         model: synthesisParticipant.model,
@@ -1946,8 +1977,13 @@ class ModelCouncilExecutor {
               .join("\n\n"),
           },
         ],
-        temperature: 0.1,
-        max_tokens: MODEL_COUNCIL_SYNTHESIS_MAX_TOKENS,
+        ...synthesisThinkingOptions,
+        // The synthesizer is the acting model for the council turn, so it
+        // inherits the exact thinking posture frozen into the turn profile.
+        // C1 participants intentionally do not inherit this value: applying a
+        // global deep/max setting to every advisory call would silently
+        // multiply cost and diverge from the operator's single acting-model
+        // choice.
         timeoutMs: 60_000,
         signal: input.signal,
         metadata: { surface: "chat", runtime: "assembly_model_council", stage: "C3_synthesize" },
@@ -2213,6 +2249,45 @@ class ModelCouncilExecutor {
   }
 }
 
+export function buildModelCouncilSynthesisThinkingOptions(
+  providerId: string | undefined,
+  apiStyle: LlmApiStyle | undefined,
+  model: string | undefined,
+  thinkingLevel: ChatTurnCapabilityProfileRecord["selection"]["thinkingLevel"] | undefined,
+): Pick<ChatCompletionRequest, "max_tokens" | "reasoning" | "temperature"> {
+  const effort = resolveChatReasoningEffort(thinkingLevel ?? "standard");
+  const isAnthropic =
+    apiStyle === "anthropic-messages" ||
+    providerId?.trim().toLowerCase() === "anthropic" ||
+    providerId?.trim().toLowerCase() === "claude-code";
+  if (isAnthropic && !model?.trim()) {
+    throw new TypeError("Anthropic council synthesis requires a resolved model before reasoning can be budgeted.");
+  }
+  if (isAnthropic) {
+    resolveAnthropicEffort({ effort, model: model! });
+  }
+  return {
+    // Reasoning-capable provider families can reject sampling controls
+    // whenever reasoning is enabled. Keep the low deterministic sampling
+    // posture only when the operator explicitly disables reasoning; for every
+    // enabled effort, let the canonical LLM owner apply provider defaults and
+    // compatibility validation.
+    ...(effort === "none" && !isAnthropic ? { temperature: 0.1 } : {}),
+    // Anthropic adaptive thinking has no wire-level budget_tokens field, but
+    // max_tokens still caps thinking plus the visible answer. Preserve the
+    // governed local effort allowance for both manual and adaptive modes so
+    // the canonical answer cannot be squeezed to zero by hidden reasoning.
+    max_tokens:
+      isAnthropic && effort !== "none"
+        ? resolveAnthropicMaxTokensForVisibleOutput({
+            effort,
+            visibleOutputTokenBudget: MODEL_COUNCIL_SYNTHESIS_MAX_TOKENS,
+          })
+        : MODEL_COUNCIL_SYNTHESIS_MAX_TOKENS,
+    reasoning: { effort },
+  };
+}
+
 function buildModelCouncilResolution(input: ExecuteChatModelCouncilInput): ModelCouncilResolution {
   assertModelCouncilInputScope(input);
   const profile = input.capabilityProfile;
@@ -2243,12 +2318,14 @@ function buildModelCouncilResolution(input: ExecuteChatModelCouncilInput): Model
     role: index === 0 ? "primary" : "advisory",
     providerId: candidate.providerId,
     model: candidate.model,
+    ...(candidate.apiStyle ? { apiStyle: candidate.apiStyle } : {}),
     contextWindowTokens: candidate.contextWindowTokens,
     routeConfigFingerprint: candidate.routeConfigFingerprint,
     routeFingerprint: digest({
       providerId: candidate.providerId,
       model: candidate.model,
       contextWindowTokens: candidate.contextWindowTokens,
+      ...(candidate.apiStyle ? { apiStyle: candidate.apiStyle } : {}),
       routeConfigFingerprint: candidate.routeConfigFingerprint,
       capabilityProfileHash: profile.hashes.profileHash,
     }),
@@ -2256,7 +2333,7 @@ function buildModelCouncilResolution(input: ExecuteChatModelCouncilInput): Model
     toolsAllowed: false,
   }));
   for (const participant of participants) {
-    assertCouncilRequestBudgets(participant, input, participants.length);
+    assertCouncilRequestBudgets(participant, input, participants.length, participants[0]!);
   }
   const draft = {
     schemaVersion: "assembly.model-council-resolution.v1" as const,
@@ -2301,18 +2378,25 @@ function assertExistingModelCouncilResolution(run: AssemblyRunRecord, input: Exe
       candidate,
     ]),
   );
+  const synthesisParticipant = resolution.participants.find(
+    (participant) => participant.participantId === resolution.synthesisParticipantId,
+  );
+  if (!synthesisParticipant) {
+    throw new Error(`Model council ${run.runId} lost its immutable synthesis participant.`);
+  }
   for (const participant of resolution.participants) {
     const current = readyRoutes.get(`${participant.providerId}\u0000${participant.model}`);
     if (
       !current ||
       current.contextWindowTokens !== participant.contextWindowTokens ||
+      (participant.apiStyle !== undefined && current.apiStyle !== participant.apiStyle) ||
       current.routeConfigFingerprint !== participant.routeConfigFingerprint
     ) {
       throw new Error(
         `Model council ${run.runId} participant ${participant.participantId} is no longer ready under its frozen route.`,
       );
     }
-    assertCouncilRequestBudgets(participant, input, resolution.participants.length);
+    assertCouncilRequestBudgets(participant, input, resolution.participants.length, synthesisParticipant);
   }
 }
 
@@ -2391,6 +2475,7 @@ function assertCouncilRequestBudgets(
   participant: Pick<ModelCouncilParticipantResolution, "participantId" | "model" | "contextWindowTokens">,
   input: ExecuteChatModelCouncilInput,
   participantCount: number,
+  synthesisParticipant: Pick<ModelCouncilParticipantResolution, "providerId" | "apiStyle" | "model">,
 ): void {
   const model = participant.model;
   const participantPromptTokens = estimateCouncilMessagesTokens(
@@ -2417,7 +2502,12 @@ function assertCouncilRequestBudgets(
   const synthesisRequiredTokens =
     Math.max(synthesisBasePromptTokens, snapshotPromptFloor) +
     participantCount * MODEL_COUNCIL_PARTICIPANT_MAX_TOKENS +
-    MODEL_COUNCIL_SYNTHESIS_MAX_TOKENS;
+    buildModelCouncilSynthesisThinkingOptions(
+      synthesisParticipant.providerId,
+      synthesisParticipant.apiStyle,
+      synthesisParticipant.model,
+      input.capabilityProfile.selection.thinkingLevel,
+    ).max_tokens!;
   const requiredTokens = Math.max(participantRequiredTokens, synthesisRequiredTokens);
   if (participant.contextWindowTokens < requiredTokens) {
     throw new Error(
@@ -2442,6 +2532,8 @@ function dedupeCouncilCandidates(candidates: ModelCouncilProviderCandidate[]): M
       !candidate.model.trim() ||
       candidate.model !== candidate.model.trim() ||
       containsAsciiControlCharacter(candidate.model) ||
+      candidate.apiStyle === undefined ||
+      !MODEL_COUNCIL_API_STYLES.has(candidate.apiStyle) ||
       !Number.isSafeInteger(candidate.contextWindowTokens) ||
       candidate.contextWindowTokens <= 0 ||
       !/^[a-f0-9]{64}$/u.test(candidate.routeConfigFingerprint)
@@ -2455,6 +2547,44 @@ function dedupeCouncilCandidates(candidates: ModelCouncilProviderCandidate[]): M
     }
   }
   return output;
+}
+
+function assertLegacyCouncilReasoningRecoverySafe(
+  storage: Storage,
+  run: AssemblyRunRecord,
+  input: ExecuteChatModelCouncilInput,
+): void {
+  const resolution = requireModelCouncilResolution(run);
+  const synthesisParticipant = resolution.participants.find(
+    (participant) => participant.participantId === resolution.synthesisParticipantId,
+  );
+  if (
+    synthesisParticipant?.apiStyle === undefined &&
+    resolveChatReasoningEffort(input.capabilityProfile.selection.thinkingLevel ?? "standard") !== "none" &&
+    !getCouncilSynthesisArtifact(storage, run)
+  ) {
+    throw new Error(
+      `Model council ${run.runId} predates the immutable provider-style/reasoning binding and cannot resume ` +
+        "reasoning dispatch safely; retry as a new Chat turn.",
+    );
+  }
+}
+
+function resolveCouncilExecutionApiStyle(
+  participant: ModelCouncilParticipantResolution,
+  input: ExecuteChatModelCouncilInput,
+): LlmApiStyle | undefined {
+  if (participant.apiStyle !== undefined) {
+    return participant.apiStyle;
+  }
+  const current = dedupeCouncilCandidates(input.providerCandidates).find(
+    (candidate) =>
+      candidate.providerId === participant.providerId &&
+      candidate.model === participant.model &&
+      candidate.contextWindowTokens === participant.contextWindowTokens &&
+      candidate.routeConfigFingerprint === participant.routeConfigFingerprint,
+  );
+  return current?.apiStyle;
 }
 
 function councilStageIndex(stage: AssemblyStage): number {
@@ -2562,6 +2692,7 @@ function requireModelCouncilResolution(run: AssemblyRunRecord): ModelCouncilReso
       !participant.model.trim() ||
       participant.model !== participant.model.trim() ||
       containsAsciiControlCharacter(participant.model) ||
+      (participant.apiStyle !== undefined && !MODEL_COUNCIL_API_STYLES.has(participant.apiStyle)) ||
       !Number.isSafeInteger(participant.contextWindowTokens) ||
       participant.contextWindowTokens <= 0 ||
       !/^[a-f0-9]{64}$/u.test(participant.routeConfigFingerprint) ||
@@ -2582,6 +2713,7 @@ function requireModelCouncilResolution(run: AssemblyRunRecord): ModelCouncilReso
       providerId: participant.providerId,
       model: participant.model,
       contextWindowTokens: participant.contextWindowTokens,
+      ...(participant.apiStyle ? { apiStyle: participant.apiStyle } : {}),
       routeConfigFingerprint: participant.routeConfigFingerprint,
       capabilityProfileHash: run.councilResolution.capabilityProfileHash,
     });

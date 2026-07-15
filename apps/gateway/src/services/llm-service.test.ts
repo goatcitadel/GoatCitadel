@@ -695,6 +695,33 @@ describe("LlmService", () => {
     ).rejects.toThrowError(/reasoning effort is set to none/i);
   });
 
+  it("rejects sampling controls for GPT-5.4 reasoning on the default Responses path", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+
+    await expect(
+      service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+        reasoning: { effort: "xhigh" },
+        temperature: 0.1,
+      }),
+    ).rejects.toThrowError(/reasoning effort is set to none/i);
+  });
+
   it("rejects sampling controls for older GPT-5 chat models", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -1444,7 +1471,7 @@ describe("LlmService", () => {
           name: "answer",
           schema: { type: "object" },
         },
-        max_tokens: 128,
+        max_tokens: 2_048,
       });
 
       expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("ok");
@@ -1466,11 +1493,9 @@ describe("LlmService", () => {
     expect(payloadBody?.messages).toEqual([
       { role: "user", content: [{ type: "text", text: "hello", cache_control: { type: "ephemeral" } }] },
     ]);
-    expect(payloadBody?.thinking).toEqual({
-      type: "enabled",
-      budget_tokens: 1024,
-    });
+    expect(payloadBody?.thinking).toEqual({ type: "adaptive" });
     expect(payloadBody?.output_config).toEqual({
+      effort: "low",
       format: {
         type: "json_schema",
         name: "answer",

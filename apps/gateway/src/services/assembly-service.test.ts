@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { canonicalJsonString } from "@goatcitadel/contracts";
 import type {
   AdversarialReview,
   AssemblyArtifactRecord,
@@ -30,11 +32,63 @@ import {
   ProviderAdapterRegistry,
   SynthesisEngine,
   bindAssemblyChatCompletion,
+  buildModelCouncilSynthesisThinkingOptions,
   type ExecuteChatModelCouncilInput,
 } from "./assembly-service.js";
+import { buildAnthropicMessagesPayload } from "./llm-provider-anthropic.js";
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("model council synthesis thinking controls", () => {
+  it("retains deterministic sampling only when reasoning is explicitly off", () => {
+    expect(buildModelCouncilSynthesisThinkingOptions("openai", "openai-responses", "gpt-5.4", "off")).toEqual({
+      temperature: 0.1,
+      max_tokens: 1_600,
+      reasoning: { effort: "none" },
+    });
+    expect(buildModelCouncilSynthesisThinkingOptions("openai", "openai-responses", "gpt-5.4", "deep")).toEqual({
+      max_tokens: 1_600,
+      reasoning: { effort: "xhigh" },
+    });
+    expect(
+      buildModelCouncilSynthesisThinkingOptions("anthropic", "anthropic-messages", "claude-sonnet-4-6", "standard"),
+    ).toEqual({
+      max_tokens: 5_696,
+      reasoning: { effort: "medium" },
+    });
+    expect(
+      buildModelCouncilSynthesisThinkingOptions("anthropic", "anthropic-messages", "claude-opus-4-8", "deep"),
+    ).toEqual({
+      max_tokens: 17_984,
+      reasoning: { effort: "xhigh" },
+    });
+    expect(
+      buildAnthropicMessagesPayload(
+        {
+          messages: [{ role: "user", content: "Synthesize." }],
+          ...buildModelCouncilSynthesisThinkingOptions(
+            "custom-claude",
+            "anthropic-messages",
+            "claude-opus-4-8",
+            "deep",
+          ),
+        },
+        "claude-opus-4-8",
+      ),
+    ).toMatchObject({
+      max_tokens: 17_984,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
+    });
+    expect(() =>
+      buildModelCouncilSynthesisThinkingOptions("anthropic", "anthropic-messages", "claude-sonnet-4-6", "deep"),
+    ).toThrow(/does not support xhigh/i);
+    expect(() =>
+      buildModelCouncilSynthesisThinkingOptions("anthropic", "anthropic-messages", "claude-fable-5", "off"),
+    ).toThrow(/cannot honor an explicit reasoning-off/i);
+  });
 });
 
 function createDeferred<T>() {
@@ -45,6 +99,10 @@ function createDeferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function testDigest(value: unknown): string {
+  return createHash("sha256").update(canonicalJsonString(value), "utf8").digest("hex");
 }
 
 const participants: AssemblyParticipantModel[] = [
@@ -355,12 +413,14 @@ function createCouncilExecutionInput(
       {
         providerId: "openai",
         model: "gpt-5.4",
+        apiStyle: "openai-responses",
         contextWindowTokens: 128_000,
         routeConfigFingerprint: "1".repeat(64),
       },
       {
         providerId: "anthropic",
         model: "claude-sonnet-5",
+        apiStyle: "anthropic-messages",
         contextWindowTokens: 200_000,
         routeConfigFingerprint: "2".repeat(64),
       },
@@ -1163,7 +1223,7 @@ describe("AssemblyService", () => {
     const capabilityProfile = {
       profileId: "profile-turn-1",
       identity: { turnId: "turn-1", sessionId: "session-1", workspaceId: "default" },
-      selection: { effectiveProviderId: "openai", effectiveModel: "gpt-5.4" },
+      selection: { effectiveProviderId: "openai", effectiveModel: "gpt-5.4", thinkingLevel: "deep" },
       governance: {
         authReadiness: [{ kind: "provider", ref: "openai", status: "ready", reasonCodes: [] }],
       },
@@ -1182,12 +1242,14 @@ describe("AssemblyService", () => {
           {
             providerId: "openai",
             model: "gpt-5.4",
+            apiStyle: "openai-responses",
             contextWindowTokens: 128_000,
             routeConfigFingerprint: "1".repeat(64),
           },
           {
             providerId: "anthropic",
             model: "claude-sonnet-5",
+            apiStyle: "anthropic-messages",
             contextWindowTokens: 200_000,
             routeConfigFingerprint: "2".repeat(64),
           },
@@ -1211,6 +1273,16 @@ describe("AssemblyService", () => {
           }),
         );
       }
+      const participantRequests = createChatCompletion.mock.calls
+        .map(([request]) => request)
+        .filter((request) => request.metadata?.stage === "C1_participate");
+      const synthesisRequest = createChatCompletion.mock.calls
+        .map(([request]) => request)
+        .find((request) => request.metadata?.stage === "C3_synthesize");
+      expect(participantRequests).toHaveLength(2);
+      expect(participantRequests.every((request) => request.reasoning === undefined)).toBe(true);
+      expect(synthesisRequest?.reasoning).toEqual({ effort: "xhigh" });
+      expect(synthesisRequest?.temperature).toBeUndefined();
       const detail = service.getRunDetail(result.runId);
       expect(detail.run.status).toBe("completed");
       expect(detail.rounds.map((round) => round.stage)).toEqual([
@@ -1280,12 +1352,14 @@ describe("AssemblyService", () => {
           {
             providerId: "openai",
             model: "gpt-5.4",
+            apiStyle: "openai-responses",
             contextWindowTokens: 128,
             routeConfigFingerprint: "1".repeat(64),
           },
           {
             providerId: "anthropic",
             model: "claude-sonnet-5",
+            apiStyle: "anthropic-messages",
             contextWindowTokens: 200_000,
             routeConfigFingerprint: "2".repeat(64),
           },
@@ -1326,6 +1400,100 @@ describe("AssemblyService", () => {
       }),
     ).rejects.toThrow(/no longer ready under its frozen route/i);
     expect(createChatCompletion).toHaveBeenCalledTimes(3);
+
+    await expect(
+      service.executeChatModelCouncil({
+        ...input,
+        providerCandidates: input.providerCandidates.map((candidate) =>
+          candidate.providerId === "openai" ? { ...candidate, apiStyle: "openai-chat-completions" } : candidate,
+        ),
+      }),
+    ).rejects.toThrow(/no longer ready under its frozen route/i);
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails before provider dispatch when a legacy council lacks the immutable reasoning route binding", async () => {
+    const storage = createStorage();
+    const createChatCompletion = vi.fn(async () => {
+      throw new Error("first advisory interrupted");
+    });
+    const service = new AssemblyService({
+      storage: storage as never,
+      rootDir: os.tmpdir(),
+      createChatCompletion,
+      publishRealtime: vi.fn(),
+    });
+    const input = createCouncilExecutionInput({
+      capabilityProfile: {
+        ...createCouncilCapabilityProfile("turn-1"),
+        selection: {
+          effectiveProviderId: "custom-claude",
+          effectiveModel: "claude-opus-4-8",
+          thinkingLevel: "standard",
+        },
+        governance: {
+          authReadiness: [{ kind: "provider", ref: "custom-claude", status: "ready", reasonCodes: [] }],
+        },
+      } as ChatTurnCapabilityProfileRecord,
+      providerCandidates: [
+        {
+          providerId: "custom-claude",
+          model: "claude-opus-4-8",
+          apiStyle: "anthropic-messages",
+          contextWindowTokens: 200_000,
+          routeConfigFingerprint: "3".repeat(64),
+        },
+        {
+          providerId: "openai",
+          model: "gpt-5.4",
+          apiStyle: "openai-responses",
+          contextWindowTokens: 128_000,
+          routeConfigFingerprint: "1".repeat(64),
+        },
+      ],
+    });
+
+    await expect(service.executeChatModelCouncil(input)).rejects.toThrow("first advisory interrupted");
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+
+    const current = [...storage.__state.runs.values()][0]!;
+    const resolution = current.councilResolution!;
+    const legacyParticipants = resolution.participants.map((participant) => {
+      const { apiStyle: _removedApiStyle, ...legacy } = participant;
+      return {
+        ...legacy,
+        routeFingerprint: testDigest({
+          providerId: legacy.providerId,
+          model: legacy.model,
+          contextWindowTokens: legacy.contextWindowTokens,
+          routeConfigFingerprint: legacy.routeConfigFingerprint,
+          capabilityProfileHash: resolution.capabilityProfileHash,
+        }),
+      };
+    });
+    const { resolutionHash: _oldResolutionHash, ...legacyResolutionBase } = resolution;
+    const legacyResolutionDraft = { ...legacyResolutionBase, participants: legacyParticipants };
+    const legacyResolution = {
+      ...legacyResolutionDraft,
+      resolutionHash: testDigest(legacyResolutionDraft),
+    };
+    storage.__state.runs.set(current.runId, {
+      ...current,
+      settings: {
+        ...current.settings,
+        tokenBudget: legacyParticipants.length * 1_200 + 1_600,
+      },
+      councilResolution: legacyResolution,
+      councilEvidence: current.councilEvidence
+        ? { ...current.councilEvidence, resolutionHash: legacyResolution.resolutionHash }
+        : undefined,
+    });
+    createChatCompletion.mockClear();
+
+    await expect(service.executeChatModelCouncil(input)).rejects.toThrow(
+      /predates the immutable provider-style\/reasoning binding.*retry as a new Chat turn/i,
+    );
+    expect(createChatCompletion).not.toHaveBeenCalled();
   });
 
   it("renews the Assembly lease during a provider call beyond the former TTL and blocks takeover", async () => {

@@ -1019,6 +1019,16 @@ export class LlmService {
       dispatcher: input.target.dispatcher,
     };
     const outputCapField = resolveOutputCapPayloadField(input.payload);
+    const minimumEffectiveOutputTokenCap = input.outputCapRecovery?.minimumEffectiveOutputTokenCap;
+    if (
+      minimumEffectiveOutputTokenCap !== undefined &&
+      (!Number.isSafeInteger(minimumEffectiveOutputTokenCap) ||
+        minimumEffectiveOutputTokenCap <= 0 ||
+        !outputCapField ||
+        minimumEffectiveOutputTokenCap > outputCapField.value)
+    ) {
+      throw new TypeError("Provider output-cap recovery semantic floor is invalid for the effective request payload.");
+    }
     const requestedOutputTokenCap = outputCapField
       ? (input.outputCapRecovery?.requestedOutputTokenCap ?? outputCapField.value)
       : undefined;
@@ -1088,6 +1098,7 @@ export class LlmService {
         effectivePayload: input.payload,
         outputCapRetriesRemaining: input.outputCapRecovery?.retriesRemaining ?? 0,
         ...(requestedOutputTokenCap === undefined ? {} : { logicalRequestedOutputTokenCap: requestedOutputTokenCap }),
+        ...(minimumEffectiveOutputTokenCap === undefined ? {} : { minimumEffectiveOutputTokenCap }),
       };
       if (
         response.ok ||
@@ -1144,6 +1155,16 @@ export class LlmService {
       tokenMultiplier: this.getModelTokenMultiplier(input.resolved.provider.providerId, input.model),
     });
     if (!decision.retry) return undefined;
+    if (
+      input.dispatched.minimumEffectiveOutputTokenCap !== undefined &&
+      decision.effectiveOutputTokenCap < input.dispatched.minimumEffectiveOutputTokenCap
+    ) {
+      // A generic context-window recovery must never reduce a provider request
+      // below a semantic floor such as Anthropic's governed reasoning reserve.
+      // Leave the original failure authoritative and do not dispatch a request
+      // that cannot preserve the caller's requested reasoning posture.
+      return undefined;
+    }
     const outputCapError = new Error(input.providerErrorText);
     outputCapError.name = "ProviderOutputCapError";
     observeProviderFailureUsage(input.dispatched.usage, input.providerFailureEvidence, {
@@ -1162,6 +1183,7 @@ export class LlmService {
       payload: retryPayload,
       outputCapRecovery: {
         requestedOutputTokenCap,
+        minimumEffectiveOutputTokenCap: input.dispatched.minimumEffectiveOutputTokenCap,
         retriesRemaining: input.dispatched.outputCapRetriesRemaining - 1,
         recoverySourceEventId: usage?.eventId,
         providerAvailableTokens: decision.providerAvailableOutputTokens,
@@ -4482,6 +4504,9 @@ function buildOpenAiResponsesPayload(
   model: string,
   provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
 ): Record<string, unknown> {
+  if (provider.providerId.trim().toLowerCase() === "openai") {
+    validateOpenAiRequestCompatibility(request, model);
+  }
   const { instructions, input } = buildOpenAiResponsesInput(request.messages);
   const payload: Record<string, unknown> = {
     model,
@@ -5647,7 +5672,7 @@ function applyProviderSpecificChatOptions(input: {
     return;
   }
   if (providerId === "openai") {
-    validateOpenAiChatRequestCompatibility(input.request, input.model);
+    validateOpenAiRequestCompatibility(input.request, input.model);
   }
   if (input.request.reasoning?.effort && (providerId === "openai" || input.request.reasoning.effort !== "none")) {
     input.payload.reasoning_effort = input.request.reasoning.effort;
@@ -5669,7 +5694,7 @@ function applyProviderSpecificChatOptions(input: {
   }
 }
 
-function validateOpenAiChatRequestCompatibility(request: ChatCompletionRequest, model: string): void {
+function validateOpenAiRequestCompatibility(request: ChatCompletionRequest, model: string): void {
   const hasSamplingControls = request.temperature !== undefined || request.top_p !== undefined;
   if (!hasSamplingControls) {
     return;

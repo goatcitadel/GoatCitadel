@@ -5249,7 +5249,13 @@ export class GatewayService {
         if (excluded || (!provider.hasApiKey && !local) || !contextWindowTokens || !routeConfigFingerprint) {
           return undefined;
         }
-        return { providerId: provider.providerId, model, contextWindowTokens, routeConfigFingerprint };
+        return {
+          providerId: provider.providerId,
+          model,
+          apiStyle: this.llmService.resolveExecutionApiStyle(provider.providerId, model),
+          contextWindowTokens,
+          routeConfigFingerprint,
+        };
       })
       .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
       .sort((left, right) => `${left.providerId}:${left.model}`.localeCompare(`${right.providerId}:${right.model}`));

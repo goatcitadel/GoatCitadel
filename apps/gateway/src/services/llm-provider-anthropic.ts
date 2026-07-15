@@ -14,6 +14,13 @@ import {
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 import { extractProviderOwnedOutputCapErrorText, parseProviderOutputCapEvidence } from "./llm-output-cap-recovery.js";
+import {
+  assertAnthropicThinkingFitsMaxTokens,
+  resolveAnthropicEffort,
+  resolveAnthropicMaxTokensForVisibleOutput,
+  resolveAnthropicThinkingMode,
+  resolveAnthropicThinkingBudgetTokens,
+} from "./anthropic-reasoning-budget.js";
 
 const MAX_ANTHROPIC_ERROR_BODY_BYTES = 64 * 1024;
 const ANTHROPIC_ERROR_BODY_TIMEOUT_MS = 5000;
@@ -31,6 +38,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     attribution: ModelUsageAttributionContext = {},
   ): Promise<ChatCompletionResponse> {
     const payload = buildAnthropicMessagesPayload(request, model);
+    const minimumEffectiveOutputTokenCap = resolveAnthropicMinimumEffectiveOutputTokenCap(payload);
     const target = adapterHost.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
     let dispatched = await adapterHost.postJsonRequest({
@@ -46,6 +54,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
       signal: request.signal,
       outputCapRecovery: {
         requestedOutputTokenCap: request.max_tokens,
+        minimumEffectiveOutputTokenCap,
         retriesRemaining: 1,
       },
     });
@@ -75,6 +84,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
                 signal: request.signal,
                 outputCapRecovery: {
                   requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                  minimumEffectiveOutputTokenCap: dispatched.minimumEffectiveOutputTokenCap,
                   retriesRemaining: dispatched.outputCapRetriesRemaining,
                 },
                 dispatched,
@@ -113,6 +123,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     attribution: ModelUsageAttributionContext = {},
   ): AsyncGenerator<Record<string, unknown>> {
     const payload = buildAnthropicMessagesPayload(request, model);
+    const minimumEffectiveOutputTokenCap = resolveAnthropicMinimumEffectiveOutputTokenCap(payload);
     payload.stream = true;
 
     const target = adapterHost.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
@@ -130,6 +141,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
       signal: request.signal,
       outputCapRecovery: {
         requestedOutputTokenCap: request.max_tokens,
+        minimumEffectiveOutputTokenCap,
         retriesRemaining: 1,
       },
     });
@@ -169,6 +181,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
                   signal: request.signal,
                   outputCapRecovery: {
                     requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                    minimumEffectiveOutputTokenCap: dispatched.minimumEffectiveOutputTokenCap,
                     retriesRemaining: dispatched.outputCapRetriesRemaining,
                   },
                   dispatched,
@@ -245,6 +258,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
                     signal: request.signal,
                     outputCapRecovery: {
                       requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                      minimumEffectiveOutputTokenCap: dispatched.minimumEffectiveOutputTokenCap,
                       retriesRemaining: dispatched.outputCapRetriesRemaining,
                     },
                     dispatched,
@@ -476,16 +490,18 @@ function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: n
 }
 
 /**
- * Newer Anthropic models (Opus 4.7+, Fable 5, Mythos 5) reject sampling controls
+ * Newer Anthropic models (Opus 4.7+, Sonnet 5, Fable 5, Mythos 5) reject sampling controls
  * (temperature/top_p/top_k) with a 400 — they use always-on adaptive sampling.
  * Detect them so the adapter omits those parameters instead of forwarding values
- * that would fail the request. Older models (bare claude-opus-4, claude-opus-4-1,
- * sonnet-4-6) still accept sampling controls.
+ * that would fail the request. Older models without enabled thinking still
+ * accept sampling controls; enabled thinking applies the stricter request-level
+ * compatibility rule below.
  */
 export function anthropicModelRejectsSamplingControls(model: string): boolean {
   const normalized = model.trim().toLowerCase();
   if (!normalized) return false;
   if (normalized.includes("fable") || normalized.includes("mythos")) return true;
+  if (/claude-sonnet-5(?:$|[.-])/u.test(normalized)) return true;
   const opusMinor = normalized.match(/claude-opus-4-(\d+)/);
   if (opusMinor) {
     const minor = Number.parseInt(opusMinor[1] ?? "", 10);
@@ -502,8 +518,32 @@ export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, mo
   // across every provider. The umbrella kill switch (coworkRuntimeQualityV1Disabled)
   // is enforced upstream where the base prompt is assembled, not here.
   const { system, messages } = applyAnthropicCacheBreakpoints(built.system, built.messages);
-  const reasoningEffort = request.reasoning?.effort;
+  const thinkingMode = resolveAnthropicThinkingMode(model);
+  const reasoningEffort =
+    request.reasoning?.effort ??
+    (thinkingMode === "adaptive_default_disable_supported" || thinkingMode === "adaptive_always_on"
+      ? "high"
+      : undefined);
   const thinkingEnabled = Boolean(reasoningEffort && reasoningEffort !== "none");
+  const anthropicEffort = reasoningEffort ? resolveAnthropicEffort({ effort: reasoningEffort, model }) : undefined;
+  assertAnthropicSamplingCompatibility({ request, model, thinkingEnabled });
+  // Adaptive Messages requests omit budget_tokens on the wire, but Anthropic's
+  // max_tokens remains a shared cap for hidden thinking and visible output.
+  // Keep the same governed local allowance for every enabled mode so direct
+  // callers and output-cap recovery cannot silently erase the visible answer.
+  const thinkingBudgetTokens =
+    thinkingEnabled && reasoningEffort ? resolveAnthropicThinkingBudgetTokens(reasoningEffort) : undefined;
+  const maxTokens =
+    request.max_tokens ??
+    (thinkingBudgetTokens === undefined
+      ? 1_024
+      : resolveAnthropicMaxTokensForVisibleOutput({
+          effort: reasoningEffort ?? "low",
+          visibleOutputTokenBudget: 1_024,
+        }));
+  if (reasoningEffort && thinkingEnabled) {
+    assertAnthropicThinkingFitsMaxTokens({ effort: reasoningEffort, maxTokens });
+  }
   const payload: Record<string, unknown> = {
     model,
     messages,
@@ -515,8 +555,7 @@ export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, mo
     if (request.temperature !== undefined) payload.temperature = request.temperature;
     if (request.top_p !== undefined) payload.top_p = request.top_p;
   }
-  if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
-  else payload.max_tokens = 1024;
+  payload.max_tokens = maxTokens;
   if (request.stop !== undefined) payload.stop_sequences = Array.isArray(request.stop) ? request.stop : [request.stop];
   const anthropicTools = mapAnthropicTools(request.tools);
   if (anthropicTools !== undefined) payload.tools = anthropicTools;
@@ -541,13 +580,64 @@ export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, mo
   }
   if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
   if (request.metadata !== undefined) payload.metadata = request.metadata;
-  if (thinkingEnabled) {
-    payload.thinking = {
-      type: "enabled",
-      budget_tokens: anthropicThinkingBudgetForEffort(reasoningEffort ?? "low"),
-    };
+  if (anthropicEffort) {
+    if (thinkingMode !== "manual") {
+      payload.output_config = {
+        ...(isRecord(payload.output_config) ? payload.output_config : {}),
+        effort: anthropicEffort,
+      };
+    }
+    if (thinkingMode === "manual") {
+      payload.thinking = {
+        type: "enabled",
+        budget_tokens: thinkingBudgetTokens,
+      };
+    } else if (thinkingMode === "adaptive_opt_in") {
+      payload.thinking = { type: "adaptive" };
+    }
+  } else if (reasoningEffort === "none" && thinkingMode === "adaptive_default_disable_supported") {
+    payload.thinking = { type: "disabled" };
   }
   return payload;
+}
+
+export function resolveAnthropicMinimumEffectiveOutputTokenCap(payload: Record<string, unknown>): number | undefined {
+  const thinking = isRecord(payload.thinking) ? payload.thinking : undefined;
+  if (thinking?.type === "enabled") {
+    const budgetTokens = thinking.budget_tokens;
+    return typeof budgetTokens === "number" && Number.isSafeInteger(budgetTokens) && budgetTokens > 0
+      ? budgetTokens + 1
+      : undefined;
+  }
+  const outputConfig = isRecord(payload.output_config) ? payload.output_config : undefined;
+  const effort = outputConfig?.effort;
+  if (effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh" && effort !== "max") {
+    return undefined;
+  }
+  const budgetTokens = resolveAnthropicThinkingBudgetTokens(effort);
+  return budgetTokens === undefined ? undefined : budgetTokens + 1;
+}
+
+function assertAnthropicSamplingCompatibility(input: {
+  request: ChatCompletionRequest;
+  model: string;
+  thinkingEnabled: boolean;
+}): void {
+  if (anthropicModelRejectsSamplingControls(input.model)) {
+    if (input.request.temperature !== undefined || input.request.top_p !== undefined) {
+      throw new Error(`Anthropic model ${input.model} does not support explicit temperature or top_p controls.`);
+    }
+    return;
+  }
+  if (!input.thinkingEnabled) {
+    return;
+  }
+  if (input.request.temperature !== undefined) {
+    throw new Error("Anthropic thinking requests do not support explicit temperature.");
+  }
+  if (input.request.top_p !== undefined && (input.request.top_p < 0.95 || input.request.top_p > 1)) {
+    throw new Error("Anthropic thinking requests require top_p between 0.95 and 1.");
+  }
 }
 
 function mapAnthropicTools(tools: ChatCompletionRequest["tools"]): Array<Record<string, unknown>> | undefined {
@@ -985,21 +1075,6 @@ function buildAnthropicStreamError(event: Record<string, unknown>, receivedMessa
         : undefined;
   const phase = receivedMessageStart ? "after message_start" : "before message_start";
   return `Anthropic stream error ${phase}: ${type ? `${type}: ` : ""}${message}`;
-}
-
-function anthropicThinkingBudgetForEffort(effort: NonNullable<ChatCompletionRequest["reasoning"]>["effort"]): number {
-  switch (effort) {
-    case "low":
-      return 1024;
-    case "medium":
-      return 4096;
-    case "high":
-      return 8192;
-    case "xhigh":
-      return 16384;
-    default:
-      return 1024;
-  }
 }
 
 function dedupeToolCalls<T extends { id: string }>(toolCalls: T[]): T[] {

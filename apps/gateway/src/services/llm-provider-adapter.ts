@@ -18,6 +18,8 @@ export interface LlmProviderResolution {
 export interface LlmOutputCapRecoveryState {
   /** Original caller request, retained while the transport cap is reduced. */
   requestedOutputTokenCap?: number;
+  /** Provider-specific hard floor below which a recovery retry would invalidate request semantics. */
+  minimumEffectiveOutputTokenCap?: number;
   /** One logical budget follows compatible request-shape retries. */
   retriesRemaining: number;
   recoverySourceEventId?: string;
@@ -63,6 +65,7 @@ export interface LlmTrackedJsonDispatch {
   effectivePayload: Record<string, unknown>;
   outputCapRetriesRemaining: number;
   logicalRequestedOutputTokenCap?: number;
+  minimumEffectiveOutputTokenCap?: number;
 }
 
 export interface LlmProviderAdapterHost {

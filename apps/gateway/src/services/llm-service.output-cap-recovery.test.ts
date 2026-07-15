@@ -218,6 +218,46 @@ describe("LlmService output-cap recovery", () => {
     expect(service.getModelContextWindow("test-provider", "claude-test")).toBe(16_384);
   });
 
+  it("does not lower Anthropic reasoning below its governed semantic floor", async () => {
+    const { service, storage } = createHarness("anthropic-messages", "claude-opus-4-8", "anthropic");
+    const payloads: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return jsonResponse({ error: { message: "Range of max_tokens should be [1, 2048]" } }, 400);
+      }),
+    );
+
+    await expect(
+      service.chatCompletions(
+        {
+          providerId: "anthropic",
+          model: "claude-opus-4-8",
+          messages: [{ role: "user", content: "answer deeply" }],
+          reasoning: { effort: "high" },
+          max_tokens: 9_000,
+        },
+        attribution("anthropic-reasoning-floor"),
+      ),
+    ).rejects.toThrow(/Range of max_tokens should be \[1, 2048\]/i);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      max_tokens: 9_000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    });
+    const events = storage.modelUsageEvents.list({ turnId: "turn-anthropic-reasoning-floor" }).items;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      requestedOutputTokenCap: 9_000,
+      effectiveOutputTokenCap: 9_000,
+      outputCapDisposition: "initial",
+      terminalOutcome: "failed_before_usage",
+    });
+  });
+
   it("fails closed after one retry and does not loop or route the error into compaction", async () => {
     const { service, storage } = createHarness("openai-responses", "gpt-5-test", "openai");
     const payloads: Array<Record<string, unknown>> = [];

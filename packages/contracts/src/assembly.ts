@@ -90,6 +90,8 @@ export interface ModelCouncilParticipantResolution {
   role: "primary" | "advisory";
   providerId: string;
   model: string;
+  /** Effective server-resolved transport style frozen for provider compatibility. */
+  apiStyle?: import("./llm.js").LlmApiStyle;
   contextWindowTokens: number;
   /** Secret-free hash of the exact server-owned endpoint/auth/API-style route configuration. */
   routeConfigFingerprint: string;
