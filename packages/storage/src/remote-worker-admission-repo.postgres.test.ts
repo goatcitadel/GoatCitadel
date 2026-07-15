@@ -228,6 +228,38 @@ describe("RemoteWorkerAdmissionRepository live PostgreSQL concurrency", () => {
         if (!readmitA.ok || !readmitB.ok) assert.fail("readmission replay did not converge");
         assert.equal(readmitA.value.record.targetWorkerGeneration, 2);
         assert.deepEqual(readmitA.value.record, readmitB.value.record);
+
+        const coherenceBootstrap = setupRepo.createBootstrap(
+          bootstrapInput("pg-registry-coherence", { expiresInSeconds: 600 }),
+        ).record;
+        setupRepo.finalizeBootstrapAdmission(finalizeInput(coherenceBootstrap, "pg-registry-coherence"));
+        const [registrySnapshot, coherenceControl] = await Promise.all([
+          runRepositoryWorker(scopedUrl.toString(), database, `hx507a-registry-read-${suffix}`, {
+            operation: "registry-detail",
+            input: { registryWorkspaceId: "default", workerId: coherenceBootstrap.workerId },
+          }),
+          runRepositoryWorker(scopedUrl.toString(), database, `hx507a-registry-control-${suffix}`, {
+            operation: "quarantine",
+            input: controlInput(coherenceBootstrap.workerId, "pg-registry-coherence", "quarantine"),
+          }),
+        ]);
+        assert.equal(registrySnapshot.ok, true, registrySnapshot.ok ? undefined : registrySnapshot.error);
+        assert.equal(coherenceControl.ok, true, coherenceControl.ok ? undefined : coherenceControl.error);
+        if (!registrySnapshot.ok) assert.fail("coherent registry read did not return");
+        assert.equal(registrySnapshot.value.admission.workerGeneration, 1);
+        if (registrySnapshot.value.control !== undefined) {
+          assert.equal(registrySnapshot.value.control.workerGeneration, 1);
+          assert.equal(registrySnapshot.value.control.action, "quarantine");
+        }
+        const finalRegistry = setupRepo.findWorkerRegistryEntry("default", coherenceBootstrap.workerId);
+        assert.equal(finalRegistry?.control?.action, "quarantine");
+        assert.equal(
+          setupRepo
+            .listWorkerRegistry("default", { limit: 100 })
+            .items.some((entry) => entry.admission.workerId === coherenceBootstrap.workerId),
+          true,
+        );
+        assert.equal(setupRepo.findWorkerRegistryEntry("foreign-workspace", coherenceBootstrap.workerId), undefined);
       } finally {
         setupDb.close();
         await migrations.close();
@@ -348,7 +380,8 @@ type WorkerRequest =
   | { operation: "finalize"; input: unknown }
   | { operation: "rotate"; input: unknown }
   | { operation: "quarantine"; input: unknown }
-  | { operation: "revoke"; input: unknown };
+  | { operation: "revoke"; input: unknown }
+  | { operation: "registry-detail"; input: { registryWorkspaceId: string; workerId: string } };
 
 type WorkerResult = { ok: true; value: Record<string, any> } | { ok: false; error: string };
 
@@ -413,7 +446,9 @@ const REPOSITORY_WORKER_SOURCE = String.raw`
             ? repo.rotateRuntimeCredential(input)
             : operation === "quarantine"
               ? repo.quarantineGeneration(input)
-              : repo.revokeGeneration(input);
+              : operation === "revoke"
+                ? repo.revokeGeneration(input)
+                : repo.findWorkerRegistryEntry(input.registryWorkspaceId, input.workerId);
       result = { ok: true, value };
     } catch (error) {
       result = { ok: false, error: error instanceof Error ? error.message : "opaque remote worker failure" };

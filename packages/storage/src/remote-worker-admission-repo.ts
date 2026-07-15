@@ -3,11 +3,15 @@ import { createHash } from "node:crypto";
 import {
   ConflictError,
   NotFoundError,
+  REMOTE_WORKER_REGISTRY_DEFAULT_LIMIT,
+  REMOTE_WORKER_REGISTRY_MAX_LIMIT,
   REMOTE_WORKER_RUNTIME_CREDENTIAL_PURPOSE,
   ValidationError,
   assertRemoteWorkerBootstrapRecord,
   assertRemoteWorkerGenerationControlRecord,
   assertRemoteWorkerGenerationRecord,
+  assertRemoteWorkerRegistryAdmission,
+  assertRemoteWorkerRegistryControl,
   assertRemoteWorkerRuntimeCredentialRecord,
   buildRemoteWorkerRuntimeCredentialClaims,
   canonicalJsonString,
@@ -26,6 +30,8 @@ import {
   type RemoteWorkerGenerationControlInput,
   type RemoteWorkerGenerationControlRecord,
   type RemoteWorkerGenerationRecord,
+  type RemoteWorkerRegistryAdmission,
+  type RemoteWorkerRegistryControl,
   type RemoteWorkerRuntimeCredentialRecord,
   type RemoteWorkerRuntimeCredentialClaims,
   type RotateRemoteWorkerRuntimeCredentialCommand,
@@ -64,6 +70,16 @@ export interface ListRemoteWorkersOptions {
 export interface ListRemoteWorkersResult {
   items: RemoteWorkerGenerationRecord[];
   nextCursor?: string;
+}
+
+export interface RemoteWorkerRegistryRecord {
+  readonly admission: RemoteWorkerRegistryAdmission;
+  readonly control?: RemoteWorkerRegistryControl;
+}
+
+export interface ListRemoteWorkerRegistryResult {
+  readonly items: readonly RemoteWorkerRegistryRecord[];
+  readonly nextCursor?: string;
 }
 
 interface BootstrapRow {
@@ -144,6 +160,94 @@ interface ControlRow {
   request_sha256: string;
   created_at: string;
 }
+
+interface RegistryRow {
+  registry_workspace_id: string;
+  worker_id: string;
+  node_id: string;
+  worker_generation: number | bigint | string;
+  bootstrap_id: string;
+  public_key_spki_sha256: string;
+  client_certificate_sha256: string;
+  transport_identity_source: string;
+  transport_trust_anchor_sha256: string;
+  transport_verification_receipt_sha256: string;
+  proof_of_possession_receipt_sha256: string;
+  download_verification_receipt_sha256: string;
+  installed_tree_attestation_sha256: string;
+  installed_tree_verification_receipt_sha256: string;
+  runtime_manifest_sha256: string;
+  workspace_ceiling_sha256: string;
+  capability_ceiling_sha256: string;
+  admitted_at: string;
+  bootstrap_worker_id: string;
+  bootstrap_node_id: string;
+  bootstrap_target_worker_generation: number | bigint | string;
+  bootstrap_worker_label: string;
+  bootstrap_platform: string;
+  bootstrap_architecture: string;
+  bootstrap_runtime_manifest_sha256: string;
+  bootstrap_allowed_workspace_count: number | bigint | string;
+  bootstrap_workspace_ceiling_sha256: string;
+  bootstrap_capability_class_count: number | bigint | string;
+  bootstrap_capability_ceiling_sha256: string;
+  control_worker_generation: number | bigint | string | null;
+  control_revision: number | bigint | string | null;
+  control_action: string | null;
+  control_created_at: string | null;
+}
+
+const REMOTE_WORKER_REGISTRY_SELECT = `
+  SELECT
+    generation.registry_workspace_id,
+    generation.worker_id,
+    generation.node_id,
+    generation.worker_generation,
+    generation.bootstrap_id,
+    generation.public_key_spki_sha256,
+    generation.client_certificate_sha256,
+    generation.transport_identity_source,
+    generation.transport_trust_anchor_sha256,
+    generation.transport_verification_receipt_sha256,
+    generation.proof_of_possession_receipt_sha256,
+    generation.download_verification_receipt_sha256,
+    generation.installed_tree_attestation_sha256,
+    generation.installed_tree_verification_receipt_sha256,
+    generation.runtime_manifest_sha256,
+    generation.workspace_ceiling_sha256,
+    generation.capability_ceiling_sha256,
+    generation.admitted_at,
+    bootstrap.worker_id AS bootstrap_worker_id,
+    bootstrap.node_id AS bootstrap_node_id,
+    bootstrap.target_worker_generation AS bootstrap_target_worker_generation,
+    bootstrap.worker_label AS bootstrap_worker_label,
+    bootstrap.platform AS bootstrap_platform,
+    bootstrap.architecture AS bootstrap_architecture,
+    bootstrap.runtime_manifest_sha256 AS bootstrap_runtime_manifest_sha256,
+    bootstrap.allowed_workspace_count AS bootstrap_allowed_workspace_count,
+    bootstrap.workspace_ceiling_sha256 AS bootstrap_workspace_ceiling_sha256,
+    bootstrap.capability_class_count AS bootstrap_capability_class_count,
+    bootstrap.capability_ceiling_sha256 AS bootstrap_capability_ceiling_sha256,
+    control.worker_generation AS control_worker_generation,
+    control.control_revision,
+    control.action AS control_action,
+    control.created_at AS control_created_at
+  FROM remote_worker_generations generation
+  INNER JOIN remote_worker_bootstrap_requests bootstrap
+    ON bootstrap.registry_workspace_id = generation.registry_workspace_id
+    AND bootstrap.bootstrap_id = generation.bootstrap_id
+  LEFT JOIN remote_worker_generation_controls control
+    ON control.registry_workspace_id = generation.registry_workspace_id
+    AND control.worker_id = generation.worker_id
+    AND control.worker_generation = generation.worker_generation
+    AND control.control_revision = (
+      SELECT MAX(latest_control.control_revision)
+      FROM remote_worker_generation_controls latest_control
+      WHERE latest_control.registry_workspace_id = generation.registry_workspace_id
+        AND latest_control.worker_id = generation.worker_id
+        AND latest_control.worker_generation = generation.worker_generation
+    )
+`;
 
 export class RemoteWorkerAdmissionRepository {
   public constructor(private readonly db: DatabaseClient) {}
@@ -647,6 +751,59 @@ export class RemoteWorkerAdmissionRepository {
       items,
       ...(hasMore && items.length > 0 ? { nextCursor: items.at(-1)!.workerId } : {}),
     };
+  }
+
+  public findWorkerRegistryEntry(
+    registryWorkspaceId: string,
+    workerId: string,
+  ): RemoteWorkerRegistryRecord | undefined {
+    const row = this.db
+      .prepare(
+        `${REMOTE_WORKER_REGISTRY_SELECT}
+         WHERE generation.registry_workspace_id = @registryWorkspaceId
+           AND generation.worker_id = @workerId
+         ORDER BY generation.worker_generation DESC
+         LIMIT 1`,
+      )
+      .get({
+        registryWorkspaceId: identifier(registryWorkspaceId, "registryWorkspaceId"),
+        workerId: identifier(workerId, "workerId"),
+      }) as RegistryRow | undefined;
+    return row ? mapRegistryRow(row) : undefined;
+  }
+
+  public listWorkerRegistry(
+    registryWorkspaceId: string,
+    options: ListRemoteWorkersOptions = {},
+  ): ListRemoteWorkerRegistryResult {
+    const workspace = identifier(registryWorkspaceId, "registryWorkspaceId");
+    const limit =
+      options.limit === undefined
+        ? REMOTE_WORKER_REGISTRY_DEFAULT_LIMIT
+        : boundedInteger(options.limit, "limit", REMOTE_WORKER_REGISTRY_MAX_LIMIT);
+    const cursor = options.cursor === undefined ? "" : identifier(options.cursor, "cursor");
+    const rows = this.db
+      .prepare(
+        `${REMOTE_WORKER_REGISTRY_SELECT}
+         WHERE generation.registry_workspace_id = @registryWorkspaceId
+           AND generation.worker_id > @cursor
+           AND generation.worker_generation = (
+             SELECT MAX(latest_generation.worker_generation)
+             FROM remote_worker_generations latest_generation
+             WHERE latest_generation.registry_workspace_id = generation.registry_workspace_id
+               AND latest_generation.worker_id = generation.worker_id
+           )
+         ORDER BY generation.worker_id ASC
+         LIMIT @fetchLimit`,
+      )
+      .all({ registryWorkspaceId: workspace, cursor, fetchLimit: limit + 1 }) as RegistryRow[];
+    const hasMore = rows.length > limit;
+    const selected = hasMore ? rows.slice(0, limit) : rows;
+    const items = selected.map(mapRegistryRow);
+    return Object.freeze({
+      items: Object.freeze(items),
+      ...(hasMore && items.length > 0 ? { nextCursor: items.at(-1)!.admission.workerId } : {}),
+    });
   }
 
   private controlGeneration(
@@ -1212,6 +1369,75 @@ function mapGeneration(row: GenerationRow): RemoteWorkerGenerationRecord {
     };
     assertRemoteWorkerGenerationRecord(record);
     return record;
+  } catch {
+    throw invalidState();
+  }
+}
+
+function mapRegistryRow(row: RegistryRow): RemoteWorkerRegistryRecord {
+  try {
+    const workerGeneration = asPositiveInteger(row.worker_generation);
+    if (
+      row.bootstrap_worker_id !== row.worker_id ||
+      row.bootstrap_node_id !== row.node_id ||
+      asPositiveInteger(row.bootstrap_target_worker_generation) !== workerGeneration ||
+      row.bootstrap_runtime_manifest_sha256 !== row.runtime_manifest_sha256 ||
+      row.bootstrap_workspace_ceiling_sha256 !== row.workspace_ceiling_sha256 ||
+      row.bootstrap_capability_ceiling_sha256 !== row.capability_ceiling_sha256
+    ) {
+      throw new Error();
+    }
+    const admission: RemoteWorkerRegistryAdmission = {
+      registryWorkspaceId: row.registry_workspace_id,
+      workerId: row.worker_id,
+      nodeId: row.node_id,
+      workerGeneration,
+      workerLabel: row.bootstrap_worker_label,
+      platform: row.bootstrap_platform as RemoteWorkerRegistryAdmission["platform"],
+      architecture: row.bootstrap_architecture as RemoteWorkerRegistryAdmission["architecture"],
+      allowedWorkspaceCount: asPositiveInteger(row.bootstrap_allowed_workspace_count),
+      workspaceCeilingSha256: row.workspace_ceiling_sha256,
+      capabilityClassCount: asPositiveInteger(row.bootstrap_capability_class_count),
+      capabilityCeilingSha256: row.capability_ceiling_sha256,
+      publicKeySpkiSha256: row.public_key_spki_sha256,
+      clientCertificateSha256: row.client_certificate_sha256,
+      runtimeManifestSha256: row.runtime_manifest_sha256,
+      transportIdentitySource:
+        row.transport_identity_source as RemoteWorkerRegistryAdmission["transportIdentitySource"],
+      transportTrustAnchorSha256: row.transport_trust_anchor_sha256,
+      transportVerificationReceiptSha256: row.transport_verification_receipt_sha256,
+      proofOfPossessionReceiptSha256: row.proof_of_possession_receipt_sha256,
+      downloadVerificationReceiptSha256: row.download_verification_receipt_sha256,
+      installedTreeAttestationSha256: row.installed_tree_attestation_sha256,
+      installedTreeVerificationReceiptSha256: row.installed_tree_verification_receipt_sha256,
+      admittedAt: row.admitted_at,
+    };
+    assertRemoteWorkerRegistryAdmission(admission);
+
+    const controlValues = [
+      row.control_worker_generation,
+      row.control_revision,
+      row.control_action,
+      row.control_created_at,
+    ];
+    const hasControl = controlValues.some((value) => value !== null && value !== undefined);
+    if (hasControl !== controlValues.every((value) => value !== null && value !== undefined)) throw new Error();
+    let control: RemoteWorkerRegistryControl | undefined;
+    if (hasControl) {
+      control = {
+        workerGeneration: asPositiveInteger(row.control_worker_generation!),
+        controlRevision: asPositiveInteger(row.control_revision!),
+        action: row.control_action as RemoteWorkerRegistryControl["action"],
+        createdAt: row.control_created_at!,
+      };
+      assertRemoteWorkerRegistryControl(control);
+      if (control.workerGeneration !== workerGeneration) throw new Error();
+      Object.freeze(control);
+    }
+    return Object.freeze({
+      admission: Object.freeze(admission),
+      ...(control ? { control } : {}),
+    });
   } catch {
     throw invalidState();
   }

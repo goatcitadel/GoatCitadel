@@ -74,6 +74,7 @@ import { daemonRoutes } from "./routes/daemon.js";
 import { curatorRoutes } from "./routes/curator.js";
 import { improvementRoutes } from "./routes/improvement.js";
 import { researchSearchRoutes } from "./routes/research-search.js";
+import { remoteWorkersRoutes } from "./routes/remote-workers.js";
 import { updateScoutRoutes } from "./routes/update-scout.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { workspacePathBridgeRoutes } from "./routes/workspace-path-bridge.js";
@@ -411,6 +412,7 @@ export async function buildApp() {
     await app.register(daemonRoutes);
     await app.register(improvementRoutes);
     await app.register(researchSearchRoutes);
+    await app.register(remoteWorkersRoutes);
     await app.register(updateScoutRoutes);
     await app.register(workspacesRoutes);
     if (

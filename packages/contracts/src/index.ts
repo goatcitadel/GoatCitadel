@@ -55,6 +55,7 @@ export * from "./mesh.js";
 export * from "./mesh-capability-publication.js";
 export * from "./remote-worker-admission.js";
 export * from "./remote-worker-assignment.js";
+export * from "./remote-worker-ops.js";
 export * from "./onboarding.js";
 export * from "./memory.js";
 export * from "./llama-cpp.js";

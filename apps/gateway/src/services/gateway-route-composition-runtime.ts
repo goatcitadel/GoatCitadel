@@ -61,6 +61,7 @@ export function composeRuntimeAdminRouteDependencies(
   | "promptPacks"
   | "realtimeEvents"
   | "researchSearch"
+  | "remoteWorkers"
   | "runtimeLifecycle"
   | "sessionsList"
   | "updateScout"
@@ -297,6 +298,7 @@ export function composeRuntimeAdminRouteDependencies(
     researchSearch: {
       search: (input) => researchSearch.search(input),
     },
+    remoteWorkers: gateway.storage.remoteWorkerAdmissions,
     runtimeLifecycle: {
       getRuntimeLifecycle: (input) => gateway.runtimeLifecycleReadService.getRuntimeLifecycle(input),
       getTranscript: (sessionId) => gateway.getTranscript(sessionId),

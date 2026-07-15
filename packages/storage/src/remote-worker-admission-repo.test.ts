@@ -826,6 +826,100 @@ describe("RemoteWorkerAdmissionRepository", () => {
     assert.throws(() => repo.listWorkers("default", { limit: 201 }), /between 1 and 200/u);
   });
 
+  it("projects the coherent latest registry generation and control with stable secret-free paging", () => {
+    const { db, repo } = harness();
+    const firstBootstrap = repo.createBootstrap(bootstrapInput("registry-a")).record;
+    repo.finalizeBootstrapAdmission(finalizeInput(firstBootstrap, "registry-a"));
+    repo.quarantineGeneration({
+      registryWorkspaceId: "default",
+      workerId: firstBootstrap.workerId,
+      workerGeneration: 1,
+      reasonCode: "operator.quarantine",
+      reasonSha256: D("registry-a:private-quarantine-reason"),
+      actorId: "operator-private",
+      idempotencyKey: "registry-a:quarantine",
+    });
+    repo.revokeGeneration({
+      registryWorkspaceId: "default",
+      workerId: firstBootstrap.workerId,
+      workerGeneration: 1,
+      reasonCode: "operator.revoke",
+      reasonSha256: D("registry-a:private-revoke-reason"),
+      actorId: "operator-private",
+      idempotencyKey: "registry-a:revoke",
+    });
+    const readmission = repo.createBootstrap(
+      bootstrapInput("registry-a-2", {
+        existingWorkerId: firstBootstrap.workerId,
+        idempotencyKey: "registry-a:readmission",
+      }),
+    ).record;
+    repo.finalizeBootstrapAdmission(finalizeInput(readmission, "registry-a-2"));
+
+    const secondBootstrap = repo.createBootstrap(bootstrapInput("registry-b")).record;
+    repo.finalizeBootstrapAdmission(finalizeInput(secondBootstrap, "registry-b"));
+    repo.quarantineGeneration({
+      registryWorkspaceId: "default",
+      workerId: secondBootstrap.workerId,
+      workerGeneration: 1,
+      reasonCode: "operator.quarantine",
+      reasonSha256: D("registry-b:private-reason"),
+      actorId: "operator-private",
+      idempotencyKey: "registry-b:quarantine",
+    });
+
+    const statements: string[] = [];
+    const registryRepo = new RemoteWorkerAdmissionRepository(
+      prepareFacade(db, (statement) => {
+        if (statement.includes("AS bootstrap_worker_label")) statements.push(statement);
+        return undefined;
+      }),
+    );
+    const all = registryRepo.listWorkerRegistry("default", { limit: 2 });
+    const firstPage = registryRepo.listWorkerRegistry("default", { limit: 1 });
+    assert.ok(firstPage.nextCursor);
+    const secondPage = registryRepo.listWorkerRegistry("default", { limit: 1, cursor: firstPage.nextCursor });
+    assert.deepEqual(
+      [...firstPage.items, ...secondPage.items].map((entry) => entry.admission.workerId),
+      all.items.map((entry) => entry.admission.workerId),
+    );
+
+    const readmitted = registryRepo.findWorkerRegistryEntry("default", firstBootstrap.workerId);
+    assert.equal(readmitted?.admission.workerGeneration, 2);
+    assert.equal(readmitted?.control, undefined);
+    const quarantined = registryRepo.findWorkerRegistryEntry("default", secondBootstrap.workerId);
+    assert.equal(quarantined?.control?.action, "quarantine");
+    assert.equal(registryRepo.findWorkerRegistryEntry("foreign-workspace", secondBootstrap.workerId), undefined);
+    assert.equal(Object.isFrozen(all), true);
+    assert.equal(Object.isFrozen(all.items), true);
+    assert.doesNotMatch(
+      JSON.stringify({ all, readmitted, quarantined }),
+      /bootstrapSecret|credentialToken|reasonCode|reasonSha256|actorId|idempotency|requestSha256|runtimeManifestJson/u,
+    );
+    assert.ok(
+      statements.every(
+        (statement) => !/bootstrap_secret|token_sha256|reason_code|actor_id|request_sha256/u.test(statement),
+      ),
+    );
+    assert.throws(() => registryRepo.listWorkerRegistry("default", { limit: 101 }), /between 1 and 100/u);
+  });
+
+  it("fails registry reads closed when joined bootstrap authority diverges", () => {
+    const { db, repo } = harness();
+    const bootstrap = repo.createBootstrap(bootstrapInput("registry-corrupt")).record;
+    repo.finalizeBootstrapAdmission(finalizeInput(bootstrap, "registry-corrupt"));
+    db.exec("DROP TRIGGER trg_remote_worker_bootstraps_no_update");
+    db.prepare("UPDATE remote_worker_bootstrap_requests SET runtime_manifest_sha256 = ? WHERE bootstrap_id = ?").run(
+      D("registry-corrupt:mismatched-runtime"),
+      bootstrap.bootstrapId,
+    );
+    assert.throws(
+      () => repo.findWorkerRegistryEntry("default", bootstrap.workerId),
+      /Remote worker admission state is invalid/u,
+    );
+    assert.throws(() => repo.listWorkerRegistry("default"), /Remote worker admission state is invalid/u);
+  });
+
   it("hashes and projects Unicode workspace ceilings with the contract's JS canonical comparator", () => {
     const { db, repo } = harness();
     const supplementaryWorkspaceId = "😀";

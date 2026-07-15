@@ -157,6 +157,7 @@ import {
   type RealtimeEventsRouteService,
 } from "./realtime-events-route-service.js";
 import { ResearchSearchRouteService, type ResearchSearchRoutePort } from "./research-search-broker-service.js";
+import { RemoteWorkersRouteService, type RemoteWorkerRegistryStore } from "./remote-workers-route-service.js";
 import { RuntimeLifecycleRouteService, type RuntimeLifecycleRoutePort } from "./runtime-lifecycle-route-service.js";
 import {
   createSessionsListRouteService,
@@ -253,6 +254,7 @@ export interface GatewayRouteServices {
   promptPacks: PromptPacksRouteService;
   realtimeEvents: RealtimeEventsRouteService;
   researchSearch: ResearchSearchRouteService;
+  remoteWorkers: RemoteWorkersRouteService;
   runtimeLifecycle: RuntimeLifecycleRouteService;
   secrets: SecretsRouteService;
   settings: SettingsRouteService;
@@ -328,6 +330,7 @@ export interface GatewayRouteServiceDependencies {
   promptPacks: PromptPacksRoutePort;
   realtimeEvents: RealtimeEventsRoutePort;
   researchSearch: ResearchSearchRoutePort;
+  remoteWorkers: RemoteWorkerRegistryStore;
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
   settings: SettingsRoutePort;
@@ -401,6 +404,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     promptPacks: new PromptPacksRouteService(deps.promptPacks),
     realtimeEvents: createRealtimeEventsRouteService(deps.realtimeEvents),
     researchSearch: new ResearchSearchRouteService(deps.researchSearch),
+    remoteWorkers: new RemoteWorkersRouteService(deps.remoteWorkers),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),
     settings: createSettingsRouteService(deps.settings),
