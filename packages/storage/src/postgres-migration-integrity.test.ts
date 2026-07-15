@@ -110,4 +110,37 @@ describe("protected Postgres migration integrity", () => {
     assert.match(sql, /different|immutable|no_update/iu);
     assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu);
   });
+
+  it("keeps HX-408 migration 111 additive, admission-authoritative, and concurrency fenced", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 111);
+    assert.equal(migration?.name, "mesh_capability_node_admission_authority");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of ["mesh_capability_node_admissions", "mesh_capability_node_admission_revocations"]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.match(sql, /UNIQUE\(workspace_id, idempotency_key\)/u);
+    assert.match(sql, /FOREIGN KEY\(join_token_sha256\) REFERENCES mesh_join_tokens\(token_hash\)/u);
+    assert.match(sql, /used_at IS NOT NULL AND token\.used_by_node_id = NEW\.node_id/u);
+    assert.match(sql, /NEW\.admission_generation <> prior_generation \+ 1/u);
+    assert.match(sql, /prior node admission must be revoked before replacement/u);
+    assert.match(sql, /active_count >= 16/u);
+    assert.equal(sql.match(/pg_advisory_xact_lock\(hashtextextended\(NEW\.workspace_id, 411\)\)/gu)?.length, 3);
+    assert.equal(
+      sql.match(/pg_advisory_xact_lock\(hashtextextended\(NEW\.workspace_id \|\| ':' \|\| NEW\.node_id, 412\)\)/gu)
+        ?.length,
+      6,
+    );
+    assert.match(sql, /terminal publisher health/u);
+    assert.match(sql, /CREATE OR REPLACE FUNCTION gc_mesh_capability_publishers_guard\(\)/u);
+    assert.doesNotMatch(sql, /publisher_count/u);
+    assert.match(sql, /publishers_admission_authority/u);
+    assert.match(sql, /manifests_admission_authority/u);
+    assert.match(sql, /activations_admission_authority/u);
+    assert.match(sql, /intents_admission_authority/u);
+    assert.match(sql, /node_admissions_no_update/u);
+    assert.match(sql, /node_admission_revocations_no_delete/u);
+    assert.doesNotMatch(sql, /mesh_capability_invocation_settlements/u);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu);
+  });
 });

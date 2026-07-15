@@ -106,6 +106,30 @@ export interface MeshCapabilityManifest {
   manifestSha256: string;
 }
 
+export interface MeshCapabilityNodeAdmissionRecord {
+  workspaceId: string;
+  nodeId: string;
+  admissionGeneration: number;
+  joinTokenSha256: string;
+  mtlsRequired: boolean;
+  tlsFingerprint?: string;
+  admittedByActorId: string;
+  idempotencyKey: string;
+  requestSha256: string;
+  admittedAt: string;
+}
+
+export interface MeshCapabilityNodeAdmissionRevocationRecord {
+  workspaceId: string;
+  nodeId: string;
+  admissionGeneration: number;
+  reason: string;
+  revokedByActorId: string;
+  idempotencyKey: string;
+  requestSha256: string;
+  revokedAt: string;
+}
+
 export interface MeshCapabilityPublisherGenerationRecord {
   workspaceId: string;
   nodeId: string;
@@ -299,6 +323,42 @@ export function assertMeshCapabilityManifest(manifest: MeshCapabilityManifest): 
     previousIdentity = identity;
   }
   assertJsonBounds(manifest, MESH_CAPABILITY_MAX_MANIFEST_BYTES, "manifest");
+}
+
+export function assertMeshCapabilityActivationApprovalPayload(
+  payload: unknown,
+): asserts payload is MeshCapabilityActivationApprovalPayload {
+  if (!isRecord(payload)) throw new TypeError("Mesh capability activation approval payload must be an object.");
+  assertExactKeys(
+    payload,
+    [
+      "workspaceId",
+      "activationId",
+      "activationRevision",
+      "requestSha256",
+      "capabilityId",
+      "manifestSha256",
+      "entrySha256",
+      "descriptorSha256",
+      "permissionEnvelopeSha256",
+      "effectPosture",
+    ],
+    "activation approval payload",
+  );
+  assertCanonicalIdentifier(payload.workspaceId as string, "workspaceId", 256);
+  assertCanonicalIdentifier(payload.activationId as string, "activationId", 256);
+  assertPositiveInteger(payload.activationRevision as number, "activationRevision");
+  assertSha256(payload.requestSha256 as string, "requestSha256");
+  assertCanonicalIdentifier(payload.capabilityId as string, "capabilityId", 512);
+  assertSha256(payload.manifestSha256 as string, "manifestSha256");
+  assertSha256(payload.entrySha256 as string, "entrySha256");
+  assertSha256(payload.descriptorSha256 as string, "descriptorSha256");
+  assertSha256(payload.permissionEnvelopeSha256 as string, "permissionEnvelopeSha256");
+  assertEnum(
+    payload.effectPosture as string,
+    ["none", "read_only", "write_local", "external_side_effect", "unknown"] as const,
+    "effectPosture",
+  );
 }
 
 export function assertMeshCapabilityManifestEntry(entry: MeshCapabilityManifestEntry, nodeId: string): void {

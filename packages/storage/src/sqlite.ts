@@ -4559,6 +4559,233 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           `);
         },
       },
+      {
+        version: 169,
+        name: "mesh_capability_node_admission_authority",
+        up: (db) => {
+          if (
+            !tableExists(db, "workspaces") ||
+            !tableExists(db, "mesh_nodes") ||
+            !tableExists(db, "mesh_join_tokens") ||
+            !tableExists(db, "mesh_capability_publishers")
+          ) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS mesh_capability_node_admissions (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              join_token_sha256 TEXT NOT NULL UNIQUE CHECK(length(join_token_sha256) = 64 AND join_token_sha256 NOT GLOB '*[^0-9a-f]*'),
+              mtls_required INTEGER NOT NULL CHECK(mtls_required IN (0, 1)),
+              tls_fingerprint TEXT,
+              admitted_by_actor_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              admitted_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, admission_generation),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(node_id) REFERENCES mesh_nodes(node_id) ON DELETE RESTRICT,
+              FOREIGN KEY(join_token_sha256) REFERENCES mesh_join_tokens(token_hash) ON DELETE RESTRICT,
+              CHECK(mtls_required = 0 OR (tls_fingerprint IS NOT NULL AND length(TRIM(tls_fingerprint)) > 0))
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_node_admission_revocations (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              reason TEXT NOT NULL,
+              revoked_by_actor_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              revoked_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, admission_generation),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, node_id, admission_generation)
+                REFERENCES mesh_capability_node_admissions(workspace_id, node_id, admission_generation) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_node_admissions_current
+              ON mesh_capability_node_admissions(workspace_id, node_id, admission_generation DESC);
+
+            DROP TRIGGER IF EXISTS trg_mesh_capability_publishers_insert_guard;
+            CREATE TRIGGER trg_mesh_capability_publishers_insert_guard
+            BEFORE INSERT ON mesh_capability_publishers
+            WHEN
+              EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND publisher_generation >= NEW.publisher_generation
+              )
+              OR EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND admission_generation > NEW.admission_generation
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_nodes node
+                JOIN mesh_leases lease ON lease.lease_key = NEW.publication_lease_key
+                WHERE node.node_id = NEW.node_id AND node.status = 'online'
+                  AND lease.holder_node_id = NEW.node_id
+                  AND lease.fencing_token = NEW.publication_lease_fencing_token
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND lease.expires_at = NEW.publication_lease_expires_at
+                  AND (NEW.mtls_required = 0 OR node.tls_fingerprint = NEW.tls_fingerprint)
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generation or live database-clock lease invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admissions_insert_guard
+            BEFORE INSERT ON mesh_capability_node_admissions
+            WHEN
+              NEW.admission_generation <> 1 + COALESCE((
+                SELECT MAX(prior.admission_generation) FROM mesh_capability_node_admissions prior
+                WHERE prior.workspace_id = NEW.workspace_id AND prior.node_id = NEW.node_id
+              ), 0)
+              OR (
+                NEW.admission_generation > 1 AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = NEW.workspace_id AND revoked.node_id = NEW.node_id
+                    AND revoked.admission_generation = NEW.admission_generation - 1
+                )
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_join_tokens token
+                WHERE token.token_hash = NEW.join_token_sha256
+                  AND token.used_at IS NOT NULL AND token.used_by_node_id = NEW.node_id
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_nodes node
+                WHERE node.node_id = NEW.node_id AND node.status = 'online'
+                  AND node.tls_fingerprint IS NEW.tls_fingerprint
+              )
+              OR (
+                SELECT COUNT(*) FROM mesh_capability_node_admissions active
+                WHERE active.workspace_id = NEW.workspace_id
+                  AND active.admission_generation = (
+                    SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                    WHERE current.workspace_id = active.workspace_id AND current.node_id = active.node_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                    WHERE revoked.workspace_id = active.workspace_id AND revoked.node_id = active.node_id
+                      AND revoked.admission_generation = active.admission_generation
+                  )
+              ) >= 16
+            BEGIN SELECT RAISE(ABORT, 'mesh capability node admission generation, token, identity, or workspace cap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admission_revocations_insert_guard
+            BEFORE INSERT ON mesh_capability_node_admission_revocations
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_node_admissions admission
+              WHERE admission.workspace_id = NEW.workspace_id AND admission.node_id = NEW.node_id
+                AND admission.admission_generation = NEW.admission_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+            ) OR EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              LEFT JOIN mesh_capability_publisher_health health
+                ON health.workspace_id = publisher.workspace_id AND health.node_id = publisher.node_id
+               AND health.publisher_generation = publisher.publisher_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.admission_generation = NEW.admission_generation
+                AND (health.status IS NULL OR health.status NOT IN ('offline', 'revoked'))
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability node admission revocation requires the current generation and terminal publisher health'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_admission_authority
+            BEFORE INSERT ON mesh_capability_publishers
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_node_admissions admission
+              WHERE admission.workspace_id = NEW.workspace_id AND admission.node_id = NEW.node_id
+                AND admission.admission_generation = NEW.admission_generation
+                AND admission.mtls_required = NEW.mtls_required
+                AND admission.tls_fingerprint IS NEW.tls_fingerprint
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifests_admission_authority
+            BEFORE INSERT ON mesh_capability_manifests
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+               AND admission.admission_generation = publisher.admission_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND publisher.admission_generation = NEW.admission_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability manifest lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activations_admission_authority
+            BEFORE INSERT ON mesh_capability_activations
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+               AND admission.admission_generation = publisher.admission_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability activation lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intents_admission_authority
+            BEFORE INSERT ON mesh_capability_invocation_intents
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+               AND admission.admission_generation = publisher.admission_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intent lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admissions_no_update BEFORE UPDATE ON mesh_capability_node_admissions BEGIN SELECT RAISE(ABORT, 'mesh capability node admissions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admissions_no_delete BEFORE DELETE ON mesh_capability_node_admissions BEGIN SELECT RAISE(ABORT, 'mesh capability node admissions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admission_revocations_no_update BEFORE UPDATE ON mesh_capability_node_admission_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability node admission revocations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admission_revocations_no_delete BEFORE DELETE ON mesh_capability_node_admission_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability node admission revocations are immutable'); END;
+          `);
+        },
+      },
     ],
   },
 ];

@@ -5631,4 +5631,272 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE TRIGGER trg_mesh_capability_settlements_no_delete BEFORE DELETE ON mesh_capability_invocation_settlements FOR EACH ROW EXECUTE FUNCTION gc_reject_mesh_capability_immutable_mutation();
     `,
   },
+  {
+    version: 111,
+    name: "mesh_capability_node_admission_authority",
+    sql: `
+      CREATE TABLE IF NOT EXISTS mesh_capability_node_admissions (
+        workspace_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        admission_generation BIGINT NOT NULL CHECK(admission_generation > 0),
+        join_token_sha256 TEXT NOT NULL UNIQUE CHECK(join_token_sha256 ~ '^[0-9a-f]{64}$'),
+        mtls_required BIGINT NOT NULL CHECK(mtls_required IN (0, 1)),
+        tls_fingerprint TEXT,
+        admitted_by_actor_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        admitted_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, node_id, admission_generation),
+        UNIQUE(workspace_id, idempotency_key),
+        FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+        FOREIGN KEY(node_id) REFERENCES mesh_nodes(node_id) ON DELETE RESTRICT,
+        FOREIGN KEY(join_token_sha256) REFERENCES mesh_join_tokens(token_hash) ON DELETE RESTRICT,
+        CHECK(mtls_required = 0 OR (tls_fingerprint IS NOT NULL AND length(btrim(tls_fingerprint)) > 0))
+      );
+
+      CREATE TABLE IF NOT EXISTS mesh_capability_node_admission_revocations (
+        workspace_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        admission_generation BIGINT NOT NULL CHECK(admission_generation > 0),
+        reason TEXT NOT NULL,
+        revoked_by_actor_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        revoked_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, node_id, admission_generation),
+        UNIQUE(workspace_id, idempotency_key),
+        FOREIGN KEY(workspace_id, node_id, admission_generation)
+          REFERENCES mesh_capability_node_admissions(workspace_id, node_id, admission_generation) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mesh_capability_node_admissions_current
+        ON mesh_capability_node_admissions(workspace_id, node_id, admission_generation DESC);
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_publishers_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id, 408));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 409));
+        IF EXISTS (
+          SELECT 1 FROM mesh_capability_publishers
+          WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+            AND publisher_generation >= NEW.publisher_generation
+        ) THEN RAISE EXCEPTION 'mesh capability publisher generation must be monotonic' USING ERRCODE = '23514'; END IF;
+        IF EXISTS (
+          SELECT 1 FROM mesh_capability_publishers
+          WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+            AND admission_generation > NEW.admission_generation
+        ) THEN RAISE EXCEPTION 'mesh capability admission generation cannot regress' USING ERRCODE = '23514'; END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_nodes node
+          JOIN mesh_leases lease ON lease.lease_key = NEW.publication_lease_key
+          WHERE node.node_id = NEW.node_id AND node.status = 'online'
+            AND lease.holder_node_id = NEW.node_id
+            AND lease.fencing_token = NEW.publication_lease_fencing_token
+            AND lease.expires_at > gc_mesh_capability_db_now()
+            AND lease.expires_at = NEW.publication_lease_expires_at
+            AND (NEW.mtls_required = 0 OR node.tls_fingerprint = NEW.tls_fingerprint)
+        ) THEN RAISE EXCEPTION 'mesh capability publisher live database-clock lease invariant violated' USING ERRCODE = '23514'; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_has_current_node_admission(
+        p_workspace_id TEXT,
+        p_node_id TEXT,
+        p_admission_generation BIGINT
+      ) RETURNS BOOLEAN AS $$
+        SELECT EXISTS (
+          SELECT 1 FROM mesh_capability_node_admissions admission
+          WHERE admission.workspace_id = p_workspace_id AND admission.node_id = p_node_id
+            AND admission.admission_generation = p_admission_generation
+            AND admission.admission_generation = (
+              SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+              WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+              WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                AND revoked.admission_generation = admission.admission_generation
+            )
+        );
+      $$ LANGUAGE SQL STABLE;
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_node_admission_guard()
+      RETURNS trigger AS $$
+      DECLARE prior_generation BIGINT; active_count BIGINT;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id, 411));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 412));
+        SELECT COALESCE(MAX(prior.admission_generation), 0) INTO prior_generation
+        FROM mesh_capability_node_admissions prior
+        WHERE prior.workspace_id = NEW.workspace_id AND prior.node_id = NEW.node_id;
+        IF NEW.admission_generation <> prior_generation + 1 THEN
+          RAISE EXCEPTION 'mesh capability node admission generation is not monotonic' USING ERRCODE = '23514';
+        END IF;
+        IF prior_generation > 0 AND NOT EXISTS (
+          SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+          WHERE revoked.workspace_id = NEW.workspace_id AND revoked.node_id = NEW.node_id
+            AND revoked.admission_generation = prior_generation
+        ) THEN
+          RAISE EXCEPTION 'mesh capability prior node admission must be revoked before replacement' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_join_tokens token
+          WHERE token.token_hash = NEW.join_token_sha256
+            AND token.used_at IS NOT NULL AND token.used_by_node_id = NEW.node_id
+        ) OR NOT EXISTS (
+          SELECT 1 FROM mesh_nodes node
+          WHERE node.node_id = NEW.node_id AND node.status = 'online'
+            AND node.tls_fingerprint IS NOT DISTINCT FROM NEW.tls_fingerprint
+        ) THEN
+          RAISE EXCEPTION 'mesh capability node admission token or node identity is invalid' USING ERRCODE = '23514';
+        END IF;
+        SELECT COUNT(*) INTO active_count
+        FROM mesh_capability_node_admissions active
+        WHERE active.workspace_id = NEW.workspace_id
+          AND active.admission_generation = (
+            SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+            WHERE current.workspace_id = active.workspace_id AND current.node_id = active.node_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+            WHERE revoked.workspace_id = active.workspace_id AND revoked.node_id = active.node_id
+              AND revoked.admission_generation = active.admission_generation
+          );
+        IF active_count >= 16 THEN
+          RAISE EXCEPTION 'mesh capability admitted publisher workspace limit exceeded' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_mesh_capability_node_admissions_insert_guard
+        BEFORE INSERT ON mesh_capability_node_admissions
+        FOR EACH ROW EXECUTE FUNCTION gc_mesh_capability_node_admission_guard();
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_node_admission_revocation_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id, 411));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 412));
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_capability_node_admissions admission
+          WHERE admission.workspace_id = NEW.workspace_id AND admission.node_id = NEW.node_id
+            AND admission.admission_generation = NEW.admission_generation
+            AND admission.admission_generation = (
+              SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+              WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+            )
+        ) OR EXISTS (
+          SELECT 1 FROM mesh_capability_publishers publisher
+          LEFT JOIN mesh_capability_publisher_health health
+            ON health.workspace_id = publisher.workspace_id AND health.node_id = publisher.node_id
+           AND health.publisher_generation = publisher.publisher_generation
+          WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+            AND publisher.admission_generation = NEW.admission_generation
+            AND (health.status IS NULL OR health.status NOT IN ('offline', 'revoked'))
+        ) THEN
+          RAISE EXCEPTION 'mesh capability node admission revocation requires the current generation and terminal publisher health' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_mesh_capability_node_admission_revocations_insert_guard
+        BEFORE INSERT ON mesh_capability_node_admission_revocations
+        FOR EACH ROW EXECUTE FUNCTION gc_mesh_capability_node_admission_revocation_guard();
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_publisher_admission_authority_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id, 411));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 412));
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_capability_node_admissions admission
+          WHERE admission.workspace_id = NEW.workspace_id AND admission.node_id = NEW.node_id
+            AND admission.admission_generation = NEW.admission_generation
+            AND admission.mtls_required = NEW.mtls_required
+            AND admission.tls_fingerprint IS NOT DISTINCT FROM NEW.tls_fingerprint
+            AND gc_mesh_capability_has_current_node_admission(
+              admission.workspace_id, admission.node_id, admission.admission_generation
+            )
+        ) THEN
+          RAISE EXCEPTION 'mesh capability publisher lacks current workspace-scoped node admission authority' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_mesh_capability_00_publishers_admission_authority
+        BEFORE INSERT ON mesh_capability_publishers
+        FOR EACH ROW EXECUTE FUNCTION gc_mesh_capability_publisher_admission_authority_guard();
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_manifest_admission_authority_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 412));
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_capability_publishers publisher
+          WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+            AND publisher.publisher_generation = NEW.publisher_generation
+            AND publisher.admission_generation = NEW.admission_generation
+            AND gc_mesh_capability_has_current_node_admission(
+              publisher.workspace_id, publisher.node_id, publisher.admission_generation
+            )
+        ) THEN
+          RAISE EXCEPTION 'mesh capability manifest lacks current workspace-scoped node admission authority' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_mesh_capability_00_manifests_admission_authority
+        BEFORE INSERT ON mesh_capability_manifests
+        FOR EACH ROW EXECUTE FUNCTION gc_mesh_capability_manifest_admission_authority_guard();
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_activation_admission_authority_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 412));
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_capability_publishers publisher
+          WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+            AND publisher.publisher_generation = NEW.publisher_generation
+            AND gc_mesh_capability_has_current_node_admission(
+              publisher.workspace_id, publisher.node_id, publisher.admission_generation
+            )
+        ) THEN
+          RAISE EXCEPTION 'mesh capability activation lacks current workspace-scoped node admission authority' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_mesh_capability_00_activations_admission_authority
+        BEFORE INSERT ON mesh_capability_activations
+        FOR EACH ROW EXECUTE FUNCTION gc_mesh_capability_activation_admission_authority_guard();
+
+      CREATE OR REPLACE FUNCTION gc_mesh_capability_intent_admission_authority_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id || ':' || NEW.node_id, 412));
+        IF NOT EXISTS (
+          SELECT 1 FROM mesh_capability_publishers publisher
+          WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+            AND publisher.publisher_generation = NEW.publisher_generation
+            AND gc_mesh_capability_has_current_node_admission(
+              publisher.workspace_id, publisher.node_id, publisher.admission_generation
+            )
+        ) THEN
+          RAISE EXCEPTION 'mesh capability invocation intent lacks current workspace-scoped node admission authority' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_mesh_capability_00_intents_admission_authority
+        BEFORE INSERT ON mesh_capability_invocation_intents
+        FOR EACH ROW EXECUTE FUNCTION gc_mesh_capability_intent_admission_authority_guard();
+
+      CREATE TRIGGER trg_mesh_capability_node_admissions_no_update BEFORE UPDATE ON mesh_capability_node_admissions FOR EACH ROW EXECUTE FUNCTION gc_reject_mesh_capability_immutable_mutation();
+      CREATE TRIGGER trg_mesh_capability_node_admissions_no_delete BEFORE DELETE ON mesh_capability_node_admissions FOR EACH ROW EXECUTE FUNCTION gc_reject_mesh_capability_immutable_mutation();
+      CREATE TRIGGER trg_mesh_capability_node_admission_revocations_no_update BEFORE UPDATE ON mesh_capability_node_admission_revocations FOR EACH ROW EXECUTE FUNCTION gc_reject_mesh_capability_immutable_mutation();
+      CREATE TRIGGER trg_mesh_capability_node_admission_revocations_no_delete BEFORE DELETE ON mesh_capability_node_admission_revocations FOR EACH ROW EXECUTE FUNCTION gc_reject_mesh_capability_immutable_mutation();
+    `,
+  },
 ];

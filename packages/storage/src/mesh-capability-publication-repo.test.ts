@@ -11,7 +11,8 @@ import {
   type MeshCapabilityManifestEntry,
   type MeshCapabilityPermissionEnvelope,
 } from "@goatcitadel/contracts";
-import type { DatabaseClient } from "./db.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
+import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import {
   MeshCapabilityPublicationRepository,
   buildMeshCapabilityActivationApprovalPayload,
@@ -44,12 +45,13 @@ function createHarness() {
     joinedAt: FUTURE,
     lastSeenAt: FUTURE,
   });
+  admitNode(db, mesh, "node-a", true, "sha256:node-a");
   const lease = mesh.acquireLease("mesh-capability-publication:default:node-a", "node-a", 3_600, FUTURE);
   const repo = new MeshCapabilityPublicationRepository(db);
   const publisher = repo.registerPublisher({
     workspaceId: "default",
     nodeId: "node-a",
-    admissionGeneration: 7,
+    admissionGeneration: 1,
     publisherGeneration: 1,
     mtlsRequired: true,
     tlsFingerprint: "sha256:node-a",
@@ -59,6 +61,69 @@ function createHarness() {
     idempotencyKey: "publisher-1",
   });
   return { db, mesh, repo, lease, publisher };
+}
+
+function createPostgresFacade(db: DatabaseClient, preparedSql: string[]): DatabaseClient {
+  return {
+    dialect: "postgres",
+    prepare(sql: string): DbStatement {
+      const normalized = sql.replace(/\s+/gu, " ").trim();
+      preparedSql.push(normalized);
+      if (normalized.includes("pg_advisory_xact_lock")) return staticStatement({ locked: null });
+      return db.prepare(sql);
+    },
+    exec: (sql) => db.exec(sql),
+    close: () => undefined,
+    transaction: (mode, callback) => db.transaction(mode, callback),
+  };
+}
+
+function staticStatement(row: unknown): DbStatement {
+  return {
+    run: () => ({ changes: 0 }),
+    get: () => row,
+    all: () => (row === undefined ? [] : [row]),
+  } as unknown as DbStatement;
+}
+
+function assertPublisherAdmissionLocksPrecedeReplayRead(preparedSql: string[]): void {
+  const workspaceLockIndex = preparedSql.findIndex((sql) => sql.includes("hashtextextended(@workspaceId, 411)"));
+  const nodeLockIndex = preparedSql.findIndex((sql) =>
+    sql.includes("hashtextextended(@workspaceId || ':' || @nodeId, 412)"),
+  );
+  const replayReadIndex = preparedSql.findIndex(
+    (sql) =>
+      sql.startsWith("SELECT *") && sql.includes("FROM mesh_capability_publishers") && sql.includes("idempotency_key"),
+  );
+  assert.ok(workspaceLockIndex >= 0, "expected the workspace admission advisory lock");
+  assert.ok(nodeLockIndex >= 0, "expected the node admission advisory lock");
+  assert.ok(replayReadIndex >= 0, "expected the publisher idempotency replay read");
+  assert.ok(workspaceLockIndex < nodeLockIndex, "workspace lock 411 must precede node lock 412");
+  assert.ok(nodeLockIndex < replayReadIndex, "node admission lock must precede the publisher replay read");
+}
+
+function admitNode(
+  db: DatabaseClient,
+  mesh: MeshRepository,
+  nodeId: string,
+  mtlsRequired: boolean,
+  tlsFingerprint?: string,
+): void {
+  const rawToken = `join:${nodeId}`;
+  mesh.issueJoinToken(rawToken, FUTURE);
+  assert.equal(mesh.consumeJoinToken(rawToken, nodeId, "2026-07-14T12:00:00.000Z"), true);
+  const joinTokenSha256 = mesh.snapshotRuntimeArtifacts(nodeId, rawToken).tokenHash;
+  assert.ok(joinTokenSha256);
+  new MeshCapabilityNodeAdmissionRepository(db).admit({
+    workspaceId: "default",
+    nodeId,
+    expectedAdmissionGeneration: 0,
+    joinTokenSha256,
+    mtlsRequired,
+    ...(tlsFingerprint === undefined ? {} : { tlsFingerprint }),
+    admittedByActorId: "operator-a",
+    idempotencyKey: `admit:${nodeId}`,
+  });
 }
 
 function permissions(): MeshCapabilityPermissionEnvelope {
@@ -126,7 +191,7 @@ function manifest(
     schemaVersion: MESH_CAPABILITY_MANIFEST_SCHEMA_VERSION,
     workspaceId: "default",
     nodeId: "node-a",
-    admissionGeneration: 7,
+    admissionGeneration: 1,
     publisherGeneration,
     publicationKey,
     publicationLeaseFencingToken: 1,
@@ -202,12 +267,36 @@ function boundedDeadline(offsetMs = 20_000): string {
 }
 
 describe("MeshCapabilityPublicationRepository", () => {
+  it("locks Postgres admission authority before identical or changed publisher replay reads", () => {
+    const { db, publisher } = createHarness();
+    const preparedSql: string[] = [];
+    const repo = new MeshCapabilityPublicationRepository(createPostgresFacade(db, preparedSql));
+    const input = {
+      workspaceId: "default",
+      nodeId: "node-a",
+      admissionGeneration: 1,
+      publisherGeneration: 1,
+      mtlsRequired: true,
+      tlsFingerprint: "sha256:node-a",
+      publicationLeaseKey: publisher.publicationLeaseKey,
+      publicationLeaseFencingToken: publisher.publicationLeaseFencingToken,
+      publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
+      idempotencyKey: publisher.idempotencyKey,
+    };
+
+    assert.deepEqual(repo.registerPublisher(input), publisher);
+    assertPublisherAdmissionLocksPrecedeReplayRead(preparedSql);
+    preparedSql.length = 0;
+    assert.throws(() => repo.registerPublisher({ ...input, admissionGeneration: 2 }), /different request bytes/);
+    assertPublisherAdmissionLocksPrecedeReplayRead(preparedSql);
+  });
+
   it("stores immutable generations and manifests with same-byte replay and workspace isolation", () => {
     const { repo, publisher } = createHarness();
     const replay = repo.registerPublisher({
       workspaceId: "default",
       nodeId: "node-a",
-      admissionGeneration: 7,
+      admissionGeneration: 1,
       publisherGeneration: 1,
       mtlsRequired: true,
       tlsFingerprint: "sha256:node-a",
@@ -386,6 +475,130 @@ describe("MeshCapabilityPublicationRepository", () => {
     );
   });
 
+  it("removes callability after node-admission revoke without blocking a dispatched settlement", () => {
+    const { db, repo, publisher } = createHarness();
+    const published = repo.publishManifest(manifest("publication-admission-revoke"));
+    const tool = published.entries.find((candidate) => candidate.kind === "tool")!;
+    const activationInput = activationFor(published, tool, "admission-revoke-tool");
+    approve(db, activationInput);
+    const activation = repo.activate(activationInput);
+    const intent = repo.createInvocationIntent({
+      workspaceId: "default",
+      invocationId: "admission-revoke-invocation",
+      activationId: activation.activationId,
+      activationRevision: activation.activationRevision,
+      capabilityId: activation.capabilityId,
+      nodeId: activation.nodeId,
+      publisherGeneration: activation.publisherGeneration,
+      healthGeneration: activation.healthGeneration,
+      publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+      manifestSha256: activation.manifestSha256,
+      entrySha256: activation.entrySha256,
+      descriptorSha256: activation.descriptorSha256,
+      permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
+      executionProfileSha256: "a".repeat(64),
+      inputSha256: "b".repeat(64),
+      sessionId: "session-a",
+      turnId: "turn-admission-revoke",
+      deadlineAt: boundedDeadline(),
+      idempotencyKey: "invoke-after-admission-revoke",
+    });
+    repo.transitionPublisherHealth({
+      workspaceId: "default",
+      nodeId: "node-a",
+      publisherGeneration: 1,
+      expectedHealthGeneration: 1,
+      status: "offline",
+      publicationLeaseFencingToken: publisher.publicationLeaseFencingToken,
+      publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
+      tlsFingerprint: publisher.tlsFingerprint,
+    });
+    new MeshCapabilityNodeAdmissionRepository(db).revoke({
+      workspaceId: "default",
+      nodeId: "node-a",
+      admissionGeneration: 1,
+      reason: "Operator revoked the admitted node.",
+      revokedByActorId: "operator-a",
+      idempotencyKey: "revoke-admission-node-a",
+    });
+
+    assert.equal(repo.listCallableActivations("default").length, 0);
+    assert.throws(() =>
+      repo.createInvocationIntent({
+        workspaceId: "default",
+        invocationId: "blocked-after-admission-revoke",
+        activationId: activation.activationId,
+        activationRevision: activation.activationRevision,
+        capabilityId: activation.capabilityId,
+        nodeId: activation.nodeId,
+        publisherGeneration: activation.publisherGeneration,
+        healthGeneration: activation.healthGeneration,
+        publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+        manifestSha256: activation.manifestSha256,
+        entrySha256: activation.entrySha256,
+        descriptorSha256: activation.descriptorSha256,
+        permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
+        executionProfileSha256: "c".repeat(64),
+        inputSha256: "d".repeat(64),
+        sessionId: "session-a",
+        turnId: "turn-blocked-after-admission-revoke",
+        deadlineAt: boundedDeadline(),
+        idempotencyKey: "blocked-after-admission-revoke",
+      }),
+    );
+    const settlement = repo.settleInvocation({
+      workspaceId: "default",
+      invocationId: intent.invocationId,
+      disposition: "unknown",
+      settlementSha256: "e".repeat(64),
+      publisherGeneration: intent.publisherGeneration,
+      publicationLeaseFencingToken: intent.publicationLeaseFencingToken,
+      idempotencyKey: "settle-after-admission-revoke",
+    });
+    assert.equal(settlement.disposition, "unknown");
+  });
+
+  it("fails legacy publication rows closed when no durable node admission exists", () => {
+    const { db, repo } = createHarness();
+    const published = repo.publishManifest(manifest("publication-legacy-admission"));
+    const tool = published.entries.find((candidate) => candidate.kind === "tool")!;
+    const activationInput = activationFor(published, tool, "legacy-admission-tool");
+    approve(db, activationInput);
+    const activation = repo.activate(activationInput);
+    assert.equal(repo.listCallableActivations("default").length, 1);
+
+    db.exec("DROP TRIGGER trg_mesh_capability_node_admissions_no_delete");
+    db.prepare(
+      `DELETE FROM mesh_capability_node_admissions
+       WHERE workspace_id = 'default' AND node_id = 'node-a' AND admission_generation = 1`,
+    ).run();
+
+    assert.equal(repo.listCallableActivations("default").length, 0);
+    assert.throws(() =>
+      repo.createInvocationIntent({
+        workspaceId: "default",
+        invocationId: "legacy-admission-blocked-invocation",
+        activationId: activation.activationId,
+        activationRevision: activation.activationRevision,
+        capabilityId: activation.capabilityId,
+        nodeId: activation.nodeId,
+        publisherGeneration: activation.publisherGeneration,
+        healthGeneration: activation.healthGeneration,
+        publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+        manifestSha256: activation.manifestSha256,
+        entrySha256: activation.entrySha256,
+        descriptorSha256: activation.descriptorSha256,
+        permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
+        executionProfileSha256: "f".repeat(64),
+        inputSha256: "0".repeat(64),
+        sessionId: "session-a",
+        turnId: "turn-legacy-admission",
+        deadlineAt: boundedDeadline(),
+        idempotencyKey: "legacy-admission-blocked-invoke",
+      }),
+    );
+  });
+
   it("invalidates prior activations when an immutable manifest head is superseded", () => {
     const { db, repo } = createHarness();
     const first = repo.publishManifest(manifest());
@@ -453,7 +666,7 @@ describe("MeshCapabilityPublicationRepository", () => {
     repo.registerPublisher({
       workspaceId: "default",
       nodeId: "node-a",
-      admissionGeneration: 7,
+      admissionGeneration: 1,
       publisherGeneration: 2,
       mtlsRequired: true,
       tlsFingerprint: "sha256:node-a",
@@ -535,7 +748,7 @@ describe("MeshCapabilityPublicationRepository", () => {
     repo.registerPublisher({
       workspaceId: "default",
       nodeId: "node-a",
-      admissionGeneration: 7,
+      admissionGeneration: 1,
       publisherGeneration: 2,
       mtlsRequired: true,
       tlsFingerprint: "sha256:node-a",
@@ -680,8 +893,9 @@ describe("MeshCapabilityPublicationRepository", () => {
     assert.equal(repo.listCallableActivations("default").length, 0, "revocation must not revive an older revision");
   });
 
-  it("enforces publisher and active-manifest caps from canonical storage state", () => {
-    const { mesh, repo } = createHarness();
+  it("enforces admitted-publisher and active-manifest caps from canonical storage state", () => {
+    const { db, mesh, repo } = createHarness();
+    const publishers = new Map<string, ReturnType<typeof repo.registerPublisher>>();
     for (let index = 1; index <= 15; index += 1) {
       const nodeId = `node-${String(index).padStart(2, "0")}`;
       mesh.upsertNode({
@@ -692,8 +906,9 @@ describe("MeshCapabilityPublicationRepository", () => {
         joinedAt: FUTURE,
         lastSeenAt: FUTURE,
       });
+      admitNode(db, mesh, nodeId, false);
       const lease = mesh.acquireLease(`mesh-capability-publication:default:${nodeId}`, nodeId, 3_600, FUTURE);
-      repo.registerPublisher({
+      const publisher = repo.registerPublisher({
         workspaceId: "default",
         nodeId,
         admissionGeneration: 1,
@@ -704,6 +919,7 @@ describe("MeshCapabilityPublicationRepository", () => {
         publicationLeaseExpiresAt: lease.expiresAt,
         idempotencyKey: `publisher-${nodeId}`,
       });
+      publishers.set(nodeId, publisher);
     }
     mesh.upsertNode({
       nodeId: "node-over-cap",
@@ -713,25 +929,75 @@ describe("MeshCapabilityPublicationRepository", () => {
       joinedAt: FUTURE,
       lastSeenAt: FUTURE,
     });
-    const overCapLease = mesh.acquireLease(
+    const overCapToken = "join:node-over-cap";
+    mesh.issueJoinToken(overCapToken, FUTURE);
+    assert.equal(mesh.consumeJoinToken(overCapToken, "node-over-cap", "2026-07-14T12:00:00.000Z"), true);
+    const overCapTokenSha256 = mesh.snapshotRuntimeArtifacts("node-over-cap", overCapToken).tokenHash;
+    assert.ok(overCapTokenSha256);
+    const admissions = new MeshCapabilityNodeAdmissionRepository(db);
+    const overCapAdmissionInput = {
+      workspaceId: "default",
+      nodeId: "node-over-cap",
+      expectedAdmissionGeneration: 0,
+      joinTokenSha256: overCapTokenSha256,
+      mtlsRequired: false,
+      admittedByActorId: "operator-a",
+      idempotencyKey: "admit:node-over-cap",
+    };
+    assert.throws(() => admissions.admit(overCapAdmissionInput));
+
+    const retired = publishers.get("node-01")!;
+    repo.transitionPublisherHealth({
+      workspaceId: "default",
+      nodeId: retired.nodeId,
+      publisherGeneration: retired.publisherGeneration,
+      expectedHealthGeneration: 1,
+      status: "offline",
+      publicationLeaseFencingToken: retired.publicationLeaseFencingToken,
+      publicationLeaseExpiresAt: retired.publicationLeaseExpiresAt,
+      tlsFingerprint: retired.tlsFingerprint,
+    });
+    admissions.revoke({
+      workspaceId: "default",
+      nodeId: retired.nodeId,
+      admissionGeneration: retired.admissionGeneration,
+      reason: "Retire one admitted publisher slot.",
+      revokedByActorId: "operator-a",
+      idempotencyKey: "revoke:node-01:slot-reuse",
+    });
+
+    const replacementAdmission = admissions.admit(overCapAdmissionInput);
+    const replacementLease = mesh.acquireLease(
       "mesh-capability-publication:default:node-over-cap",
       "node-over-cap",
       3_600,
       FUTURE,
     );
-    assert.throws(() =>
+    assert.equal(
       repo.registerPublisher({
         workspaceId: "default",
         nodeId: "node-over-cap",
-        admissionGeneration: 1,
+        admissionGeneration: replacementAdmission.admissionGeneration,
         publisherGeneration: 1,
         mtlsRequired: false,
-        publicationLeaseKey: overCapLease.leaseKey,
-        publicationLeaseFencingToken: overCapLease.fencingToken,
-        publicationLeaseExpiresAt: overCapLease.expiresAt,
-        idempotencyKey: "publisher-over-cap",
-      }),
+        publicationLeaseKey: replacementLease.leaseKey,
+        publicationLeaseFencingToken: replacementLease.fencingToken,
+        publicationLeaseExpiresAt: replacementLease.expiresAt,
+        idempotencyKey: "publisher-node-over-cap-after-retire",
+      }).nodeId,
+      "node-over-cap",
+      "historical publisher rows must not shadow a retired admission slot",
     );
+
+    mesh.upsertNode({
+      nodeId: "node-still-over-cap",
+      transport: "lan",
+      status: "online",
+      capabilities: [],
+      joinedAt: FUTURE,
+      lastSeenAt: FUTURE,
+    });
+    assert.throws(() => admitNode(db, mesh, "node-still-over-cap", false));
 
     const repeatedEntry = entry("tool", "manifest.cap");
     for (let index = 1; index <= 32; index += 1) {

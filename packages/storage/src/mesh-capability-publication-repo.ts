@@ -250,6 +250,7 @@ export class MeshCapabilityPublicationRepository {
     const normalized = normalizePublisherInput(input);
     const requestSha256 = sha256(normalized);
     return this.db.transaction("immediate", () => {
+      this.acquirePostgresAdmissionLocks(normalized.workspaceId, normalized.nodeId);
       const replay = this.findPublisherByIdempotency(normalized.workspaceId, normalized.idempotencyKey);
       if (replay) return assertReplay(replay, requestSha256, "publisher generation");
       const now = this.databaseNow();
@@ -717,6 +718,9 @@ export class MeshCapabilityPublicationRepository {
       JOIN mesh_capability_publishers publisher
         ON publisher.workspace_id = activation.workspace_id AND publisher.node_id = activation.node_id
        AND publisher.publisher_generation = activation.publisher_generation
+      JOIN mesh_capability_node_admissions admission
+        ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+       AND admission.admission_generation = publisher.admission_generation
       JOIN mesh_capability_publisher_health health
         ON health.workspace_id = activation.workspace_id AND health.node_id = activation.node_id
        AND health.publisher_generation = activation.publisher_generation
@@ -735,6 +739,23 @@ export class MeshCapabilityPublicationRepository {
         AND health.status = 'online' AND health.health_generation = activation.health_generation
         AND health.publication_lease_fencing_token = activation.publication_lease_fencing_token
         AND publisher.publication_lease_fencing_token = activation.publication_lease_fencing_token
+        AND admission.mtls_required = publisher.mtls_required
+        AND (
+          admission.tls_fingerprint = publisher.tls_fingerprint
+          OR (admission.tls_fingerprint IS NULL AND publisher.tls_fingerprint IS NULL)
+        )
+        AND admission.admission_generation = (
+          SELECT MAX(current_admission.admission_generation)
+          FROM mesh_capability_node_admissions current_admission
+          WHERE current_admission.workspace_id = admission.workspace_id
+            AND current_admission.node_id = admission.node_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM mesh_capability_node_admission_revocations admission_revocation
+          WHERE admission_revocation.workspace_id = admission.workspace_id
+            AND admission_revocation.node_id = admission.node_id
+            AND admission_revocation.admission_generation = admission.admission_generation
+        )
         AND health.publication_lease_expires_at > @now
         AND activation.publisher_generation = (SELECT MAX(current.publisher_generation)
           FROM mesh_capability_publishers current
@@ -762,6 +783,14 @@ export class MeshCapabilityPublicationRepository {
     const row = this.db.prepare(sql).get() as { now?: string } | undefined;
     if (!row?.now) throw new Error("Database clock did not return a timestamp.");
     return row.now;
+  }
+
+  private acquirePostgresAdmissionLocks(workspaceId: string, nodeId: string): void {
+    if (this.db.dialect !== "postgres") return;
+    this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@workspaceId, 411)) AS locked").get({ workspaceId });
+    this.db
+      .prepare("SELECT pg_advisory_xact_lock(hashtextextended(@workspaceId || ':' || @nodeId, 412)) AS locked")
+      .get({ workspaceId, nodeId });
   }
 
   private findPublisherByIdempotency(workspaceId: string, idempotencyKey: string) {

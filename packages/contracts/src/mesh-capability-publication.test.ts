@@ -5,6 +5,7 @@ import {
   MESH_CAPABILITY_PERMISSION_DIFF_SCHEMA_VERSION,
   MESH_CAPABILITY_EFFECT_DIFF_SCHEMA_VERSION,
   assertMeshCallableKind,
+  assertMeshCapabilityActivationApprovalPayload,
   assertMeshCapabilityEffectDiff,
   assertMeshCapabilityManifest,
   assertMeshCapabilityPermissionDiff,
@@ -227,5 +228,28 @@ describe("governed mesh capability publication contracts", () => {
     expect(() => assertMeshCallableKind("tool")).not.toThrow();
     expect(() => assertMeshCallableKind("mcp_server")).not.toThrow();
     expect(() => assertMeshCallableKind("skill")).toThrow(/never be callable/);
+  });
+
+  it("keeps activation approvals bound to the exact ten-key payload", () => {
+    const payload = {
+      workspaceId: "workspace-a",
+      activationId: "activation-a",
+      activationRevision: 1,
+      requestSha256: SHA,
+      capabilityId: "mesh:node-a:tool:project.status",
+      manifestSha256: SHA,
+      entrySha256: SHA,
+      descriptorSha256: SHA,
+      permissionEnvelopeSha256: SHA,
+      effectPosture: "read_only",
+    };
+    expect(() => assertMeshCapabilityActivationApprovalPayload(payload)).not.toThrow();
+    expect(Object.keys(payload)).toHaveLength(10);
+    expect(() => assertMeshCapabilityActivationApprovalPayload({ ...payload, approvalId: "approval-a" })).toThrow(
+      /unknown field approvalId/,
+    );
+    const missing = { ...payload } as Partial<typeof payload>;
+    delete missing.entrySha256;
+    expect(() => assertMeshCapabilityActivationApprovalPayload(missing)).toThrow(/missing required field entrySha256/);
   });
 });
