@@ -13,8 +13,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   canonicalJsonString,
+  assertMeshCapabilityActivationApprovalPayload,
   type ApprovalEffectRecord,
+  type ApprovalLinkage,
   type ApprovalListResponse,
   type ApprovalReplayEvent,
   ConflictError,
@@ -29,6 +32,7 @@ import {
   type ToolGrantRecord,
   type ToolGrantScope,
   type ToolInvokeResult,
+  type MeshCapabilityActivationApprovalPayload,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "./device-access-helpers.js";
@@ -158,6 +162,158 @@ export interface ApprovalLifecycleHost {
     options?: ApprovalResolutionEffectEnqueueOptions,
   ): ApprovalEffectRecord[];
   awaitApprovalResolutionEffects(approvalId: string): Promise<ApprovalEffectRecord[]>;
+}
+
+export const MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS = 15 * 60_000;
+
+export interface MeshCapabilityActivationApprovalLifecycleHost {
+  readonly storage: Pick<Storage, "approvals" | "approvalEvents" | "runImmediateTransaction">;
+}
+
+export interface MeshCapabilityActivationApprovalCommitInput {
+  approvalId: string;
+  payload: MeshCapabilityActivationApprovalPayload;
+  preview: Pick<
+    MeshCapabilityActivationApprovalPayload,
+    "activationId" | "activationRevision" | "capabilityId" | "effectPosture"
+  >;
+  linkage: Pick<ApprovalLinkage, "workspaceId" | "sessionId" | "turnId"> & { workspaceId: string };
+}
+
+export interface MeshCapabilityActivationApprovalCommitResult {
+  approval: ApprovalRequest;
+  replayed: boolean;
+}
+
+/**
+ * Commits the production-dark mesh activation approval record and its one
+ * canonical creation event. It deliberately performs none of the generic
+ * approval lifecycle enrichment, hook, wait-run, or pending-action work.
+ */
+export function commitMeshCapabilityActivationApproval(
+  host: MeshCapabilityActivationApprovalLifecycleHost,
+  input: MeshCapabilityActivationApprovalCommitInput,
+): MeshCapabilityActivationApprovalCommitResult {
+  assertMeshCapabilityActivationApprovalPayload(input.payload);
+  assertExactMeshActivationApprovalPreview(input.preview, input.payload);
+  assertExactMeshActivationApprovalLinkage(input.linkage, input.payload.workspaceId);
+
+  let result!: MeshCapabilityActivationApprovalCommitResult;
+  host.storage.runImmediateTransaction(() => {
+    const stored = host.storage.approvals.createDeterministicDetachedWithTtlDuration(
+      {
+        approvalId: input.approvalId,
+        kind: MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+        riskLevel: "danger",
+        payload: { ...input.payload },
+        preview: { ...input.preview },
+        linkage: { ...input.linkage },
+      },
+      MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
+    );
+    const existingEvents = host.storage.approvalEvents.listByApprovalId(stored.approval.approvalId);
+    if (stored.created) {
+      if (existingEvents.length !== 0) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Approval ${stored.approval.approvalId} has inconsistent creation evidence.`,
+        });
+      }
+      host.storage.approvalEvents.append({
+        approvalId: stored.approval.approvalId,
+        eventType: "created",
+        actorId: "system",
+        timestamp: stored.approval.createdAt,
+        payload: {
+          kind: stored.approval.kind,
+          riskLevel: stored.approval.riskLevel,
+          status: stored.approval.status,
+        },
+      });
+    } else {
+      assertCanonicalMeshActivationCreatedEvent(stored.approval, existingEvents);
+    }
+    result = { approval: stored.approval, replayed: !stored.created };
+  });
+  return result;
+}
+
+function assertCanonicalMeshActivationCreatedEvent(
+  approval: ApprovalRequest,
+  events: readonly ApprovalReplayEvent[],
+): void {
+  const createdEvents = events.filter((event) => event.eventType === "created");
+  const created = createdEvents[0];
+  const expectedPayload = {
+    kind: MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+    riskLevel: "danger",
+    status: "pending",
+  };
+  if (
+    createdEvents.length !== 1 ||
+    !created ||
+    created.approvalId !== approval.approvalId ||
+    created.actorId !== "system" ||
+    created.timestamp !== approval.createdAt ||
+    canonicalJsonString(created.payload) !== canonicalJsonString(expectedPayload)
+  ) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Approval ${approval.approvalId} has inconsistent creation evidence.`,
+    });
+  }
+}
+
+function assertExactMeshActivationApprovalPreview(
+  preview: MeshCapabilityActivationApprovalCommitInput["preview"],
+  payload: MeshCapabilityActivationApprovalPayload,
+): void {
+  assertExactKeys(preview, ["activationId", "activationRevision", "capabilityId", "effectPosture"], "preview");
+  if (
+    preview.activationId !== payload.activationId ||
+    preview.activationRevision !== payload.activationRevision ||
+    preview.capabilityId !== payload.capabilityId ||
+    preview.effectPosture !== payload.effectPosture
+  ) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "preview",
+      message: "Mesh capability activation approval preview does not match its exact payload binding.",
+    });
+  }
+}
+
+function assertExactMeshActivationApprovalLinkage(
+  linkage: MeshCapabilityActivationApprovalCommitInput["linkage"],
+  workspaceId: string,
+): void {
+  const optionalKeys = ["sessionId", "turnId"].filter((key) => Object.prototype.hasOwnProperty.call(linkage, key));
+  assertExactKeys(linkage, ["workspaceId", ...optionalKeys], "linkage");
+  if (
+    linkage.workspaceId !== workspaceId ||
+    optionalKeys.some((key) => typeof linkage[key as "sessionId" | "turnId"] !== "string")
+  ) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "linkage",
+      message: "Mesh capability activation approval linkage is not exact.",
+    });
+  }
+}
+
+function assertExactKeys(value: unknown, expectedKeys: readonly string[], field: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpected = [...expectedKeys].sort();
+  if (canonicalJsonString(actualKeys) !== canonicalJsonString(sortedExpected)) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field,
+      message: `Mesh capability activation approval ${field} has an invalid key set.`,
+    });
+  }
 }
 
 export function listToolGrants(

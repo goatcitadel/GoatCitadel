@@ -6,6 +6,7 @@ import type {
   ToolGrantCreateInput,
 } from "@goatcitadel/contracts";
 import {
+  commitMeshCapabilityActivationApproval,
   createApproval,
   createToolGrant,
   expirePendingApprovals,
@@ -15,6 +16,7 @@ import {
   resolveApproval,
   resolveApprovalsBulk,
   resolveChatToolApproval,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
   type ApprovalLifecycleHost,
 } from "./approval-lifecycle-service.js";
 import {
@@ -319,6 +321,191 @@ describe("approval lifecycle service", () => {
       nextCursor: "opaque-next-cursor",
     });
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("commits an exact detached mesh activation approval and one canonical created event", () => {
+    const host = createApprovalHarness();
+    const payload = createMeshActivationApprovalPayload();
+    const result = commitMeshCapabilityActivationApproval(host, {
+      approvalId: "mesh-capability-activation:" + "a".repeat(64),
+      payload,
+      preview: {
+        activationId: payload.activationId,
+        activationRevision: payload.activationRevision,
+        capabilityId: payload.capabilityId,
+        effectPosture: payload.effectPosture,
+      },
+      linkage: { workspaceId: payload.workspaceId, sessionId: "session-1", turnId: "turn-1" },
+    });
+
+    expect(result.replayed).toBe(false);
+    expect(host.storage.approvals.createDeterministicDetachedWithTtlDuration).toHaveBeenCalledWith(
+      {
+        approvalId: "mesh-capability-activation:" + "a".repeat(64),
+        kind: "mesh.capability.activate",
+        riskLevel: "danger",
+        payload,
+        preview: {
+          activationId: payload.activationId,
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: payload.workspaceId, sessionId: "session-1", turnId: "turn-1" },
+      },
+      MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
+    );
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledOnce();
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledWith({
+      approvalId: "mesh-capability-activation:" + "a".repeat(64),
+      eventType: "created",
+      actorId: "system",
+      timestamp: "2026-04-11T00:00:00.000Z",
+      payload: {
+        kind: "mesh.capability.activate",
+        riskLevel: "danger",
+        status: "pending",
+      },
+    });
+    expect(host.hooksService.runInlineHooks).not.toHaveBeenCalled();
+    expect(host.approvalWaitRunService.reserveApprovalWaitRun).not.toHaveBeenCalled();
+    expect(host.enqueueApprovalWaitMaterialization).not.toHaveBeenCalled();
+  });
+
+  it("returns exact mesh approval replay without emitting another created event", () => {
+    const host = createApprovalHarness();
+    const payload = createMeshActivationApprovalPayload();
+    const approval = {
+      ...host.storage.approvals.get("approval-1"),
+      approvalId: "mesh-capability-activation:" + "a".repeat(64),
+      kind: "mesh.capability.activate",
+      riskLevel: "danger" as const,
+      status: "approved" as const,
+      payload,
+      linkage: { workspaceId: payload.workspaceId },
+    };
+    host.storage.approvals.createDeterministicDetachedWithTtlDuration.mockReturnValue({
+      approval,
+      created: false,
+    });
+    host.storage.approvalEvents.listByApprovalId.mockReturnValue([
+      {
+        eventId: "created-1",
+        approvalId: approval.approvalId,
+        eventType: "created",
+        actorId: "system",
+        timestamp: approval.createdAt,
+        payload: { kind: "mesh.capability.activate", riskLevel: "danger", status: "pending" },
+      },
+      {
+        eventId: "resolved-1",
+        approvalId: approval.approvalId,
+        eventType: "resolved",
+        actorId: "operator-1",
+        timestamp: "2026-04-11T00:01:00.000Z",
+        payload: { decision: "approve", status: "approved" },
+      },
+    ]);
+
+    expect(
+      commitMeshCapabilityActivationApproval(host, {
+        approvalId: approval.approvalId,
+        payload,
+        preview: {
+          activationId: payload.activationId,
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: payload.workspaceId },
+      }),
+    ).toEqual({ approval, replayed: true });
+    expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
+  });
+
+  it("fails exact mesh replay closed when canonical creation evidence is missing, duplicated, or mismatched", () => {
+    const payload = createMeshActivationApprovalPayload();
+    const approvalId = "mesh-capability-activation:" + "a".repeat(64);
+    const canonicalCreated = {
+      eventId: "created-1",
+      approvalId,
+      eventType: "created" as const,
+      actorId: "system",
+      timestamp: "2026-04-11T00:00:00.000Z",
+      payload: { kind: "mesh.capability.activate", riskLevel: "danger", status: "pending" },
+    };
+
+    for (const events of [
+      [],
+      [canonicalCreated, { ...canonicalCreated, eventId: "created-2" }],
+      [{ ...canonicalCreated, actorId: "foreign-actor" }],
+      [{ ...canonicalCreated, timestamp: "2026-04-11T00:00:01.000Z" }],
+      [{ ...canonicalCreated, payload: { ...canonicalCreated.payload, status: "approved" } }],
+    ]) {
+      const host = createApprovalHarness();
+      const approval = {
+        ...host.storage.approvals.get("approval-1"),
+        approvalId,
+        kind: "mesh.capability.activate",
+        riskLevel: "danger" as const,
+        payload,
+        linkage: { workspaceId: payload.workspaceId },
+        createdAt: canonicalCreated.timestamp,
+      };
+      host.storage.approvals.createDeterministicDetachedWithTtlDuration.mockReturnValue({
+        approval,
+        created: false,
+      });
+      host.storage.approvalEvents.listByApprovalId.mockReturnValue(events);
+
+      expect(() =>
+        commitMeshCapabilityActivationApproval(host, {
+          approvalId,
+          payload,
+          preview: {
+            activationId: payload.activationId,
+            activationRevision: payload.activationRevision,
+            capabilityId: payload.capabilityId,
+            effectPosture: payload.effectPosture,
+          },
+          linkage: { workspaceId: payload.workspaceId },
+        }),
+      ).toThrow(/inconsistent creation evidence/i);
+      expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
+    }
+  });
+
+  it("fails mesh activation approval creation before storage for changed preview or foreign linkage", () => {
+    const host = createApprovalHarness();
+    const payload = createMeshActivationApprovalPayload();
+    expect(() =>
+      commitMeshCapabilityActivationApproval(host, {
+        approvalId: "mesh-capability-activation:" + "a".repeat(64),
+        payload,
+        preview: {
+          activationId: "changed-activation",
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: payload.workspaceId },
+      }),
+    ).toThrow(/preview does not match/i);
+    expect(() =>
+      commitMeshCapabilityActivationApproval(host, {
+        approvalId: "mesh-capability-activation:" + "a".repeat(64),
+        payload,
+        preview: {
+          activationId: payload.activationId,
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: "foreign-workspace" },
+      }),
+    ).toThrow(/linkage is not exact/i);
+    expect(host.storage.approvals.createDeterministicDetachedWithTtlDuration).not.toHaveBeenCalled();
+    expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
   });
 
   it("creates approvals with explicit wait-run linkage and retained-stream metadata", async () => {
@@ -2858,6 +3045,21 @@ describe("approval lifecycle service", () => {
   });
 });
 
+function createMeshActivationApprovalPayload() {
+  return {
+    workspaceId: "workspace-1",
+    activationId: "activation-1",
+    activationRevision: 1,
+    requestSha256: "1".repeat(64),
+    capabilityId: "mesh:node-1:tool:status",
+    manifestSha256: "2".repeat(64),
+    entrySha256: "3".repeat(64),
+    descriptorSha256: "4".repeat(64),
+    permissionEnvelopeSha256: "5".repeat(64),
+    effectPosture: "read_only" as const,
+  };
+}
+
 function createApprovalHarness(input?: {
   pendingAction?: {
     approvalId: string;
@@ -2924,6 +3126,23 @@ function createApprovalHarness(input?: {
       };
       return approval;
     }),
+    createDeterministicDetachedWithTtlDuration: vi.fn(
+      (request: Record<string, unknown> & { approvalId: string }, ttlMs: number) => {
+        approval = {
+          ...approval,
+          approvalId: request.approvalId,
+          kind: String(request.kind),
+          riskLevel: request.riskLevel as typeof approval.riskLevel,
+          payload: request.payload as typeof approval.payload,
+          preview: request.preview as typeof approval.preview,
+          linkage: request.linkage as typeof approval.linkage,
+          status: "pending",
+          createdAt: "2026-04-11T00:00:00.000Z",
+          expiresAt: new Date(Date.parse("2026-04-11T00:00:00.000Z") + ttlMs).toISOString(),
+        };
+        return { approval, created: true };
+      },
+    ),
     get: vi.fn(() => approval),
     lockPendingForUpdate: vi.fn(() => {
       if (approval.status !== "pending") {
