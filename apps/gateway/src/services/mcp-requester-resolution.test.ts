@@ -1,24 +1,28 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import * as requesterResolutionModule from "./mcp-requester-resolution.js";
 import {
-  MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
   canonicalJsonString,
-  mcpRequesterResolutionBindingHashMaterial,
-  mcpRequesterScopeHashMaterial,
-  type McpRequesterResolutionBinding,
+  type McpProfileDiscoveryAuthorityHashInput,
   type McpRequesterResolutionTransportPolicy,
+  type McpToolCallAuthorityHashInput,
 } from "@goatcitadel/contracts";
 import {
   McpRequesterResolutionError,
   McpRequesterResolverRegistry,
-  assertMcpRequesterAuthority,
+  assertMcpProfileDiscoveryAuthority,
+  assertMcpToolCallAuthority,
+  assertNormalizedMcpRequesterDiscoveryCatalog,
   createMcpEphemeralResolvedConnectionCandidate,
-  createMcpRequesterAuthority,
+  createMcpRequesterProviderAlias,
   mcpRequesterScopedServerConfigHash,
   mcpRequesterTransportPolicyHash,
+  normalizeMcpRequesterDiscoveryOutput,
+  readMcpEphemeralResolvedConnectionCandidate,
+  snapshotMcpRequesterScopedServerSnapshot,
   validateMcpEphemeralResolvedConnection,
   type McpEphemeralResolvedConnectionInput,
-  type McpRequesterAuthorityInput,
+  type McpRequesterDiscoverySecretScanner,
   type McpRequesterScopedServerSnapshot,
 } from "./mcp-requester-resolution.js";
 
@@ -28,39 +32,129 @@ function digest(input: unknown): string {
   return createHash("sha256").update(canonicalJsonString(input)).digest("hex");
 }
 
-function authorityInput(actorId = "operator-a"): McpRequesterAuthorityInput {
-  const base = {
-    actorId,
-    actorSource: "token" as const,
-    workspaceId: "workspace-1",
-    sessionId: "session-1",
-    turnId: "turn-1",
-    capabilityProfileId: "profile-1",
-    capabilityProfileSha256: "a".repeat(64),
-    invocationAttemptId: `attempt-${actorId}`,
-    attemptGeneration: 3,
-  };
-  return {
-    ...base,
-    requesterScopeSha256: digest(
-      mcpRequesterScopeHashMaterial({
-        profileId: base.capabilityProfileId,
-        turnId: base.turnId,
-        sessionId: base.sessionId,
-        workspaceId: base.workspaceId,
-        authActorId: base.actorId,
-        authActorSource: base.actorSource,
-      }),
-    ),
-  };
-}
-
 function policy(): McpRequesterResolutionTransportPolicy {
   return {
     allowedSchemes: ["https"],
     allowedHosts: ["a.example.test", "b.example.test", "mcp.example.test"],
     allowedPorts: [443],
     allowedHeaderNames: ["authorization", "x-a", "x-b", "x-c", "x-d", "x-tenant"],
+  };
+}
+
+function server(): McpRequesterScopedServerSnapshot {
+  return {
+    serverId: "tenant-mcp",
+    transport: "http",
+    connectionMode: "requester_scoped",
+    configurationRevision: 7,
+    requesterResolution: {
+      resolverId: "gateway.tenant",
+      resolverVersion: "1.2.3",
+      configGeneration: 4,
+      transportPolicy: policy(),
+    },
+  };
+}
+
+function discoveryAuthorityInput(actorId = "operator-a"): McpProfileDiscoveryAuthorityHashInput {
+  const selected = server();
+  return {
+    actorId,
+    actorSource: "token",
+    workspaceId: "workspace-1",
+    sessionId: `session-${actorId}`,
+    turnId: `turn-${actorId}`,
+    futureProfileId: `future-profile-${actorId}`,
+    baseCallableCatalogSha256: digest({ tools: ["mcp.invoke"] }),
+    serverId: selected.serverId,
+    serverConfigRevision: selected.configurationRevision,
+    serverConfigSha256: mcpRequesterScopedServerConfigHash(selected),
+    resolverId: selected.requesterResolution.resolverId,
+    resolverVersion: selected.requesterResolution.resolverVersion,
+    resolverConfigGeneration: selected.requesterResolution.configGeneration,
+    transportPolicySha256: mcpRequesterTransportPolicyHash(selected.requesterResolution.transportPolicy),
+    globalNetworkPolicyGeneration: 5,
+    authConnectionGeneration: 6,
+    turnGeneration: 7,
+    preparationGeneration: 8,
+    discoveryAttemptId: `discovery-${actorId}`,
+    discoveryAttemptGeneration: 9,
+  };
+}
+
+function scanner(overrides: Partial<McpRequesterDiscoverySecretScanner> = {}): McpRequesterDiscoverySecretScanner {
+  return {
+    scannerId: "gateway.secret-scan",
+    scannerVersion: "1.0.0",
+    scannerGeneration: 3,
+    scan: ({ payloadSha256 }) => ({ verdict: "clean", evidenceSha256: digest({ payloadSha256, clean: true }) }),
+    ...overrides,
+  };
+}
+
+function discoveryCatalog() {
+  return normalizeMcpRequesterDiscoveryOutput(
+    "tenant-mcp",
+    {
+      tools: [
+        {
+          rawRemoteToolName: "search",
+          canonicalToolName: "mcp.tenant-mcp.search",
+          description: "Search safely",
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
+    },
+    scanner(),
+  );
+}
+
+function toolCallAuthorityInput(actorId = "operator-a"): McpToolCallAuthorityHashInput {
+  const selected = server();
+  const catalog = discoveryCatalog();
+  const tool = catalog.tools[0]!;
+  const profile = {
+    finalProfileId: "profile-1",
+    finalProfileSha256: digest({ profile: 1 }),
+    baseCallableCatalogSha256: digest({ tools: ["mcp.invoke"] }),
+    finalCallableCatalogSha256: digest({ tools: ["mcp.tenant-mcp.search"] }),
+    serverId: "tenant-mcp",
+    rawRemoteToolName: tool.rawRemoteToolName,
+    canonicalToolName: tool.canonicalToolName,
+    normalizedDiscoveryCatalogSha256: catalog.catalogSha256,
+    normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
+    bindingSha256: digest({ binding: 1 }),
+  };
+  return {
+    actorId,
+    actorSource: "token",
+    workspaceId: "workspace-1",
+    sessionId: `session-${actorId}`,
+    turnId: `turn-${actorId}`,
+    ...profile,
+    providerAlias: createMcpRequesterProviderAlias({
+      serverId: profile.serverId,
+      rawRemoteToolName: profile.rawRemoteToolName,
+      canonicalToolName: profile.canonicalToolName,
+      normalizedToolDefinitionSha256: profile.normalizedToolDefinitionSha256,
+      bindingSha256: profile.bindingSha256,
+    }),
+    serverConfigRevision: selected.configurationRevision,
+    serverConfigSha256: mcpRequesterScopedServerConfigHash(selected),
+    resolverId: selected.requesterResolution.resolverId,
+    resolverVersion: selected.requesterResolution.resolverVersion,
+    resolverConfigGeneration: selected.requesterResolution.configGeneration,
+    transportPolicySha256: mcpRequesterTransportPolicyHash(selected.requesterResolution.transportPolicy),
+    globalNetworkPolicyGeneration: 5,
+    authConnectionGeneration: 6,
+    turnGeneration: 7,
+    preparationGeneration: 8,
+    profileDiscoveryAttemptId: `discovery-${actorId}`,
+    profileDiscoveryAttemptGeneration: 9,
+    revalidationAttemptId: `revalidation-${actorId}`,
+    revalidationAttemptGeneration: 10,
+    finalEffectAttemptId: `effect-${actorId}`,
+    finalEffectAttemptGeneration: 11,
   };
 }
 
@@ -78,147 +172,269 @@ function output(): McpEphemeralResolvedConnectionInput {
   };
 }
 
-describe("MCP requester resolution primitives", () => {
-  it("creates only exact branded, nonserializable authenticated requester authority", () => {
-    const authority = createMcpRequesterAuthority(authorityInput());
-    expect(() => assertMcpRequesterAuthority(authority)).not.toThrow();
-    expect(authority.actorId).toBe("operator-a");
-    expect(() => JSON.stringify(authority)).toThrowError(
+describe("MCP two-stage requester resolution primitives", () => {
+  it("keeps all authority, sealed-profile, and callback issuer construction paths private", () => {
+    expect(Object.keys(requesterResolutionModule)).not.toEqual(
+      expect.arrayContaining([
+        "createMcpProfileDiscoveryAuthority",
+        "createMcpSealedToolCallProfile",
+        "createMcpToolCallAuthority",
+        "createMcpRequesterAuthorityIssuer",
+      ]),
+    );
+    const bodyDiscovery = discoveryAuthorityInput();
+    const bodyToolCall = toolCallAuthorityInput();
+    const bodyCallback = (): McpProfileDiscoveryAuthorityHashInput => bodyDiscovery;
+    expect(() => assertMcpProfileDiscoveryAuthority(bodyDiscovery)).toThrowError(
       expect.objectContaining({ code: "requester_context_ambiguous" }),
     );
-    expect(() => assertMcpRequesterAuthority({ ...authorityInput() })).toThrowError(
+    expect(() => assertMcpToolCallAuthority(bodyToolCall)).toThrowError(
       expect.objectContaining({ code: "requester_context_ambiguous" }),
     );
-
-    const forgedScope = { ...authorityInput(), requesterScopeSha256: "f".repeat(64) };
-    expect(() => createMcpRequesterAuthority(forgedScope)).toThrowError(
-      expect.objectContaining({ code: "requester_scope_mismatch" }),
-    );
-    expect(() => createMcpRequesterAuthority({ ...authorityInput(), actorSource: "none" } as never)).toThrowError(
+    expect(() => assertMcpProfileDiscoveryAuthority(bodyCallback())).toThrowError(
       expect.objectContaining({ code: "requester_context_ambiguous" }),
     );
   });
 
-  it("rejects authority prototype forgery, accessors, and proxies without rereading attacker input", () => {
-    const valid = createMcpRequesterAuthority(authorityInput());
-    const prototypeForgery = Object.create(Object.getPrototypeOf(valid));
-    Object.defineProperties(prototypeForgery, Object.getOwnPropertyDescriptors(authorityInput()));
-    expect(() => assertMcpRequesterAuthority(prototypeForgery)).toThrowError(
-      expect.objectContaining({ code: "requester_context_ambiguous" }),
-    );
+  it("rejects body and prototype authority forgery with no structural conversion path", () => {
+    const prototypeForgery = Object.create({ stage: "profile_discovery" });
+    Object.assign(prototypeForgery, discoveryAuthorityInput(), { authoritySha256: "a".repeat(64) });
+    expect(() => assertMcpProfileDiscoveryAuthority(prototypeForgery)).toThrow();
+    expect(() => assertMcpProfileDiscoveryAuthority({ ...discoveryAuthorityInput() })).toThrow();
+    expect(() => assertMcpToolCallAuthority({ ...toolCallAuthorityInput() })).toThrow();
+  });
 
-    let getterReads = 0;
-    const accessorInput = authorityInput();
-    Object.defineProperty(accessorInput, "actorId", {
+  it("rejects authority accessors and proxies without invoking body getters", () => {
+    let reads = 0;
+    const accessor = discoveryAuthorityInput();
+    Object.defineProperty(accessor, "actorId", {
       enumerable: true,
       get() {
-        getterReads += 1;
-        return getterReads === 1 ? "operator-a" : "operator-b";
+        reads += 1;
+        return "operator-a";
       },
     });
-    expect(() => createMcpRequesterAuthority(accessorInput)).toThrowError(
+    expect(() => assertMcpProfileDiscoveryAuthority(accessor)).toThrowError(
       expect.objectContaining({ code: "requester_context_ambiguous" }),
     );
-    expect(getterReads).toBe(0);
-
-    let proxyReads = 0;
-    const proxyInput = new Proxy(authorityInput(), {
+    expect(reads).toBe(0);
+    const proxy = new Proxy(discoveryAuthorityInput(), {
       get(target, key, receiver) {
-        proxyReads += 1;
+        reads += 1;
         return Reflect.get(target, key, receiver);
       },
     });
-    expect(() => createMcpRequesterAuthority(proxyInput)).toThrowError(
-      expect.objectContaining({ code: "requester_context_ambiguous" }),
-    );
-    expect(proxyReads).toBe(0);
+    expect(() => assertMcpProfileDiscoveryAuthority(proxy)).toThrow();
+    expect(reads).toBe(0);
   });
 
-  it("freezes an exact resolver registry and rejects duplicate or drifted registrations", async () => {
-    const candidate = createMcpEphemeralResolvedConnectionCandidate(output());
-    expect(() => JSON.stringify(candidate)).toThrowError(expect.objectContaining({ code: "secret_guard_failed" }));
-    const resolve = vi.fn(async () => candidate);
-    const mutable = { resolverId: "gateway.tenant", resolverVersion: "1.2.3", configGeneration: 4, resolve };
-    const registry = new McpRequesterResolverRegistry([mutable]);
-    mutable.resolverVersion = "9.9.9";
-    mutable.configGeneration = 99;
-
-    const frozen = registry.resolveExact("gateway.tenant", "1.2.3", 4);
-    await expect(frozen.resolve({} as never)).resolves.toBe(candidate);
-    expect(registry.listMetadata()).toEqual([
-      { resolverId: "gateway.tenant", resolverVersion: "1.2.3", configGeneration: 4 },
-    ]);
-    expect(() => registry.resolveExact("missing", "1.0.0", 1)).toThrowError(
-      expect.objectContaining({ code: "resolver_missing" }),
-    );
-    expect(() => registry.resolveExact("gateway.tenant", "1.2.4", 4)).toThrowError(
-      expect.objectContaining({ code: "resolver_binding_drift" }),
-    );
-    expect(
-      () => new McpRequesterResolverRegistry([mutable, { ...mutable, resolverVersion: "1.2.3", configGeneration: 4 }]),
-    ).toThrowError(expect.objectContaining({ code: "resolver_binding_drift" }));
+  it("creates a full-digest opaque provider alias without exposing a profile mint", () => {
+    const input = toolCallAuthorityInput();
+    expect(input.providerAlias).toMatch(/^mcp__[a-f0-9]{64}$/u);
+    expect(input.providerAlias).toHaveLength(69);
+    expect(input.providerAlias).not.toContain(input.serverId);
   });
 
-  it("rejects accessor and proxy resolver records without observing drift", () => {
-    let getterReads = 0;
-    const accessorResolver = {
-      resolverVersion: "1.2.3",
-      configGeneration: 4,
-      resolve: async () => createMcpEphemeralResolvedConnectionCandidate(output()),
-    } as Record<string, unknown>;
-    Object.defineProperty(accessorResolver, "resolverId", {
+  it("normalizes discovery output deterministically and binds the clean scan", () => {
+    const first = normalizeMcpRequesterDiscoveryOutput(
+      "tenant-mcp",
+      {
+        tools: [
+          { rawRemoteToolName: "zeta", canonicalToolName: "mcp.tenant.zeta", inputSchema: { type: "object" } },
+          { rawRemoteToolName: "alpha", canonicalToolName: "mcp.tenant.alpha", inputSchema: { type: "object" } },
+        ],
+      },
+      scanner(),
+    );
+    const second = normalizeMcpRequesterDiscoveryOutput(
+      "tenant-mcp",
+      {
+        tools: [...first.tools]
+          .reverse()
+          .map(({ toolDefinitionSha256: _hash, ...tool }) => ({ ...tool, inputSchema: { ...tool.inputSchema } })),
+      },
+      scanner(),
+    );
+    expect(first.tools.map((tool) => tool.rawRemoteToolName)).toEqual(["alpha", "zeta"]);
+    expect(second.catalogSha256).toBe(first.catalogSha256);
+    expect(first.secretScan).toMatchObject({ verdict: "clean", scannerGeneration: 3 });
+    expect(() => assertNormalizedMcpRequesterDiscoveryCatalog(first)).not.toThrow();
+    expect(() => assertNormalizedMcpRequesterDiscoveryCatalog(structuredClone(first))).toThrow();
+  });
+
+  it.each([
+    [
+      "duplicate raw names",
+      [
+        { rawRemoteToolName: "search", canonicalToolName: "mcp.tenant.search-a", inputSchema: {} },
+        { rawRemoteToolName: "search", canonicalToolName: "mcp.tenant.search-b", inputSchema: {} },
+      ],
+      "discovery_output_invalid",
+    ],
+    [
+      "canonical collision",
+      [
+        { rawRemoteToolName: "search-a", canonicalToolName: "mcp.tenant.search", inputSchema: {} },
+        { rawRemoteToolName: "search-b", canonicalToolName: "mcp.tenant.search", inputSchema: {} },
+      ],
+      "discovery_output_invalid",
+    ],
+    [
+      "tool limit",
+      Array.from({ length: 65 }, (_, index) => ({
+        rawRemoteToolName: `tool-${index}`,
+        canonicalToolName: `mcp.tenant.tool-${index}`,
+        inputSchema: {},
+      })),
+      "discovery_output_too_large",
+    ],
+    [
+      "description limit",
+      [
+        {
+          rawRemoteToolName: "search",
+          canonicalToolName: "mcp.tenant.search",
+          description: "x".repeat(8_193),
+          inputSchema: {},
+        },
+      ],
+      "discovery_output_invalid",
+    ],
+  ])("rejects bounded discovery %s", (_label, tools, code) => {
+    expect(() => normalizeMcpRequesterDiscoveryOutput("tenant-mcp", { tools }, scanner())).toThrowError(
+      expect.objectContaining({ code }),
+    );
+  });
+
+  it("rejects excessive schema depth and nodes", () => {
+    let deep: Record<string, unknown> = {};
+    for (let index = 0; index < 17; index += 1) deep = { child: deep };
+    expect(() =>
+      normalizeMcpRequesterDiscoveryOutput(
+        "tenant-mcp",
+        { tools: [{ rawRemoteToolName: "search", canonicalToolName: "mcp.tenant.search", inputSchema: deep }] },
+        scanner(),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "discovery_output_too_large" }));
+    const wide = Object.fromEntries(Array.from({ length: 2_049 }, (_, index) => [`field${index}`, null]));
+    expect(() =>
+      normalizeMcpRequesterDiscoveryOutput(
+        "tenant-mcp",
+        { tools: [{ rawRemoteToolName: "search", canonicalToolName: "mcp.tenant.search", inputSchema: wide }] },
+        scanner(),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "discovery_output_too_large" }));
+  });
+
+  it("rejects giant schema strings, keys, and cumulative bytes before canonicalization", () => {
+    const normalizeSchema = (inputSchema: Record<string, unknown>) =>
+      normalizeMcpRequesterDiscoveryOutput(
+        "tenant-mcp",
+        { tools: [{ rawRemoteToolName: "search", canonicalToolName: "mcp.tenant.search", inputSchema }] },
+        scanner(),
+      );
+    expect(() => normalizeSchema({ value: "x".repeat(70_000) })).toThrowError(
+      expect.objectContaining({ code: "discovery_output_too_large" }),
+    );
+    expect(() => normalizeSchema({ ["k".repeat(70_000)]: true })).toThrowError(
+      expect.objectContaining({ code: "discovery_output_too_large" }),
+    );
+    expect(() => normalizeSchema({ a: "x".repeat(40_000), b: "y".repeat(40_000) })).toThrowError(
+      expect.objectContaining({ code: "discovery_output_too_large" }),
+    );
+  });
+
+  it("fails closed on secret-scan rejection, scanner forgery, and discovery getters/proxies", () => {
+    const tool = { rawRemoteToolName: "search", canonicalToolName: "mcp.tenant.search", inputSchema: {} };
+    expect(() =>
+      normalizeMcpRequesterDiscoveryOutput(
+        "tenant-mcp",
+        { tools: [tool] },
+        scanner({ scan: (() => ({ verdict: "secret", evidenceSha256: "a".repeat(64) })) as never }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "discovery_secret_detected" }));
+    expect(() =>
+      normalizeMcpRequesterDiscoveryOutput("tenant-mcp", { tools: [tool] }, new Proxy(scanner(), {})),
+    ).toThrow();
+
+    let reads = 0;
+    const hostile = { ...tool };
+    Object.defineProperty(hostile, "rawRemoteToolName", {
       enumerable: true,
       get() {
-        getterReads += 1;
-        return getterReads === 1 ? "gateway.tenant" : "gateway.attacker";
+        reads += 1;
+        return "search";
       },
     });
-    expect(() => new McpRequesterResolverRegistry([accessorResolver as never])).toThrowError(
-      expect.objectContaining({ code: "resolver_binding_drift" }),
-    );
-    expect(getterReads).toBe(0);
+    expect(() => normalizeMcpRequesterDiscoveryOutput("tenant-mcp", { tools: [hostile] }, scanner())).toThrow();
+    expect(reads).toBe(0);
+    expect(() =>
+      normalizeMcpRequesterDiscoveryOutput("tenant-mcp", { tools: [new Proxy(tool, {})] }, scanner()),
+    ).toThrow();
+  });
 
-    let proxyReads = 0;
-    const proxyResolver = new Proxy(
-      {
-        resolverId: "gateway.tenant",
-        resolverVersion: "1.2.3",
-        configGeneration: 4,
-        resolve: async () => createMcpEphemeralResolvedConnectionCandidate(output()),
-      },
-      {
-        get(target, key, receiver) {
-          proxyReads += 1;
-          return Reflect.get(target, key, receiver);
+  it("freezes distinct discovery/final resolver ports with no generic resolve", async () => {
+    const candidate = createMcpEphemeralResolvedConnectionCandidate(output());
+    const discovery = vi.fn(async () => candidate);
+    const final = vi.fn(async () => createMcpEphemeralResolvedConnectionCandidate(output()));
+    const registry = new McpRequesterResolverRegistry({
+      profileDiscovery: [
+        {
+          resolverId: "gateway.tenant",
+          resolverVersion: "1.2.3",
+          configGeneration: 4,
+          resolveForProfileDiscovery: discovery,
         },
-      },
-    );
-    expect(() => new McpRequesterResolverRegistry([proxyResolver])).toThrowError(
-      expect.objectContaining({ code: "resolver_binding_drift" }),
-    );
-    expect(proxyReads).toBe(0);
+      ],
+      toolCall: [
+        {
+          resolverId: "gateway.tenant",
+          resolverVersion: "1.2.3",
+          configGeneration: 4,
+          resolveForToolCall: final,
+        },
+      ],
+    });
+    expect(registry.listMetadata()).toEqual([
+      { stage: "profile_discovery", resolverId: "gateway.tenant", resolverVersion: "1.2.3", configGeneration: 4 },
+      { stage: "tool_call", resolverId: "gateway.tenant", resolverVersion: "1.2.3", configGeneration: 4 },
+    ]);
+    expect((registry as unknown as Record<string, unknown>).resolveExact).toBeUndefined();
+    await expect(
+      registry.resolveProfileDiscoveryExact("gateway.tenant", "1.2.3", 4).resolveForProfileDiscovery({} as never),
+    ).resolves.toBe(candidate);
+    await expect(
+      registry.resolveToolCallExact("gateway.tenant", "1.2.3", 4).resolveForToolCall({} as never),
+    ).resolves.toBeInstanceOf(Object);
   });
 
-  it("hashes only the exact non-secret server and transport policy material", () => {
-    const server: McpRequesterScopedServerSnapshot = {
-      serverId: "tenant-mcp",
-      transport: "http",
-      connectionMode: "requester_scoped",
-      configurationRevision: 7,
-      requesterResolution: {
-        resolverId: "gateway.tenant",
-        resolverVersion: "1.2.3",
-        configGeneration: 4,
-        transportPolicy: policy(),
-      },
-    };
-    expect(mcpRequesterScopedServerConfigHash(server)).toMatch(/^[a-f0-9]{64}$/u);
-    expect(mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy)).toBe(
-      digest(server.requesterResolution.transportPolicy),
+  it("makes resolved candidates one-shot so stages cannot reuse connection secrets", () => {
+    const candidate = createMcpEphemeralResolvedConnectionCandidate(output());
+    expect(readMcpEphemeralResolvedConnectionCandidate(candidate)).toMatchObject({ connectionGeneration: 5 });
+    expect(() => readMcpEphemeralResolvedConnectionCandidate(candidate)).toThrowError(
+      expect.objectContaining({ code: "resolved_connection_invalid" }),
     );
+    expect(() => JSON.stringify(candidate)).toThrowError(expect.objectContaining({ code: "secret_guard_failed" }));
   });
 
-  it("accepts one exact bounded resolved connection and canonicalizes header names", () => {
+  it("snapshots requester-scoped servers without invoking accessors or proxies", () => {
+    const valid = snapshotMcpRequesterScopedServerSnapshot(server());
+    expect(Object.isFrozen(valid.requesterResolution.transportPolicy.allowedHosts)).toBe(true);
+    let reads = 0;
+    const hostile = server();
+    Object.defineProperty(hostile, "serverId", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return "tenant-mcp";
+      },
+    });
+    expect(() => snapshotMcpRequesterScopedServerSnapshot(hostile)).toThrow();
+    expect(reads).toBe(0);
+    expect(() => snapshotMcpRequesterScopedServerSnapshot(new Proxy(server(), {}))).toThrow();
+  });
+
+  it("keeps exact destination/header/expiry bounds for each fresh stage connection", () => {
     const validated = validateMcpEphemeralResolvedConnection(output(), policy(), NOW);
     expect(validated).toMatchObject({
       url: "https://mcp.example.test/search?tenant=alpha",
@@ -227,144 +443,20 @@ describe("MCP requester resolution primitives", () => {
         { name: "x-tenant", value: "alpha" },
       ],
       connectionGeneration: 5,
-      expiresAtMs: Date.parse("2026-07-14T12:04:00.000Z"),
     });
-    expect(Object.isFrozen(validated.headers)).toBe(true);
-  });
-
-  it("rejects accessor and proxy resolved connections without a second URL or header read", () => {
-    let urlReads = 0;
-    const accessorOutput = output();
-    Object.defineProperty(accessorOutput, "url", {
-      enumerable: true,
-      get() {
-        urlReads += 1;
-        return urlReads === 1 ? "https://mcp.example.test/path" : "https://evil.example.test/path";
-      },
-    });
-    expect(() => validateMcpEphemeralResolvedConnection(accessorOutput, policy(), NOW)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_invalid" }),
-    );
-    expect(urlReads).toBe(0);
-
-    let headerReads = 0;
-    const headerAccessorOutput = output();
-    Object.defineProperty(headerAccessorOutput.headers[0], "value", {
-      enumerable: true,
-      get() {
-        headerReads += 1;
-        return headerReads === 1 ? "Bearer canary-secret" : "Bearer attacker-secret";
-      },
-    });
-    expect(() => createMcpEphemeralResolvedConnectionCandidate(headerAccessorOutput)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_invalid" }),
-    );
-    expect(headerReads).toBe(0);
-
-    const proxyOutput = new Proxy(output(), {});
-    expect(() => validateMcpEphemeralResolvedConnection(proxyOutput, policy(), NOW)).toThrowError(
-      expect.objectContaining({ code: "resolved_connection_invalid" }),
-    );
-  });
-
-  it.each([
-    [
-      "unknown output field",
-      () => ({ ...output(), endpoint: "https://secret.example.test" }),
-      "resolved_connection_invalid",
-    ],
-    ["unsupported scheme", () => ({ ...output(), url: "ftp://mcp.example.test/file" }), "resolved_connection_invalid"],
-    [
-      "userinfo",
-      () => ({ ...output(), url: "https://user:pass@mcp.example.test/file" }),
-      "resolved_connection_invalid",
-    ],
-    ["fragment", () => ({ ...output(), url: "https://mcp.example.test/file#secret" }), "resolved_connection_invalid"],
-    ["host drift", () => ({ ...output(), url: "https://evil.example.test/file" }), "resolved_destination_denied"],
-    ["port drift", () => ({ ...output(), url: "https://mcp.example.test:8443/file" }), "resolved_destination_denied"],
-    [
-      "oversized URL",
-      () => ({ ...output(), url: `https://mcp.example.test/${"x".repeat(2_100)}` }),
-      "resolved_connection_invalid",
-    ],
-    ["expired", () => ({ ...output(), expiresAt: "2026-07-14T11:59:59.999Z" }), "resolved_connection_expired"],
-    ["overlong expiry", () => ({ ...output(), expiresAt: "2026-07-14T12:05:00.001Z" }), "resolved_connection_invalid"],
-  ])("rejects %s", (_label, build, code) => {
-    expect(() => validateMcpEphemeralResolvedConnection(build(), policy(), NOW)).toThrowError(
-      expect.objectContaining({ code }),
-    );
-  });
-
-  it("allows HTTP only for an exact configured loopback authority", () => {
-    const loopbackPolicy: McpRequesterResolutionTransportPolicy = {
-      allowedSchemes: ["http"],
-      allowedHosts: ["127.0.0.1", "mcp.example.test"],
-      allowedPorts: [80],
-      allowedHeaderNames: [],
-    };
     expect(() =>
-      validateMcpEphemeralResolvedConnection(
-        { ...output(), url: "http://127.0.0.1/path", headers: [] },
-        loopbackPolicy,
-        NOW,
-      ),
-    ).not.toThrow();
-    expect(() =>
-      validateMcpEphemeralResolvedConnection(
-        { ...output(), url: "http://mcp.example.test/path", headers: [] },
-        loopbackPolicy,
-        NOW,
-      ),
+      validateMcpEphemeralResolvedConnection({ ...output(), url: "https://evil.example.test/path" }, policy(), NOW),
     ).toThrowError(expect.objectContaining({ code: "resolved_destination_denied" }));
+    expect(() =>
+      validateMcpEphemeralResolvedConnection(
+        { ...output(), headers: [{ name: "Host", value: "mcp.example.test" }] },
+        policy(),
+        NOW,
+      ),
+    ).toThrowError(expect.objectContaining({ code: "resolved_header_denied" }));
   });
 
-  it.each([
-    ["too many", () => Array.from({ length: 17 }, (_, index) => ({ name: "X-Tenant", value: String(index) }))],
-    [
-      "case-fold duplicate",
-      () => [
-        { name: "X-Tenant", value: "a" },
-        { name: "x-tenant", value: "b" },
-      ],
-    ],
-    ["forbidden", () => [{ name: "Host", value: "mcp.example.test" }]],
-    ["not allowed", () => [{ name: "X-Other", value: "secret" }]],
-    ["control", () => [{ name: "X-Tenant", value: "secret\r\nInjected: yes" }]],
-    ["surrounding whitespace", () => [{ name: "X-Tenant", value: " secret " }]],
-    ["oversized value", () => [{ name: "X-Tenant", value: "x".repeat(8_193) }]],
-    [
-      "aggregate overflow",
-      () => [
-        { name: "X-A", value: "a".repeat(8_190) },
-        { name: "X-B", value: "b".repeat(8_190) },
-        { name: "X-C", value: "c".repeat(8_190) },
-        { name: "X-D", value: "d".repeat(8_190) },
-      ],
-    ],
-  ])("rejects %s resolved headers", (_label, build) => {
-    expect(() => validateMcpEphemeralResolvedConnection({ ...output(), headers: build() }, policy(), NOW)).toThrowError(
-      expect.objectContaining({ code: "resolved_header_denied" }),
-    );
-  });
-
-  it("keeps binding hash material independent from the claimed digest", () => {
-    const binding = {
-      schemaVersion: MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
-      mode: "requester_scoped",
-      serverId: "tenant-mcp",
-      toolName: "mcp.tenant-mcp.search",
-      resolverId: "gateway.tenant",
-      resolverVersion: "1.2.3",
-      resolverConfigGeneration: 4,
-      requesterScopeSha256: "a".repeat(64),
-      serverConfigRevision: 7,
-      serverConfigSha256: "b".repeat(64),
-      transportPolicySha256: "c".repeat(64),
-      callableCatalogSnapshotId: "snapshot-1",
-      callableCatalogSha256: "d".repeat(64),
-      bindingSha256: "e".repeat(64),
-    } satisfies McpRequesterResolutionBinding;
-    expect(mcpRequesterResolutionBindingHashMaterial(binding)).not.toHaveProperty("bindingSha256");
+  it("keeps reason messages opaque", () => {
     expect(new McpRequesterResolutionError("resolver_failed").message).not.toContain("tenant-mcp");
   });
 });

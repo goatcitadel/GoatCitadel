@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- MCP contracts stay in one browser-safe public module. */
 import type { ChannelProbeReport } from "./channel-probes.js";
 import type { CapabilityCatalogEntry, CapabilityKind } from "./capabilities.js";
 import type { PermissionSurface, ToolPolicyActorContext } from "./policy.js";
@@ -7,6 +8,27 @@ export type McpServerStatus = "disconnected" | "connecting" | "connected" | "err
 export type McpServerConnectionMode = "static" | "requester_scoped";
 export const MCP_REQUESTER_RESOLUTION_BINDING_VERSION = "goatcitadel.mcp-requester-resolution-binding.v1" as const;
 export const MCP_REQUESTER_SCOPE_HASH_MATERIAL_VERSION = "goatcitadel.mcp-requester-scope-hash-material.v1" as const;
+export const MCP_PROFILE_DISCOVERY_AUTHORITY_HASH_MATERIAL_VERSION =
+  "goatcitadel.mcp-profile-discovery-authority-hash-material.v1" as const;
+export const MCP_TOOL_CALL_AUTHORITY_HASH_MATERIAL_VERSION =
+  "goatcitadel.mcp-tool-call-authority-hash-material.v1" as const;
+export const MCP_REQUESTER_DISCOVERY_TOOL_HASH_MATERIAL_VERSION =
+  "goatcitadel.mcp-requester-discovery-tool-hash-material.v1" as const;
+export const MCP_REQUESTER_DISCOVERY_CATALOG_HASH_MATERIAL_VERSION =
+  "goatcitadel.mcp-requester-discovery-catalog-hash-material.v1" as const;
+export const MCP_REQUESTER_PROVIDER_ALIAS_HASH_MATERIAL_VERSION =
+  "goatcitadel.mcp-requester-provider-alias-hash-material.v1" as const;
+export const MCP_REQUESTER_DISCOVERY_OUTPUT_VERSION = "goatcitadel.mcp-requester-discovery-output.v1" as const;
+
+export const MCP_REQUESTER_DISCOVERY_LIMITS = Object.freeze({
+  maxTools: 64,
+  maxAggregateBytes: 256 * 1_024,
+  maxDescriptionBytes: 8 * 1_024,
+  maxSchemaBytesPerTool: 64 * 1_024,
+  maxSchemaDepth: 16,
+  maxSchemaNodesPerTool: 2_048,
+  maxSchemaNodesAggregate: 8_192,
+} as const);
 
 export interface McpRequesterResolutionTransportPolicy {
   allowedSchemes: Array<"http" | "https">;
@@ -73,6 +95,141 @@ export interface McpRequesterScopeHashInput {
 
 export interface McpRequesterScopeHashMaterial extends McpRequesterScopeHashInput {
   schemaVersion: typeof MCP_REQUESTER_SCOPE_HASH_MATERIAL_VERSION;
+}
+
+export interface McpProfileDiscoveryAuthorityHashInput {
+  actorId: string;
+  actorSource: McpRequesterScopeAuthActorSource;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  futureProfileId: string;
+  baseCallableCatalogSha256: string;
+  serverId: string;
+  serverConfigRevision: number;
+  serverConfigSha256: string;
+  resolverId: string;
+  resolverVersion: string;
+  resolverConfigGeneration: number;
+  transportPolicySha256: string;
+  globalNetworkPolicyGeneration: number;
+  authConnectionGeneration: number;
+  turnGeneration: number;
+  preparationGeneration: number;
+  meshPublisherGeneration?: number;
+  meshActivationGeneration?: number;
+  discoveryAttemptId: string;
+  discoveryAttemptGeneration: number;
+}
+
+export interface McpProfileDiscoveryAuthorityHashMaterial extends McpProfileDiscoveryAuthorityHashInput {
+  schemaVersion: typeof MCP_PROFILE_DISCOVERY_AUTHORITY_HASH_MATERIAL_VERSION;
+  stage: "profile_discovery";
+}
+
+export interface McpToolCallAuthorityHashInput {
+  actorId: string;
+  actorSource: McpRequesterScopeAuthActorSource;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  finalProfileId: string;
+  finalProfileSha256: string;
+  baseCallableCatalogSha256: string;
+  finalCallableCatalogSha256: string;
+  serverId: string;
+  serverConfigRevision: number;
+  serverConfigSha256: string;
+  resolverId: string;
+  resolverVersion: string;
+  resolverConfigGeneration: number;
+  transportPolicySha256: string;
+  globalNetworkPolicyGeneration: number;
+  authConnectionGeneration: number;
+  turnGeneration: number;
+  preparationGeneration: number;
+  meshPublisherGeneration?: number;
+  meshActivationGeneration?: number;
+  profileDiscoveryAttemptId: string;
+  profileDiscoveryAttemptGeneration: number;
+  revalidationAttemptId: string;
+  revalidationAttemptGeneration: number;
+  finalEffectAttemptId: string;
+  finalEffectAttemptGeneration: number;
+  rawRemoteToolName: string;
+  canonicalToolName: string;
+  providerAlias: string;
+  normalizedDiscoveryCatalogSha256: string;
+  normalizedToolDefinitionSha256: string;
+  bindingSha256: string;
+}
+
+export interface McpToolCallAuthorityHashMaterial extends McpToolCallAuthorityHashInput {
+  schemaVersion: typeof MCP_TOOL_CALL_AUTHORITY_HASH_MATERIAL_VERSION;
+  stage: "tool_call";
+}
+
+export interface McpRequesterDiscoveryToolInput {
+  rawRemoteToolName: string;
+  canonicalToolName: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface McpRequesterDiscoveryOutputInput {
+  tools: McpRequesterDiscoveryToolInput[];
+}
+
+export interface McpRequesterDiscoverySecretScanEvidence {
+  scannerId: string;
+  scannerVersion: string;
+  scannerGeneration: number;
+  scannedSha256: string;
+  evidenceSha256: string;
+  verdict: "clean";
+}
+
+export interface McpRequesterDiscoveryToolHashInput {
+  serverId: string;
+  rawRemoteToolName: string;
+  canonicalToolName: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface McpRequesterDiscoveryToolHashMaterial extends McpRequesterDiscoveryToolHashInput {
+  schemaVersion: typeof MCP_REQUESTER_DISCOVERY_TOOL_HASH_MATERIAL_VERSION;
+}
+
+export interface McpNormalizedRequesterDiscoveryTool extends McpRequesterDiscoveryToolInput {
+  toolDefinitionSha256: string;
+}
+
+export interface McpRequesterDiscoveryCatalogHashInput {
+  serverId: string;
+  secretScan: McpRequesterDiscoverySecretScanEvidence;
+  tools: McpNormalizedRequesterDiscoveryTool[];
+}
+
+export interface McpRequesterDiscoveryCatalogHashMaterial extends McpRequesterDiscoveryCatalogHashInput {
+  schemaVersion: typeof MCP_REQUESTER_DISCOVERY_CATALOG_HASH_MATERIAL_VERSION;
+}
+
+export interface McpNormalizedRequesterDiscoveryCatalog extends McpRequesterDiscoveryCatalogHashInput {
+  schemaVersion: typeof MCP_REQUESTER_DISCOVERY_OUTPUT_VERSION;
+  catalogSha256: string;
+}
+
+export interface McpRequesterProviderAliasHashInput {
+  serverId: string;
+  rawRemoteToolName: string;
+  canonicalToolName: string;
+  normalizedToolDefinitionSha256: string;
+  bindingSha256: string;
+}
+
+export interface McpRequesterProviderAliasHashMaterial extends McpRequesterProviderAliasHashInput {
+  schemaVersion: typeof MCP_REQUESTER_PROVIDER_ALIAS_HASH_MATERIAL_VERSION;
 }
 export type McpServerCategory =
   | "development"
@@ -341,6 +498,291 @@ export function mcpRequesterScopeHashMaterial(input: McpRequesterScopeHashInput)
     authActorId: input.authActorId,
     authActorSource: input.authActorSource,
   };
+}
+
+/** Domain-separated authority material for the bounded profile-discovery stage. */
+export function mcpProfileDiscoveryAuthorityHashMaterial(
+  input: McpProfileDiscoveryAuthorityHashInput,
+): McpProfileDiscoveryAuthorityHashMaterial {
+  assertExactObjectKeys(
+    input,
+    [
+      "actorId",
+      "actorSource",
+      "authConnectionGeneration",
+      "baseCallableCatalogSha256",
+      "discoveryAttemptGeneration",
+      "discoveryAttemptId",
+      "futureProfileId",
+      "globalNetworkPolicyGeneration",
+      "meshActivationGeneration",
+      "meshPublisherGeneration",
+      "preparationGeneration",
+      "resolverConfigGeneration",
+      "resolverId",
+      "resolverVersion",
+      "serverConfigRevision",
+      "serverConfigSha256",
+      "serverId",
+      "sessionId",
+      "transportPolicySha256",
+      "turnGeneration",
+      "turnId",
+      "workspaceId",
+    ],
+    "profile discovery authority hash input",
+    ["meshActivationGeneration", "meshPublisherGeneration"],
+  );
+  assertMcpRequesterAuthorityScope(input);
+  for (const [field, value] of [
+    ["futureProfileId", input.futureProfileId],
+    ["serverId", input.serverId],
+    ["resolverId", input.resolverId],
+    ["discoveryAttemptId", input.discoveryAttemptId],
+  ] as const) {
+    assertCanonicalMcpIdentifier(value, field, 256);
+  }
+  assertCanonicalSemVer(input.resolverVersion, "resolverVersion");
+  assertMcpRequesterAuthorityGenerations(input);
+  for (const [field, value] of [
+    ["baseCallableCatalogSha256", input.baseCallableCatalogSha256],
+    ["serverConfigSha256", input.serverConfigSha256],
+    ["transportPolicySha256", input.transportPolicySha256],
+  ] as const) {
+    assertLowercaseSha256(value, field);
+  }
+  return {
+    schemaVersion: MCP_PROFILE_DISCOVERY_AUTHORITY_HASH_MATERIAL_VERSION,
+    stage: "profile_discovery",
+    ...input,
+  };
+}
+
+/** Domain-separated authority material for one exact post-profile tools/call. */
+export function mcpToolCallAuthorityHashMaterial(
+  input: McpToolCallAuthorityHashInput,
+): McpToolCallAuthorityHashMaterial {
+  assertExactObjectKeys(
+    input,
+    [
+      "actorId",
+      "actorSource",
+      "authConnectionGeneration",
+      "baseCallableCatalogSha256",
+      "bindingSha256",
+      "canonicalToolName",
+      "finalCallableCatalogSha256",
+      "finalEffectAttemptGeneration",
+      "finalEffectAttemptId",
+      "finalProfileId",
+      "finalProfileSha256",
+      "globalNetworkPolicyGeneration",
+      "meshActivationGeneration",
+      "meshPublisherGeneration",
+      "normalizedDiscoveryCatalogSha256",
+      "normalizedToolDefinitionSha256",
+      "preparationGeneration",
+      "profileDiscoveryAttemptGeneration",
+      "profileDiscoveryAttemptId",
+      "providerAlias",
+      "rawRemoteToolName",
+      "resolverConfigGeneration",
+      "resolverId",
+      "resolverVersion",
+      "revalidationAttemptGeneration",
+      "revalidationAttemptId",
+      "serverConfigRevision",
+      "serverConfigSha256",
+      "serverId",
+      "sessionId",
+      "transportPolicySha256",
+      "turnGeneration",
+      "turnId",
+      "workspaceId",
+    ],
+    "tool call authority hash input",
+    ["meshActivationGeneration", "meshPublisherGeneration"],
+  );
+  assertMcpRequesterAuthorityScope(input);
+  for (const [field, value] of [
+    ["finalProfileId", input.finalProfileId],
+    ["serverId", input.serverId],
+    ["resolverId", input.resolverId],
+    ["profileDiscoveryAttemptId", input.profileDiscoveryAttemptId],
+    ["revalidationAttemptId", input.revalidationAttemptId],
+    ["finalEffectAttemptId", input.finalEffectAttemptId],
+    ["rawRemoteToolName", input.rawRemoteToolName],
+    ["canonicalToolName", input.canonicalToolName],
+    ["providerAlias", input.providerAlias],
+  ] as const) {
+    assertCanonicalMcpIdentifier(value, field, 256);
+  }
+  if (!/^mcp__[a-f0-9]{64}$/u.test(input.providerAlias)) {
+    throw new TypeError("MCP providerAlias must be an opaque full-digest alias.");
+  }
+  assertCanonicalSemVer(input.resolverVersion, "resolverVersion");
+  assertMcpRequesterAuthorityGenerations(input);
+  for (const [field, value] of [
+    ["finalProfileSha256", input.finalProfileSha256],
+    ["baseCallableCatalogSha256", input.baseCallableCatalogSha256],
+    ["finalCallableCatalogSha256", input.finalCallableCatalogSha256],
+    ["serverConfigSha256", input.serverConfigSha256],
+    ["transportPolicySha256", input.transportPolicySha256],
+    ["normalizedDiscoveryCatalogSha256", input.normalizedDiscoveryCatalogSha256],
+    ["normalizedToolDefinitionSha256", input.normalizedToolDefinitionSha256],
+    ["bindingSha256", input.bindingSha256],
+  ] as const) {
+    assertLowercaseSha256(value, field);
+  }
+  return {
+    schemaVersion: MCP_TOOL_CALL_AUTHORITY_HASH_MATERIAL_VERSION,
+    stage: "tool_call",
+    ...input,
+  };
+}
+
+export function mcpRequesterDiscoveryToolHashMaterial(
+  input: McpRequesterDiscoveryToolHashInput,
+): McpRequesterDiscoveryToolHashMaterial {
+  assertExactObjectKeys(
+    input,
+    ["canonicalToolName", "description", "inputSchema", "rawRemoteToolName", "serverId"],
+    "requester discovery tool hash input",
+    ["description"],
+  );
+  assertCanonicalMcpIdentifier(input.serverId, "serverId", 256);
+  assertCanonicalMcpIdentifier(input.rawRemoteToolName, "rawRemoteToolName", 256);
+  assertCanonicalMcpIdentifier(input.canonicalToolName, "canonicalToolName", 256);
+  if (input.description !== undefined && typeof input.description !== "string") {
+    throw new TypeError("MCP requester discovery description is invalid.");
+  }
+  if (typeof input.inputSchema !== "object" || input.inputSchema === null || Array.isArray(input.inputSchema)) {
+    throw new TypeError("MCP requester discovery inputSchema must be an object.");
+  }
+  return { schemaVersion: MCP_REQUESTER_DISCOVERY_TOOL_HASH_MATERIAL_VERSION, ...input };
+}
+
+export function mcpRequesterDiscoveryCatalogHashMaterial(
+  input: McpRequesterDiscoveryCatalogHashInput,
+): McpRequesterDiscoveryCatalogHashMaterial {
+  assertExactObjectKeys(input, ["secretScan", "serverId", "tools"], "requester discovery catalog hash input");
+  assertCanonicalMcpIdentifier(input.serverId, "serverId", 256);
+  assertMcpRequesterDiscoverySecretScanEvidence(input.secretScan);
+  if (!Array.isArray(input.tools) || input.tools.length > MCP_REQUESTER_DISCOVERY_LIMITS.maxTools) {
+    throw new TypeError("MCP requester discovery tools are invalid.");
+  }
+  for (const tool of input.tools) {
+    assertExactObjectKeys(
+      tool,
+      ["canonicalToolName", "description", "inputSchema", "rawRemoteToolName", "toolDefinitionSha256"],
+      "normalized requester discovery tool",
+      ["description"],
+    );
+    mcpRequesterDiscoveryToolHashMaterial({
+      serverId: input.serverId,
+      rawRemoteToolName: tool.rawRemoteToolName,
+      canonicalToolName: tool.canonicalToolName,
+      ...(tool.description === undefined ? {} : { description: tool.description }),
+      inputSchema: tool.inputSchema,
+    });
+    assertLowercaseSha256(tool.toolDefinitionSha256, "toolDefinitionSha256");
+  }
+  return { schemaVersion: MCP_REQUESTER_DISCOVERY_CATALOG_HASH_MATERIAL_VERSION, ...input };
+}
+
+export function mcpRequesterProviderAliasHashMaterial(
+  input: McpRequesterProviderAliasHashInput,
+): McpRequesterProviderAliasHashMaterial {
+  assertExactObjectKeys(
+    input,
+    ["bindingSha256", "canonicalToolName", "normalizedToolDefinitionSha256", "rawRemoteToolName", "serverId"],
+    "requester provider alias hash input",
+  );
+  for (const [field, value] of [
+    ["serverId", input.serverId],
+    ["rawRemoteToolName", input.rawRemoteToolName],
+    ["canonicalToolName", input.canonicalToolName],
+  ] as const) {
+    assertCanonicalMcpIdentifier(value, field, 256);
+  }
+  assertLowercaseSha256(input.normalizedToolDefinitionSha256, "normalizedToolDefinitionSha256");
+  assertLowercaseSha256(input.bindingSha256, "bindingSha256");
+  return { schemaVersion: MCP_REQUESTER_PROVIDER_ALIAS_HASH_MATERIAL_VERSION, ...input };
+}
+
+export function assertMcpRequesterDiscoverySecretScanEvidence(
+  input: unknown,
+): asserts input is McpRequesterDiscoverySecretScanEvidence {
+  assertExactObjectKeys(
+    input,
+    ["evidenceSha256", "scannedSha256", "scannerGeneration", "scannerId", "scannerVersion", "verdict"],
+    "requester discovery secret scan",
+  );
+  const value = input as Record<string, unknown>;
+  assertCanonicalMcpIdentifier(value.scannerId, "scannerId", 128);
+  assertCanonicalSemVer(value.scannerVersion, "scannerVersion");
+  assertPositiveSafeInteger(value.scannerGeneration, "scannerGeneration");
+  assertLowercaseSha256(value.scannedSha256, "scannedSha256");
+  assertLowercaseSha256(value.evidenceSha256, "evidenceSha256");
+  if (value.verdict !== "clean") throw new TypeError("MCP requester discovery secret scan did not pass.");
+}
+
+function assertMcpRequesterAuthorityScope(input: {
+  actorId: unknown;
+  actorSource: unknown;
+  workspaceId: unknown;
+  sessionId: unknown;
+  turnId: unknown;
+}): void {
+  assertCanonicalMcpIdentifier(input.actorId, "actorId", 256);
+  assertCanonicalMcpIdentifier(input.workspaceId, "workspaceId", 256);
+  assertCanonicalMcpIdentifier(input.sessionId, "sessionId", 256);
+  assertCanonicalMcpIdentifier(input.turnId, "turnId", 256);
+  if (
+    input.actorSource !== "token" &&
+    input.actorSource !== "basic" &&
+    input.actorSource !== "loopback" &&
+    input.actorSource !== "device" &&
+    input.actorSource !== "companion"
+  ) {
+    throw new TypeError("MCP actorSource is not authenticated.");
+  }
+}
+
+function assertMcpRequesterAuthorityGenerations(
+  input: Record<string, unknown> & {
+    meshPublisherGeneration?: number;
+    meshActivationGeneration?: number;
+  },
+): void {
+  for (const field of [
+    "serverConfigRevision",
+    "resolverConfigGeneration",
+    "globalNetworkPolicyGeneration",
+    "authConnectionGeneration",
+    "turnGeneration",
+    "preparationGeneration",
+  ]) {
+    assertPositiveSafeInteger(input[field], field);
+  }
+  const stageGenerationFields = [
+    "discoveryAttemptGeneration",
+    "profileDiscoveryAttemptGeneration",
+    "revalidationAttemptGeneration",
+    "finalEffectAttemptGeneration",
+  ];
+  for (const field of stageGenerationFields) {
+    if (input[field] !== undefined) assertPositiveSafeInteger(input[field], field);
+  }
+  const hasPublisher = input.meshPublisherGeneration !== undefined;
+  const hasActivation = input.meshActivationGeneration !== undefined;
+  if (hasPublisher !== hasActivation) {
+    throw new TypeError("MCP mesh authority generations must be present together.");
+  }
+  if (hasPublisher) {
+    assertPositiveSafeInteger(input.meshPublisherGeneration, "meshPublisherGeneration");
+    assertPositiveSafeInteger(input.meshActivationGeneration, "meshActivationGeneration");
+  }
 }
 
 export function assertMcpRequesterResolutionConfig(input: unknown): asserts input is McpRequesterResolutionConfig {

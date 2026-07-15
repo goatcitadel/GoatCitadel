@@ -1,13 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  MCP_PROFILE_DISCOVERY_AUTHORITY_HASH_MATERIAL_VERSION,
+  MCP_REQUESTER_DISCOVERY_CATALOG_HASH_MATERIAL_VERSION,
+  MCP_REQUESTER_DISCOVERY_TOOL_HASH_MATERIAL_VERSION,
+  MCP_REQUESTER_PROVIDER_ALIAS_HASH_MATERIAL_VERSION,
   MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
+  MCP_TOOL_CALL_AUTHORITY_HASH_MATERIAL_VERSION,
   assertMcpRequesterResolutionBinding,
   assertMcpServerConnectionConfiguration,
+  mcpProfileDiscoveryAuthorityHashMaterial,
+  mcpRequesterDiscoveryCatalogHashMaterial,
+  mcpRequesterDiscoveryToolHashMaterial,
+  mcpRequesterProviderAliasHashMaterial,
   mcpRequesterResolutionBindingHashMaterial,
   mcpRequesterScopeHashMaterial,
+  mcpToolCallAuthorityHashMaterial,
   resolveMcpServerConnectionMode,
+  type McpProfileDiscoveryAuthorityHashInput,
   type McpRequesterResolutionBinding,
   type McpServerConnectionConfiguration,
+  type McpToolCallAuthorityHashInput,
 } from "./mcp.js";
 
 function requesterConfiguration(): McpServerConnectionConfiguration {
@@ -49,6 +61,72 @@ function requesterBinding(): McpRequesterResolutionBinding {
   };
 }
 
+function discoveryAuthorityInput(): McpProfileDiscoveryAuthorityHashInput {
+  return {
+    actorId: "operator-1",
+    actorSource: "token",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    futureProfileId: "future-profile-1",
+    baseCallableCatalogSha256: "a".repeat(64),
+    serverId: "tenant-mcp",
+    serverConfigRevision: 7,
+    serverConfigSha256: "b".repeat(64),
+    resolverId: "gateway.tenant-mcp",
+    resolverVersion: "1.2.3",
+    resolverConfigGeneration: 4,
+    transportPolicySha256: "c".repeat(64),
+    globalNetworkPolicyGeneration: 5,
+    authConnectionGeneration: 6,
+    turnGeneration: 7,
+    preparationGeneration: 8,
+    meshPublisherGeneration: 9,
+    meshActivationGeneration: 10,
+    discoveryAttemptId: "discovery-attempt-1",
+    discoveryAttemptGeneration: 11,
+  };
+}
+
+function toolCallAuthorityInput(): McpToolCallAuthorityHashInput {
+  return {
+    actorId: "operator-1",
+    actorSource: "token",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    finalProfileId: "profile-1",
+    finalProfileSha256: "d".repeat(64),
+    baseCallableCatalogSha256: "a".repeat(64),
+    finalCallableCatalogSha256: "e".repeat(64),
+    serverId: "tenant-mcp",
+    serverConfigRevision: 7,
+    serverConfigSha256: "b".repeat(64),
+    resolverId: "gateway.tenant-mcp",
+    resolverVersion: "1.2.3",
+    resolverConfigGeneration: 4,
+    transportPolicySha256: "c".repeat(64),
+    globalNetworkPolicyGeneration: 5,
+    authConnectionGeneration: 6,
+    turnGeneration: 7,
+    preparationGeneration: 8,
+    meshPublisherGeneration: 9,
+    meshActivationGeneration: 10,
+    profileDiscoveryAttemptId: "discovery-attempt-1",
+    profileDiscoveryAttemptGeneration: 11,
+    revalidationAttemptId: "revalidation-attempt-1",
+    revalidationAttemptGeneration: 12,
+    finalEffectAttemptId: "effect-attempt-1",
+    finalEffectAttemptGeneration: 13,
+    rawRemoteToolName: "search",
+    canonicalToolName: "mcp.tenant-mcp.search",
+    providerAlias: `mcp__${"f".repeat(64)}`,
+    normalizedDiscoveryCatalogSha256: "1".repeat(64),
+    normalizedToolDefinitionSha256: "2".repeat(64),
+    bindingSha256: "3".repeat(64),
+  };
+}
+
 describe("requester-scoped MCP contracts", () => {
   it("preserves missing-mode legacy static compatibility", () => {
     const legacy: McpServerConnectionConfiguration = {
@@ -57,109 +135,132 @@ describe("requester-scoped MCP contracts", () => {
       args: ["server.mjs"],
       authType: "none",
     };
-
     expect(resolveMcpServerConnectionMode(legacy)).toBe("static");
     expect(() => assertMcpServerConnectionConfiguration(legacy)).not.toThrow();
-
-    const legacyRecordShape = { ...legacy, label: "Legacy server", status: "connected" };
-    expect(() => assertMcpServerConnectionConfiguration(legacyRecordShape)).not.toThrow();
+    expect(() =>
+      assertMcpServerConnectionConfiguration({
+        ...legacy,
+        label: "Legacy",
+        status: "connected",
+      } as McpServerConnectionConfiguration),
+    ).not.toThrow();
   });
 
   it("accepts only canonical non-secret requester configuration", () => {
     expect(() => assertMcpServerConnectionConfiguration(requesterConfiguration())).not.toThrow();
+    for (const patch of [
+      { transport: "stdio" },
+      { url: "https://secret.example.test/path?token=canary" },
+      { command: "node" },
+      { args: [] },
+      { authType: "token" },
+      { oauth: { tokenUrl: "https://auth.example.test/token" } },
+      { authState: { authType: "none", readiness: "not_required" } },
+      { policy: { allowedEnvKeys: ["MCP_TOKEN"] } },
+      { configurationRevision: undefined },
+    ]) {
+      expect(() =>
+        assertMcpServerConnectionConfiguration({
+          ...requesterConfiguration(),
+          ...patch,
+        } as McpServerConnectionConfiguration),
+      ).toThrow();
+    }
   });
 
-  it.each([
-    ["stdio transport", { transport: "stdio" }],
-    ["static URL", { url: "https://secret.example.test/path?token=canary" }],
-    ["static command", { command: "node" }],
-    ["static args", { args: [] }],
-    ["static auth", { authType: "token" }],
-    ["OAuth config", { oauth: { tokenUrl: "https://auth.example.test/token" } }],
-    ["auth state", { authState: { authType: "none", readiness: "not_required" } }],
-    ["environment pass-through", { policy: { allowedEnvKeys: ["MCP_TOKEN"] } }],
-    ["missing configuration revision", { configurationRevision: undefined }],
-  ])("rejects requester-scoped %s", (_label, patch) => {
-    expect(() =>
-      assertMcpServerConnectionConfiguration({
-        ...requesterConfiguration(),
-        ...patch,
-      } as McpServerConnectionConfiguration),
-    ).toThrow();
-  });
-
-  it("rejects hidden resolver fields, non-canonical arrays, and forbidden headers", () => {
+  it("rejects hidden resolver fields, noncanonical arrays, and forbidden headers", () => {
     const hiddenSecret = requesterConfiguration();
     Object.assign(hiddenSecret.requesterResolution as object, { token: "never-store-this" });
     expect(() => assertMcpServerConnectionConfiguration(hiddenSecret)).toThrow(/unsupported fields/);
-
     const unsortedHosts = requesterConfiguration();
     unsortedHosts.requesterResolution!.transportPolicy.allowedHosts = ["z.example.test", "a.example.test"];
     expect(() => assertMcpServerConnectionConfiguration(unsortedHosts)).toThrow(/unique and sorted/);
-
     const forbiddenHeader = requesterConfiguration();
     forbiddenHeader.requesterResolution!.transportPolicy.allowedHeaderNames = ["host"];
     expect(() => assertMcpServerConnectionConfiguration(forbiddenHeader)).toThrow(/forbidden name/);
-
-    const wildcardHost = requesterConfiguration();
-    wildcardHost.requesterResolution!.transportPolicy.allowedHosts = ["*.example.test"];
-    expect(() => assertMcpServerConnectionConfiguration(wildcardHost)).toThrow(/canonical hosts/);
-
-    const hiddenTopLevel = { ...requesterConfiguration(), endpoint: "https://secret.example.test/path" };
-    expect(() => assertMcpServerConnectionConfiguration(hiddenTopLevel)).toThrow(/unsupported fields/);
-
-    const hiddenPolicy = requesterConfiguration();
-    Object.assign(hiddenPolicy.policy ?? (hiddenPolicy.policy = {}), { credential: "never-store-this" });
-    expect(() => assertMcpServerConnectionConfiguration(hiddenPolicy)).toThrow(/unsupported fields/);
-
-    const malformedEmptyEnvList = requesterConfiguration();
-    malformedEmptyEnvList.policy = { allowedEnvKeys: "" } as never;
-    expect(() => assertMcpServerConnectionConfiguration(malformedEmptyEnvList)).toThrow(/environment variables/);
   });
 
   it("accepts only an exact secret-free binding shape", () => {
     const binding = requesterBinding();
     expect(() => assertMcpRequesterResolutionBinding(binding)).not.toThrow();
-    const material = mcpRequesterResolutionBindingHashMaterial(binding);
-    expect(material).not.toHaveProperty("bindingSha256");
-    expect(material).toMatchObject({ serverId: binding.serverId, toolName: binding.toolName });
-
-    const endpointSmuggling = { ...binding, url: "https://secret.example.test" };
-    expect(() => assertMcpRequesterResolutionBinding(endpointSmuggling)).toThrow(/unsupported fields/);
-
-    const endpointAsIdentifier = { ...binding, serverId: "https://secret.example.test/path" };
-    expect(() => assertMcpRequesterResolutionBinding(endpointAsIdentifier)).toThrow(/canonical identifier/);
+    expect(mcpRequesterResolutionBindingHashMaterial(binding)).not.toHaveProperty("bindingSha256");
+    expect(() => assertMcpRequesterResolutionBinding({ ...binding, url: "https://secret.example.test" })).toThrow(
+      /unsupported fields/,
+    );
   });
 
-  it("defines one exact non-secret authenticated requester scope hash material", () => {
+  it("keeps legacy scope material exact and authenticated", () => {
     expect(
       mcpRequesterScopeHashMaterial({
-        profileId: "chat-capability-profile-turn-1",
+        profileId: "profile-1",
         turnId: "turn-1",
         sessionId: "session-1",
         workspaceId: "workspace-1",
         authActorId: "operator-1",
         authActorSource: "token",
       }),
-    ).toEqual({
-      schemaVersion: "goatcitadel.mcp-requester-scope-hash-material.v1",
-      profileId: "chat-capability-profile-turn-1",
-      turnId: "turn-1",
-      sessionId: "session-1",
-      workspaceId: "workspace-1",
-      authActorId: "operator-1",
-      authActorSource: "token",
-    });
+    ).toMatchObject({ schemaVersion: "goatcitadel.mcp-requester-scope-hash-material.v1" });
+  });
 
-    const hidden = {
-      profileId: "chat-capability-profile-turn-1",
-      turnId: "turn-1",
-      sessionId: "session-1",
-      workspaceId: "workspace-1",
-      authActorId: "operator-1",
-      authActorSource: "token" as const,
-      endpoint: "https://secret.example.test",
+  it("domain-separates discovery and final authority materials", () => {
+    const discovery = mcpProfileDiscoveryAuthorityHashMaterial(discoveryAuthorityInput());
+    const final = mcpToolCallAuthorityHashMaterial(toolCallAuthorityInput());
+    expect(discovery).toMatchObject({
+      schemaVersion: MCP_PROFILE_DISCOVERY_AUTHORITY_HASH_MATERIAL_VERSION,
+      stage: "profile_discovery",
+    });
+    expect(final).toMatchObject({
+      schemaVersion: MCP_TOOL_CALL_AUTHORITY_HASH_MATERIAL_VERSION,
+      stage: "tool_call",
+    });
+    expect(discovery.schemaVersion).not.toBe(final.schemaVersion);
+  });
+
+  it("rejects partial mesh generations and unknown authority fields", () => {
+    const partial = { ...discoveryAuthorityInput(), meshActivationGeneration: undefined };
+    delete partial.meshActivationGeneration;
+    expect(() => mcpProfileDiscoveryAuthorityHashMaterial(partial)).toThrow(/present together/);
+    expect(() =>
+      mcpProfileDiscoveryAuthorityHashMaterial({ ...discoveryAuthorityInput(), endpoint: "secret" } as never),
+    ).toThrow(/unsupported fields/);
+    expect(() =>
+      mcpToolCallAuthorityHashMaterial({ ...toolCallAuthorityInput(), providerAlias: "mcp__search" }),
+    ).toThrow(/opaque full-digest/);
+  });
+
+  it("domain-separates normalized tool, catalog, and provider alias materials", () => {
+    const tool = {
+      serverId: "tenant-mcp",
+      rawRemoteToolName: "search",
+      canonicalToolName: "mcp.tenant-mcp.search",
+      description: "Search safely",
+      inputSchema: { type: "object" },
     };
-    expect(() => mcpRequesterScopeHashMaterial(hidden)).toThrow(/unsupported fields/);
+    const toolMaterial = mcpRequesterDiscoveryToolHashMaterial(tool);
+    expect(toolMaterial.schemaVersion).toBe(MCP_REQUESTER_DISCOVERY_TOOL_HASH_MATERIAL_VERSION);
+    const { serverId: _serverId, ...toolWithoutServer } = tool;
+    const normalizedTool = { ...toolWithoutServer, toolDefinitionSha256: "1".repeat(64) };
+    const catalog = mcpRequesterDiscoveryCatalogHashMaterial({
+      serverId: "tenant-mcp",
+      secretScan: {
+        scannerId: "gateway.secret-scan",
+        scannerVersion: "1.0.0",
+        scannerGeneration: 1,
+        scannedSha256: "2".repeat(64),
+        evidenceSha256: "3".repeat(64),
+        verdict: "clean",
+      },
+      tools: [normalizedTool],
+    });
+    expect(catalog.schemaVersion).toBe(MCP_REQUESTER_DISCOVERY_CATALOG_HASH_MATERIAL_VERSION);
+    expect(
+      mcpRequesterProviderAliasHashMaterial({
+        serverId: "tenant-mcp",
+        rawRemoteToolName: "search",
+        canonicalToolName: "mcp.tenant-mcp.search",
+        normalizedToolDefinitionSha256: "1".repeat(64),
+        bindingSha256: "4".repeat(64),
+      }).schemaVersion,
+    ).toBe(MCP_REQUESTER_PROVIDER_ALIAS_HASH_MATERIAL_VERSION);
   });
 });

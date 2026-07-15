@@ -1,40 +1,64 @@
-import type { McpRequesterResolutionBinding } from "@goatcitadel/contracts";
+/* eslint-disable max-lines -- Stage-specific resolution and attempt lifecycles remain auditable in one seam. */
+import { createHash } from "node:crypto";
+import { types as nodeTypes } from "node:util";
+import {
+  canonicalJsonString,
+  mcpRequesterScopeHashMaterial,
+  type McpNormalizedRequesterDiscoveryCatalog,
+  type McpRequesterResolutionBinding,
+} from "@goatcitadel/contracts";
 import {
   MCP_REQUESTER_RESOLUTION_TIMEOUT_MS,
   McpRequesterResolutionError,
-  assertMcpRequesterAuthority,
-  assertMcpRequesterCapabilityProfileSnapshot,
+  assertMcpProfileDiscoveryAuthority,
   assertMcpRequesterResolutionBindingIntegrity,
-  assertMcpRequesterScopedServerSnapshot,
-  mcpRequesterMeshActivationHash,
+  assertMcpToolCallAuthority,
+  assertNormalizedMcpRequesterDiscoveryCatalog,
   mcpRequesterScopedServerConfigHash,
   mcpRequesterTransportPolicyHash,
   readMcpEphemeralResolvedConnectionCandidate,
+  snapshotMcpRequesterScopedServerSnapshot,
   validateMcpEphemeralResolvedConnection,
+  type McpEphemeralResolvedConnectionCandidate,
   type McpEphemeralResolvedHeaderInput,
-  type McpRequesterAuthority,
-  type McpRequesterCapabilityProfileSnapshot,
-  type McpRequesterResolutionCurrentState,
+  type McpProfileDiscoveryAuthority,
+  type McpProfileDiscoveryCurrentState,
   type McpRequesterResolutionReasonCode,
   type McpRequesterResolverRegistry,
   type McpRequesterScopedServerSnapshot,
+  type McpToolCallAuthority,
+  type McpToolCallCurrentState,
   type ValidatedMcpEphemeralResolvedConnection,
 } from "./mcp-requester-resolution.js";
 import { createMcpResolutionSecretGuard, type McpResolutionSecretGuard } from "./mcp-resolution-secret-guard.js";
 
-export interface McpRequesterCurrentStateCheck {
-  connectionGeneration?: number;
-}
-
-export interface McpRequesterResolutionServiceInput {
-  requester: McpRequesterAuthority;
-  server: McpRequesterScopedServerSnapshot;
-  profile: McpRequesterCapabilityProfileSnapshot;
-  binding: McpRequesterResolutionBinding;
-  readCurrentState(check: McpRequesterCurrentStateCheck): McpRequesterResolutionCurrentState;
+interface ResolutionSignals {
   signal?: AbortSignal;
   shutdownSignal?: AbortSignal;
   revocationSignal?: AbortSignal;
+}
+
+export interface McpProfileDiscoveryCurrentStateCheck {
+  connectionGeneration?: number;
+  rotationGeneration?: number;
+}
+
+export interface McpToolCallCurrentStateCheck {
+  connectionGeneration?: number;
+  rotationGeneration?: number;
+}
+
+export interface McpProfileDiscoveryResolutionServiceInput extends ResolutionSignals {
+  requester: McpProfileDiscoveryAuthority;
+  server: McpRequesterScopedServerSnapshot;
+  readCurrentState(check: McpProfileDiscoveryCurrentStateCheck): McpProfileDiscoveryCurrentState;
+}
+
+export interface McpToolCallResolutionServiceInput extends ResolutionSignals {
+  requester: McpToolCallAuthority;
+  server: McpRequesterScopedServerSnapshot;
+  binding: McpRequesterResolutionBinding;
+  readCurrentState(check: McpToolCallCurrentStateCheck): McpToolCallCurrentState;
 }
 
 export interface McpEphemeralResolvedConnection {
@@ -47,10 +71,128 @@ export interface McpEphemeralResolvedConnection {
   toJSON(): never;
 }
 
-export interface McpRequesterResolutionAttempt {
+const profileDiscoveryOperationPermitBrand: unique symbol = Symbol(
+  "goatcitadel.mcp.profile-discovery-operation-permit",
+);
+const toolCallRevalidationPermitBrand: unique symbol = Symbol("goatcitadel.mcp.tool-call-revalidation-permit");
+const toolCallOperationPermitBrand: unique symbol = Symbol("goatcitadel.mcp.tool-call-operation-permit");
+const profileDiscoveryOperationPermits = new WeakSet<object>();
+const toolCallRevalidationPermits = new WeakSet<object>();
+const toolCallOperationPermits = new WeakSet<object>();
+
+export type McpProfileDiscoveryOperation = "initialize" | "notifications/initialized" | "tools/list";
+
+export interface McpProfileDiscoveryOperationPermit {
+  readonly stage: "profile_discovery";
+  readonly operation: McpProfileDiscoveryOperation;
+  readonly authoritySha256: string;
+  readonly connectionGeneration: number;
+  readonly rotationGeneration?: number;
+  readonly [profileDiscoveryOperationPermitBrand]: true;
+  toJSON(): never;
+}
+
+export interface McpToolCallRevalidationPermit {
+  readonly stage: "tool_call_revalidation";
+  readonly operation: "tools/list";
+  readonly authoritySha256: string;
+  readonly revalidationAttemptId: string;
+  readonly revalidationAttemptGeneration: number;
+  readonly connectionGeneration: number;
+  readonly rotationGeneration?: number;
+  readonly expectedCatalogSha256: string;
+  readonly expectedToolDefinitionSha256: string;
+  readonly [toolCallRevalidationPermitBrand]: true;
+  toJSON(): never;
+}
+
+export interface McpToolCallOperationPermit {
+  readonly stage: "tool_call";
+  readonly operation: "tools/call";
+  readonly authoritySha256: string;
+  readonly finalEffectAttemptId: string;
+  readonly finalEffectAttemptGeneration: number;
+  readonly connectionGeneration: number;
+  readonly rotationGeneration?: number;
+  readonly serverId: string;
+  readonly rawRemoteToolName: string;
+  readonly canonicalToolName: string;
+  readonly providerAlias: string;
+  readonly [toolCallOperationPermitBrand]: true;
+  toJSON(): never;
+}
+
+class ProfileDiscoveryOperationPermitValue {
+  public constructor(
+    value: Omit<McpProfileDiscoveryOperationPermit, typeof profileDiscoveryOperationPermitBrand | "toJSON">,
+  ) {
+    Object.assign(this, value);
+    profileDiscoveryOperationPermits.add(this);
+    Object.freeze(this);
+  }
+
+  public toJSON(): never {
+    throw new McpRequesterResolutionError("operation_denied");
+  }
+}
+
+class ToolCallRevalidationPermitValue {
+  public constructor(value: Omit<McpToolCallRevalidationPermit, typeof toolCallRevalidationPermitBrand | "toJSON">) {
+    Object.assign(this, value);
+    toolCallRevalidationPermits.add(this);
+    Object.freeze(this);
+  }
+
+  public toJSON(): never {
+    throw new McpRequesterResolutionError("operation_denied");
+  }
+}
+
+class ToolCallOperationPermitValue {
+  public constructor(value: Omit<McpToolCallOperationPermit, typeof toolCallOperationPermitBrand | "toJSON">) {
+    Object.assign(this, value);
+    toolCallOperationPermits.add(this);
+    Object.freeze(this);
+  }
+
+  public toJSON(): never {
+    throw new McpRequesterResolutionError("operation_denied");
+  }
+}
+
+Object.freeze(ProfileDiscoveryOperationPermitValue.prototype);
+Object.freeze(ToolCallRevalidationPermitValue.prototype);
+Object.freeze(ToolCallOperationPermitValue.prototype);
+
+function assertLiveMcpProfileDiscoveryOperationPermit(
+  input: unknown,
+): asserts input is McpProfileDiscoveryOperationPermit {
+  if (typeof input !== "object" || input === null || !profileDiscoveryOperationPermits.has(input)) {
+    throw new McpRequesterResolutionError("operation_denied");
+  }
+}
+
+function assertLiveMcpToolCallRevalidationPermit(input: unknown): asserts input is McpToolCallRevalidationPermit {
+  if (typeof input !== "object" || input === null || !toolCallRevalidationPermits.has(input)) {
+    throw new McpRequesterResolutionError("operation_denied");
+  }
+}
+
+function assertLiveMcpToolCallOperationPermit(input: unknown): asserts input is McpToolCallOperationPermit {
+  if (typeof input !== "object" || input === null || !toolCallOperationPermits.has(input)) {
+    throw new McpRequesterResolutionError("operation_denied");
+  }
+}
+
+export interface McpProfileDiscoveryResolutionAttempt {
+  readonly stage: "profile_discovery";
   readonly attemptId: string;
   readonly connection: McpEphemeralResolvedConnection;
   readonly signal: AbortSignal;
+  authorizeInitialize(): McpProfileDiscoveryOperationPermit;
+  authorizeInitializedNotification(): McpProfileDiscoveryOperationPermit;
+  authorizeToolsList(): McpProfileDiscoveryOperationPermit;
+  consumeOperationPermit(input: McpProfileDiscoveryOperationPermit): McpProfileDiscoveryOperationPermit;
   assertCurrent(): void;
   scrubText(input: string): string;
   scrubDiagnostic(input: unknown): unknown;
@@ -59,17 +201,28 @@ export interface McpRequesterResolutionAttempt {
   toJSON(): never;
 }
 
-interface FrozenResolutionExpectation {
-  requester: McpRequesterAuthority;
-  serverConfigRevision: number;
-  serverConfigSha256: string;
-  resolverId: string;
-  resolverVersion: string;
-  resolverConfigGeneration: number;
-  transportPolicySha256: string;
-  callableCatalogSnapshotId: string;
-  callableCatalogSha256: string;
-  meshActivationSha256?: string;
+export interface McpFreshToolsListRevalidationInput {
+  revalidationAttemptId: string;
+  revalidationAttemptGeneration: number;
+  catalog: McpNormalizedRequesterDiscoveryCatalog;
+}
+
+export interface McpToolCallResolutionAttempt {
+  readonly stage: "tool_call";
+  readonly attemptId: string;
+  readonly connection: McpEphemeralResolvedConnection;
+  readonly signal: AbortSignal;
+  authorizeToolsListRevalidation(): McpToolCallRevalidationPermit;
+  consumeToolsListRevalidationPermit(input: McpToolCallRevalidationPermit): McpToolCallRevalidationPermit;
+  acceptFreshToolsListRevalidation(input: McpFreshToolsListRevalidationInput): void;
+  authorizeToolsCall(): McpToolCallOperationPermit;
+  consumeToolsCallPermit(input: McpToolCallOperationPermit): McpToolCallOperationPermit;
+  assertCurrent(): void;
+  scrubText(input: string): string;
+  scrubDiagnostic(input: unknown): unknown;
+  dispose(): void;
+  isDisposed(): boolean;
+  toJSON(): never;
 }
 
 class McpEphemeralResolvedConnectionValue implements McpEphemeralResolvedConnection {
@@ -116,41 +269,49 @@ class McpEphemeralResolvedConnectionValue implements McpEphemeralResolvedConnect
   }
 }
 
-class McpRequesterResolutionAttemptValue implements McpRequesterResolutionAttempt {
-  readonly #attemptId: string;
+class ResolutionLease {
   readonly #connection: McpEphemeralResolvedConnectionValue;
   readonly #guard: McpResolutionSecretGuard;
   readonly #abort: ResolutionAbortLatch;
-  readonly #expectation: FrozenResolutionExpectation;
-  readonly #readCurrentState: McpRequesterResolutionServiceInput["readCurrentState"];
+  readonly #assertCurrentState: (connectionGeneration?: number, rotationGeneration?: number) => void;
   readonly #now: () => number;
+  readonly #onDispose: () => void;
+  readonly #expiryTimer: ReturnType<typeof setTimeout>;
+  readonly #abortListener: () => void;
   #disposed = false;
 
   public constructor(input: {
     connection: McpEphemeralResolvedConnectionValue;
     guard: McpResolutionSecretGuard;
     abort: ResolutionAbortLatch;
-    expectation: FrozenResolutionExpectation;
-    readCurrentState: McpRequesterResolutionServiceInput["readCurrentState"];
+    assertCurrentState(connectionGeneration?: number, rotationGeneration?: number): void;
     now: () => number;
+    onDispose(): void;
   }) {
-    this.#attemptId = input.expectation.requester.invocationAttemptId;
     this.#connection = input.connection;
     this.#guard = input.guard;
     this.#abort = input.abort;
-    this.#expectation = input.expectation;
-    this.#readCurrentState = input.readCurrentState;
+    this.#assertCurrentState = input.assertCurrentState;
     this.#now = input.now;
+    this.#onDispose = input.onDispose;
+    this.#abortListener = () => this.#disposeResources();
+    this.#abort.signal.addEventListener("abort", this.#abortListener, { once: true });
+    this.#expiryTimer = setTimeout(
+      () => this.#abort.abort("resolved_connection_expired"),
+      Math.max(0, this.#connection.expiresAtMs - this.#now()),
+    );
+    this.#expiryTimer.unref?.();
     Object.freeze(this);
   }
 
-  public get attemptId(): string {
-    return this.#attemptId;
+  public get connection(): McpEphemeralResolvedConnection {
+    this.#assertAccessible();
+    return this.#connection;
   }
 
-  public get connection(): McpEphemeralResolvedConnection {
-    this.#assertNotDisposed();
-    return this.#connection;
+  public get connectionGeneration(): number {
+    this.#assertAccessible();
+    return this.#connection.connectionGeneration;
   }
 
   public get signal(): AbortSignal {
@@ -158,54 +319,373 @@ class McpRequesterResolutionAttemptValue implements McpRequesterResolutionAttemp
   }
 
   public assertCurrent(): void {
-    this.#assertNotDisposed();
     this.#abort.throwIfAborted();
+    this.#assertNotDisposed();
     if (this.#now() >= this.#connection.expiresAtMs) {
-      throw new McpRequesterResolutionError("resolved_connection_expired");
+      this.#abort.abort("resolved_connection_expired");
+      this.#abort.throwIfAborted();
     }
-    assertCurrentState(this.#expectation, this.#readCurrentState, this.#connection.connectionGeneration);
+    try {
+      this.#assertCurrentState(this.#connection.connectionGeneration, this.#connection.rotationGeneration);
+    } catch (error) {
+      this.#abort.abort(error instanceof McpRequesterResolutionError ? error.code : "connection_generation_revoked");
+      this.#abort.throwIfAborted();
+    }
     this.#abort.throwIfAborted();
   }
 
   public scrubText(input: string): string {
-    this.#assertNotDisposed();
+    this.#assertAccessible();
     return this.#guard.scrubText(input);
   }
 
   public scrubDiagnostic(input: unknown): unknown {
-    this.#assertNotDisposed();
+    this.#assertAccessible();
     return this.#guard.scrubDiagnostic(input);
   }
 
   public dispose(): void {
     if (this.#disposed) return;
-    this.#disposed = true;
+    this.#abort.abort("connection_generation_revoked");
     this.#abort.dispose();
-    this.#connection.dispose();
-    this.#guard.dispose();
+    this.#disposeResources();
   }
 
   public isDisposed(): boolean {
     return this.#disposed;
   }
 
-  public toJSON(): never {
-    throw new McpRequesterResolutionError("secret_guard_failed");
+  #disposeResources(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    clearTimeout(this.#expiryTimer);
+    this.#abort.signal.removeEventListener("abort", this.#abortListener);
+    this.#abort.dispose();
+    this.#connection.dispose();
+    this.#guard.dispose();
+    this.#onDispose();
   }
 
   #assertNotDisposed(): void {
     if (this.#disposed) throw new McpRequesterResolutionError("connection_generation_revoked");
   }
+
+  #assertAccessible(): void {
+    this.#abort.throwIfAborted();
+    this.#assertNotDisposed();
+  }
 }
+
+class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryResolutionAttempt {
+  public readonly stage = "profile_discovery" as const;
+  readonly #requester: McpProfileDiscoveryAuthority;
+  readonly #lease: ResolutionLease;
+  readonly #abortListener: () => void;
+  readonly #authorizedOperations = new Set<McpProfileDiscoveryOperation>();
+  readonly #issuedPermits = new Map<McpProfileDiscoveryOperation, McpProfileDiscoveryOperationPermit>();
+
+  public constructor(requester: McpProfileDiscoveryAuthority, lease: ResolutionLease) {
+    this.#requester = requester;
+    this.#lease = lease;
+    this.#abortListener = () => this.#revokeIssuedPermits();
+    this.#lease.signal.addEventListener("abort", this.#abortListener, { once: true });
+    Object.seal(this);
+  }
+
+  public get attemptId(): string {
+    return this.#requester.discoveryAttemptId;
+  }
+  public get connection(): McpEphemeralResolvedConnection {
+    return this.#lease.connection;
+  }
+  public get signal(): AbortSignal {
+    return this.#lease.signal;
+  }
+  public authorizeInitialize(): McpProfileDiscoveryOperationPermit {
+    return this.#permit("initialize");
+  }
+  public authorizeInitializedNotification(): McpProfileDiscoveryOperationPermit {
+    return this.#permit("notifications/initialized");
+  }
+  public authorizeToolsList(): McpProfileDiscoveryOperationPermit {
+    return this.#permit("tools/list");
+  }
+  public consumeOperationPermit(input: McpProfileDiscoveryOperationPermit): McpProfileDiscoveryOperationPermit {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+    const issued = [...this.#issuedPermits.entries()].find(([, permit]) => permit === input);
+    if (!issued) throw new McpRequesterResolutionError("operation_denied");
+    assertLiveMcpProfileDiscoveryOperationPermit(input);
+    if (!profileDiscoveryOperationPermits.delete(input)) {
+      throw new McpRequesterResolutionError("operation_denied");
+    }
+    this.#issuedPermits.delete(issued[0]);
+    return input;
+  }
+  public assertCurrent(): void {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+  }
+  public scrubText(input: string): string {
+    return this.#lease.scrubText(input);
+  }
+  public scrubDiagnostic(input: unknown): unknown {
+    return this.#lease.scrubDiagnostic(input);
+  }
+  public dispose(): void {
+    this.#revokeIssuedPermits();
+    this.#lease.signal.removeEventListener("abort", this.#abortListener);
+    this.#lease.dispose();
+  }
+  public isDisposed(): boolean {
+    return this.#lease.isDisposed();
+  }
+  public toJSON(): never {
+    throw new McpRequesterResolutionError("secret_guard_failed");
+  }
+
+  #permit(operation: McpProfileDiscoveryOperation): McpProfileDiscoveryOperationPermit {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+    if (this.#authorizedOperations.has(operation)) throw new McpRequesterResolutionError("operation_denied");
+    const permit = new ProfileDiscoveryOperationPermitValue({
+      stage: "profile_discovery",
+      operation,
+      authoritySha256: this.#requester.authoritySha256,
+      connectionGeneration: this.#lease.connectionGeneration,
+      ...(this.#lease.connection.rotationGeneration === undefined
+        ? {}
+        : { rotationGeneration: this.#lease.connection.rotationGeneration }),
+    }) as unknown as McpProfileDiscoveryOperationPermit;
+    this.#authorizedOperations.add(operation);
+    this.#issuedPermits.set(operation, permit);
+    return permit;
+  }
+
+  #revokeIssuedPermits(): void {
+    for (const permit of this.#issuedPermits.values()) profileDiscoveryOperationPermits.delete(permit);
+    this.#issuedPermits.clear();
+  }
+}
+
+class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt {
+  public readonly stage = "tool_call" as const;
+  readonly #requester: McpToolCallAuthority;
+  readonly #lease: ResolutionLease;
+  readonly #abortListener: () => void;
+  #revalidationAuthorized = false;
+  #issuedRevalidationPermit: McpToolCallRevalidationPermit | undefined;
+  #revalidationDispatched = false;
+  #revalidated = false;
+  #callAuthorized = false;
+  #issuedCallPermit: McpToolCallOperationPermit | undefined;
+
+  public constructor(requester: McpToolCallAuthority, lease: ResolutionLease) {
+    this.#requester = requester;
+    this.#lease = lease;
+    this.#abortListener = () => this.#revokeIssuedPermits();
+    this.#lease.signal.addEventListener("abort", this.#abortListener, { once: true });
+    Object.seal(this);
+  }
+
+  public get attemptId(): string {
+    return this.#requester.finalEffectAttemptId;
+  }
+  public get connection(): McpEphemeralResolvedConnection {
+    return this.#lease.connection;
+  }
+  public get signal(): AbortSignal {
+    return this.#lease.signal;
+  }
+  public authorizeToolsListRevalidation(): McpToolCallRevalidationPermit {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+    if (this.#revalidationAuthorized) {
+      throw new McpRequesterResolutionError("operation_denied");
+    }
+    const permit = new ToolCallRevalidationPermitValue({
+      stage: "tool_call_revalidation",
+      operation: "tools/list",
+      authoritySha256: this.#requester.authoritySha256,
+      revalidationAttemptId: this.#requester.revalidationAttemptId,
+      revalidationAttemptGeneration: this.#requester.revalidationAttemptGeneration,
+      connectionGeneration: this.#lease.connectionGeneration,
+      ...(this.#lease.connection.rotationGeneration === undefined
+        ? {}
+        : { rotationGeneration: this.#lease.connection.rotationGeneration }),
+      expectedCatalogSha256: this.#requester.normalizedDiscoveryCatalogSha256,
+      expectedToolDefinitionSha256: this.#requester.normalizedToolDefinitionSha256,
+    }) as unknown as McpToolCallRevalidationPermit;
+    this.#revalidationAuthorized = true;
+    this.#issuedRevalidationPermit = permit;
+    return permit;
+  }
+  public consumeToolsListRevalidationPermit(input: McpToolCallRevalidationPermit): McpToolCallRevalidationPermit {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+    if (input !== this.#issuedRevalidationPermit) throw new McpRequesterResolutionError("operation_denied");
+    assertLiveMcpToolCallRevalidationPermit(input);
+    if (!toolCallRevalidationPermits.delete(input)) throw new McpRequesterResolutionError("operation_denied");
+    this.#issuedRevalidationPermit = undefined;
+    this.#revalidationDispatched = true;
+    return input;
+  }
+  public acceptFreshToolsListRevalidation(input: McpFreshToolsListRevalidationInput): void {
+    if (this.#revalidated) throw new McpRequesterResolutionError("schema_revalidation_drift");
+    if (!this.#revalidationDispatched) throw new McpRequesterResolutionError("schema_revalidation_required");
+    this.#revalidationDispatched = false;
+    try {
+      this.#assertCurrentAndRevokePermitsOnFailure();
+      const value = snapshotExactDataRecord(input, [
+        "catalog",
+        "revalidationAttemptGeneration",
+        "revalidationAttemptId",
+      ]);
+      assertNormalizedMcpRequesterDiscoveryCatalog(value.catalog);
+      if (
+        value.revalidationAttemptId !== this.#requester.revalidationAttemptId ||
+        value.revalidationAttemptGeneration !== this.#requester.revalidationAttemptGeneration ||
+        value.catalog.serverId !== this.#requester.serverId ||
+        value.catalog.catalogSha256 !== this.#requester.normalizedDiscoveryCatalogSha256
+      ) {
+        throw new McpRequesterResolutionError("schema_revalidation_drift");
+      }
+      const exactTool = value.catalog.tools.find(
+        (tool) =>
+          tool.rawRemoteToolName === this.#requester.rawRemoteToolName &&
+          tool.canonicalToolName === this.#requester.canonicalToolName,
+      );
+      if (
+        !exactTool ||
+        exactTool.toolDefinitionSha256 !== this.#requester.normalizedToolDefinitionSha256 ||
+        value.catalog.tools.some(
+          (tool) =>
+            tool !== exactTool &&
+            (tool.rawRemoteToolName === this.#requester.rawRemoteToolName ||
+              tool.canonicalToolName === this.#requester.canonicalToolName),
+        )
+      ) {
+        throw new McpRequesterResolutionError("schema_revalidation_drift");
+      }
+      this.#assertCurrentAndRevokePermitsOnFailure();
+      this.#revalidated = true;
+    } catch (error) {
+      this.dispose();
+      throw error;
+    }
+  }
+  public authorizeToolsCall(): McpToolCallOperationPermit {
+    this.#assertCurrentAndRevokePermitsOnFailure();
+    if (!this.#revalidated) throw new McpRequesterResolutionError("schema_revalidation_required");
+    if (this.#callAuthorized) throw new McpRequesterResolutionError("operation_denied");
+    const permit = new ToolCallOperationPermitValue({
+      stage: "tool_call",
+      operation: "tools/call",
+      authoritySha256: this.#requester.authoritySha256,
+      finalEffectAttemptId: this.#requester.finalEffectAttemptId,
+      finalEffectAttemptGeneration: this.#requester.finalEffectAttemptGeneration,
+      connectionGeneration: this.#lease.connectionGeneration,
+      ...(this.#lease.connection.rotationGeneration === undefined
+        ? {}
+        : { rotationGeneration: this.#lease.connection.rotationGeneration }),
+      serverId: this.#requester.serverId,
+      rawRemoteToolName: this.#requester.rawRemoteToolName,
+      canonicalToolName: this.#requester.canonicalToolName,
+      providerAlias: this.#requester.providerAlias,
+    }) as unknown as McpToolCallOperationPermit;
+    this.#callAuthorized = true;
+    this.#issuedCallPermit = permit;
+    return permit;
+  }
+  public consumeToolsCallPermit(input: McpToolCallOperationPermit): McpToolCallOperationPermit {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+    if (input !== this.#issuedCallPermit) throw new McpRequesterResolutionError("operation_denied");
+    assertLiveMcpToolCallOperationPermit(input);
+    if (!toolCallOperationPermits.delete(input)) throw new McpRequesterResolutionError("operation_denied");
+    this.#issuedCallPermit = undefined;
+    return input;
+  }
+  public assertCurrent(): void {
+    this.#assertCurrentAndRevokePermitsOnFailure();
+  }
+  public scrubText(input: string): string {
+    return this.#lease.scrubText(input);
+  }
+  public scrubDiagnostic(input: unknown): unknown {
+    return this.#lease.scrubDiagnostic(input);
+  }
+  public dispose(): void {
+    this.#revokeIssuedPermits();
+    this.#lease.signal.removeEventListener("abort", this.#abortListener);
+    this.#lease.dispose();
+    this.#revalidationDispatched = false;
+    this.#revalidated = false;
+    this.#callAuthorized = true;
+  }
+  public isDisposed(): boolean {
+    return this.#lease.isDisposed();
+  }
+  public toJSON(): never {
+    throw new McpRequesterResolutionError("secret_guard_failed");
+  }
+
+  #revokeIssuedPermits(): void {
+    if (this.#issuedRevalidationPermit) {
+      toolCallRevalidationPermits.delete(this.#issuedRevalidationPermit);
+      this.#issuedRevalidationPermit = undefined;
+    }
+    if (this.#issuedCallPermit) {
+      toolCallOperationPermits.delete(this.#issuedCallPermit);
+      this.#issuedCallPermit = undefined;
+    }
+  }
+
+  #assertCurrentAndRevokePermitsOnFailure(): void {
+    try {
+      this.#lease.assertCurrent();
+    } catch (error) {
+      this.#revokeIssuedPermits();
+      throw error;
+    }
+  }
+}
+
+Object.freeze(McpEphemeralResolvedConnectionValue.prototype);
+Object.freeze(ResolutionLease.prototype);
+Object.freeze(McpProfileDiscoveryResolutionAttemptValue.prototype);
+Object.freeze(McpToolCallResolutionAttemptValue.prototype);
 
 class ResolutionAbortLatch {
   readonly #controller = new AbortController();
   readonly #listeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
   #code: McpRequesterResolutionReasonCode | undefined;
 
-  public constructor(
-    input: Pick<McpRequesterResolutionServiceInput, "signal" | "shutdownSignal" | "revocationSignal">,
-  ) {
+  public constructor(input: ResolutionSignals) {
     this.#link(input.signal, "resolver_cancelled");
     this.#link(input.shutdownSignal, "resolver_cancelled");
     this.#link(input.revocationSignal, "connection_generation_revoked");
@@ -214,26 +694,20 @@ class ResolutionAbortLatch {
   public get signal(): AbortSignal {
     return this.#controller.signal;
   }
-
   public abort(code: McpRequesterResolutionReasonCode): void {
     if (this.#code) return;
     this.#code = code;
     this.#controller.abort();
   }
-
   public throwIfAborted(): void {
     if (this.#code || this.#controller.signal.aborted) {
       throw new McpRequesterResolutionError(this.#code ?? "resolver_cancelled");
     }
   }
-
   public dispose(): void {
-    for (const { signal, listener } of this.#listeners.splice(0)) {
-      signal.removeEventListener("abort", listener);
-    }
+    for (const { signal, listener } of this.#listeners.splice(0)) signal.removeEventListener("abort", listener);
     this.abort("resolver_cancelled");
   }
-
   #link(signal: AbortSignal | undefined, code: McpRequesterResolutionReasonCode): void {
     if (!signal) return;
     if (signal.aborted) {
@@ -246,72 +720,142 @@ class ResolutionAbortLatch {
   }
 }
 
-Object.freeze(McpEphemeralResolvedConnectionValue.prototype);
-Object.freeze(McpRequesterResolutionAttemptValue.prototype);
-
 export class McpRequesterResolutionService {
   readonly #registry: McpRequesterResolverRegistry;
   readonly #now: () => number;
+  readonly #activeProfileDiscoveryAuthorities = new Set<string>();
+  readonly #activeToolCallAuthorities = new Set<string>();
 
   public constructor(registry: McpRequesterResolverRegistry, options?: { now?: () => number }) {
     this.#registry = registry;
     this.#now = options?.now ?? Date.now;
   }
 
-  public async resolve(input: McpRequesterResolutionServiceInput): Promise<McpRequesterResolutionAttempt> {
-    input = freezeResolutionInput(input);
-    assertMcpRequesterAuthority(input.requester);
-    assertMcpRequesterScopedServerSnapshot(input.server);
-    assertMcpRequesterCapabilityProfileSnapshot(input.profile);
-    assertMcpRequesterResolutionBindingIntegrity(input.binding);
-    const expectation = buildExpectation(input);
-    assertFrozenBindings(input, expectation);
-    const resolver = this.#registry.resolveExact(
-      expectation.resolverId,
-      expectation.resolverVersion,
-      expectation.resolverConfigGeneration,
+  public async resolveForProfileDiscovery(
+    rawInput: McpProfileDiscoveryResolutionServiceInput,
+  ): Promise<McpProfileDiscoveryResolutionAttempt> {
+    const input = freezeProfileDiscoveryInput(rawInput);
+    assertMcpProfileDiscoveryAuthority(input.requester);
+    assertDiscoveryServerBindings(input.requester, input.server);
+    const assertCurrent = (connectionGeneration?: number, rotationGeneration?: number): void =>
+      assertProfileDiscoveryCurrentState(
+        input.requester,
+        input.readCurrentState,
+        connectionGeneration,
+        rotationGeneration,
+      );
+    assertCurrent();
+    const resolver = this.#registry.resolveProfileDiscoveryExact(
+      input.requester.resolverId,
+      input.requester.resolverVersion,
+      input.requester.resolverConfigGeneration,
     );
-    assertCurrentState(expectation, input.readCurrentState);
+    const releaseClaim = this.#claimAuthority(this.#activeProfileDiscoveryAuthorities, input.requester.authoritySha256);
+    try {
+      const lease = await this.#resolveConnection({
+        server: input.server,
+        signals: input,
+        assertCurrent,
+        resolve: (signal) =>
+          resolver.resolveForProfileDiscovery({
+            serverId: input.server.serverId,
+            requester: input.requester,
+            signal,
+          }),
+        onDispose: releaseClaim,
+      });
+      return new McpProfileDiscoveryResolutionAttemptValue(input.requester, lease);
+    } catch (error) {
+      releaseClaim();
+      throw error;
+    }
+  }
 
-    const abort = new ResolutionAbortLatch(input);
+  public async resolveForToolCall(rawInput: McpToolCallResolutionServiceInput): Promise<McpToolCallResolutionAttempt> {
+    const input = freezeToolCallInput(rawInput);
+    assertMcpToolCallAuthority(input.requester);
+    assertFinalServerAndBinding(input.requester, input.server, input.binding);
+    const assertCurrent = (connectionGeneration?: number, rotationGeneration?: number): void =>
+      assertToolCallCurrentState(input.requester, input.readCurrentState, connectionGeneration, rotationGeneration);
+    assertCurrent();
+    const resolver = this.#registry.resolveToolCallExact(
+      input.requester.resolverId,
+      input.requester.resolverVersion,
+      input.requester.resolverConfigGeneration,
+    );
+    const releaseClaim = this.#claimAuthority(this.#activeToolCallAuthorities, input.requester.authoritySha256);
+    try {
+      const lease = await this.#resolveConnection({
+        server: input.server,
+        signals: input,
+        assertCurrent,
+        resolve: (signal) =>
+          resolver.resolveForToolCall({
+            serverId: input.server.serverId,
+            requester: input.requester,
+            binding: input.binding,
+            signal,
+          }),
+        onDispose: releaseClaim,
+      });
+      return new McpToolCallResolutionAttemptValue(input.requester, lease);
+    } catch (error) {
+      releaseClaim();
+      throw error;
+    }
+  }
+
+  #claimAuthority(claims: Set<string>, authoritySha256: string): () => void {
+    if (claims.has(authoritySha256)) throw new McpRequesterResolutionError("operation_denied");
+    claims.add(authoritySha256);
+    let released = false;
+    return (): void => {
+      if (released) return;
+      released = true;
+      claims.delete(authoritySha256);
+    };
+  }
+
+  async #resolveConnection(input: {
+    server: McpRequesterScopedServerSnapshot;
+    signals: ResolutionSignals;
+    assertCurrent(connectionGeneration?: number, rotationGeneration?: number): void;
+    resolve(signal: AbortSignal): Promise<McpEphemeralResolvedConnectionCandidate>;
+    onDispose(): void;
+  }): Promise<ResolutionLease> {
+    const abort = new ResolutionAbortLatch(input.signals);
     let guard: McpResolutionSecretGuard | undefined;
     let connection: McpEphemeralResolvedConnectionValue | undefined;
     const timer = setTimeout(() => abort.abort("resolver_timeout"), MCP_REQUESTER_RESOLUTION_TIMEOUT_MS);
     try {
       abort.throwIfAborted();
+      input.assertCurrent();
       const result = await awaitResolverResult(
-        Promise.resolve().then(() =>
-          resolver.resolve({
-            serverId: input.server.serverId,
-            requester: input.requester,
-            binding: input.binding,
-            signal: abort.signal,
-          }),
-        ),
+        Promise.resolve().then(() => input.resolve(abort.signal)),
         abort,
       );
       clearTimeout(timer);
       abort.throwIfAborted();
-      assertCurrentState(expectation, input.readCurrentState);
+      input.assertCurrent();
       const candidate = readMcpEphemeralResolvedConnectionCandidate(result);
       const validated = validateMcpEphemeralResolvedConnection(
         candidate,
         input.server.requesterResolution.transportPolicy,
         this.#now(),
       );
-      assertCurrentState(expectation, input.readCurrentState, validated.connectionGeneration);
+      input.assertCurrent(validated.connectionGeneration, validated.rotationGeneration);
       guard = createMcpResolutionSecretGuard({ url: validated.url, headers: validated.headers });
       connection = new McpEphemeralResolvedConnectionValue(validated);
-      const attempt = new McpRequesterResolutionAttemptValue({
+      const lease = new ResolutionLease({
         connection,
         guard,
         abort,
-        expectation,
-        readCurrentState: input.readCurrentState,
+        assertCurrentState: input.assertCurrent,
         now: this.#now,
+        onDispose: input.onDispose,
       });
-      attempt.assertCurrent();
-      return attempt;
+      lease.assertCurrent();
+      return lease;
     } catch (error) {
       clearTimeout(timer);
       connection?.dispose();
@@ -323,208 +867,446 @@ export class McpRequesterResolutionService {
   }
 }
 
-function freezeResolutionInput(input: McpRequesterResolutionServiceInput): McpRequesterResolutionServiceInput {
-  let server: McpRequesterScopedServerSnapshot;
-  let profile: McpRequesterCapabilityProfileSnapshot;
-  let binding: McpRequesterResolutionBinding;
+function freezeProfileDiscoveryInput(
+  input: McpProfileDiscoveryResolutionServiceInput,
+): McpProfileDiscoveryResolutionServiceInput {
   try {
-    const copiedServer = structuredClone(input.server);
-    copiedServer.requesterResolution.transportPolicy.allowedSchemes = Object.freeze([
-      ...copiedServer.requesterResolution.transportPolicy.allowedSchemes,
-    ]) as Array<"http" | "https">;
-    copiedServer.requesterResolution.transportPolicy.allowedHosts = Object.freeze([
-      ...copiedServer.requesterResolution.transportPolicy.allowedHosts,
-    ]) as string[];
-    copiedServer.requesterResolution.transportPolicy.allowedPorts = Object.freeze([
-      ...copiedServer.requesterResolution.transportPolicy.allowedPorts,
-    ]) as number[];
-    copiedServer.requesterResolution.transportPolicy.allowedHeaderNames = Object.freeze([
-      ...copiedServer.requesterResolution.transportPolicy.allowedHeaderNames,
-    ]) as string[];
-    Object.freeze(copiedServer.requesterResolution.transportPolicy);
-    Object.freeze(copiedServer.requesterResolution);
-    server = Object.freeze(copiedServer);
-  } catch {
-    throw new McpRequesterResolutionError("server_not_callable");
+    const value = snapshotExactDataRecord(
+      input,
+      ["readCurrentState", "requester", "revocationSignal", "server", "shutdownSignal", "signal"],
+      ["revocationSignal", "shutdownSignal", "signal"],
+    );
+    assertCallable(value.readCurrentState);
+    const signals = freezeResolutionSignals(value);
+    return Object.freeze({
+      requester: value.requester as McpProfileDiscoveryAuthority,
+      server: snapshotMcpRequesterScopedServerSnapshot(value.server),
+      readCurrentState: value.readCurrentState as McpProfileDiscoveryResolutionServiceInput["readCurrentState"],
+      ...signals,
+    });
+  } catch (error) {
+    if (error instanceof McpRequesterResolutionError) throw error;
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
   }
-  try {
-    profile = Object.freeze(structuredClone(input.profile));
-    const copiedBinding = structuredClone(input.binding);
-    if (copiedBinding.meshActivation) Object.freeze(copiedBinding.meshActivation);
-    binding = Object.freeze(copiedBinding);
-  } catch {
-    throw new McpRequesterResolutionError("capability_profile_invalid");
-  }
-  return Object.freeze({ ...input, server, profile, binding });
 }
 
-function buildExpectation(input: McpRequesterResolutionServiceInput): FrozenResolutionExpectation {
+function freezeToolCallInput(input: McpToolCallResolutionServiceInput): McpToolCallResolutionServiceInput {
+  try {
+    const value = snapshotExactDataRecord(
+      input,
+      ["binding", "readCurrentState", "requester", "revocationSignal", "server", "shutdownSignal", "signal"],
+      ["revocationSignal", "shutdownSignal", "signal"],
+    );
+    assertCallable(value.readCurrentState);
+    const signals = freezeResolutionSignals(value);
+    return Object.freeze({
+      requester: value.requester as McpToolCallAuthority,
+      server: snapshotMcpRequesterScopedServerSnapshot(value.server),
+      binding: snapshotBinding(value.binding),
+      readCurrentState: value.readCurrentState as McpToolCallResolutionServiceInput["readCurrentState"],
+      ...signals,
+    });
+  } catch (error) {
+    if (error instanceof McpRequesterResolutionError) throw error;
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+}
+
+function freezeResolutionSignals(input: Readonly<Record<string, unknown>>): ResolutionSignals {
+  const signal = assertOptionalGenuineAbortSignal(input.signal);
+  const shutdownSignal = assertOptionalGenuineAbortSignal(input.shutdownSignal);
+  const revocationSignal = assertOptionalGenuineAbortSignal(input.revocationSignal);
   return Object.freeze({
-    requester: input.requester,
-    serverConfigRevision: input.server.configurationRevision,
-    serverConfigSha256: mcpRequesterScopedServerConfigHash(input.server),
-    resolverId: input.server.requesterResolution.resolverId,
-    resolverVersion: input.server.requesterResolution.resolverVersion,
-    resolverConfigGeneration: input.server.requesterResolution.configGeneration,
-    transportPolicySha256: mcpRequesterTransportPolicyHash(input.server.requesterResolution.transportPolicy),
-    callableCatalogSnapshotId: input.profile.callableCatalogSnapshotId,
-    callableCatalogSha256: input.profile.callableCatalogSha256,
-    meshActivationSha256: mcpRequesterMeshActivationHash(input.binding),
+    ...(signal === undefined ? {} : { signal }),
+    ...(shutdownSignal === undefined ? {} : { shutdownSignal }),
+    ...(revocationSignal === undefined ? {} : { revocationSignal }),
   });
 }
 
-function assertFrozenBindings(
-  input: McpRequesterResolutionServiceInput,
-  expectation: FrozenResolutionExpectation,
+function assertOptionalGenuineAbortSignal(input: unknown): AbortSignal | undefined {
+  if (input === undefined) return undefined;
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    nodeTypes.isProxy(input) ||
+    !(input instanceof AbortSignal) ||
+    Object.getPrototypeOf(input) !== AbortSignal.prototype
+  ) {
+    throw new TypeError();
+  }
+  return input;
+}
+
+function snapshotBinding(input: unknown): McpRequesterResolutionBinding {
+  const value = snapshotExactDataRecord(
+    input,
+    [
+      "bindingSha256",
+      "callableCatalogSha256",
+      "callableCatalogSnapshotId",
+      "meshActivation",
+      "mode",
+      "requesterScopeSha256",
+      "resolverConfigGeneration",
+      "resolverId",
+      "resolverVersion",
+      "schemaVersion",
+      "serverConfigRevision",
+      "serverConfigSha256",
+      "serverId",
+      "toolName",
+      "transportPolicySha256",
+    ],
+    ["meshActivation"],
+  );
+  const meshActivation =
+    value.meshActivation === undefined
+      ? undefined
+      : Object.freeze(
+          snapshotExactDataRecord(value.meshActivation, [
+            "activationId",
+            "activationRevision",
+            "descriptorSha256",
+            "entrySha256",
+            "healthGeneration",
+            "manifestSha256",
+            "publicationLeaseFencingToken",
+            "publisherGeneration",
+          ]),
+        );
+  const snapshot = Object.freeze({
+    ...value,
+    ...(meshActivation === undefined ? {} : { meshActivation }),
+  }) as unknown as McpRequesterResolutionBinding;
+  assertMcpRequesterResolutionBindingIntegrity(snapshot);
+  return snapshot;
+}
+
+function assertDiscoveryServerBindings(
+  requester: Pick<
+    McpProfileDiscoveryAuthority,
+    | "serverId"
+    | "serverConfigRevision"
+    | "serverConfigSha256"
+    | "resolverId"
+    | "resolverVersion"
+    | "resolverConfigGeneration"
+    | "transportPolicySha256"
+  >,
+  server: McpRequesterScopedServerSnapshot,
 ): void {
   if (
-    input.requester.capabilityProfileId !== input.profile.profileId ||
-    input.requester.capabilityProfileSha256 !== input.profile.profileSha256
-  ) {
-    throw new McpRequesterResolutionError("capability_profile_drift");
-  }
-  if (
-    input.binding.serverId !== input.server.serverId ||
-    input.binding.toolName !== input.profile.canonicalToolName ||
-    input.binding.requesterScopeSha256 !== input.requester.requesterScopeSha256
-  ) {
-    throw new McpRequesterResolutionError("requester_scope_mismatch");
-  }
-  if (
-    input.binding.serverConfigRevision !== expectation.serverConfigRevision ||
-    input.binding.serverConfigSha256 !== expectation.serverConfigSha256 ||
-    input.binding.resolverId !== expectation.resolverId ||
-    input.binding.resolverVersion !== expectation.resolverVersion ||
-    input.binding.resolverConfigGeneration !== expectation.resolverConfigGeneration ||
-    input.binding.transportPolicySha256 !== expectation.transportPolicySha256
+    requester.serverId !== server.serverId ||
+    requester.serverConfigRevision !== server.configurationRevision ||
+    requester.serverConfigSha256 !== mcpRequesterScopedServerConfigHash(server) ||
+    requester.resolverId !== server.requesterResolution.resolverId ||
+    requester.resolverVersion !== server.requesterResolution.resolverVersion ||
+    requester.resolverConfigGeneration !== server.requesterResolution.configGeneration ||
+    requester.transportPolicySha256 !== mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy)
   ) {
     throw new McpRequesterResolutionError("resolver_binding_drift");
   }
+}
+
+function assertFinalServerAndBinding(
+  requester: McpToolCallAuthority,
+  server: McpRequesterScopedServerSnapshot,
+  binding: McpRequesterResolutionBinding,
+): void {
+  assertDiscoveryServerBindings(requester, server);
+  const expectedScopeSha256 = digest(
+    mcpRequesterScopeHashMaterial({
+      profileId: requester.finalProfileId,
+      turnId: requester.turnId,
+      sessionId: requester.sessionId,
+      workspaceId: requester.workspaceId,
+      authActorId: requester.actorId,
+      authActorSource: requester.actorSource,
+    }),
+  );
+  if (binding.requesterScopeSha256 !== expectedScopeSha256) {
+    throw new McpRequesterResolutionError("requester_scope_mismatch");
+  }
   if (
-    input.binding.callableCatalogSnapshotId !== expectation.callableCatalogSnapshotId ||
-    input.binding.callableCatalogSha256 !== expectation.callableCatalogSha256
+    binding.bindingSha256 !== requester.bindingSha256 ||
+    binding.serverId !== requester.serverId ||
+    binding.toolName !== requester.canonicalToolName ||
+    binding.serverConfigRevision !== requester.serverConfigRevision ||
+    binding.serverConfigSha256 !== requester.serverConfigSha256 ||
+    binding.resolverId !== requester.resolverId ||
+    binding.resolverVersion !== requester.resolverVersion ||
+    binding.resolverConfigGeneration !== requester.resolverConfigGeneration ||
+    binding.transportPolicySha256 !== requester.transportPolicySha256 ||
+    binding.callableCatalogSha256 !== requester.finalCallableCatalogSha256
   ) {
     throw new McpRequesterResolutionError("capability_profile_drift");
   }
+  if (
+    binding.meshActivation?.publisherGeneration !== requester.meshPublisherGeneration ||
+    binding.meshActivation?.activationRevision !== requester.meshActivationGeneration
+  ) {
+    throw new McpRequesterResolutionError("resolver_binding_drift");
+  }
 }
 
-function assertCurrentState(
-  expected: FrozenResolutionExpectation,
-  readCurrentState: McpRequesterResolutionServiceInput["readCurrentState"],
+function assertProfileDiscoveryCurrentState(
+  expected: McpProfileDiscoveryAuthority,
+  readCurrentState: McpProfileDiscoveryResolutionServiceInput["readCurrentState"],
   connectionGeneration?: number,
+  rotationGeneration?: number,
 ): void {
-  let current: McpRequesterResolutionCurrentState;
+  const current = readCurrentStateExact(
+    readCurrentState,
+    connectionGeneration,
+    rotationGeneration,
+    DISCOVERY_CURRENT_STATE_KEYS,
+  );
+  assertLiveCurrentState(current);
+  if (current.discoveryAttemptOpen !== true) throw new McpRequesterResolutionError("operation_denied");
+  assertExactFields(
+    current,
+    expected,
+    ["actorId", "actorSource", "workspaceId", "sessionId", "turnId"],
+    "requester_scope_mismatch",
+  );
+  assertExactFields(current, expected, ["futureProfileId", "baseCallableCatalogSha256"], "capability_profile_drift");
+  assertExactFields(
+    current,
+    expected,
+    [
+      "serverId",
+      "serverConfigRevision",
+      "serverConfigSha256",
+      "resolverId",
+      "resolverVersion",
+      "resolverConfigGeneration",
+      "transportPolicySha256",
+      "globalNetworkPolicyGeneration",
+      "authConnectionGeneration",
+      "turnGeneration",
+      "preparationGeneration",
+      "meshPublisherGeneration",
+      "meshActivationGeneration",
+      "discoveryAttemptId",
+      "discoveryAttemptGeneration",
+    ],
+    "resolver_binding_drift",
+  );
+}
+
+function assertToolCallCurrentState(
+  expected: McpToolCallAuthority,
+  readCurrentState: McpToolCallResolutionServiceInput["readCurrentState"],
+  connectionGeneration?: number,
+  rotationGeneration?: number,
+): void {
+  const current = readCurrentStateExact(
+    readCurrentState,
+    connectionGeneration,
+    rotationGeneration,
+    TOOL_CALL_CURRENT_STATE_KEYS,
+  );
+  assertLiveCurrentState(current);
+  if (current.finalEffectAttemptOpen !== true) throw new McpRequesterResolutionError("operation_denied");
+  assertExactFields(
+    current,
+    expected,
+    ["actorId", "actorSource", "workspaceId", "sessionId", "turnId"],
+    "requester_scope_mismatch",
+  );
+  assertExactFields(
+    current,
+    expected,
+    [
+      "finalProfileId",
+      "finalProfileSha256",
+      "baseCallableCatalogSha256",
+      "finalCallableCatalogSha256",
+      "rawRemoteToolName",
+      "canonicalToolName",
+      "providerAlias",
+      "normalizedDiscoveryCatalogSha256",
+      "normalizedToolDefinitionSha256",
+      "bindingSha256",
+    ],
+    "capability_profile_drift",
+  );
+  assertExactFields(
+    current,
+    expected,
+    [
+      "serverId",
+      "serverConfigRevision",
+      "serverConfigSha256",
+      "resolverId",
+      "resolverVersion",
+      "resolverConfigGeneration",
+      "transportPolicySha256",
+      "globalNetworkPolicyGeneration",
+      "authConnectionGeneration",
+      "turnGeneration",
+      "preparationGeneration",
+      "meshPublisherGeneration",
+      "meshActivationGeneration",
+      "profileDiscoveryAttemptId",
+      "profileDiscoveryAttemptGeneration",
+      "revalidationAttemptId",
+      "revalidationAttemptGeneration",
+      "finalEffectAttemptId",
+      "finalEffectAttemptGeneration",
+    ],
+    "resolver_binding_drift",
+  );
+}
+
+function readCurrentStateExact<TCheck>(
+  reader: (check: TCheck) => unknown,
+  connectionGeneration: number | undefined,
+  rotationGeneration: number | undefined,
+  keys: readonly string[],
+): Readonly<Record<string, unknown>> {
   try {
-    current = readExactCurrentState(
-      readCurrentState(connectionGeneration === undefined ? {} : { connectionGeneration }),
+    return snapshotExactDataRecord(
+      reader(
+        (connectionGeneration === undefined
+          ? {}
+          : {
+              connectionGeneration,
+              ...(rotationGeneration === undefined ? {} : { rotationGeneration }),
+            }) as TCheck,
+      ),
+      keys,
+      ["meshActivationGeneration", "meshPublisherGeneration"],
     );
   } catch {
     throw new McpRequesterResolutionError("resolver_binding_drift");
   }
-  if (current.revoked || !current.connectionGenerationCurrent) {
-    throw new McpRequesterResolutionError("connection_generation_revoked");
-  }
+}
+
+function assertLiveCurrentState(current: Readonly<Record<string, unknown>>): void {
   if (
-    current.capabilityProfileId !== expected.requester.capabilityProfileId ||
-    current.capabilityProfileSha256 !== expected.requester.capabilityProfileSha256 ||
-    current.callableCatalogSnapshotId !== expected.callableCatalogSnapshotId ||
-    current.callableCatalogSha256 !== expected.callableCatalogSha256
-  ) {
-    throw new McpRequesterResolutionError("capability_profile_drift");
-  }
-  if (
-    current.requesterScopeSha256 !== expected.requester.requesterScopeSha256 ||
-    current.attemptGeneration !== expected.requester.attemptGeneration ||
-    current.authConnectionGeneration !== expected.requester.authConnectionGeneration
-  ) {
-    throw new McpRequesterResolutionError("requester_scope_mismatch");
-  }
-  if (
-    current.serverConfigRevision !== expected.serverConfigRevision ||
-    current.serverConfigSha256 !== expected.serverConfigSha256 ||
-    current.resolverId !== expected.resolverId ||
-    current.resolverVersion !== expected.resolverVersion ||
-    current.resolverConfigGeneration !== expected.resolverConfigGeneration ||
-    current.transportPolicySha256 !== expected.transportPolicySha256 ||
-    current.meshActivationSha256 !== expected.meshActivationSha256
+    typeof current.revoked !== "boolean" ||
+    typeof current.connectionGenerationCurrent !== "boolean" ||
+    typeof current.rotationGenerationCurrent !== "boolean"
   ) {
     throw new McpRequesterResolutionError("resolver_binding_drift");
   }
+  if (current.revoked || !current.connectionGenerationCurrent || !current.rotationGenerationCurrent) {
+    throw new McpRequesterResolutionError("connection_generation_revoked");
+  }
 }
 
-function readExactCurrentState(input: unknown): McpRequesterResolutionCurrentState {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) throw new TypeError();
-  const ownKeys = Reflect.ownKeys(input);
-  if (ownKeys.some((key) => typeof key !== "string")) throw new TypeError();
-  const keys = (ownKeys as string[]).sort(compareExact);
-  const required = [
-    "attemptGeneration",
-    "callableCatalogSha256",
-    "callableCatalogSnapshotId",
-    "capabilityProfileId",
-    "capabilityProfileSha256",
-    "connectionGenerationCurrent",
-    "requesterScopeSha256",
-    "resolverConfigGeneration",
-    "resolverId",
-    "resolverVersion",
-    "revoked",
-    "serverConfigRevision",
-    "serverConfigSha256",
-    "transportPolicySha256",
-  ];
-  const optional = ["authConnectionGeneration", "meshActivationSha256"];
-  const allowed = new Set([...required, ...optional]);
-  if (keys.some((key) => !allowed.has(key)) || required.some((key) => !keys.includes(key))) throw new TypeError();
-  const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const key of keys) {
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+function assertExactFields(
+  current: object,
+  expected: object,
+  fields: readonly string[],
+  code: McpRequesterResolutionReasonCode,
+): void {
+  const currentRecord = current as Readonly<Record<string, unknown>>;
+  const expectedRecord = expected as Readonly<Record<string, unknown>>;
+  if (fields.some((field) => currentRecord[field] !== expectedRecord[field])) {
+    throw new McpRequesterResolutionError(code);
+  }
+}
+
+const DISCOVERY_CURRENT_STATE_KEYS = [
+  "actorId",
+  "actorSource",
+  "authConnectionGeneration",
+  "baseCallableCatalogSha256",
+  "connectionGenerationCurrent",
+  "rotationGenerationCurrent",
+  "discoveryAttemptGeneration",
+  "discoveryAttemptId",
+  "discoveryAttemptOpen",
+  "futureProfileId",
+  "globalNetworkPolicyGeneration",
+  "meshActivationGeneration",
+  "meshPublisherGeneration",
+  "preparationGeneration",
+  "resolverConfigGeneration",
+  "resolverId",
+  "resolverVersion",
+  "revoked",
+  "serverConfigRevision",
+  "serverConfigSha256",
+  "serverId",
+  "sessionId",
+  "transportPolicySha256",
+  "turnGeneration",
+  "turnId",
+  "workspaceId",
+] as const;
+
+const TOOL_CALL_CURRENT_STATE_KEYS = [
+  "actorId",
+  "actorSource",
+  "authConnectionGeneration",
+  "baseCallableCatalogSha256",
+  "bindingSha256",
+  "canonicalToolName",
+  "connectionGenerationCurrent",
+  "rotationGenerationCurrent",
+  "finalCallableCatalogSha256",
+  "finalEffectAttemptGeneration",
+  "finalEffectAttemptId",
+  "finalEffectAttemptOpen",
+  "finalProfileId",
+  "finalProfileSha256",
+  "globalNetworkPolicyGeneration",
+  "meshActivationGeneration",
+  "meshPublisherGeneration",
+  "normalizedDiscoveryCatalogSha256",
+  "normalizedToolDefinitionSha256",
+  "preparationGeneration",
+  "profileDiscoveryAttemptGeneration",
+  "profileDiscoveryAttemptId",
+  "providerAlias",
+  "rawRemoteToolName",
+  "resolverConfigGeneration",
+  "resolverId",
+  "resolverVersion",
+  "revalidationAttemptGeneration",
+  "revalidationAttemptId",
+  "revoked",
+  "serverConfigRevision",
+  "serverConfigSha256",
+  "serverId",
+  "sessionId",
+  "transportPolicySha256",
+  "turnGeneration",
+  "turnId",
+  "workspaceId",
+] as const;
+
+function snapshotExactDataRecord(
+  input: unknown,
+  keys: readonly string[],
+  optional: readonly string[] = [],
+): Readonly<Record<string, unknown>> {
+  if (typeof input !== "object" || input === null || Array.isArray(input) || nodeTypes.isProxy(input))
+    throw new TypeError();
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
+  const descriptors = Object.getOwnPropertyDescriptors(input) as unknown as Record<PropertyKey, PropertyDescriptor>;
+  const actual = Reflect.ownKeys(descriptors);
+  if (actual.some((key) => typeof key !== "string")) throw new TypeError();
+  const actualKeys = (actual as string[]).sort(compareExact);
+  const allowed = new Set(keys);
+  const optionalSet = new Set(optional);
+  if (actualKeys.some((key) => !allowed.has(key))) throw new TypeError();
+  if (keys.some((key) => !optionalSet.has(key) && !actualKeys.includes(key))) throw new TypeError();
+  const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of actualKeys) {
+    const descriptor = descriptors[key];
     if (!descriptor || !("value" in descriptor)) throw new TypeError();
-    value[key] = descriptor.value;
+    snapshot[key] = descriptor.value;
   }
-  const stringFields = [
-    "capabilityProfileId",
-    "capabilityProfileSha256",
-    "requesterScopeSha256",
-    "serverConfigSha256",
-    "resolverId",
-    "resolverVersion",
-    "transportPolicySha256",
-    "callableCatalogSnapshotId",
-    "callableCatalogSha256",
-  ];
-  if (stringFields.some((key) => typeof value[key] !== "string" || value[key] === "")) throw new TypeError();
-  if (value.meshActivationSha256 !== undefined && typeof value.meshActivationSha256 !== "string") throw new TypeError();
-  for (const key of ["serverConfigRevision", "resolverConfigGeneration", "attemptGeneration"]) {
-    if (!Number.isSafeInteger(value[key]) || (value[key] as number) <= 0) throw new TypeError();
-  }
-  if (
-    value.authConnectionGeneration !== undefined &&
-    (!Number.isSafeInteger(value.authConnectionGeneration) || (value.authConnectionGeneration as number) <= 0)
-  ) {
-    throw new TypeError();
-  }
-  if (typeof value.revoked !== "boolean" || typeof value.connectionGenerationCurrent !== "boolean") {
-    throw new TypeError();
-  }
-  return Object.freeze({
-    revoked: value.revoked,
-    capabilityProfileId: value.capabilityProfileId,
-    capabilityProfileSha256: value.capabilityProfileSha256,
-    requesterScopeSha256: value.requesterScopeSha256,
-    serverConfigRevision: value.serverConfigRevision,
-    serverConfigSha256: value.serverConfigSha256,
-    resolverId: value.resolverId,
-    resolverVersion: value.resolverVersion,
-    resolverConfigGeneration: value.resolverConfigGeneration,
-    transportPolicySha256: value.transportPolicySha256,
-    callableCatalogSnapshotId: value.callableCatalogSnapshotId,
-    callableCatalogSha256: value.callableCatalogSha256,
-    attemptGeneration: value.attemptGeneration,
-    authConnectionGeneration: value.authConnectionGeneration,
-    meshActivationSha256: value.meshActivationSha256,
-    connectionGenerationCurrent: value.connectionGenerationCurrent,
-  } as McpRequesterResolutionCurrentState);
+  return Object.freeze(snapshot);
+}
+
+function assertCallable(input: unknown): asserts input is (...args: never[]) => unknown {
+  if (typeof input !== "function" || nodeTypes.isProxy(input)) throw new TypeError();
 }
 
 async function awaitResolverResult(resolverPromise: Promise<unknown>, abort: ResolutionAbortLatch): Promise<unknown> {
@@ -549,6 +1331,10 @@ async function awaitResolverResult(resolverPromise: Promise<unknown>, abort: Res
   }
   if (result.kind === "error") throw new McpRequesterResolutionError("resolver_failed");
   return result.value;
+}
+
+function digest(input: unknown): string {
+  return createHash("sha256").update(canonicalJsonString(input)).digest("hex");
 }
 
 function compareExact(left: string, right: string): number {
