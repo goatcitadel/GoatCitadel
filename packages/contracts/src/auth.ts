@@ -1,3 +1,20 @@
+import { z } from "zod";
+
+export const COMPANION_PRINCIPAL_PURPOSES = ["general_companion", "session_control_client"] as const;
+export const DEFAULT_COMPANION_PRINCIPAL_PURPOSE = "general_companion" as const;
+export type CompanionPrincipalPurpose = (typeof COMPANION_PRINCIPAL_PURPOSES)[number];
+
+export const CompanionPrincipalPurposeSchema = z
+  .string()
+  .refine(
+    (value): value is CompanionPrincipalPurpose =>
+      COMPANION_PRINCIPAL_PURPOSES.includes(value as CompanionPrincipalPurpose),
+    { message: "Companion principal purpose is invalid." },
+  );
+export const DefaultedCompanionPrincipalPurposeSchema = CompanionPrincipalPurposeSchema.default(
+  DEFAULT_COMPANION_PRINCIPAL_PURPOSE,
+);
+
 export interface SseTokenIssueResponse {
   token: string;
   expiresAt: string;
