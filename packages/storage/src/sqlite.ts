@@ -5367,6 +5367,1149 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           `);
         },
       },
+      {
+        version: 171,
+        name: "remote_worker_assignment_foundation",
+        up: (db) => {
+          if (
+            !tableExists(db, "workspaces") ||
+            !tableExists(db, "durable_runs") ||
+            !tableExists(db, "tasks") ||
+            !tableExists(db, "chat_session_meta") ||
+            !tableExists(db, "chat_turn_traces") ||
+            !tableExists(db, "remote_worker_generations") ||
+            !tableExists(db, "mesh_capability_node_admissions")
+          ) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS remote_worker_assignments (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              execution_workspace_id TEXT NOT NULL CHECK(length(execution_workspace_id) BETWEEN 1 AND 256),
+              durable_run_id TEXT NOT NULL CHECK(length(durable_run_id) BETWEEN 1 AND 256),
+              task_id TEXT NOT NULL CHECK(length(task_id) BETWEEN 1 AND 256),
+              session_id TEXT CHECK(session_id IS NULL OR length(session_id) BETWEEN 1 AND 256),
+              turn_id TEXT CHECK(turn_id IS NULL OR length(turn_id) BETWEEN 1 AND 256),
+              manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 32768),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_by_actor_id TEXT NOT NULL CHECK(length(created_by_actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(execution_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id) ON DELETE RESTRICT,
+              FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE RESTRICT,
+              FOREIGN KEY(session_id) REFERENCES chat_session_meta(session_id) ON DELETE RESTRICT,
+              FOREIGN KEY(turn_id) REFERENCES chat_turn_traces(turn_id) ON DELETE RESTRICT,
+              CHECK((session_id IS NULL) = (turn_id IS NULL)),
+              CHECK(json_extract(manifest_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-manifest.v1'),
+              CHECK(json_extract(manifest_json, '$.protocolVersion') = 'goatcitadel.remote-worker.v1'),
+              CHECK(json_extract(manifest_json, '$.registryWorkspaceId') = registry_workspace_id),
+              CHECK(json_extract(manifest_json, '$.executionWorkspaceId') = execution_workspace_id),
+              CHECK(json_extract(manifest_json, '$.durableRunId') = durable_run_id),
+              CHECK(json_extract(manifest_json, '$.taskId') = task_id),
+              CHECK(json_extract(manifest_json, '$.sessionId') IS session_id),
+              CHECK(json_extract(manifest_json, '$.turnId') IS turn_id),
+              CHECK(json_extract(manifest_json, '$.leaseTtlSeconds') BETWEEN 1 AND 900),
+              CHECK(json_extract(manifest_json, '$.maxEventCount') BETWEEN 1 AND 10000),
+              CHECK(json_extract(manifest_json, '$.maxEventBytes') BETWEEN 1 AND 65536),
+              CHECK(json_extract(manifest_json, '$.eventLowWatermark') BETWEEN 0 AND 9999),
+              CHECK(json_extract(manifest_json, '$.eventHighWatermark') BETWEEN 1 AND 10000),
+              CHECK(json_extract(manifest_json, '$.eventLowWatermark') < json_extract(manifest_json, '$.eventHighWatermark')),
+              CHECK(json_extract(manifest_json, '$.eventHighWatermark') <= json_extract(manifest_json, '$.maxEventCount')),
+              CHECK(json_extract(manifest_json, '$.maxOutputBytes') BETWEEN 1 AND 8388608),
+              CHECK(json_extract(manifest_json, '$.maxArtifactBytes') BETWEEN 1 AND 67108864)
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_generations (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              execution_workspace_id TEXT NOT NULL CHECK(length(execution_workspace_id) BETWEEN 1 AND 256),
+              worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+              worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+              node_id TEXT NOT NULL CHECK(length(node_id) BETWEEN 1 AND 256),
+              node_admission_generation INTEGER NOT NULL CHECK(typeof(node_admission_generation) = 'integer' AND node_admission_generation > 0),
+              runtime_manifest_sha256 TEXT NOT NULL CHECK(length(runtime_manifest_sha256) = 64 AND runtime_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              workspace_ceiling_sha256 TEXT NOT NULL CHECK(length(workspace_ceiling_sha256) = 64 AND workspace_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              capability_ceiling_sha256 TEXT NOT NULL CHECK(length(capability_ceiling_sha256) = 64 AND capability_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              dispatch_owner_id TEXT NOT NULL CHECK(length(dispatch_owner_id) BETWEEN 1 AND 256),
+              durable_run_attempt INTEGER NOT NULL CHECK(typeof(durable_run_attempt) = 'integer' AND durable_run_attempt > 0),
+              dispatch_authority_json TEXT NOT NULL CHECK(json_valid(dispatch_authority_json) AND length(CAST(dispatch_authority_json AS BLOB)) <= 8192),
+              dispatch_authority_sha256 TEXT NOT NULL CHECK(length(dispatch_authority_sha256) = 64 AND dispatch_authority_sha256 NOT GLOB '*[^0-9a-f]*'),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              started_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', started_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', started_at, '+0 days') = started_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, assignment_id)
+                REFERENCES remote_worker_assignments(registry_workspace_id, assignment_id) ON DELETE RESTRICT,
+              FOREIGN KEY(registry_workspace_id, worker_id, worker_generation)
+                REFERENCES remote_worker_generations(registry_workspace_id, worker_id, worker_generation) ON DELETE RESTRICT,
+              FOREIGN KEY(execution_workspace_id, node_id, node_admission_generation)
+                REFERENCES mesh_capability_node_admissions(workspace_id, node_id, admission_generation) ON DELETE RESTRICT,
+              CHECK(json_extract(dispatch_authority_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-dispatch-authority.v1'),
+              CHECK(json_extract(dispatch_authority_json, '$.dispatchOwnerId') = dispatch_owner_id),
+              CHECK(json_extract(dispatch_authority_json, '$.durableRunAttempt') = durable_run_attempt)
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_leases (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              lease_revision INTEGER NOT NULL CHECK(typeof(lease_revision) = 'integer' AND lease_revision > 0),
+              lease_token_sha256 TEXT NOT NULL UNIQUE CHECK(length(lease_token_sha256) = 64 AND lease_token_sha256 NOT GLOB '*[^0-9a-f]*'),
+              worker_sent_through INTEGER NOT NULL CHECK(typeof(worker_sent_through) = 'integer' AND worker_sent_through BETWEEN 0 AND 10000),
+              server_acknowledged_through INTEGER NOT NULL CHECK(typeof(server_acknowledged_through) = 'integer' AND server_acknowledged_through BETWEEN 0 AND 10000),
+              parent_dispatch_authority_json TEXT NOT NULL CHECK(json_valid(parent_dispatch_authority_json) AND length(CAST(parent_dispatch_authority_json AS BLOB)) <= 8192),
+              parent_dispatch_authority_sha256 TEXT NOT NULL CHECK(length(parent_dispatch_authority_sha256) = 64 AND parent_dispatch_authority_sha256 NOT GLOB '*[^0-9a-f]*'),
+              heartbeat_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', heartbeat_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', heartbeat_at, '+0 days') = heartbeat_at
+              ),
+              expires_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+              ),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, lease_revision),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(server_acknowledged_through <= worker_sent_through),
+              CHECK(json_extract(parent_dispatch_authority_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-dispatch-authority.v1')
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_controls (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              control_revision INTEGER NOT NULL CHECK(typeof(control_revision) = 'integer' AND control_revision > 0),
+              action TEXT NOT NULL CHECK(action IN ('cancel_requested', 'generation_abandoned', 'recovery_exhausted')),
+              expected_lease_revision INTEGER NOT NULL CHECK(typeof(expected_lease_revision) = 'integer' AND expected_lease_revision > 0),
+              reason_code TEXT NOT NULL CHECK(
+                length(reason_code) BETWEEN 1 AND 128
+                AND reason_code NOT GLOB '*[^a-z0-9._-]*'
+                AND substr(reason_code, 1, 1) GLOB '[a-z0-9]'
+                AND substr(reason_code, -1, 1) GLOB '[a-z0-9]'
+              ),
+              reason_sha256 TEXT NOT NULL CHECK(length(reason_sha256) = 64 AND reason_sha256 NOT GLOB '*[^0-9a-f]*'),
+              actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, control_revision),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              UNIQUE(registry_workspace_id, assignment_id, assignment_generation, action),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_events (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              sequence INTEGER NOT NULL CHECK(typeof(sequence) = 'integer' AND sequence BETWEEN 1 AND 10000),
+              event_id TEXT NOT NULL CHECK(length(event_id) BETWEEN 1 AND 256),
+              event_type TEXT NOT NULL CHECK(event_type IN (
+                'status', 'tool_progress', 'model_progress', 'approval_wait',
+                'diagnostic', 'transcript_delta', 'terminal_output'
+              )),
+              payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 65536),
+              payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+              previous_event_sha256 TEXT NOT NULL CHECK(length(previous_event_sha256) = 64 AND previous_event_sha256 NOT GLOB '*[^0-9a-f]*'),
+              event_sha256 TEXT NOT NULL CHECK(length(event_sha256) = 64 AND event_sha256 NOT GLOB '*[^0-9a-f]*'),
+              worker_sent_through INTEGER NOT NULL CHECK(typeof(worker_sent_through) = 'integer' AND worker_sent_through BETWEEN sequence AND 10000),
+              received_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', received_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', received_at, '+0 days') = received_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, sequence),
+              UNIQUE(registry_workspace_id, event_id),
+              UNIQUE(registry_workspace_id, event_sha256),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(json_extract(payload_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-event.v1')
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_settlements (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.remote-worker-assignment-settlement.v1'),
+              outcome TEXT NOT NULL CHECK(outcome IN ('completed', 'failed', 'cancelled')),
+              origin TEXT NOT NULL CHECK(origin IN ('worker', 'gateway_recovery')),
+              gateway_actor_id TEXT CHECK(gateway_actor_id IS NULL OR length(gateway_actor_id) BETWEEN 1 AND 256),
+              recovery_evidence_sha256 TEXT CHECK(recovery_evidence_sha256 IS NULL OR (length(recovery_evidence_sha256) = 64 AND recovery_evidence_sha256 NOT GLOB '*[^0-9a-f]*')),
+              final_event_sequence INTEGER NOT NULL CHECK(typeof(final_event_sequence) = 'integer' AND final_event_sequence BETWEEN 0 AND 10000),
+              final_event_sha256 TEXT NOT NULL CHECK(length(final_event_sha256) = 64 AND final_event_sha256 NOT GLOB '*[^0-9a-f]*'),
+              result_sha256 TEXT CHECK(result_sha256 IS NULL OR (length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*')),
+              output_manifest_sha256 TEXT CHECK(output_manifest_sha256 IS NULL OR (length(output_manifest_sha256) = 64 AND output_manifest_sha256 NOT GLOB '*[^0-9a-f]*')),
+              failure_sha256 TEXT CHECK(failure_sha256 IS NULL OR (length(failure_sha256) = 64 AND failure_sha256 NOT GLOB '*[^0-9a-f]*')),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              settled_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', settled_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', settled_at, '+0 days') = settled_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(
+                (outcome = 'completed' AND result_sha256 IS NOT NULL AND output_manifest_sha256 IS NOT NULL AND failure_sha256 IS NULL)
+                OR (outcome = 'failed' AND result_sha256 IS NULL AND output_manifest_sha256 IS NULL AND failure_sha256 IS NOT NULL)
+                OR (outcome = 'cancelled' AND result_sha256 IS NULL AND output_manifest_sha256 IS NULL AND failure_sha256 IS NULL)
+              ),
+              CHECK(
+                (origin = 'worker' AND gateway_actor_id IS NULL AND recovery_evidence_sha256 IS NULL)
+                OR (origin = 'gateway_recovery' AND gateway_actor_id IS NOT NULL AND recovery_evidence_sha256 IS NOT NULL)
+              )
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_materializations (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              materialization_id TEXT NOT NULL CHECK(length(materialization_id) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.remote-worker-assignment-materialization.v1'),
+              source_kind TEXT NOT NULL CHECK(source_kind IN ('event', 'settlement')),
+              source_generation INTEGER NOT NULL CHECK(typeof(source_generation) = 'integer' AND source_generation > 0),
+              source_sequence INTEGER CHECK(source_sequence IS NULL OR (typeof(source_sequence) = 'integer' AND source_sequence BETWEEN 1 AND 10000)),
+              source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64 AND source_sha256 NOT GLOB '*[^0-9a-f]*'),
+              target_kind TEXT NOT NULL CHECK(target_kind IN ('chat_transcript', 'durable_run_result')),
+              target_id TEXT NOT NULL CHECK(length(target_id) BETWEEN 1 AND 256),
+              target_sha256 TEXT NOT NULL CHECK(length(target_sha256) = 64 AND target_sha256 NOT GLOB '*[^0-9a-f]*'),
+              target_owner_session_id TEXT CHECK(target_owner_session_id IS NULL OR length(target_owner_session_id) BETWEEN 1 AND 256),
+              target_owner_turn_id TEXT CHECK(target_owner_turn_id IS NULL OR length(target_owner_turn_id) BETWEEN 1 AND 256),
+              target_owner_durable_run_id TEXT CHECK(target_owner_durable_run_id IS NULL OR length(target_owner_durable_run_id) BETWEEN 1 AND 256),
+              receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 64 AND receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              gateway_actor_id TEXT NOT NULL CHECK(length(gateway_actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              materialized_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', materialized_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', materialized_at, '+0 days') = materialized_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, materialization_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              UNIQUE(registry_workspace_id, assignment_id, source_kind, source_generation, source_sequence, target_kind),
+              FOREIGN KEY(registry_workspace_id, assignment_id)
+                REFERENCES remote_worker_assignments(registry_workspace_id, assignment_id) ON DELETE RESTRICT,
+              FOREIGN KEY(registry_workspace_id, assignment_id, source_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(
+                (source_kind = 'event' AND source_sequence IS NOT NULL AND target_kind = 'chat_transcript'
+                  AND target_owner_session_id IS NOT NULL AND target_owner_turn_id IS NOT NULL
+                  AND target_owner_durable_run_id IS NULL)
+                OR (source_kind = 'settlement' AND source_sequence IS NULL AND target_kind = 'durable_run_result'
+                  AND target_owner_session_id IS NULL AND target_owner_turn_id IS NULL
+                  AND target_owner_durable_run_id IS NOT NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_generations_current
+              ON remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_leases_current
+              ON remote_worker_assignment_leases(registry_workspace_id, assignment_id, assignment_generation, lease_revision DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_events_chain
+              ON remote_worker_assignment_events(registry_workspace_id, assignment_id, assignment_generation, sequence);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_materializations_source
+              ON remote_worker_assignment_materializations(registry_workspace_id, assignment_id, source_kind, source_generation, source_sequence);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_materializations_event_once
+              ON remote_worker_assignment_materializations(
+                registry_workspace_id, assignment_id, source_generation, source_sequence, target_kind
+              ) WHERE source_kind = 'event';
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_materializations_settlement_once
+              ON remote_worker_assignment_materializations(
+                registry_workspace_id, assignment_id, source_generation, target_kind
+              ) WHERE source_kind = 'settlement';
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignments_insert_guard
+            BEFORE INSERT ON remote_worker_assignments
+            WHEN
+              json(NEW.manifest_json) <> NEW.manifest_json
+              OR COALESCE(json_type(NEW.manifest_json, '$'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json)) <>
+                CASE WHEN NEW.session_id IS NULL THEN 20 ELSE 22 END
+              OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json)) <>
+                (SELECT COUNT(DISTINCT field.key) FROM json_each(NEW.manifest_json) field)
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json) field
+                WHERE field.key NOT IN (
+                  'schemaVersion', 'protocolVersion', 'registryWorkspaceId', 'executionWorkspaceId',
+                  'durableRunId', 'taskId', 'sessionId', 'turnId', 'capabilityProfileSha256',
+                  'contextSnapshotSha256', 'toolEffectPostureSha256', 'pathJailSha256',
+                  'parentContextSha256', 'requiredCapabilityClasses', 'deadlineAt', 'leaseTtlSeconds',
+                  'maxEventCount', 'maxEventBytes', 'eventLowWatermark', 'eventHighWatermark',
+                  'maxOutputBytes', 'maxArtifactBytes'
+                )
+              )
+              OR (
+                NEW.session_id IS NULL
+                AND (json_type(NEW.manifest_json, '$.sessionId') IS NOT NULL
+                  OR json_type(NEW.manifest_json, '$.turnId') IS NOT NULL)
+              )
+              OR (
+                NEW.session_id IS NOT NULL
+                AND (COALESCE(json_type(NEW.manifest_json, '$.sessionId'), '') <> 'text'
+                  OR COALESCE(json_type(NEW.manifest_json, '$.turnId'), '') <> 'text')
+              )
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json) field
+                WHERE (
+                  field.key IN (
+                    'schemaVersion', 'protocolVersion', 'registryWorkspaceId', 'executionWorkspaceId',
+                    'durableRunId', 'taskId', 'sessionId', 'turnId', 'capabilityProfileSha256',
+                    'contextSnapshotSha256', 'toolEffectPostureSha256', 'pathJailSha256',
+                    'parentContextSha256', 'deadlineAt'
+                  )
+                  AND field.type <> 'text'
+                ) OR (
+                  field.key IN (
+                    'leaseTtlSeconds', 'maxEventCount', 'maxEventBytes', 'eventLowWatermark',
+                    'eventHighWatermark', 'maxOutputBytes', 'maxArtifactBytes'
+                  )
+                  AND field.type <> 'integer'
+                )
+              )
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json) field
+                WHERE field.key IN (
+                  'capabilityProfileSha256', 'contextSnapshotSha256', 'toolEffectPostureSha256',
+                  'pathJailSha256', 'parentContextSha256'
+                ) AND (
+                  length(field.value) <> 64 OR field.value GLOB '*[^0-9a-f]*'
+                )
+              )
+              OR COALESCE(json_type(NEW.manifest_json, '$.requiredCapabilityClasses'), '') <> 'array'
+              OR json_array_length(json_extract(NEW.manifest_json, '$.requiredCapabilityClasses')) NOT BETWEEN 1 AND 9
+              OR NOT EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json, '$.requiredCapabilityClasses') capability
+                WHERE capability.value = 'durable_compute'
+              )
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json, '$.requiredCapabilityClasses') capability
+                WHERE capability.type <> 'text' OR capability.value NOT IN (
+                  'durable_compute', 'gateway_inference', 'governed_tool', 'governed_code',
+                  'artifact_stage', 'trusted_verification', 'device_camera', 'device_location', 'device_notification'
+                )
+              )
+              OR json_array_length(json_extract(NEW.manifest_json, '$.requiredCapabilityClasses')) <> (
+                SELECT COUNT(DISTINCT capability.value)
+                FROM json_each(NEW.manifest_json, '$.requiredCapabilityClasses') capability
+              )
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(NEW.manifest_json, '$.deadlineAt'), '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(NEW.manifest_json, '$.deadlineAt'), '+0 days')
+                <> json_extract(NEW.manifest_json, '$.deadlineAt')
+              OR json_extract(NEW.manifest_json, '$.deadlineAt') <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              OR COALESCE(json_type(NEW.manifest_json, '$.parentContextSha256'), '') <> 'text'
+              OR length(json_extract(NEW.manifest_json, '$.parentContextSha256')) <> 64
+              OR json_extract(NEW.manifest_json, '$.parentContextSha256') GLOB '*[^0-9a-f]*'
+              OR NOT EXISTS (
+                SELECT 1 FROM tasks task
+                WHERE task.task_id = NEW.task_id AND task.workspace_id = NEW.execution_workspace_id
+                  AND task.deleted_at IS NULL
+              )
+              OR (NEW.session_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM chat_session_meta session
+                JOIN chat_turn_traces turn ON turn.turn_id = NEW.turn_id AND turn.session_id = session.session_id
+                WHERE session.session_id = NEW.session_id AND session.workspace_id = NEW.execution_workspace_id
+              ))
+              OR NOT EXISTS (
+                SELECT 1 FROM durable_runs run
+                WHERE run.run_id = NEW.durable_run_id
+                  AND json_valid(run.metadata_json)
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                    = json_extract(NEW.manifest_json, '$.parentContextSha256')
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.schemaVersion')
+                    = 'goatcitadel.remote-worker-assignment-parent-context.v1'
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                    = NEW.execution_workspace_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                    = NEW.durable_run_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = NEW.task_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS NEW.session_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS NEW.turn_id
+              )
+              OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment manifest or database-clock invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_generation_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_generations
+            WHEN
+              NEW.assignment_generation <> 1 + COALESCE((
+                SELECT MAX(prior.assignment_generation) FROM remote_worker_assignment_generations prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+              ), 0)
+              OR (NEW.assignment_generation > 1 AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation - 1
+                  AND control.action = 'generation_abandoned'
+              ))
+              OR (NEW.assignment_generation > 1 AND EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls cancelled
+                WHERE cancelled.registry_workspace_id = NEW.registry_workspace_id
+                  AND cancelled.assignment_id = NEW.assignment_id
+                  AND cancelled.assignment_generation = NEW.assignment_generation - 1
+                  AND cancelled.action = 'cancel_requested'
+              ))
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignments assignment
+                JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+                JOIN remote_worker_generations worker
+                  ON worker.registry_workspace_id = NEW.registry_workspace_id AND worker.worker_id = NEW.worker_id
+                 AND worker.worker_generation = NEW.worker_generation AND worker.node_id = NEW.node_id
+                JOIN remote_worker_bootstrap_requests bootstrap
+                  ON bootstrap.registry_workspace_id = worker.registry_workspace_id AND bootstrap.bootstrap_id = worker.bootstrap_id
+                JOIN remote_worker_bootstrap_allowed_workspaces scope
+                  ON scope.registry_workspace_id = bootstrap.registry_workspace_id AND scope.bootstrap_id = bootstrap.bootstrap_id
+                 AND scope.allowed_workspace_id = assignment.execution_workspace_id
+                JOIN mesh_capability_node_admissions admission
+                  ON admission.workspace_id = assignment.execution_workspace_id AND admission.node_id = NEW.node_id
+                 AND admission.admission_generation = NEW.node_admission_generation
+                WHERE assignment.registry_workspace_id = NEW.registry_workspace_id
+                  AND assignment.assignment_id = NEW.assignment_id
+                  AND assignment.execution_workspace_id = NEW.execution_workspace_id
+                  AND worker.runtime_manifest_sha256 = NEW.runtime_manifest_sha256
+                  AND worker.workspace_ceiling_sha256 = NEW.workspace_ceiling_sha256
+                  AND worker.capability_ceiling_sha256 = NEW.capability_ceiling_sha256
+                  AND worker.worker_generation = (
+                    SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                    WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM remote_worker_generation_controls worker_control
+                    WHERE worker_control.registry_workspace_id = worker.registry_workspace_id
+                      AND worker_control.worker_id = worker.worker_id
+                      AND worker_control.worker_generation = worker.worker_generation
+                  )
+                  AND admission.admission_generation = (
+                    SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                    WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                    WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                      AND revoked.admission_generation = admission.admission_generation
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(assignment.manifest_json, '$.requiredCapabilityClasses') required
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM remote_worker_bootstrap_capability_classes granted
+                      WHERE granted.registry_workspace_id = bootstrap.registry_workspace_id
+                        AND granted.bootstrap_id = bootstrap.bootstrap_id AND granted.capability_class = required.value
+                    )
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM tasks task
+                    WHERE task.task_id = assignment.task_id
+                      AND task.workspace_id = assignment.execution_workspace_id
+                      AND task.deleted_at IS NULL
+                  )
+                  AND (
+                    (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                    OR EXISTS (
+                      SELECT 1 FROM chat_session_meta session
+                      JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                      WHERE session.session_id = assignment.session_id
+                        AND session.workspace_id = assignment.execution_workspace_id
+                        AND turn.turn_id = assignment.turn_id
+                    )
+                  )
+                  AND json_valid(run.metadata_json)
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                    = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                    = assignment.execution_workspace_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                    = assignment.durable_run_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                  AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                    = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                  AND run.status = 'running' AND run.attempt_count = NEW.durable_run_attempt
+                  AND run.lease_owner_id = NEW.dispatch_owner_id
+                  AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND json_extract(NEW.dispatch_authority_json, '$.durableRunId') = run.run_id
+                  AND json_extract(NEW.dispatch_authority_json, '$.durableRunVersion') = run.version
+                  AND json_extract(NEW.dispatch_authority_json, '$.durableRunLeaseExpiresAt') = run.lease_expires_at
+              )
+              OR json(NEW.dispatch_authority_json) <> NEW.dispatch_authority_json
+              OR abs((julianday(NEW.started_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment generation lacks current dispatch, worker, or node authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_lease_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_leases
+            WHEN
+              NEW.lease_revision <> 1 + COALESCE((
+                SELECT MAX(prior.lease_revision) FROM remote_worker_assignment_leases prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.server_acknowledged_through <> COALESCE((
+                SELECT MAX(event.sequence) FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.worker_sent_through < NEW.server_acknowledged_through
+              OR NEW.worker_sent_through < COALESCE((
+                SELECT MAX(committed.worker_sent_through) FROM (
+                  SELECT prior.worker_sent_through FROM remote_worker_assignment_leases prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.assignment_id = NEW.assignment_id
+                    AND prior.assignment_generation = NEW.assignment_generation
+                  UNION ALL
+                  SELECT event.worker_sent_through FROM remote_worker_assignment_events event
+                  WHERE event.registry_workspace_id = NEW.registry_workspace_id
+                    AND event.assignment_id = NEW.assignment_id
+                    AND event.assignment_generation = NEW.assignment_generation
+                ) committed
+              ), 0)
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_generations generation
+                JOIN remote_worker_assignments assignment
+                  ON assignment.registry_workspace_id = generation.registry_workspace_id
+                 AND assignment.assignment_id = generation.assignment_id
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.assignment_id = NEW.assignment_id
+                  AND generation.assignment_generation = NEW.assignment_generation
+                  AND generation.assignment_generation = (
+                    SELECT MAX(current.assignment_generation) FROM remote_worker_assignment_generations current
+                    WHERE current.registry_workspace_id = generation.registry_workspace_id
+                      AND current.assignment_id = generation.assignment_id
+                  )
+                  AND NEW.worker_sent_through <= json_extract(assignment.manifest_json, '$.maxEventCount')
+                  AND NEW.expires_at <= json_extract(assignment.manifest_json, '$.deadlineAt')
+                  AND (julianday(NEW.expires_at) - julianday(NEW.heartbeat_at)) * 86400.0
+                    BETWEEN 0.999 AND json_extract(assignment.manifest_json, '$.leaseTtlSeconds') + 0.001
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation
+                  AND control.action IN ('cancel_requested', 'generation_abandoned', 'recovery_exhausted')
+              )
+              OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              OR abs((julianday(NEW.heartbeat_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment lease revision or database-clock invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_control_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_controls
+            WHEN
+              NEW.control_revision <> 1 + COALESCE((
+                SELECT MAX(prior.control_revision) FROM remote_worker_assignment_controls prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.control_revision <> 1
+              OR NEW.assignment_generation <> COALESCE((
+                SELECT MAX(generation.assignment_generation) FROM remote_worker_assignment_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.assignment_id = NEW.assignment_id
+              ), 0)
+              OR NEW.expected_lease_revision <> COALESCE((
+                SELECT MAX(lease.lease_revision) FROM remote_worker_assignment_leases lease
+                WHERE lease.registry_workspace_id = NEW.registry_workspace_id AND lease.assignment_id = NEW.assignment_id
+                  AND lease.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR (NEW.action IN ('generation_abandoned', 'recovery_exhausted') AND EXISTS (
+                SELECT 1 FROM remote_worker_assignment_leases lease
+                WHERE lease.registry_workspace_id = NEW.registry_workspace_id AND lease.assignment_id = NEW.assignment_id
+                  AND lease.assignment_generation = NEW.assignment_generation
+                  AND lease.lease_revision = NEW.expected_lease_revision
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              ))
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment control revision or recovery invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_event_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_events
+            WHEN
+              NEW.sequence <> 1 + COALESCE((
+                SELECT MAX(prior.sequence) FROM remote_worker_assignment_events prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.previous_event_sha256 <> COALESCE((
+                SELECT prior.event_sha256 FROM remote_worker_assignment_events prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation AND prior.sequence = NEW.sequence - 1
+              ), '0000000000000000000000000000000000000000000000000000000000000000')
+              OR NEW.worker_sent_through < COALESCE((
+                SELECT MAX(committed.worker_sent_through) FROM (
+                  SELECT lease.worker_sent_through FROM remote_worker_assignment_leases lease
+                  WHERE lease.registry_workspace_id = NEW.registry_workspace_id
+                    AND lease.assignment_id = NEW.assignment_id
+                    AND lease.assignment_generation = NEW.assignment_generation
+                  UNION ALL
+                  SELECT prior.worker_sent_through FROM remote_worker_assignment_events prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.assignment_id = NEW.assignment_id
+                    AND prior.assignment_generation = NEW.assignment_generation
+                ) committed
+              ), 0)
+              OR json(NEW.payload_json) <> NEW.payload_json
+              OR COALESCE(json_type(NEW.payload_json, '$'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.payload_json)) <>
+                (SELECT COUNT(DISTINCT field.key) FROM json_each(NEW.payload_json) field)
+              OR COALESCE(json_type(NEW.payload_json, '$.schemaVersion'), '') <> 'text'
+              OR json_extract(NEW.payload_json, '$.schemaVersion') <>
+                'goatcitadel.remote-worker-assignment-event.v1'
+              OR CASE NEW.event_type
+                WHEN 'status' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 3
+                  AND COALESCE(json_type(NEW.payload_json, '$.phase'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.phase') IN ('accepted', 'running', 'waiting', 'finishing')
+                  AND COALESCE(json_type(NEW.payload_json, '$.statusSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.statusSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.statusSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'tool_progress' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) BETWEEN 4 AND 6
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(NEW.payload_json) field
+                    WHERE field.key NOT IN (
+                      'schemaVersion', 'toolRunId', 'phase', 'toolNameSha256', 'argsSha256', 'resultSha256'
+                    )
+                  )
+                  AND COALESCE(json_type(NEW.payload_json, '$.toolRunId'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.toolRunId')) BETWEEN 1 AND 256
+                  AND COALESCE(json_type(NEW.payload_json, '$.phase'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.phase') IN (
+                    'requested', 'running', 'waiting_approval', 'completed', 'failed'
+                  )
+                  AND COALESCE(json_type(NEW.payload_json, '$.toolNameSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.toolNameSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.toolNameSha256') NOT GLOB '*[^0-9a-f]*'
+                  AND (
+                    json_type(NEW.payload_json, '$.argsSha256') IS NULL
+                    OR (
+                      json_type(NEW.payload_json, '$.argsSha256') = 'text'
+                      AND length(json_extract(NEW.payload_json, '$.argsSha256')) = 64
+                      AND json_extract(NEW.payload_json, '$.argsSha256') NOT GLOB '*[^0-9a-f]*'
+                    )
+                  )
+                  AND (
+                    json_type(NEW.payload_json, '$.resultSha256') IS NULL
+                    OR (
+                      json_type(NEW.payload_json, '$.resultSha256') = 'text'
+                      AND length(json_extract(NEW.payload_json, '$.resultSha256')) = 64
+                      AND json_extract(NEW.payload_json, '$.resultSha256') NOT GLOB '*[^0-9a-f]*'
+                    )
+                  )
+                )
+                WHEN 'model_progress' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 5
+                  AND COALESCE(json_type(NEW.payload_json, '$.inferenceRequestId'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.inferenceRequestId')) BETWEEN 1 AND 256
+                  AND COALESCE(json_type(NEW.payload_json, '$.inferenceAttempt'), '') = 'integer'
+                  AND json_extract(NEW.payload_json, '$.inferenceAttempt') BETWEEN 1 AND 9007199254740991
+                  AND COALESCE(json_type(NEW.payload_json, '$.phase'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.phase') IN ('requested', 'streaming', 'completed', 'failed')
+                  AND COALESCE(json_type(NEW.payload_json, '$.modelIntentSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.modelIntentSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.modelIntentSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'approval_wait' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 4
+                  AND COALESCE(json_type(NEW.payload_json, '$.approvalId'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.approvalId')) BETWEEN 1 AND 256
+                  AND COALESCE(json_type(NEW.payload_json, '$.approvalKind'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.approvalKind')) BETWEEN 1 AND 128
+                  AND json_extract(NEW.payload_json, '$.approvalKind') NOT GLOB '*[^a-z0-9._-]*'
+                  AND substr(json_extract(NEW.payload_json, '$.approvalKind'), 1, 1) GLOB '[a-z0-9]'
+                  AND substr(json_extract(NEW.payload_json, '$.approvalKind'), -1, 1) GLOB '[a-z0-9]'
+                  AND COALESCE(json_type(NEW.payload_json, '$.riskLevelSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.riskLevelSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.riskLevelSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'diagnostic' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 4
+                  AND COALESCE(json_type(NEW.payload_json, '$.severity'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.severity') IN ('info', 'warning', 'error')
+                  AND COALESCE(json_type(NEW.payload_json, '$.code'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.code')) BETWEEN 1 AND 128
+                  AND json_extract(NEW.payload_json, '$.code') NOT GLOB '*[^a-z0-9._-]*'
+                  AND substr(json_extract(NEW.payload_json, '$.code'), 1, 1) GLOB '[a-z0-9]'
+                  AND substr(json_extract(NEW.payload_json, '$.code'), -1, 1) GLOB '[a-z0-9]'
+                  AND COALESCE(json_type(NEW.payload_json, '$.detailSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.detailSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.detailSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'transcript_delta' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 3
+                  AND COALESCE(json_type(NEW.payload_json, '$.role'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.role') = 'assistant'
+                  AND COALESCE(json_type(NEW.payload_json, '$.text'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.text')) BETWEEN 1 AND 16384
+                  AND length(CAST(json_extract(NEW.payload_json, '$.text') AS BLOB)) BETWEEN 1 AND 65536
+                )
+                WHEN 'terminal_output' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 4
+                  AND COALESCE(json_type(NEW.payload_json, '$.stream'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.stream') IN ('stdout', 'stderr')
+                  AND COALESCE(json_type(NEW.payload_json, '$.chunkSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.chunkSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.chunkSha256') NOT GLOB '*[^0-9a-f]*'
+                  AND COALESCE(json_type(NEW.payload_json, '$.byteLength'), '') = 'integer'
+                  AND json_extract(NEW.payload_json, '$.byteLength') BETWEEN 1 AND 65536
+                )
+                ELSE 0
+              END IS NOT 1
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignments assignment
+                JOIN remote_worker_assignment_generations generation
+                  ON generation.registry_workspace_id = assignment.registry_workspace_id
+                 AND generation.assignment_id = assignment.assignment_id
+                JOIN remote_worker_assignment_leases lease
+                  ON lease.registry_workspace_id = generation.registry_workspace_id
+                 AND lease.assignment_id = generation.assignment_id
+                 AND lease.assignment_generation = generation.assignment_generation
+                WHERE assignment.registry_workspace_id = NEW.registry_workspace_id
+                  AND assignment.assignment_id = NEW.assignment_id
+                  AND generation.assignment_generation = NEW.assignment_generation
+                  AND generation.assignment_generation = (
+                    SELECT MAX(current.assignment_generation) FROM remote_worker_assignment_generations current
+                    WHERE current.registry_workspace_id = generation.registry_workspace_id
+                      AND current.assignment_id = generation.assignment_id
+                  )
+                  AND lease.lease_revision = (
+                    SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                    WHERE current.registry_workspace_id = lease.registry_workspace_id
+                      AND current.assignment_id = lease.assignment_id
+                      AND current.assignment_generation = lease.assignment_generation
+                  )
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND NEW.sequence <= json_extract(assignment.manifest_json, '$.maxEventCount')
+                  AND NEW.worker_sent_through <= json_extract(assignment.manifest_json, '$.maxEventCount')
+                  AND COALESCE((
+                    SELECT SUM(length(CAST(committed.payload_json AS BLOB)))
+                    FROM remote_worker_assignment_events committed
+                    WHERE committed.registry_workspace_id = NEW.registry_workspace_id
+                      AND committed.assignment_id = NEW.assignment_id
+                      AND committed.assignment_generation = NEW.assignment_generation
+                  ), 0) + length(CAST(NEW.payload_json AS BLOB))
+                    <= json_extract(assignment.manifest_json, '$.maxEventBytes')
+                  AND COALESCE((
+                    SELECT SUM(CASE
+                      WHEN committed.event_type = 'terminal_output'
+                        THEN CAST(json_extract(committed.payload_json, '$.byteLength') AS INTEGER)
+                      WHEN committed.event_type = 'transcript_delta'
+                        THEN length(CAST(json_extract(committed.payload_json, '$.text') AS BLOB))
+                      ELSE 0
+                    END)
+                    FROM remote_worker_assignment_events committed
+                    WHERE committed.registry_workspace_id = NEW.registry_workspace_id
+                      AND committed.assignment_id = NEW.assignment_id
+                      AND committed.assignment_generation = NEW.assignment_generation
+                  ), 0) + CASE
+                    WHEN NEW.event_type = 'terminal_output'
+                      THEN CAST(json_extract(NEW.payload_json, '$.byteLength') AS INTEGER)
+                    WHEN NEW.event_type = 'transcript_delta'
+                      THEN length(CAST(json_extract(NEW.payload_json, '$.text') AS BLOB))
+                    ELSE 0
+                  END <= json_extract(assignment.manifest_json, '$.maxOutputBytes')
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation
+                  AND control.action IN ('cancel_requested', 'generation_abandoned', 'recovery_exhausted')
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR abs((julianday(NEW.received_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment event chain, lease, or ceiling invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlement_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_settlements
+            WHEN
+              NEW.assignment_generation <> COALESCE((
+                SELECT MAX(generation.assignment_generation) FROM remote_worker_assignment_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id AND generation.assignment_id = NEW.assignment_id
+              ), 0)
+              OR NEW.final_event_sequence <> COALESCE((
+                SELECT MAX(event.sequence) FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.final_event_sha256 <> COALESCE((
+                SELECT event.event_sha256 FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.assignment_generation AND event.sequence = NEW.final_event_sequence
+              ), '0000000000000000000000000000000000000000000000000000000000000000')
+              OR (NEW.origin = 'worker' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_leases lease
+                WHERE lease.registry_workspace_id = NEW.registry_workspace_id AND lease.assignment_id = NEW.assignment_id
+                  AND lease.assignment_generation = NEW.assignment_generation
+                  AND lease.lease_revision = (
+                    SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                    WHERE current.registry_workspace_id = lease.registry_workspace_id
+                      AND current.assignment_id = lease.assignment_id
+                      AND current.assignment_generation = lease.assignment_generation
+                  )
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              ))
+              OR (NEW.outcome = 'cancelled' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation AND control.action = 'cancel_requested'
+              ))
+              OR (NEW.outcome IN ('completed', 'failed') AND EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation AND control.action = 'cancel_requested'
+              ))
+              OR (NEW.origin = 'gateway_recovery' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation
+                  AND control.request_sha256 = NEW.recovery_evidence_sha256
+                  AND (
+                    (NEW.outcome = 'cancelled' AND control.action = 'cancel_requested')
+                    OR (NEW.outcome IN ('completed', 'failed') AND control.action IN ('generation_abandoned', 'recovery_exhausted'))
+                  )
+              ))
+              OR abs((julianday(NEW.settled_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlement winner, chain, or lease invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_materialization_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_materializations
+            WHEN
+              (NEW.source_kind = 'event' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.source_generation AND event.sequence = NEW.source_sequence
+                  AND event.event_sha256 = NEW.source_sha256 AND event.event_type = 'transcript_delta'
+              ))
+              OR (NEW.source_kind = 'settlement' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+                  AND settlement.assignment_generation = NEW.source_generation AND settlement.request_sha256 = NEW.source_sha256
+              ))
+              OR NEW.source_generation <> COALESCE((
+                SELECT MAX(generation.assignment_generation) FROM remote_worker_assignment_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.assignment_id = NEW.assignment_id
+              ), 0)
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id
+                  AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.source_generation
+                  AND control.action IN ('generation_abandoned', 'recovery_exhausted')
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignments assignment
+                WHERE assignment.registry_workspace_id = NEW.registry_workspace_id
+                  AND assignment.assignment_id = NEW.assignment_id
+                  AND (
+                    (NEW.source_kind = 'event'
+                      AND assignment.session_id = NEW.target_owner_session_id
+                      AND assignment.turn_id = NEW.target_owner_turn_id)
+                    OR (NEW.source_kind = 'settlement'
+                      AND assignment.durable_run_id = NEW.target_owner_durable_run_id)
+                  )
+              )
+              OR abs((julianday(NEW.materialized_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment materialization source or database-clock invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_leases_live_authority
+            BEFORE INSERT ON remote_worker_assignment_leases
+            WHEN NOT EXISTS (
+              SELECT 1 FROM remote_worker_assignment_generations generation
+              JOIN remote_worker_assignments assignment
+                ON assignment.registry_workspace_id = generation.registry_workspace_id
+               AND assignment.assignment_id = generation.assignment_id
+              JOIN remote_worker_generations worker
+                ON worker.registry_workspace_id = generation.registry_workspace_id
+               AND worker.worker_id = generation.worker_id
+               AND worker.worker_generation = generation.worker_generation
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = generation.execution_workspace_id
+               AND admission.node_id = generation.node_id
+               AND admission.admission_generation = generation.node_admission_generation
+              JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+              WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                AND generation.assignment_id = NEW.assignment_id
+                AND generation.assignment_generation = NEW.assignment_generation
+                AND worker.worker_generation = (
+                  SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                  WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls controlled
+                  WHERE controlled.registry_workspace_id = worker.registry_workspace_id
+                    AND controlled.worker_id = worker.worker_id
+                    AND controlled.worker_generation = worker.worker_generation
+                )
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+                AND EXISTS (
+                  SELECT 1 FROM tasks task
+                  WHERE task.task_id = assignment.task_id
+                    AND task.workspace_id = assignment.execution_workspace_id
+                    AND task.deleted_at IS NULL
+                )
+                AND (
+                  (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                  OR EXISTS (
+                    SELECT 1 FROM chat_session_meta session
+                    JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                    WHERE session.session_id = assignment.session_id
+                      AND session.workspace_id = assignment.execution_workspace_id
+                      AND turn.turn_id = assignment.turn_id
+                  )
+                )
+                AND json_valid(run.metadata_json)
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                  = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                  = assignment.execution_workspace_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                  = assignment.durable_run_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                  = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                AND run.status = 'running'
+                AND run.attempt_count = generation.durable_run_attempt
+                AND run.lease_owner_id = generation.dispatch_owner_id
+                AND json_extract(NEW.parent_dispatch_authority_json, '$.durableRunId') = assignment.durable_run_id
+                AND json_extract(NEW.parent_dispatch_authority_json, '$.durableRunAttempt') = generation.durable_run_attempt
+                AND json_extract(NEW.parent_dispatch_authority_json, '$.dispatchOwnerId') = generation.dispatch_owner_id
+                AND run.version = json_extract(NEW.parent_dispatch_authority_json, '$.durableRunVersion')
+                AND run.lease_expires_at = json_extract(NEW.parent_dispatch_authority_json, '$.durableRunLeaseExpiresAt')
+                AND NEW.expires_at <= run.lease_expires_at
+                AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment lease lacks current worker, node, or parent dispatch authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_events_live_authority
+            BEFORE INSERT ON remote_worker_assignment_events
+            WHEN NOT EXISTS (
+              SELECT 1 FROM remote_worker_assignment_generations generation
+              JOIN remote_worker_assignments assignment
+                ON assignment.registry_workspace_id = generation.registry_workspace_id
+               AND assignment.assignment_id = generation.assignment_id
+              JOIN remote_worker_generations worker
+                ON worker.registry_workspace_id = generation.registry_workspace_id
+               AND worker.worker_id = generation.worker_id
+               AND worker.worker_generation = generation.worker_generation
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = generation.execution_workspace_id
+               AND admission.node_id = generation.node_id
+               AND admission.admission_generation = generation.node_admission_generation
+              JOIN remote_worker_assignment_leases lease
+                ON lease.registry_workspace_id = generation.registry_workspace_id
+               AND lease.assignment_id = generation.assignment_id
+               AND lease.assignment_generation = generation.assignment_generation
+              JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+              WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                AND generation.assignment_id = NEW.assignment_id
+                AND generation.assignment_generation = NEW.assignment_generation
+                AND worker.worker_generation = (
+                  SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                  WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls controlled
+                  WHERE controlled.registry_workspace_id = worker.registry_workspace_id
+                    AND controlled.worker_id = worker.worker_id
+                    AND controlled.worker_generation = worker.worker_generation
+                )
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND lease.lease_revision = (
+                  SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                  WHERE current.registry_workspace_id = lease.registry_workspace_id
+                    AND current.assignment_id = lease.assignment_id
+                    AND current.assignment_generation = lease.assignment_generation
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+                AND EXISTS (
+                  SELECT 1 FROM tasks task
+                  WHERE task.task_id = assignment.task_id
+                    AND task.workspace_id = assignment.execution_workspace_id
+                    AND task.deleted_at IS NULL
+                )
+                AND (
+                  (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                  OR EXISTS (
+                    SELECT 1 FROM chat_session_meta session
+                    JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                    WHERE session.session_id = assignment.session_id
+                      AND session.workspace_id = assignment.execution_workspace_id
+                      AND turn.turn_id = assignment.turn_id
+                  )
+                )
+                AND json_valid(run.metadata_json)
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                  = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                  = assignment.execution_workspace_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                  = assignment.durable_run_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                  = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                AND run.status = 'running'
+                AND run.attempt_count = generation.durable_run_attempt
+                AND run.lease_owner_id = generation.dispatch_owner_id
+                AND run.version = json_extract(lease.parent_dispatch_authority_json, '$.durableRunVersion')
+                AND run.lease_expires_at = json_extract(lease.parent_dispatch_authority_json, '$.durableRunLeaseExpiresAt')
+                AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment event lacks current worker, node, or parent dispatch authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlements_live_authority
+            BEFORE INSERT ON remote_worker_assignment_settlements
+            WHEN NEW.origin = 'worker' AND NOT EXISTS (
+              SELECT 1 FROM remote_worker_assignment_generations generation
+              JOIN remote_worker_assignments assignment
+                ON assignment.registry_workspace_id = generation.registry_workspace_id
+               AND assignment.assignment_id = generation.assignment_id
+              JOIN remote_worker_generations worker
+                ON worker.registry_workspace_id = generation.registry_workspace_id
+               AND worker.worker_id = generation.worker_id
+               AND worker.worker_generation = generation.worker_generation
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = generation.execution_workspace_id
+               AND admission.node_id = generation.node_id
+               AND admission.admission_generation = generation.node_admission_generation
+              JOIN remote_worker_assignment_leases lease
+                ON lease.registry_workspace_id = generation.registry_workspace_id
+               AND lease.assignment_id = generation.assignment_id
+               AND lease.assignment_generation = generation.assignment_generation
+              JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+              WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                AND generation.assignment_id = NEW.assignment_id
+                AND generation.assignment_generation = NEW.assignment_generation
+                AND worker.worker_generation = (
+                  SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                  WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls controlled
+                  WHERE controlled.registry_workspace_id = worker.registry_workspace_id
+                    AND controlled.worker_id = worker.worker_id
+                    AND controlled.worker_generation = worker.worker_generation
+                )
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND lease.lease_revision = (
+                  SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                  WHERE current.registry_workspace_id = lease.registry_workspace_id
+                    AND current.assignment_id = lease.assignment_id
+                    AND current.assignment_generation = lease.assignment_generation
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+                AND EXISTS (
+                  SELECT 1 FROM tasks task
+                  WHERE task.task_id = assignment.task_id
+                    AND task.workspace_id = assignment.execution_workspace_id
+                    AND task.deleted_at IS NULL
+                )
+                AND (
+                  (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                  OR EXISTS (
+                    SELECT 1 FROM chat_session_meta session
+                    JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                    WHERE session.session_id = assignment.session_id
+                      AND session.workspace_id = assignment.execution_workspace_id
+                      AND turn.turn_id = assignment.turn_id
+                  )
+                )
+                AND json_valid(run.metadata_json)
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                  = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                  = assignment.execution_workspace_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                  = assignment.durable_run_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                  = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                AND run.status = 'running'
+                AND run.attempt_count = generation.durable_run_attempt
+                AND run.lease_owner_id = generation.dispatch_owner_id
+                AND run.version = json_extract(lease.parent_dispatch_authority_json, '$.durableRunVersion')
+                AND run.lease_expires_at = json_extract(lease.parent_dispatch_authority_json, '$.durableRunLeaseExpiresAt')
+                AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlement lacks current worker, node, or parent dispatch authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignments_no_update BEFORE UPDATE ON remote_worker_assignments BEGIN SELECT RAISE(ABORT, 'remote worker assignments are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignments_no_delete BEFORE DELETE ON remote_worker_assignments BEGIN SELECT RAISE(ABORT, 'remote worker assignments are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_generations_no_update BEFORE UPDATE ON remote_worker_assignment_generations BEGIN SELECT RAISE(ABORT, 'remote worker assignment generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_generations_no_delete BEFORE DELETE ON remote_worker_assignment_generations BEGIN SELECT RAISE(ABORT, 'remote worker assignment generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_leases_no_update BEFORE UPDATE ON remote_worker_assignment_leases BEGIN SELECT RAISE(ABORT, 'remote worker assignment leases are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_leases_no_delete BEFORE DELETE ON remote_worker_assignment_leases BEGIN SELECT RAISE(ABORT, 'remote worker assignment leases are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_controls_no_update BEFORE UPDATE ON remote_worker_assignment_controls BEGIN SELECT RAISE(ABORT, 'remote worker assignment controls are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_controls_no_delete BEFORE DELETE ON remote_worker_assignment_controls BEGIN SELECT RAISE(ABORT, 'remote worker assignment controls are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_events_no_update BEFORE UPDATE ON remote_worker_assignment_events BEGIN SELECT RAISE(ABORT, 'remote worker assignment events are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_events_no_delete BEFORE DELETE ON remote_worker_assignment_events BEGIN SELECT RAISE(ABORT, 'remote worker assignment events are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlements_no_update BEFORE UPDATE ON remote_worker_assignment_settlements BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlements_no_delete BEFORE DELETE ON remote_worker_assignment_settlements BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_materializations_no_update BEFORE UPDATE ON remote_worker_assignment_materializations BEGIN SELECT RAISE(ABORT, 'remote worker assignment materializations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_materializations_no_delete BEFORE DELETE ON remote_worker_assignment_materializations BEGIN SELECT RAISE(ABORT, 'remote worker assignment materializations are immutable'); END;
+          `);
+        },
+      },
     ],
   },
 ];

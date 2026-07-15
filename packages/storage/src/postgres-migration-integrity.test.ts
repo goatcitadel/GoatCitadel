@@ -36,6 +36,17 @@ describe("protected Postgres migration integrity", () => {
     );
   });
 
+  it("keeps migration 105 context-pressure recovery CHECK executable and balanced", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 105);
+    assert.equal(migration?.name, "context_pressure_recovery_truth");
+    const sql = migration?.sql ?? "";
+    assert.match(
+      sql,
+      /transport_retry_reason = 'output_cap_recovery'\s*\)\s*AND \(\s*\(transport_retry_parent_event_id IS NULL[\s\S]*?\)\s*\)\);/u,
+    );
+    assert.doesNotMatch(sql, /transport_retry_reason = 'output_cap_recovery'\s*\)\s*\)\s*AND \(/u);
+  });
+
   it("keeps HX-413 migration 107 as additive bounded DDL without a competing outbox", () => {
     const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 107);
     assert.equal(migration?.name, "skill_hub_lifecycle_foundation");
@@ -188,5 +199,46 @@ describe("protected Postgres migration integrity", () => {
     assert.match(sql, /credentials_no_delete/u);
     assert.doesNotMatch(sql, /mesh_capability_node_admissions|gateway_route|readiness|listener/iu);
     assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu);
+  });
+
+  it("keeps HX-502/HX-504 migration 113 additive, append-only, parent-fenced, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 113);
+    assert.equal(migration?.name, "remote_worker_assignment_foundation");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "remote_worker_assignments",
+      "remote_worker_assignment_generations",
+      "remote_worker_assignment_leases",
+      "remote_worker_assignment_controls",
+      "remote_worker_assignment_events",
+      "remote_worker_assignment_settlements",
+      "remote_worker_assignment_materializations",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+      assert.match(sql, new RegExp(`${table}_no_update`, "u"));
+      assert.match(sql, new RegExp(`${table}_no_delete`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_assignment/gu)?.length, 7);
+    assert.match(sql, /parent_dispatch_authority_json/u);
+    assert.match(sql, /gc_remote_worker_assignment_lock_parent_context/u);
+    assert.match(sql, /durable_runs run WHERE run\.run_id = durable_run_key FOR UPDATE/u);
+    assert.match(sql, /tasks task WHERE task\.task_id = task_key FOR SHARE/u);
+    assert.match(sql, /chat_session_meta session WHERE session\.session_id = session_key FOR SHARE/u);
+    assert.match(sql, /chat_turn_traces turn_trace WHERE turn_trace\.turn_id = turn_key FOR SHARE/u);
+    assert.match(sql, /hashtextextended\(execution_workspace, 411\)/u);
+    assert.match(sql, /hashtextextended\(execution_workspace \|\| ':' \|\| COALESCE\(assigned_node, ''\), 412\)/u);
+    for (const lock of [501, 502, 503, 504]) assert.match(sql, new RegExp(`, ${lock}\\)`, "u"));
+    assert.match(sql, /NEW\.outcome = 'cancelled'[\s\S]*control\.action = 'cancel_requested'/u);
+    assert.match(sql, /WHERE source_kind = 'event'/u);
+    assert.match(sql, /WHERE source_kind = 'settlement'/u);
+    assert.match(sql, /octet_length\(manifest_json\) <= 32768/u);
+    assert.match(sql, /octet_length\(payload_json\) <= 65536/u);
+    assert.doesNotMatch(sql, /length\(octet_length/u);
+    assert.doesNotMatch(
+      sql,
+      /\b(?:INSERT\s+INTO|UPDATE\s+durable_runs|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu,
+    );
+    assert.doesNotMatch(sql, /gateway_route|listener|chat_messages\s+SET|model_usage_events/iu);
   });
 });
