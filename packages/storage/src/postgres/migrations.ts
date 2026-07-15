@@ -7689,4 +7689,784 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE TRIGGER trg_remote_worker_assignment_materializations_no_delete BEFORE DELETE ON remote_worker_assignment_materializations FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_assignment_mutation();
     `,
   },
+  {
+    version: 114,
+    name: "session_control_foundation",
+    sql: `
+      ALTER TABLE auth_device_requests
+        ADD COLUMN IF NOT EXISTS principal_purpose TEXT NOT NULL DEFAULT 'general_companion';
+      ALTER TABLE auth_device_grants
+        ADD COLUMN IF NOT EXISTS principal_purpose TEXT NOT NULL DEFAULT 'general_companion';
+      ALTER TABLE companion_sessions
+        ADD COLUMN IF NOT EXISTS principal_purpose TEXT NOT NULL DEFAULT 'general_companion';
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_tokens (
+        token_sha256 TEXT PRIMARY KEY CHECK(token_sha256 ~ '^[0-9a-f]{64}$'),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        first_request_id TEXT CHECK(first_request_id IS NULL OR length(first_request_id) BETWEEN 1 AND 256),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        )
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_requests (
+        request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 256),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        companion_session_id TEXT NOT NULL CHECK(length(companion_session_id) BETWEEN 1 AND 256),
+        device_grant_id TEXT NOT NULL CHECK(length(device_grant_id) BETWEEN 1 AND 256),
+        client_instance_id TEXT NOT NULL CHECK(length(client_instance_id) BETWEEN 1 AND 256),
+        principal_purpose TEXT NOT NULL CHECK(principal_purpose = 'session_control_client'),
+        token_sha256 TEXT NOT NULL,
+        requested_capabilities_json TEXT NOT NULL CHECK(requested_capabilities_json IN ('["send"]', '["send","read"]')),
+        requested_capabilities_sha256 TEXT NOT NULL CHECK(requested_capabilities_sha256 ~ '^[0-9a-f]{64}$'),
+        requested_generation BIGINT NOT NULL CHECK(requested_generation > 0),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'rejected', 'expired', 'activated', 'cancelled')),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = expires_at
+        ),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        decided_at TEXT CHECK(
+          decided_at IS NULL OR (
+            gc_try_parse_timestamptz(decided_at) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(decided_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = decided_at
+          )
+        ),
+        decided_by_actor_id TEXT CHECK(decided_by_actor_id IS NULL OR length(decided_by_actor_id) BETWEEN 1 AND 256),
+        decision_reason_code TEXT CHECK(
+          decision_reason_code IS NULL OR decision_reason_code IN (
+            'request_rejected', 'request_expired', 'request_cancelled', 'handoff'
+          )
+        ),
+        activated_generation BIGINT CHECK(activated_generation IS NULL OR activated_generation > 1),
+        CHECK(
+          (requested_capabilities_json = '["send"]'
+            AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+          OR (requested_capabilities_json = '["send","read"]'
+            AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+        ),
+        FOREIGN KEY(token_sha256) REFERENCES chat_session_control_tokens(token_sha256) ON DELETE RESTRICT,
+        CHECK(expires_at > created_at),
+        CHECK(
+          (status = 'pending' AND decided_at IS NULL AND decided_by_actor_id IS NULL
+            AND decision_reason_code IS NULL AND activated_generation IS NULL)
+          OR (status = 'activated' AND decided_at IS NOT NULL AND decided_at < expires_at
+            AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'handoff'
+            AND activated_generation = requested_generation + 1)
+          OR (status = 'rejected' AND decided_at IS NOT NULL AND decided_at < expires_at
+            AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_rejected'
+            AND activated_generation IS NULL)
+          OR (status = 'cancelled' AND decided_at IS NOT NULL AND decided_at < expires_at
+            AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_cancelled'
+            AND activated_generation IS NULL)
+          OR (status = 'expired' AND decided_at IS NOT NULL AND decided_at >= expires_at
+            AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_expired'
+            AND activated_generation IS NULL)
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_requests_session_status
+        ON chat_session_control_requests(session_id, status, created_at, request_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_requests_companion_status
+        ON chat_session_control_requests(companion_session_id, status, created_at);
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_grants (
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        generation BIGINT NOT NULL CHECK(generation > 0),
+        is_current BIGINT NOT NULL CHECK(is_current IN (0, 1)),
+        owner_kind TEXT NOT NULL CHECK(owner_kind IN ('operator', 'external_companion')),
+        lease_state TEXT NOT NULL CHECK(lease_state IN (
+          'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+        )),
+        request_id TEXT,
+        companion_session_id TEXT,
+        device_grant_id TEXT,
+        client_instance_id TEXT,
+        principal_purpose TEXT,
+        requested_capabilities_json TEXT NOT NULL CHECK(
+          requested_capabilities_json IN ('[]', '["send"]', '["send","read"]')
+        ),
+        requested_capabilities_sha256 TEXT NOT NULL CHECK(requested_capabilities_sha256 ~ '^[0-9a-f]{64}$'),
+        effective_capabilities_json TEXT NOT NULL CHECK(
+          effective_capabilities_json IN ('[]', '["send"]', '["send","read"]')
+        ),
+        effective_capabilities_sha256 TEXT NOT NULL CHECK(effective_capabilities_sha256 ~ '^[0-9a-f]{64}$'),
+        token_sha256 TEXT,
+        token_expires_at TEXT,
+        last_heartbeat_at TEXT,
+        lease_expires_at TEXT,
+        reconnect_expires_at TEXT,
+        control_revision BIGINT NOT NULL CHECK(control_revision > 0),
+        transition_idempotency_key TEXT NOT NULL UNIQUE CHECK(length(transition_idempotency_key) BETWEEN 1 AND 512),
+        transition_request_sha256 TEXT NOT NULL CHECK(transition_request_sha256 ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        updated_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(updated_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = updated_at
+        ),
+        terminal_at TEXT CHECK(
+          terminal_at IS NULL OR (
+            gc_try_parse_timestamptz(terminal_at) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(terminal_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = terminal_at
+          )
+        ),
+        CHECK(
+          (requested_capabilities_json = '[]'
+            AND requested_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+          OR (requested_capabilities_json = '["send"]'
+            AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+          OR (requested_capabilities_json = '["send","read"]'
+            AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+        ),
+        CHECK(
+          (effective_capabilities_json = '[]'
+            AND effective_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+          OR (effective_capabilities_json = '["send"]'
+            AND effective_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+          OR (effective_capabilities_json = '["send","read"]'
+            AND effective_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+        ),
+        PRIMARY KEY(session_id, generation),
+        FOREIGN KEY(request_id) REFERENCES chat_session_control_requests(request_id) ON DELETE RESTRICT,
+        FOREIGN KEY(token_sha256) REFERENCES chat_session_control_tokens(token_sha256) ON DELETE RESTRICT,
+        CHECK(updated_at >= created_at),
+        CHECK(
+          (is_current = 1 AND terminal_at IS NULL AND lease_state IN ('operator_active', 'external_live', 'external_stale'))
+          OR (is_current = 0 AND terminal_at IS NOT NULL AND lease_state IN ('released', 'revoked', 'superseded', 'deleted'))
+        ),
+        CHECK(
+          (owner_kind = 'operator' AND request_id IS NULL AND companion_session_id IS NULL
+            AND device_grant_id IS NULL AND client_instance_id IS NULL AND principal_purpose IS NULL
+            AND requested_capabilities_json = '[]' AND effective_capabilities_json = '[]'
+            AND token_sha256 IS NULL AND token_expires_at IS NULL AND last_heartbeat_at IS NULL
+            AND lease_expires_at IS NULL AND reconnect_expires_at IS NULL)
+          OR (owner_kind = 'external_companion' AND generation >= 2 AND request_id IS NOT NULL
+            AND length(companion_session_id) BETWEEN 1 AND 256 AND length(device_grant_id) BETWEEN 1 AND 256
+            AND length(client_instance_id) BETWEEN 1 AND 256 AND principal_purpose = 'session_control_client'
+            AND requested_capabilities_json IN ('["send"]', '["send","read"]')
+            AND effective_capabilities_json IN ('["send"]', '["send","read"]')
+            AND token_sha256 IS NOT NULL AND token_expires_at IS NOT NULL AND last_heartbeat_at IS NOT NULL
+            AND lease_expires_at IS NOT NULL AND reconnect_expires_at IS NOT NULL
+            AND lease_expires_at > last_heartbeat_at AND reconnect_expires_at > lease_expires_at)
+        )
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_control_grants_one_current
+        ON chat_session_control_grants(session_id) WHERE is_current = 1;
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_workspace_current
+        ON chat_session_control_grants(workspace_id, is_current, updated_at DESC, session_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_companion_current
+        ON chat_session_control_grants(companion_session_id, is_current, session_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_device_current
+        ON chat_session_control_grants(device_grant_id, is_current, session_id);
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_events (
+        event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 256),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        event_sequence BIGINT NOT NULL CHECK(event_sequence > 0),
+        request_id TEXT,
+        previous_generation BIGINT CHECK(previous_generation IS NULL OR previous_generation > 0),
+        next_generation BIGINT NOT NULL CHECK(next_generation > 0),
+        previous_owner_kind TEXT CHECK(previous_owner_kind IS NULL OR previous_owner_kind IN ('operator', 'external_companion')),
+        next_owner_kind TEXT CHECK(next_owner_kind IS NULL OR next_owner_kind IN ('operator', 'external_companion')),
+        previous_lease_state TEXT CHECK(previous_lease_state IS NULL OR previous_lease_state IN (
+          'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+        )),
+        next_lease_state TEXT NOT NULL CHECK(next_lease_state IN (
+          'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+        )),
+        reason_code TEXT NOT NULL CHECK(reason_code IN (
+          'session_initialized', 'request_created', 'request_rejected', 'request_expired', 'request_cancelled',
+          'handoff', 'heartbeat', 'lease_stale', 'reconnect', 'identity_revoked', 'release',
+          'operator_revoke', 'emergency_takeover', 'auth_revoked', 'session_deleted',
+          'session_reactivated', 'mutation_denied'
+        )),
+        actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        companion_session_id TEXT CHECK(companion_session_id IS NULL OR length(companion_session_id) BETWEEN 1 AND 256),
+        device_grant_id TEXT CHECK(device_grant_id IS NULL OR length(device_grant_id) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        FOREIGN KEY(request_id) REFERENCES chat_session_control_requests(request_id) ON DELETE RESTRICT,
+        UNIQUE(session_id, event_sequence),
+        CHECK(
+          (reason_code = 'session_initialized' AND previous_generation IS NULL AND previous_owner_kind IS NULL
+            AND previous_lease_state IS NULL AND next_generation = 1 AND next_owner_kind = 'operator'
+            AND next_lease_state = 'operator_active' AND actor_kind = 'system')
+          OR (reason_code <> 'session_initialized' AND previous_generation IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_session_created
+        ON chat_session_control_events(session_id, event_sequence);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_workspace_created
+        ON chat_session_control_events(workspace_id, created_at DESC, event_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_companion_created
+        ON chat_session_control_events(companion_session_id, created_at DESC, event_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_request_sha256
+        ON chat_session_control_events(request_sha256, workspace_id, session_id, event_sequence);
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_auth_revoke_receipts (
+        idempotency_key TEXT PRIMARY KEY CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        binding_kind TEXT NOT NULL CHECK(binding_kind IN ('companion_session', 'device_grant')),
+        binding_id TEXT NOT NULL CHECK(length(binding_id) BETWEEN 1 AND 256),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        target_count BIGINT NOT NULL CHECK(target_count >= 0),
+        session_count BIGINT NOT NULL CHECK(session_count >= 0),
+        event_set_sha256 TEXT NOT NULL CHECK(event_set_sha256 ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        CHECK(
+          (target_count = 0 AND session_count = 0
+            AND event_set_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+          OR (target_count > 0 AND session_count BETWEEN 1 AND target_count)
+        )
+      );
+
+      -- Migration 2 builds the current SQLite blueprint on fresh PostgreSQL databases. Its
+      -- compatibility translator intentionally omits SQLite CHECK clauses, so the four
+      -- production-dark tables can already exist when this forward migration runs. Reconcile
+      -- every bounded/enumerated invariant with deterministic names; upgraded databases keep
+      -- their inline checks and receive the same named checks harmlessly.
+      DO $$
+      DECLARE check_spec RECORD;
+      BEGIN
+        FOR check_spec IN
+          SELECT * FROM (VALUES
+            ('auth_device_requests', 'gc_adr_principal_purpose', $check$principal_purpose IN ('general_companion', 'session_control_client')$check$),
+            ('auth_device_grants', 'gc_adg_principal_purpose', $check$principal_purpose IN ('general_companion', 'session_control_client')$check$),
+            ('companion_sessions', 'gc_cs_principal_purpose', $check$principal_purpose IN ('general_companion', 'session_control_client')$check$),
+
+            ('chat_session_control_tokens', 'gc_sct_token_sha256', $check$token_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_tokens', 'gc_sct_workspace_length', $check$length(workspace_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_tokens', 'gc_sct_session_length', $check$length(session_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_tokens', 'gc_sct_first_request_length', $check$first_request_id IS NULL OR length(first_request_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_tokens', 'gc_sct_created_at_canonical', $check$gc_try_parse_timestamptz(created_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at$check$),
+
+            ('chat_session_control_requests', 'gc_scr_request_length', $check$length(request_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_workspace_length', $check$length(workspace_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_session_length', $check$length(session_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_companion_length', $check$length(companion_session_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_device_length', $check$length(device_grant_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_client_length', $check$length(client_instance_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_principal_purpose', $check$principal_purpose = 'session_control_client'$check$),
+            ('chat_session_control_requests', 'gc_scr_capabilities', $check$requested_capabilities_json IN ('["send"]', '["send","read"]')$check$),
+            ('chat_session_control_requests', 'gc_scr_capabilities_sha256', $check$requested_capabilities_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_requests', 'gc_scr_capabilities_digest', $check$(requested_capabilities_json = '["send"]' AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c') OR (requested_capabilities_json = '["send","read"]' AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')$check$),
+            ('chat_session_control_requests', 'gc_scr_generation_positive', $check$requested_generation > 0$check$),
+            ('chat_session_control_requests', 'gc_scr_status', $check$status IN ('pending', 'rejected', 'expired', 'activated', 'cancelled')$check$),
+            ('chat_session_control_requests', 'gc_scr_idempotency_length', $check$length(idempotency_key) BETWEEN 1 AND 512$check$),
+            ('chat_session_control_requests', 'gc_scr_request_sha256', $check$request_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_requests', 'gc_scr_expires_at_canonical', $check$gc_try_parse_timestamptz(expires_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = expires_at$check$),
+            ('chat_session_control_requests', 'gc_scr_created_at_canonical', $check$gc_try_parse_timestamptz(created_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at$check$),
+            ('chat_session_control_requests', 'gc_scr_decided_at_canonical', $check$decided_at IS NULL OR (gc_try_parse_timestamptz(decided_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(decided_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = decided_at)$check$),
+            ('chat_session_control_requests', 'gc_scr_decided_actor_length', $check$decided_by_actor_id IS NULL OR length(decided_by_actor_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_requests', 'gc_scr_decision_reason', $check$decision_reason_code IS NULL OR decision_reason_code IN ('request_rejected', 'request_expired', 'request_cancelled', 'handoff')$check$),
+            ('chat_session_control_requests', 'gc_scr_activated_generation', $check$activated_generation IS NULL OR activated_generation > 1$check$),
+            ('chat_session_control_requests', 'gc_scr_expiry_after_creation', $check$expires_at > created_at$check$),
+            ('chat_session_control_requests', 'gc_scr_lifecycle_shape', $check$(status = 'pending' AND decided_at IS NULL AND decided_by_actor_id IS NULL AND decision_reason_code IS NULL AND activated_generation IS NULL) OR (status = 'activated' AND decided_at IS NOT NULL AND decided_at < expires_at AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'handoff' AND activated_generation = requested_generation + 1) OR (status = 'rejected' AND decided_at IS NOT NULL AND decided_at < expires_at AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_rejected' AND activated_generation IS NULL) OR (status = 'cancelled' AND decided_at IS NOT NULL AND decided_at < expires_at AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_cancelled' AND activated_generation IS NULL) OR (status = 'expired' AND decided_at IS NOT NULL AND decided_at >= expires_at AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_expired' AND activated_generation IS NULL)$check$),
+
+            ('chat_session_control_grants', 'gc_scg_workspace_length', $check$length(workspace_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_grants', 'gc_scg_session_length', $check$length(session_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_grants', 'gc_scg_generation_positive', $check$generation > 0$check$),
+            ('chat_session_control_grants', 'gc_scg_current_flag', $check$is_current IN (0, 1)$check$),
+            ('chat_session_control_grants', 'gc_scg_owner_kind', $check$owner_kind IN ('operator', 'external_companion')$check$),
+            ('chat_session_control_grants', 'gc_scg_lease_state', $check$lease_state IN ('operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted')$check$),
+            ('chat_session_control_grants', 'gc_scg_requested_capabilities', $check$requested_capabilities_json IN ('[]', '["send"]', '["send","read"]')$check$),
+            ('chat_session_control_grants', 'gc_scg_requested_sha256', $check$requested_capabilities_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_grants', 'gc_scg_requested_digest', $check$(requested_capabilities_json = '[]' AND requested_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945') OR (requested_capabilities_json = '["send"]' AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c') OR (requested_capabilities_json = '["send","read"]' AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')$check$),
+            ('chat_session_control_grants', 'gc_scg_effective_capabilities', $check$effective_capabilities_json IN ('[]', '["send"]', '["send","read"]')$check$),
+            ('chat_session_control_grants', 'gc_scg_effective_sha256', $check$effective_capabilities_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_grants', 'gc_scg_effective_digest', $check$(effective_capabilities_json = '[]' AND effective_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945') OR (effective_capabilities_json = '["send"]' AND effective_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c') OR (effective_capabilities_json = '["send","read"]' AND effective_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')$check$),
+            ('chat_session_control_grants', 'gc_scg_control_revision', $check$control_revision > 0$check$),
+            ('chat_session_control_grants', 'gc_scg_idempotency_length', $check$length(transition_idempotency_key) BETWEEN 1 AND 512$check$),
+            ('chat_session_control_grants', 'gc_scg_request_sha256', $check$transition_request_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_grants', 'gc_scg_created_at_canonical', $check$gc_try_parse_timestamptz(created_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at$check$),
+            ('chat_session_control_grants', 'gc_scg_updated_at_canonical', $check$gc_try_parse_timestamptz(updated_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = updated_at$check$),
+            ('chat_session_control_grants', 'gc_scg_terminal_at_canonical', $check$terminal_at IS NULL OR (gc_try_parse_timestamptz(terminal_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(terminal_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = terminal_at)$check$),
+            ('chat_session_control_grants', 'gc_scg_update_order', $check$updated_at >= created_at$check$),
+            ('chat_session_control_grants', 'gc_scg_current_shape', $check$(is_current = 1 AND terminal_at IS NULL AND lease_state IN ('operator_active', 'external_live', 'external_stale')) OR (is_current = 0 AND terminal_at IS NOT NULL AND lease_state IN ('released', 'revoked', 'superseded', 'deleted'))$check$),
+            ('chat_session_control_grants', 'gc_scg_owner_shape', $check$(owner_kind = 'operator' AND request_id IS NULL AND companion_session_id IS NULL AND device_grant_id IS NULL AND client_instance_id IS NULL AND principal_purpose IS NULL AND requested_capabilities_json = '[]' AND effective_capabilities_json = '[]' AND token_sha256 IS NULL AND token_expires_at IS NULL AND last_heartbeat_at IS NULL AND lease_expires_at IS NULL AND reconnect_expires_at IS NULL) OR (owner_kind = 'external_companion' AND generation >= 2 AND request_id IS NOT NULL AND length(companion_session_id) BETWEEN 1 AND 256 AND length(device_grant_id) BETWEEN 1 AND 256 AND length(client_instance_id) BETWEEN 1 AND 256 AND principal_purpose = 'session_control_client' AND requested_capabilities_json IN ('["send"]', '["send","read"]') AND effective_capabilities_json IN ('["send"]', '["send","read"]') AND token_sha256 IS NOT NULL AND token_expires_at IS NOT NULL AND last_heartbeat_at IS NOT NULL AND lease_expires_at IS NOT NULL AND reconnect_expires_at IS NOT NULL AND lease_expires_at > last_heartbeat_at AND reconnect_expires_at > lease_expires_at)$check$),
+
+            ('chat_session_control_events', 'gc_sce_event_length', $check$length(event_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_workspace_length', $check$length(workspace_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_session_length', $check$length(session_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_sequence_positive', $check$event_sequence > 0$check$),
+            ('chat_session_control_events', 'gc_sce_previous_generation', $check$previous_generation IS NULL OR previous_generation > 0$check$),
+            ('chat_session_control_events', 'gc_sce_next_generation', $check$next_generation > 0$check$),
+            ('chat_session_control_events', 'gc_sce_previous_owner', $check$previous_owner_kind IS NULL OR previous_owner_kind IN ('operator', 'external_companion')$check$),
+            ('chat_session_control_events', 'gc_sce_next_owner', $check$next_owner_kind IS NULL OR next_owner_kind IN ('operator', 'external_companion')$check$),
+            ('chat_session_control_events', 'gc_sce_previous_lease', $check$previous_lease_state IS NULL OR previous_lease_state IN ('operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted')$check$),
+            ('chat_session_control_events', 'gc_sce_next_lease', $check$next_lease_state IN ('operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted')$check$),
+            ('chat_session_control_events', 'gc_sce_reason_code', $check$reason_code IN ('session_initialized', 'request_created', 'request_rejected', 'request_expired', 'request_cancelled', 'handoff', 'heartbeat', 'lease_stale', 'reconnect', 'identity_revoked', 'release', 'operator_revoke', 'emergency_takeover', 'auth_revoked', 'session_deleted', 'session_reactivated', 'mutation_denied')$check$),
+            ('chat_session_control_events', 'gc_sce_actor_kind', $check$actor_kind IN ('operator', 'external_companion', 'system')$check$),
+            ('chat_session_control_events', 'gc_sce_actor_length', $check$length(actor_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_companion_length', $check$companion_session_id IS NULL OR length(companion_session_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_device_length', $check$device_grant_id IS NULL OR length(device_grant_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_idempotency_length', $check$length(idempotency_key) BETWEEN 1 AND 512$check$),
+            ('chat_session_control_events', 'gc_sce_request_sha256', $check$request_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_events', 'gc_sce_correlation_length', $check$length(correlation_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_events', 'gc_sce_created_at_canonical', $check$gc_try_parse_timestamptz(created_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at$check$),
+            ('chat_session_control_events', 'gc_sce_initialization_shape', $check$(reason_code = 'session_initialized' AND previous_generation IS NULL AND previous_owner_kind IS NULL AND previous_lease_state IS NULL AND next_generation = 1 AND next_owner_kind = 'operator' AND next_lease_state = 'operator_active' AND actor_kind = 'system') OR (reason_code <> 'session_initialized' AND previous_generation IS NOT NULL)$check$),
+
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_idempotency_length', $check$length(idempotency_key) BETWEEN 1 AND 512$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_request_sha256', $check$request_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_binding_kind', $check$binding_kind IN ('companion_session', 'device_grant')$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_binding_length', $check$length(binding_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_actor_length', $check$length(actor_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_correlation_length', $check$length(correlation_id) BETWEEN 1 AND 256$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_target_nonnegative', $check$target_count >= 0$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_session_shape', $check$(target_count = 0 AND session_count = 0 AND event_set_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945') OR (target_count > 0 AND session_count BETWEEN 1 AND target_count)$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_event_set_sha256', $check$event_set_sha256 ~ '^[0-9a-f]{64}$'$check$),
+            ('chat_session_control_auth_revoke_receipts', 'gc_scarr_created_at_canonical', $check$gc_try_parse_timestamptz(created_at) IS NOT NULL AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at$check$)
+          ) AS checks(table_name, constraint_name, check_expression)
+        LOOP
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint constraint_row
+            WHERE constraint_row.conrelid = to_regclass(check_spec.table_name)
+              AND constraint_row.conname = check_spec.constraint_name
+          ) THEN
+            EXECUTE format(
+              'ALTER TABLE %I ADD CONSTRAINT %I CHECK (%s)',
+              check_spec.table_name,
+              check_spec.constraint_name,
+              check_spec.check_expression
+            );
+          END IF;
+        END LOOP;
+      END;
+      $$;
+
+      CREATE OR REPLACE FUNCTION gc_auth_device_request_principal_purpose_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.principal_purpose IS DISTINCT FROM OLD.principal_purpose THEN
+          RAISE EXCEPTION 'auth device request principal purpose is immutable' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_auth_device_requests_principal_purpose_immutable
+        BEFORE UPDATE ON auth_device_requests FOR EACH ROW
+        EXECUTE FUNCTION gc_auth_device_request_principal_purpose_guard();
+
+      CREATE OR REPLACE FUNCTION gc_auth_device_grant_principal_purpose_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'UPDATE' AND (
+          NEW.request_id IS DISTINCT FROM OLD.request_id
+          OR NEW.principal_purpose IS DISTINCT FROM OLD.principal_purpose
+        ) THEN
+          RAISE EXCEPTION 'auth device grant parent and principal purpose are immutable' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM auth_device_requests request_row
+          WHERE request_row.request_id = NEW.request_id
+            AND request_row.principal_purpose = NEW.principal_purpose
+        ) THEN
+          RAISE EXCEPTION 'auth device grant principal purpose must match its request' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_auth_device_grants_principal_purpose_guard
+        BEFORE INSERT OR UPDATE ON auth_device_grants FOR EACH ROW
+        EXECUTE FUNCTION gc_auth_device_grant_principal_purpose_guard();
+
+      CREATE OR REPLACE FUNCTION gc_companion_session_principal_purpose_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'UPDATE' AND (
+          NEW.grant_id IS DISTINCT FROM OLD.grant_id
+          OR NEW.principal_purpose IS DISTINCT FROM OLD.principal_purpose
+        ) THEN
+          RAISE EXCEPTION 'companion session parent and principal purpose are immutable' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM auth_device_grants grant_row
+          WHERE grant_row.grant_id = NEW.grant_id
+            AND grant_row.principal_purpose = NEW.principal_purpose
+        ) THEN
+          RAISE EXCEPTION 'companion session principal purpose must match its grant' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_companion_sessions_principal_purpose_guard
+        BEFORE INSERT OR UPDATE ON companion_sessions FOR EACH ROW
+        EXECUTE FUNCTION gc_companion_session_principal_purpose_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_token_insert_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM chat_session_control_grants grant_row
+          WHERE grant_row.workspace_id = NEW.workspace_id AND grant_row.session_id = NEW.session_id
+        ) THEN
+          RAISE EXCEPTION 'session control token binding invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_tokens_insert_guard
+        BEFORE INSERT ON chat_session_control_tokens FOR EACH ROW EXECUTE FUNCTION gc_session_control_token_insert_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_request_insert_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.status <> 'pending'
+          OR NOT EXISTS (
+            SELECT 1 FROM chat_session_control_tokens token_row
+            WHERE token_row.token_sha256 = NEW.token_sha256
+              AND token_row.workspace_id = NEW.workspace_id
+              AND token_row.session_id = NEW.session_id
+              AND token_row.first_request_id = NEW.request_id
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM chat_session_control_grants grant_row
+            WHERE grant_row.workspace_id = NEW.workspace_id AND grant_row.session_id = NEW.session_id
+              AND grant_row.generation = NEW.requested_generation AND grant_row.is_current = 1
+              AND grant_row.owner_kind = 'operator' AND grant_row.lease_state = 'operator_active'
+          )
+          OR NOT EXISTS (
+            SELECT 1
+            FROM companion_sessions companion_session
+            JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+            JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+            WHERE companion_session.session_id = NEW.companion_session_id
+              AND companion_session.grant_id = NEW.device_grant_id
+              AND companion_session.principal_purpose = NEW.principal_purpose
+              AND device_grant.principal_purpose = NEW.principal_purpose
+              AND device_request.principal_purpose = NEW.principal_purpose
+              AND NEW.principal_purpose = 'session_control_client'
+              AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+              AND gc_try_parse_timestamptz(companion_session.refresh_token_expires_at) > clock_timestamp()
+              AND (device_grant.expires_at IS NULL
+                OR gc_try_parse_timestamptz(device_grant.expires_at) > clock_timestamp())
+          ) THEN
+          RAISE EXCEPTION 'session control request binding invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_requests_insert_guard
+        BEFORE INSERT ON chat_session_control_requests FOR EACH ROW EXECUTE FUNCTION gc_session_control_request_insert_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_session_control_immutable_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'session control record is immutable' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_tokens_no_update
+        BEFORE UPDATE ON chat_session_control_tokens FOR EACH ROW EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_tokens_no_delete
+        BEFORE DELETE ON chat_session_control_tokens FOR EACH ROW EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_requests_no_delete
+        BEFORE DELETE ON chat_session_control_requests FOR EACH ROW EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_grants_no_delete
+        BEFORE DELETE ON chat_session_control_grants FOR EACH ROW EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_events_no_update
+        BEFORE UPDATE ON chat_session_control_events FOR EACH ROW EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_events_no_delete
+        BEFORE DELETE ON chat_session_control_events FOR EACH ROW EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_receipts_no_update
+        BEFORE UPDATE ON chat_session_control_auth_revoke_receipts FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_receipts_no_delete
+        BEFORE DELETE ON chat_session_control_auth_revoke_receipts FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_control_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_request_transition_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.status <> 'pending'
+          OR NEW.request_id <> OLD.request_id OR NEW.workspace_id <> OLD.workspace_id
+          OR NEW.session_id <> OLD.session_id OR NEW.companion_session_id <> OLD.companion_session_id
+          OR NEW.device_grant_id <> OLD.device_grant_id OR NEW.client_instance_id <> OLD.client_instance_id
+          OR NEW.principal_purpose <> OLD.principal_purpose OR NEW.token_sha256 <> OLD.token_sha256
+          OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+          OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+          OR NEW.requested_generation <> OLD.requested_generation OR NEW.idempotency_key <> OLD.idempotency_key
+          OR NEW.request_sha256 <> OLD.request_sha256 OR NEW.expires_at <> OLD.expires_at
+          OR NEW.created_at <> OLD.created_at OR NEW.status = 'pending'
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.decided_at) - clock_timestamp()))) > 1 THEN
+          RAISE EXCEPTION 'session control request transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_requests_transition_guard
+        BEFORE UPDATE ON chat_session_control_requests FOR EACH ROW EXECUTE FUNCTION gc_session_control_request_transition_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_grant_insert_guard()
+      RETURNS trigger AS $$
+      DECLARE prior_generation BIGINT;
+      DECLARE prior_workspace TEXT;
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        SELECT MAX(generation), MIN(workspace_id) INTO prior_generation, prior_workspace
+        FROM chat_session_control_grants WHERE session_id = NEW.session_id;
+        IF NEW.is_current <> 1
+          OR (prior_workspace IS NOT NULL AND prior_workspace <> NEW.workspace_id)
+          OR (prior_generation IS NULL AND NEW.generation <> 1)
+          OR (prior_generation IS NOT NULL AND NEW.generation <> prior_generation + 1)
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - database_now))) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.updated_at) - database_now))) > 1 THEN
+          RAISE EXCEPTION 'session control generation, workspace, or database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_control_requests request_row
+          JOIN chat_session_control_tokens token_row ON token_row.token_sha256 = NEW.token_sha256
+          WHERE request_row.request_id = NEW.request_id
+            AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+            AND request_row.companion_session_id = NEW.companion_session_id
+            AND request_row.device_grant_id = NEW.device_grant_id
+            AND request_row.client_instance_id = NEW.client_instance_id
+            AND request_row.principal_purpose = NEW.principal_purpose
+            AND request_row.requested_capabilities_json = NEW.requested_capabilities_json
+            AND request_row.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+            AND request_row.status = 'activated' AND request_row.decision_reason_code = 'handoff'
+            AND request_row.activated_generation = request_row.requested_generation + 1
+            AND request_row.activated_generation <= NEW.generation
+            AND token_row.workspace_id = NEW.workspace_id AND token_row.session_id = NEW.session_id
+            AND (
+              (NEW.generation = request_row.activated_generation AND NEW.token_sha256 = request_row.token_sha256)
+              OR (NEW.generation > request_row.activated_generation AND EXISTS (
+                SELECT 1 FROM chat_session_control_grants prior
+                WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+                  AND prior.generation = NEW.generation - 1 AND prior.owner_kind = 'external_companion'
+                  AND prior.request_id = NEW.request_id
+                  AND prior.companion_session_id = NEW.companion_session_id
+                  AND prior.device_grant_id = NEW.device_grant_id
+                  AND prior.client_instance_id = NEW.client_instance_id
+                  AND prior.principal_purpose = NEW.principal_purpose
+                  AND prior.requested_capabilities_json = NEW.requested_capabilities_json
+                  AND prior.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+                  AND prior.effective_capabilities_json = NEW.effective_capabilities_json
+                  AND prior.effective_capabilities_sha256 = NEW.effective_capabilities_sha256
+              ))
+            )
+            AND (
+              (NEW.requested_capabilities_json = '["send"]' AND NEW.effective_capabilities_json = '["send"]')
+              OR (NEW.requested_capabilities_json = '["send","read"]'
+                AND NEW.effective_capabilities_json IN ('["send"]', '["send","read"]'))
+            )
+        ) THEN
+          RAISE EXCEPTION 'session control external request binding invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+          SELECT 1
+          FROM companion_sessions companion_session
+          JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+          JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+          WHERE companion_session.session_id = NEW.companion_session_id
+            AND companion_session.grant_id = NEW.device_grant_id
+            AND companion_session.principal_purpose = NEW.principal_purpose
+            AND device_grant.principal_purpose = NEW.principal_purpose
+            AND device_request.principal_purpose = NEW.principal_purpose
+            AND NEW.principal_purpose = 'session_control_client'
+            AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+            AND gc_try_parse_timestamptz(companion_session.refresh_token_expires_at) > database_now
+            AND (device_grant.expires_at IS NULL
+              OR gc_try_parse_timestamptz(device_grant.expires_at) > database_now)
+        ) THEN
+          RAISE EXCEPTION 'session control external auth binding invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.owner_kind = 'external_companion' AND (
+          abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.token_expires_at) - database_now)) - 900) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.lease_expires_at) - database_now)) - 60) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.reconnect_expires_at) - database_now)) - 300) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.last_heartbeat_at) - database_now))) > 1
+        ) THEN
+          RAISE EXCEPTION 'session control external database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_grants_insert_guard
+        BEFORE INSERT ON chat_session_control_grants FOR EACH ROW EXECUTE FUNCTION gc_session_control_grant_insert_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_grant_update_guard()
+      RETURNS trigger AS $$
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      DECLARE valid_transition BOOLEAN := FALSE;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        IF OLD.is_current <> 1 OR OLD.terminal_at IS NOT NULL
+          OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+          OR NEW.generation <> OLD.generation OR NEW.owner_kind <> OLD.owner_kind
+          OR NEW.request_id IS DISTINCT FROM OLD.request_id
+          OR NEW.companion_session_id IS DISTINCT FROM OLD.companion_session_id
+          OR NEW.device_grant_id IS DISTINCT FROM OLD.device_grant_id
+          OR NEW.client_instance_id IS DISTINCT FROM OLD.client_instance_id
+          OR NEW.principal_purpose IS DISTINCT FROM OLD.principal_purpose
+          OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+          OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+          OR NEW.effective_capabilities_json <> OLD.effective_capabilities_json
+          OR NEW.effective_capabilities_sha256 <> OLD.effective_capabilities_sha256
+          OR NEW.token_sha256 IS DISTINCT FROM OLD.token_sha256
+          OR NEW.token_expires_at IS DISTINCT FROM OLD.token_expires_at
+          OR NEW.transition_idempotency_key <> OLD.transition_idempotency_key
+          OR NEW.transition_request_sha256 <> OLD.transition_request_sha256
+          OR NEW.created_at <> OLD.created_at OR NEW.control_revision <> OLD.control_revision + 1
+          OR NEW.updated_at < OLD.updated_at
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.updated_at) - database_now))) > 1 THEN
+          RAISE EXCEPTION 'session control current generation transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        valid_transition := OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_live' AND NEW.terminal_at IS NULL
+          AND gc_try_parse_timestamptz(NEW.last_heartbeat_at) >= gc_try_parse_timestamptz(OLD.last_heartbeat_at)
+          AND abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.last_heartbeat_at) - database_now))) <= 1
+          AND abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.lease_expires_at) - database_now)) - 60) <= 1
+          AND abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.reconnect_expires_at) - database_now)) - 300) <= 1;
+        valid_transition := valid_transition OR (
+          OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_stale' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at = OLD.last_heartbeat_at AND NEW.lease_expires_at = OLD.lease_expires_at
+          AND NEW.reconnect_expires_at = OLD.reconnect_expires_at
+        );
+        valid_transition := valid_transition OR (
+          NEW.is_current = 0 AND NEW.lease_state IN ('released', 'revoked', 'superseded', 'deleted')
+          AND NEW.terminal_at = NEW.updated_at
+          AND NEW.last_heartbeat_at IS NOT DISTINCT FROM OLD.last_heartbeat_at
+          AND NEW.lease_expires_at IS NOT DISTINCT FROM OLD.lease_expires_at
+          AND NEW.reconnect_expires_at IS NOT DISTINCT FROM OLD.reconnect_expires_at
+        );
+        IF NOT valid_transition THEN
+          RAISE EXCEPTION 'session control current generation transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_grants_update_guard
+        BEFORE UPDATE ON chat_session_control_grants FOR EACH ROW EXECUTE FUNCTION gc_session_control_grant_update_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_event_insert_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.request_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_requests request_row
+          WHERE request_row.request_id = NEW.request_id
+            AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+            AND request_row.companion_session_id = NEW.companion_session_id
+            AND request_row.device_grant_id = NEW.device_grant_id
+        ) THEN
+          RAISE EXCEPTION 'session control event request attribution invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_events_insert_guard
+        BEFORE INSERT ON chat_session_control_events FOR EACH ROW EXECUTE FUNCTION gc_session_control_event_insert_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_auth_revoke_receipt_insert_guard()
+      RETURNS trigger AS $$
+      DECLARE event_count BIGINT;
+      DECLARE distinct_session_count BIGINT;
+      BEGIN
+        SELECT COUNT(*), COUNT(DISTINCT (event_row.workspace_id, event_row.session_id))
+        INTO event_count, distinct_session_count
+        FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256;
+        IF abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - clock_timestamp()))) > 1
+          OR event_count <> NEW.target_count
+          OR distinct_session_count <> NEW.session_count
+          OR (NEW.target_count > 0 AND NOT EXISTS (
+            SELECT 1 FROM chat_session_control_events event_row
+            WHERE event_row.request_sha256 = NEW.request_sha256
+              AND event_row.idempotency_key = NEW.idempotency_key
+          )) THEN
+          RAISE EXCEPTION 'session control auth revoke receipt invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_receipts_insert_guard
+        BEFORE INSERT ON chat_session_control_auth_revoke_receipts FOR EACH ROW
+        EXECUTE FUNCTION gc_session_control_auth_revoke_receipt_insert_guard();
+
+      INSERT INTO chat_session_control_grants (
+        workspace_id, session_id, generation, is_current, owner_kind, lease_state,
+        requested_capabilities_json, requested_capabilities_sha256,
+        effective_capabilities_json, effective_capabilities_sha256,
+        control_revision, transition_idempotency_key, transition_request_sha256,
+        created_at, updated_at
+      )
+      SELECT
+        meta.workspace_id, meta.session_id, 1, 1, 'operator', 'operator_active',
+        '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+        '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+        1, 'migration:114:' || meta.session_id,
+        '2611e731bb3250febc517d518b578ae6a30102dc92f0d07d9efdd14e4ae4a26c',
+        to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      FROM chat_session_meta meta
+      WHERE NOT EXISTS (
+        SELECT 1 FROM chat_session_control_grants grant_row WHERE grant_row.session_id = meta.session_id
+      );
+
+      INSERT INTO chat_session_control_events (
+        event_id, workspace_id, session_id, event_sequence, request_id, previous_generation, next_generation,
+        previous_owner_kind, next_owner_kind, previous_lease_state, next_lease_state,
+        reason_code, actor_kind, actor_id, companion_session_id, device_grant_id,
+        idempotency_key, request_sha256, correlation_id, created_at
+      )
+      SELECT
+        'sce_' || md5(meta.session_id || ':114') || substr(md5('114:' || meta.session_id), 1, 16),
+        meta.workspace_id, meta.session_id, 1, NULL, NULL, 1, NULL, 'operator', NULL, 'operator_active',
+        'session_initialized', 'system', 'system', NULL, NULL,
+        'migration:114:event:' || meta.session_id,
+        '2611e731bb3250febc517d518b578ae6a30102dc92f0d07d9efdd14e4ae4a26c',
+        'migration:114',
+        to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      FROM chat_session_meta meta
+      JOIN chat_session_control_grants grant_row
+        ON grant_row.session_id = meta.session_id AND grant_row.generation = 1
+      WHERE NOT EXISTS (
+        SELECT 1 FROM chat_session_control_events event_row WHERE event_row.session_id = meta.session_id
+      );
+
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM chat_session_meta meta
+          LEFT JOIN chat_session_control_grants grant_row
+            ON grant_row.session_id = meta.session_id AND grant_row.is_current = 1
+          WHERE grant_row.session_id IS NULL OR grant_row.workspace_id <> meta.workspace_id
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_session_control_events event_row WHERE event_row.session_id = meta.session_id
+            )
+        ) THEN
+          RAISE EXCEPTION 'session control backfill invariant violated' USING ERRCODE = '23514';
+        END IF;
+      END;
+      $$;
+    `,
+  },
 ];

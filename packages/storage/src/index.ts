@@ -38,6 +38,7 @@ import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-ad
 import { MeshCapabilityPublicationRepository } from "./mesh-capability-publication-repo.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
+import { SessionControlRepository } from "./session-control-repo.js";
 import { MemoryContextRepository } from "./memory-context-repo.js";
 import { ContextManifestRepository } from "./context-manifest-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
@@ -252,6 +253,7 @@ export class Storage {
   public readonly meshCapabilityPublications: MeshCapabilityPublicationRepository;
   public readonly remoteWorkerAdmissions: RemoteWorkerAdmissionRepository;
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
+  public readonly sessionControls: SessionControlRepository;
   public readonly memoryContexts: MemoryContextRepository;
   public readonly contextManifests: ContextManifestRepository;
   public readonly memoryQmdRuns: MemoryQmdRunRepository;
@@ -396,6 +398,7 @@ export class Storage {
     this.meshCapabilityPublications = new MeshCapabilityPublicationRepository(this.db);
     this.remoteWorkerAdmissions = new RemoteWorkerAdmissionRepository(this.db);
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
+    this.sessionControls = new SessionControlRepository(this.db);
     this.memoryContexts = new MemoryContextRepository(this.db);
     this.contextManifests = new ContextManifestRepository(this.db);
     this.memoryQmdRuns = new MemoryQmdRunRepository(this.db);
@@ -795,6 +798,7 @@ export * from "./mesh-capability-node-admission-repo.js";
 export * from "./mesh-capability-publication-repo.js";
 export * from "./remote-worker-admission-repo.js";
 export * from "./remote-worker-assignment-repo.js";
+export * from "./session-control-repo.js";
 export * from "./memory-context-repo.js";
 export * from "./memory-qmd-run-repo.js";
 export * from "./tool-grant-repo.js";

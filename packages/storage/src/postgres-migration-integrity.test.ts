@@ -241,4 +241,74 @@ describe("protected Postgres migration integrity", () => {
     );
     assert.doesNotMatch(sql, /gateway_route|listener|chat_messages\s+SET|model_usage_events/iu);
   });
+
+  it("keeps HX-411 migration 114 additive, hash-only, generation-fenced, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 114);
+    assert.equal(migration?.name, "session_control_foundation");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "chat_session_control_tokens",
+      "chat_session_control_requests",
+      "chat_session_control_grants",
+      "chat_session_control_events",
+      "chat_session_control_auth_revoke_receipts",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS chat_session_control_/gu)?.length, 5);
+    assert.match(sql, /token_sha256 TEXT PRIMARY KEY CHECK\(token_sha256 ~ '\^\[0-9a-f\]\{64\}\$'\)/u);
+    assert.match(
+      sql,
+      /requested_capabilities_json TEXT NOT NULL CHECK\(requested_capabilities_json IN \('\["send"\]', '\["send","read"\]'\)\)/u,
+    );
+    assert.doesNotMatch(sql, /'\["read"\]'/u);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_control_grants_one_current/u);
+    assert.match(sql, /NEW\.generation <> prior_generation \+ 1/u);
+    assert.match(sql, /prior_workspace <> NEW\.workspace_id/u);
+    assert.match(sql, /UNIQUE\(session_id, event_sequence\)/u);
+    assert.match(sql, /events_no_update/u);
+    assert.match(sql, /events_no_delete/u);
+    assert.equal(sql.match(/pg_advisory_xact_lock\(hashtextextended\(NEW\.session_id, 411\)\)/gu)?.length, 2);
+    assert.match(sql, /database_now TIMESTAMPTZ := clock_timestamp\(\)/u);
+    assert.match(sql, /token_expires_at[\s\S]*900/u);
+    assert.match(sql, /lease_expires_at[\s\S]*60/u);
+    assert.match(sql, /reconnect_expires_at[\s\S]*300/u);
+    assert.equal(sql.match(/^\s*\('chat_session_control_/gmu)?.length, 78);
+    assert.match(sql, /gc_scr_capabilities/u);
+    assert.match(sql, /gc_scr_capabilities_digest/u);
+    assert.match(sql, /gc_scg_owner_shape/u);
+    assert.match(sql, /gc_scg_requested_digest/u);
+    assert.match(sql, /gc_scg_effective_digest/u);
+    assert.match(sql, /gc_sce_reason_code/u);
+    assert.match(sql, /ALTER TABLE auth_device_requests[\s\S]*principal_purpose/u);
+    assert.match(sql, /ALTER TABLE auth_device_grants[\s\S]*principal_purpose/u);
+    assert.match(sql, /ALTER TABLE companion_sessions[\s\S]*principal_purpose/u);
+    assert.match(sql, /gc_adr_principal_purpose/u);
+    assert.match(sql, /gc_adg_principal_purpose/u);
+    assert.match(sql, /gc_cs_principal_purpose/u);
+    assert.match(sql, /gc_auth_device_request_principal_purpose_guard/u);
+    assert.match(sql, /gc_auth_device_grant_principal_purpose_guard/u);
+    assert.match(sql, /gc_companion_session_principal_purpose_guard/u);
+    assert.match(sql, /NEW\.request_id IS DISTINCT FROM OLD\.request_id/u);
+    assert.match(sql, /NEW\.grant_id IS DISTINCT FROM OLD\.grant_id/u);
+    assert.match(sql, /gc_session_control_token_insert_guard/u);
+    assert.match(sql, /gc_session_control_request_insert_guard/u);
+    assert.match(sql, /gc_session_control_event_insert_guard/u);
+    assert.match(sql, /gc_session_control_auth_revoke_receipt_insert_guard/u);
+    assert.match(sql, /auth_revoke_receipts_no_update/u);
+    assert.match(sql, /auth_revoke_receipts_no_delete/u);
+    assert.match(sql, /constraint_row\.conrelid = to_regclass\(check_spec\.table_name\)/u);
+    assert.match(sql, /ALTER TABLE %I ADD CONSTRAINT %I CHECK \(%s\)/u);
+    assert.match(sql, /INSERT INTO chat_session_control_grants[\s\S]*FROM chat_session_meta meta/u);
+    assert.match(sql, /INSERT INTO chat_session_control_events[\s\S]*'session_initialized'/u);
+    assert.match(sql, /session control backfill invariant violated/u);
+    assert.doesNotMatch(sql, /FOREIGN KEY[^;]*REFERENCES chat_session_meta/iu);
+    assert.doesNotMatch(sql, /TRIGGER[^;]*(?:INSERT|DELETE|UPDATE) ON chat_session_meta/iu);
+    assert.doesNotMatch(sql, /\b(?:DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE|UPDATE\s+chat_session_meta)\b/iu);
+    assert.doesNotMatch(
+      sql,
+      /chat_messages|chat_turn_traces|model_usage_events|durable_runs|gateway_route|listener|(?:plaintext|secret|value)_token/iu,
+    );
+  });
 });

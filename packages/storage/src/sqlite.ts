@@ -6510,11 +6510,639 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           `);
         },
       },
+      {
+        version: 172,
+        name: "session_control_foundation",
+        up: (db) => {
+          if (!tableExists(db, "chat_session_meta")) {
+            return;
+          }
+          createSessionControlFoundationSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createSessionControlFoundationSchema(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(
+    db,
+    "auth_device_requests",
+    "principal_purpose",
+    "TEXT NOT NULL DEFAULT 'general_companion' CHECK(principal_purpose IN ('general_companion', 'session_control_client'))",
+  );
+  addColumnIfMissingIfTableExists(
+    db,
+    "auth_device_grants",
+    "principal_purpose",
+    "TEXT NOT NULL DEFAULT 'general_companion' CHECK(principal_purpose IN ('general_companion', 'session_control_client'))",
+  );
+  addColumnIfMissingIfTableExists(
+    db,
+    "companion_sessions",
+    "principal_purpose",
+    "TEXT NOT NULL DEFAULT 'general_companion' CHECK(principal_purpose IN ('general_companion', 'session_control_client'))",
+  );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_control_tokens (
+      token_sha256 TEXT PRIMARY KEY CHECK(length(token_sha256) = 64 AND token_sha256 NOT GLOB '*[^0-9a-f]*'),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      first_request_id TEXT CHECK(first_request_id IS NULL OR length(first_request_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_requests (
+      request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      companion_session_id TEXT NOT NULL CHECK(length(companion_session_id) BETWEEN 1 AND 256),
+      device_grant_id TEXT NOT NULL CHECK(length(device_grant_id) BETWEEN 1 AND 256),
+      client_instance_id TEXT NOT NULL CHECK(length(client_instance_id) BETWEEN 1 AND 256),
+      principal_purpose TEXT NOT NULL CHECK(principal_purpose = 'session_control_client'),
+      token_sha256 TEXT NOT NULL,
+      requested_capabilities_json TEXT NOT NULL CHECK(requested_capabilities_json IN ('["send"]', '["send","read"]')),
+      requested_capabilities_sha256 TEXT NOT NULL CHECK(
+        length(requested_capabilities_sha256) = 64 AND requested_capabilities_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      requested_generation INTEGER NOT NULL CHECK(
+        typeof(requested_generation) = 'integer' AND requested_generation > 0
+      ),
+      status TEXT NOT NULL CHECK(status IN ('pending', 'rejected', 'expired', 'activated', 'cancelled')),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      decided_at TEXT CHECK(
+        decided_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', decided_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', decided_at, '+0 days') = decided_at
+        )
+      ),
+      decided_by_actor_id TEXT CHECK(decided_by_actor_id IS NULL OR length(decided_by_actor_id) BETWEEN 1 AND 256),
+      decision_reason_code TEXT CHECK(
+        decision_reason_code IS NULL OR decision_reason_code IN (
+          'request_rejected', 'request_expired', 'request_cancelled', 'handoff'
+        )
+      ),
+      activated_generation INTEGER CHECK(
+        activated_generation IS NULL OR (typeof(activated_generation) = 'integer' AND activated_generation > 1)
+      ),
+      CHECK(
+        (requested_capabilities_json = '["send"]'
+          AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+        OR (requested_capabilities_json = '["send","read"]'
+          AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+      ),
+      FOREIGN KEY(token_sha256) REFERENCES chat_session_control_tokens(token_sha256) ON DELETE RESTRICT,
+      CHECK(expires_at > created_at),
+      CHECK(
+        (status = 'pending' AND decided_at IS NULL AND decided_by_actor_id IS NULL
+          AND decision_reason_code IS NULL AND activated_generation IS NULL)
+        OR (status = 'activated' AND decided_at IS NOT NULL AND decided_at < expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'handoff'
+          AND activated_generation = requested_generation + 1)
+        OR (status = 'rejected' AND decided_at IS NOT NULL AND decided_at < expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_rejected'
+          AND activated_generation IS NULL)
+        OR (status = 'cancelled' AND decided_at IS NOT NULL AND decided_at < expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_cancelled'
+          AND activated_generation IS NULL)
+        OR (status = 'expired' AND decided_at IS NOT NULL AND decided_at >= expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_expired'
+          AND activated_generation IS NULL)
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_requests_session_status
+      ON chat_session_control_requests(session_id, status, created_at, request_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_requests_companion_status
+      ON chat_session_control_requests(companion_session_id, status, created_at);
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_grants (
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation > 0),
+      is_current INTEGER NOT NULL CHECK(typeof(is_current) = 'integer' AND is_current IN (0, 1)),
+      owner_kind TEXT NOT NULL CHECK(owner_kind IN ('operator', 'external_companion')),
+      lease_state TEXT NOT NULL CHECK(lease_state IN (
+        'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+      )),
+      request_id TEXT,
+      companion_session_id TEXT,
+      device_grant_id TEXT,
+      client_instance_id TEXT,
+      principal_purpose TEXT,
+      requested_capabilities_json TEXT NOT NULL CHECK(
+        requested_capabilities_json IN ('[]', '["send"]', '["send","read"]')
+      ),
+      requested_capabilities_sha256 TEXT NOT NULL CHECK(
+        length(requested_capabilities_sha256) = 64 AND requested_capabilities_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      effective_capabilities_json TEXT NOT NULL CHECK(
+        effective_capabilities_json IN ('[]', '["send"]', '["send","read"]')
+      ),
+      effective_capabilities_sha256 TEXT NOT NULL CHECK(
+        length(effective_capabilities_sha256) = 64 AND effective_capabilities_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      token_sha256 TEXT,
+      token_expires_at TEXT,
+      last_heartbeat_at TEXT,
+      lease_expires_at TEXT,
+      reconnect_expires_at TEXT,
+      control_revision INTEGER NOT NULL CHECK(typeof(control_revision) = 'integer' AND control_revision > 0),
+      transition_idempotency_key TEXT NOT NULL UNIQUE CHECK(length(transition_idempotency_key) BETWEEN 1 AND 512),
+      transition_request_sha256 TEXT NOT NULL CHECK(
+        length(transition_request_sha256) = 64 AND transition_request_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      terminal_at TEXT CHECK(
+        terminal_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', terminal_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', terminal_at, '+0 days') = terminal_at
+        )
+      ),
+      CHECK(
+        (requested_capabilities_json = '[]'
+          AND requested_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (requested_capabilities_json = '["send"]'
+          AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+        OR (requested_capabilities_json = '["send","read"]'
+          AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+      ),
+      CHECK(
+        (effective_capabilities_json = '[]'
+          AND effective_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (effective_capabilities_json = '["send"]'
+          AND effective_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+        OR (effective_capabilities_json = '["send","read"]'
+          AND effective_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+      ),
+      PRIMARY KEY(session_id, generation),
+      FOREIGN KEY(request_id) REFERENCES chat_session_control_requests(request_id) ON DELETE RESTRICT,
+      FOREIGN KEY(token_sha256) REFERENCES chat_session_control_tokens(token_sha256) ON DELETE RESTRICT,
+      CHECK(updated_at >= created_at),
+      CHECK(
+        (is_current = 1 AND terminal_at IS NULL AND lease_state IN ('operator_active', 'external_live', 'external_stale'))
+        OR (is_current = 0 AND terminal_at IS NOT NULL AND lease_state IN ('released', 'revoked', 'superseded', 'deleted'))
+      ),
+      CHECK(
+        (owner_kind = 'operator' AND request_id IS NULL AND companion_session_id IS NULL
+          AND device_grant_id IS NULL AND client_instance_id IS NULL AND principal_purpose IS NULL
+          AND requested_capabilities_json = '[]' AND effective_capabilities_json = '[]'
+          AND token_sha256 IS NULL AND token_expires_at IS NULL AND last_heartbeat_at IS NULL
+          AND lease_expires_at IS NULL AND reconnect_expires_at IS NULL)
+        OR (owner_kind = 'external_companion' AND generation >= 2 AND request_id IS NOT NULL
+          AND length(companion_session_id) BETWEEN 1 AND 256 AND length(device_grant_id) BETWEEN 1 AND 256
+          AND length(client_instance_id) BETWEEN 1 AND 256 AND principal_purpose = 'session_control_client'
+          AND requested_capabilities_json IN ('["send"]', '["send","read"]')
+          AND effective_capabilities_json IN ('["send"]', '["send","read"]')
+          AND token_sha256 IS NOT NULL AND token_expires_at IS NOT NULL AND last_heartbeat_at IS NOT NULL
+          AND lease_expires_at IS NOT NULL AND reconnect_expires_at IS NOT NULL
+          AND lease_expires_at > last_heartbeat_at AND reconnect_expires_at > lease_expires_at)
+      )
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_control_grants_one_current
+      ON chat_session_control_grants(session_id) WHERE is_current = 1;
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_workspace_current
+      ON chat_session_control_grants(workspace_id, is_current, updated_at DESC, session_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_companion_current
+      ON chat_session_control_grants(companion_session_id, is_current, session_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_device_current
+      ON chat_session_control_grants(device_grant_id, is_current, session_id);
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_events (
+      event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      event_sequence INTEGER NOT NULL CHECK(typeof(event_sequence) = 'integer' AND event_sequence > 0),
+      request_id TEXT,
+      previous_generation INTEGER CHECK(
+        previous_generation IS NULL OR (typeof(previous_generation) = 'integer' AND previous_generation > 0)
+      ),
+      next_generation INTEGER NOT NULL CHECK(typeof(next_generation) = 'integer' AND next_generation > 0),
+      previous_owner_kind TEXT CHECK(previous_owner_kind IS NULL OR previous_owner_kind IN ('operator', 'external_companion')),
+      next_owner_kind TEXT CHECK(next_owner_kind IS NULL OR next_owner_kind IN ('operator', 'external_companion')),
+      previous_lease_state TEXT CHECK(previous_lease_state IS NULL OR previous_lease_state IN (
+        'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+      )),
+      next_lease_state TEXT NOT NULL CHECK(next_lease_state IN (
+        'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+      )),
+      reason_code TEXT NOT NULL CHECK(reason_code IN (
+        'session_initialized', 'request_created', 'request_rejected', 'request_expired', 'request_cancelled',
+        'handoff', 'heartbeat', 'lease_stale', 'reconnect', 'identity_revoked', 'release',
+        'operator_revoke', 'emergency_takeover', 'auth_revoked', 'session_deleted',
+        'session_reactivated', 'mutation_denied'
+      )),
+      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      companion_session_id TEXT CHECK(companion_session_id IS NULL OR length(companion_session_id) BETWEEN 1 AND 256),
+      device_grant_id TEXT CHECK(device_grant_id IS NULL OR length(device_grant_id) BETWEEN 1 AND 256),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      FOREIGN KEY(request_id) REFERENCES chat_session_control_requests(request_id) ON DELETE RESTRICT,
+      UNIQUE(session_id, event_sequence),
+      CHECK(
+        (reason_code = 'session_initialized' AND previous_generation IS NULL AND previous_owner_kind IS NULL
+          AND previous_lease_state IS NULL AND next_generation = 1 AND next_owner_kind = 'operator'
+          AND next_lease_state = 'operator_active' AND actor_kind = 'system')
+        OR (reason_code <> 'session_initialized' AND previous_generation IS NOT NULL)
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_session_created
+      ON chat_session_control_events(session_id, event_sequence);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_workspace_created
+      ON chat_session_control_events(workspace_id, created_at DESC, event_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_companion_created
+      ON chat_session_control_events(companion_session_id, created_at DESC, event_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_request_sha256
+      ON chat_session_control_events(request_sha256, workspace_id, session_id, event_sequence);
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_auth_revoke_receipts (
+      idempotency_key TEXT PRIMARY KEY CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      binding_kind TEXT NOT NULL CHECK(binding_kind IN ('companion_session', 'device_grant')),
+      binding_id TEXT NOT NULL CHECK(length(binding_id) BETWEEN 1 AND 256),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      target_count INTEGER NOT NULL CHECK(typeof(target_count) = 'integer' AND target_count >= 0),
+      session_count INTEGER NOT NULL CHECK(typeof(session_count) = 'integer' AND session_count >= 0),
+      event_set_sha256 TEXT NOT NULL CHECK(
+        length(event_set_sha256) = 64 AND event_set_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      CHECK(
+        (target_count = 0 AND session_count = 0
+          AND event_set_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (target_count > 0 AND session_count BETWEEN 1 AND target_count)
+      )
+    );
+
+    CREATE TRIGGER IF NOT EXISTS trg_auth_device_requests_principal_purpose_immutable
+    BEFORE UPDATE ON auth_device_requests
+    WHEN NEW.principal_purpose <> OLD.principal_purpose
+    BEGIN SELECT RAISE(ABORT, 'auth device request principal purpose is immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_auth_device_grants_principal_purpose_guard
+    BEFORE INSERT ON auth_device_grants
+    WHEN NOT EXISTS (
+      SELECT 1 FROM auth_device_requests request_row
+      WHERE request_row.request_id = NEW.request_id
+        AND request_row.principal_purpose = NEW.principal_purpose
+    )
+    BEGIN SELECT RAISE(ABORT, 'auth device grant principal purpose must match its request'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_auth_device_grants_principal_purpose_immutable
+    BEFORE UPDATE ON auth_device_grants
+    WHEN NEW.request_id <> OLD.request_id
+      OR NEW.principal_purpose <> OLD.principal_purpose
+      OR NOT EXISTS (
+        SELECT 1 FROM auth_device_requests request_row
+        WHERE request_row.request_id = NEW.request_id
+          AND request_row.principal_purpose = NEW.principal_purpose
+      )
+    BEGIN SELECT RAISE(ABORT, 'auth device grant parent and principal purpose are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_companion_sessions_principal_purpose_guard
+    BEFORE INSERT ON companion_sessions
+    WHEN NOT EXISTS (
+      SELECT 1 FROM auth_device_grants grant_row
+      WHERE grant_row.grant_id = NEW.grant_id
+        AND grant_row.principal_purpose = NEW.principal_purpose
+    )
+    BEGIN SELECT RAISE(ABORT, 'companion session principal purpose must match its grant'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_companion_sessions_principal_purpose_immutable
+    BEFORE UPDATE ON companion_sessions
+    WHEN NEW.grant_id <> OLD.grant_id
+      OR NEW.principal_purpose <> OLD.principal_purpose
+      OR NOT EXISTS (
+        SELECT 1 FROM auth_device_grants grant_row
+        WHERE grant_row.grant_id = NEW.grant_id
+          AND grant_row.principal_purpose = NEW.principal_purpose
+      )
+    BEGIN SELECT RAISE(ABORT, 'companion session parent and principal purpose are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_tokens_no_update
+    BEFORE UPDATE ON chat_session_control_tokens
+    BEGIN SELECT RAISE(ABORT, 'session control token hashes are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_tokens_no_delete
+    BEFORE DELETE ON chat_session_control_tokens
+    BEGIN SELECT RAISE(ABORT, 'session control token hashes are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_tokens_insert_guard
+    BEFORE INSERT ON chat_session_control_tokens
+    WHEN NOT EXISTS (
+      SELECT 1 FROM chat_session_control_grants grant_row
+      WHERE grant_row.workspace_id = NEW.workspace_id AND grant_row.session_id = NEW.session_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control token binding invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_requests_insert_guard
+    BEFORE INSERT ON chat_session_control_requests
+    WHEN NEW.status <> 'pending'
+      OR NOT EXISTS (
+        SELECT 1 FROM chat_session_control_tokens token_row
+        WHERE token_row.token_sha256 = NEW.token_sha256
+          AND token_row.workspace_id = NEW.workspace_id
+          AND token_row.session_id = NEW.session_id
+          AND token_row.first_request_id = NEW.request_id
+      )
+      OR NOT EXISTS (
+        SELECT 1 FROM chat_session_control_grants grant_row
+        WHERE grant_row.workspace_id = NEW.workspace_id AND grant_row.session_id = NEW.session_id
+          AND grant_row.generation = NEW.requested_generation AND grant_row.is_current = 1
+          AND grant_row.owner_kind = 'operator' AND grant_row.lease_state = 'operator_active'
+      )
+      OR NOT EXISTS (
+        SELECT 1
+        FROM companion_sessions companion_session
+        JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+        JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+        WHERE companion_session.session_id = NEW.companion_session_id
+          AND companion_session.grant_id = NEW.device_grant_id
+          AND companion_session.principal_purpose = NEW.principal_purpose
+          AND device_grant.principal_purpose = NEW.principal_purpose
+          AND device_request.principal_purpose = NEW.principal_purpose
+          AND NEW.principal_purpose = 'session_control_client'
+          AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', companion_session.refresh_token_expires_at, '+0 days')
+            = companion_session.refresh_token_expires_at
+          AND companion_session.refresh_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND (device_grant.expires_at IS NULL OR (
+            strftime('%Y-%m-%dT%H:%M:%fZ', device_grant.expires_at, '+0 days') = device_grant.expires_at
+            AND device_grant.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          ))
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control request binding invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_requests_transition_guard
+    BEFORE UPDATE ON chat_session_control_requests
+    WHEN OLD.status <> 'pending'
+      OR NEW.request_id <> OLD.request_id OR NEW.workspace_id <> OLD.workspace_id
+      OR NEW.session_id <> OLD.session_id OR NEW.companion_session_id <> OLD.companion_session_id
+      OR NEW.device_grant_id <> OLD.device_grant_id OR NEW.client_instance_id <> OLD.client_instance_id
+      OR NEW.principal_purpose <> OLD.principal_purpose OR NEW.token_sha256 <> OLD.token_sha256
+      OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+      OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+      OR NEW.requested_generation <> OLD.requested_generation OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.request_sha256 <> OLD.request_sha256 OR NEW.expires_at <> OLD.expires_at
+      OR NEW.created_at <> OLD.created_at OR NEW.status = 'pending'
+      OR abs((julianday(NEW.decided_at) - julianday('now')) * 86400.0) > 1.0
+    BEGIN SELECT RAISE(ABORT, 'session control request transition invariant violated'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_requests_no_delete
+    BEFORE DELETE ON chat_session_control_requests
+    BEGIN SELECT RAISE(ABORT, 'session control requests are durable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_grants_insert_guard
+    BEFORE INSERT ON chat_session_control_grants
+    WHEN NEW.is_current <> 1
+      OR EXISTS (
+        SELECT 1 FROM chat_session_control_grants prior
+        WHERE prior.session_id = NEW.session_id AND prior.workspace_id <> NEW.workspace_id
+      )
+      OR (
+        NOT EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        AND NEW.generation <> 1
+      )
+      OR (
+        EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        AND NEW.generation <> (
+          SELECT MAX(prior.generation) + 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id
+        )
+      )
+      OR (NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+        SELECT 1
+        FROM chat_session_control_requests request_row
+        JOIN chat_session_control_tokens token_row ON token_row.token_sha256 = NEW.token_sha256
+        WHERE request_row.request_id = NEW.request_id
+          AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+          AND request_row.companion_session_id = NEW.companion_session_id
+          AND request_row.device_grant_id = NEW.device_grant_id
+          AND request_row.client_instance_id = NEW.client_instance_id
+          AND request_row.principal_purpose = NEW.principal_purpose
+          AND request_row.requested_capabilities_json = NEW.requested_capabilities_json
+          AND request_row.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+          AND request_row.status = 'activated' AND request_row.decision_reason_code = 'handoff'
+          AND request_row.activated_generation = request_row.requested_generation + 1
+          AND request_row.activated_generation <= NEW.generation
+          AND token_row.workspace_id = NEW.workspace_id AND token_row.session_id = NEW.session_id
+          AND (
+            (NEW.generation = request_row.activated_generation AND NEW.token_sha256 = request_row.token_sha256)
+            OR (NEW.generation > request_row.activated_generation AND EXISTS (
+              SELECT 1 FROM chat_session_control_grants prior
+              WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+                AND prior.generation = NEW.generation - 1 AND prior.owner_kind = 'external_companion'
+                AND prior.request_id = NEW.request_id
+                AND prior.companion_session_id = NEW.companion_session_id
+                AND prior.device_grant_id = NEW.device_grant_id
+                AND prior.client_instance_id = NEW.client_instance_id
+                AND prior.principal_purpose = NEW.principal_purpose
+                AND prior.requested_capabilities_json = NEW.requested_capabilities_json
+                AND prior.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+                AND prior.effective_capabilities_json = NEW.effective_capabilities_json
+                AND prior.effective_capabilities_sha256 = NEW.effective_capabilities_sha256
+            ))
+          )
+          AND (
+            (NEW.requested_capabilities_json = '["send"]' AND NEW.effective_capabilities_json = '["send"]')
+            OR (NEW.requested_capabilities_json = '["send","read"]'
+              AND NEW.effective_capabilities_json IN ('["send"]', '["send","read"]'))
+          )
+      ))
+      OR (NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+        SELECT 1
+        FROM companion_sessions companion_session
+        JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+        JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+        WHERE companion_session.session_id = NEW.companion_session_id
+          AND companion_session.grant_id = NEW.device_grant_id
+          AND companion_session.principal_purpose = NEW.principal_purpose
+          AND device_grant.principal_purpose = NEW.principal_purpose
+          AND device_request.principal_purpose = NEW.principal_purpose
+          AND NEW.principal_purpose = 'session_control_client'
+          AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', companion_session.refresh_token_expires_at, '+0 days')
+            = companion_session.refresh_token_expires_at
+          AND companion_session.refresh_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND (device_grant.expires_at IS NULL OR (
+            strftime('%Y-%m-%dT%H:%M:%fZ', device_grant.expires_at, '+0 days') = device_grant.expires_at
+            AND device_grant.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          ))
+      ))
+      OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+      OR abs((julianday(NEW.updated_at) - julianday('now')) * 86400.0) > 1.0
+      OR (NEW.owner_kind = 'external_companion' AND (
+        abs((julianday(NEW.token_expires_at) - julianday('now')) * 86400.0 - 900.0) > 1.0
+        OR abs((julianday(NEW.last_heartbeat_at) - julianday('now')) * 86400.0) > 1.0
+        OR abs((julianday(NEW.lease_expires_at) - julianday('now')) * 86400.0 - 60.0) > 1.0
+        OR abs((julianday(NEW.reconnect_expires_at) - julianday('now')) * 86400.0 - 300.0) > 1.0
+      ))
+    BEGIN SELECT RAISE(ABORT, 'session control generation, workspace, or database-clock invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_grants_update_guard
+    BEFORE UPDATE ON chat_session_control_grants
+    WHEN OLD.is_current <> 1 OR OLD.terminal_at IS NOT NULL
+      OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+      OR NEW.generation <> OLD.generation OR NEW.owner_kind <> OLD.owner_kind
+      OR NEW.request_id IS NOT OLD.request_id OR NEW.companion_session_id IS NOT OLD.companion_session_id
+      OR NEW.device_grant_id IS NOT OLD.device_grant_id OR NEW.client_instance_id IS NOT OLD.client_instance_id
+      OR NEW.principal_purpose IS NOT OLD.principal_purpose
+      OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+      OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+      OR NEW.effective_capabilities_json <> OLD.effective_capabilities_json
+      OR NEW.effective_capabilities_sha256 <> OLD.effective_capabilities_sha256
+      OR NEW.token_sha256 IS NOT OLD.token_sha256 OR NEW.token_expires_at IS NOT OLD.token_expires_at
+      OR NEW.transition_idempotency_key <> OLD.transition_idempotency_key
+      OR NEW.transition_request_sha256 <> OLD.transition_request_sha256 OR NEW.created_at <> OLD.created_at
+      OR NEW.control_revision <> OLD.control_revision + 1 OR NEW.updated_at < OLD.updated_at
+      OR abs((julianday(NEW.updated_at) - julianday('now')) * 86400.0) > 1.0
+      OR NOT (
+        (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_live' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at >= OLD.last_heartbeat_at
+          AND abs((julianday(NEW.last_heartbeat_at) - julianday('now')) * 86400.0) <= 1.0
+          AND abs((julianday(NEW.lease_expires_at) - julianday('now')) * 86400.0 - 60.0) <= 1.0
+          AND abs((julianday(NEW.reconnect_expires_at) - julianday('now')) * 86400.0 - 300.0) <= 1.0)
+        OR (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_stale' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at = OLD.last_heartbeat_at AND NEW.lease_expires_at = OLD.lease_expires_at
+          AND NEW.reconnect_expires_at = OLD.reconnect_expires_at)
+        OR (NEW.is_current = 0 AND NEW.lease_state IN ('released', 'revoked', 'superseded', 'deleted')
+          AND NEW.terminal_at = NEW.updated_at AND NEW.last_heartbeat_at IS OLD.last_heartbeat_at
+          AND NEW.lease_expires_at IS OLD.lease_expires_at AND NEW.reconnect_expires_at IS OLD.reconnect_expires_at)
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control current generation transition invariant violated'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_grants_no_delete
+    BEFORE DELETE ON chat_session_control_grants
+    BEGIN SELECT RAISE(ABORT, 'session control grants are durable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_events_insert_guard
+    BEFORE INSERT ON chat_session_control_events
+    WHEN NEW.request_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM chat_session_control_requests request_row
+      WHERE request_row.request_id = NEW.request_id
+        AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+        AND request_row.companion_session_id = NEW.companion_session_id
+        AND request_row.device_grant_id = NEW.device_grant_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control event request attribution invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_events_no_update
+    BEFORE UPDATE ON chat_session_control_events
+    BEGIN SELECT RAISE(ABORT, 'session control events are append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_events_no_delete
+    BEFORE DELETE ON chat_session_control_events
+    BEGIN SELECT RAISE(ABORT, 'session control events are append-only'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_auth_revoke_receipts_insert_guard
+    BEFORE INSERT ON chat_session_control_auth_revoke_receipts
+    WHEN abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+      OR (
+        SELECT COUNT(*) FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+      ) <> NEW.target_count
+      OR (
+        SELECT COUNT(DISTINCT event_row.workspace_id || char(0) || event_row.session_id)
+        FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+      ) <> NEW.session_count
+      OR (NEW.target_count > 0 AND NOT EXISTS (
+        SELECT 1 FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+          AND event_row.idempotency_key = NEW.idempotency_key
+      ))
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipt invariant violated'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_auth_revoke_receipts_no_update
+    BEFORE UPDATE ON chat_session_control_auth_revoke_receipts
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipts are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_auth_revoke_receipts_no_delete
+    BEFORE DELETE ON chat_session_control_auth_revoke_receipts
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipts are immutable'); END;
+
+    INSERT INTO chat_session_control_grants (
+      workspace_id, session_id, generation, is_current, owner_kind, lease_state,
+      requested_capabilities_json, requested_capabilities_sha256,
+      effective_capabilities_json, effective_capabilities_sha256,
+      control_revision, transition_idempotency_key, transition_request_sha256,
+      created_at, updated_at
+    )
+    SELECT
+      meta.workspace_id, meta.session_id, 1, 1, 'operator', 'operator_active',
+      '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+      '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+      1, 'migration:172:' || meta.session_id,
+      'b133aba1d745b01c28823f849c760975b6dbabae2f3e647ebdbe8fae58b96da9',
+      strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    FROM chat_session_meta meta
+    WHERE NOT EXISTS (
+      SELECT 1 FROM chat_session_control_grants grant_row WHERE grant_row.session_id = meta.session_id
+    );
+
+    INSERT INTO chat_session_control_events (
+      event_id, workspace_id, session_id, event_sequence, request_id, previous_generation, next_generation,
+      previous_owner_kind, next_owner_kind, previous_lease_state, next_lease_state,
+      reason_code, actor_kind, actor_id, companion_session_id, device_grant_id,
+      idempotency_key, request_sha256, correlation_id, created_at
+    )
+    SELECT
+      'sce_' || lower(hex(randomblob(24))), meta.workspace_id, meta.session_id, 1, NULL, NULL, 1,
+      NULL, 'operator', NULL, 'operator_active', 'session_initialized', 'system', 'system', NULL, NULL,
+      'migration:172:event:' || meta.session_id,
+      'b133aba1d745b01c28823f849c760975b6dbabae2f3e647ebdbe8fae58b96da9',
+      'migration:172', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    FROM chat_session_meta meta
+    JOIN chat_session_control_grants grant_row
+      ON grant_row.session_id = meta.session_id AND grant_row.generation = 1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM chat_session_control_events event_row WHERE event_row.session_id = meta.session_id
+    );
+
+    CREATE TEMP TABLE IF NOT EXISTS gc_session_control_backfill_guard (
+      ok INTEGER NOT NULL CHECK(ok = 1)
+    );
+    DELETE FROM gc_session_control_backfill_guard;
+    INSERT INTO gc_session_control_backfill_guard(ok)
+    SELECT CASE WHEN EXISTS (
+      SELECT 1
+      FROM chat_session_meta meta
+      LEFT JOIN chat_session_control_grants grant_row
+        ON grant_row.session_id = meta.session_id AND grant_row.is_current = 1
+      WHERE grant_row.session_id IS NULL OR grant_row.workspace_id <> meta.workspace_id
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row WHERE event_row.session_id = meta.session_id
+        )
+    ) THEN 0 ELSE 1 END;
+    DROP TABLE gc_session_control_backfill_guard;
+  `);
+}
 
 function scrubLegacyDeviceTokenPlaintext(db: DatabaseSync): void {
   if (!tableExists(db, "auth_device_requests")) {
