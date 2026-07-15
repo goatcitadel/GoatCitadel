@@ -1,0 +1,314 @@
+import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import { describe, it } from "node:test";
+import { Worker } from "node:worker_threads";
+import {
+  REMOTE_WORKER_PROTOCOL_VERSION,
+  REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+  canonicalJsonString,
+  type CreateRemoteWorkerBootstrapCommand,
+  type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+} from "@goatcitadel/contracts";
+import { Pool } from "pg";
+import { PostgresDatabaseClient } from "./postgres/client.js";
+import { runPostgresMigrations } from "./postgres/migrator.js";
+import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
+import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
+import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+
+const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
+const postgresIt = postgresConnectionString ? it : it.skip;
+const D = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+
+describe("RemoteWorkerAdmissionRepository live PostgreSQL concurrency", () => {
+  postgresIt(
+    "serializes exact/changed exchange replay and rotation versus controls under the 501 then 502 locks",
+    { timeout: 120_000 },
+    async () => {
+      assert.ok(postgresConnectionString);
+      const suffix = randomUUID().replaceAll("-", "");
+      const schemaName = `hx501_${suffix}`;
+      const adminPool = new Pool({ connectionString: postgresConnectionString, max: 2 });
+      const scopedUrl = new URL(postgresConnectionString);
+      scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+      const database = decodeURIComponent(scopedUrl.pathname.replace(/^\//u, "")) || "postgres";
+      const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 4 });
+      const migrations = new PostgresDatabaseClient(
+        { connectionString: scopedUrl.toString(), database },
+        { pool: scopedPool },
+      );
+      const setupDb = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database,
+        applicationName: `hx501-setup-${suffix}`,
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+
+      try {
+        await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+        await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
+        const setupRepo = new RemoteWorkerAdmissionRepository(setupDb);
+        const bootstrapCommand = bootstrapInput("pg-a", { expiresInSeconds: 600 });
+        const bootstrap = setupRepo.createBootstrap(bootstrapCommand).record;
+        const bootstrapReplay = setupRepo.createBootstrap({
+          ...bootstrapCommand,
+          bootstrapSecretSha256: D("pg-a:replacement-generated-secret"),
+        });
+        assert.equal(bootstrapReplay.disposition, "replayed_without_secret");
+        assert.deepEqual(bootstrapReplay.record, bootstrap);
+        const exchange = finalizeInput(bootstrap, "pg-a", { credentialExpiresInSeconds: 900 });
+
+        const [left, right] = await Promise.all([
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-exchange-a-${suffix}`, {
+            operation: "finalize",
+            input: exchange,
+          }),
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-exchange-b-${suffix}`, {
+            operation: "finalize",
+            input: exchange,
+          }),
+        ]);
+        assert.equal(left.ok, true, left.ok ? undefined : left.error);
+        assert.equal(right.ok, true, right.ok ? undefined : right.error);
+        if (!left.ok || !right.ok) assert.fail("exact exchange replay did not converge");
+        assert.deepEqual(left.value.generation, right.value.generation);
+        assert.deepEqual(left.value.credential, right.value.credential);
+        assert.deepEqual(
+          new Set([left.value.disposition, right.value.disposition]),
+          new Set(["admitted", "replayed_without_credential_secret"]),
+        );
+
+        const changed = await runRepositoryWorker(scopedUrl.toString(), database, `hx501-changed-${suffix}`, {
+          operation: "finalize",
+          input: { ...exchange, verifiedTransportReceiptSha256: D("pg-a:changed-transport") },
+        });
+        assert.equal(changed.ok, false);
+        if (changed.ok) assert.fail("changed exchange unexpectedly succeeded");
+        assert.doesNotMatch(changed.error, /(?:23505|23514|SQLSTATE|bootstrap_secret|token_sha256)/iu);
+
+        const rotation = rotationInput(bootstrap.workerId, "pg-a");
+        const quarantine = controlInput(bootstrap.workerId, "pg-a", "quarantine");
+        const [rotationRace, quarantineRace] = await Promise.all([
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-rotate-${suffix}`, {
+            operation: "rotate",
+            input: rotation,
+          }),
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-quarantine-${suffix}`, {
+            operation: "quarantine",
+            input: quarantine,
+          }),
+        ]);
+        assert.equal(quarantineRace.ok, true, quarantineRace.ok ? undefined : quarantineRace.error);
+        assert.ok(rotationRace.ok || /durable admission authority/u.test(rotationRace.error));
+        assert.equal(setupRepo.resolveRuntimeCredentialByHash(exchange.credentialTokenSha256), undefined);
+        assert.equal(setupRepo.resolveRuntimeCredentialByHash(rotation.credentialTokenSha256), undefined);
+
+        const revoke = await runRepositoryWorker(scopedUrl.toString(), database, `hx501-revoke-${suffix}`, {
+          operation: "revoke",
+          input: controlInput(bootstrap.workerId, "pg-a", "revoke"),
+        });
+        assert.equal(revoke.ok, true, revoke.ok ? undefined : revoke.error);
+        const readmission = bootstrapInput("pg-b", {
+          existingWorkerId: bootstrap.workerId,
+          idempotencyKey: "bootstrap:pg-b:readmission",
+        });
+        const [readmitA, readmitB] = await Promise.all([
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-readmit-a-${suffix}`, {
+            operation: "create",
+            input: readmission,
+          }),
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-readmit-b-${suffix}`, {
+            operation: "create",
+            input: readmission,
+          }),
+        ]);
+        assert.equal(readmitA.ok, true, readmitA.ok ? undefined : readmitA.error);
+        assert.equal(readmitB.ok, true, readmitB.ok ? undefined : readmitB.error);
+        if (!readmitA.ok || !readmitB.ok) assert.fail("readmission replay did not converge");
+        assert.equal(readmitA.value.record.targetWorkerGeneration, 2);
+        assert.deepEqual(readmitA.value.record, readmitB.value.record);
+      } finally {
+        setupDb.close();
+        await migrations.close();
+        await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+        await adminPool.end();
+      }
+    },
+  );
+});
+
+function runtimeManifest(seed: string) {
+  const payload = {
+    schemaVersion: REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    bundleSha256: D(`${seed}:bundle`),
+    dependencyLockSha256: D(`${seed}:lock`),
+    vendorTreeSha256: D(`${seed}:vendor`),
+    launcherSha256: D(`${seed}:launcher`),
+    installedTreeManifestSha256: D(`${seed}:tree`),
+    installedTreeFileCount: 24,
+    platform: "linux",
+    architecture: "x64",
+  } as const;
+  return {
+    payload,
+    payloadSha256: D(canonicalJsonString(payload)),
+    signatureAlgorithm: "ed25519" as const,
+    signerKeyId: `key-${seed}`,
+    signatureBase64Url: "A".repeat(86),
+  };
+}
+
+function bootstrapInput(
+  seed: string,
+  overrides: Partial<CreateRemoteWorkerBootstrapCommand> = {},
+): CreateRemoteWorkerBootstrapCommand {
+  return {
+    registryWorkspaceId: "default",
+    workerLabel: `Worker ${seed}`,
+    platform: "linux",
+    architecture: "x64",
+    runtimeManifest: runtimeManifest(seed),
+    allowedWorkspaceIds: ["default"],
+    capabilityClasses: ["durable_compute", "gateway_inference"],
+    expiresInSeconds: 300,
+    createdByActorId: "operator-a",
+    idempotencyKey: `bootstrap:${seed}`,
+    bootstrapSecretSha256: D(`${seed}:bootstrap-secret`),
+    ...overrides,
+  };
+}
+
+function finalizeInput(
+  bootstrap: ReturnType<RemoteWorkerAdmissionRepository["createBootstrap"]>["record"],
+  seed: string,
+  overrides: Partial<FinalizeRemoteWorkerBootstrapAdmissionCommand> = {},
+): FinalizeRemoteWorkerBootstrapAdmissionCommand {
+  return {
+    bootstrapSecretSha256: D(`${seed}:bootstrap-secret`),
+    verifiedPublicKeySpkiSha256: D(`${seed}:spki`),
+    verifiedClientCertificateSha256: D(`${seed}:certificate`),
+    verifiedRuntimeManifestSha256: D(canonicalJsonString(bootstrap.runtimeManifest)),
+    verifiedWorkspaceCeilingSha256: bootstrap.workspaceCeilingSha256,
+    verifiedCapabilityCeilingSha256: bootstrap.capabilityCeilingSha256,
+    verifiedTransportIdentitySource: "native_mtls",
+    verifiedTransportTrustAnchorSha256: D(`${seed}:anchor`),
+    verifiedTransportReceiptSha256: D(`${seed}:transport`),
+    verifiedProofOfPossessionReceiptSha256: D(`${seed}:pop`),
+    verifiedDownloadReceiptSha256: D(`${seed}:download`),
+    verifiedInstalledTreeAttestationSha256: D(`${seed}:attestation`),
+    verifiedInstalledTreeReceiptSha256: D(`${seed}:tree-receipt`),
+    credentialIssuanceProofSha256: D(`${seed}:issuance`),
+    credentialExpiresInSeconds: 600,
+    credentialTokenSha256: D(`${seed}:token-1`),
+    exchangeIdempotencyKey: `exchange:${seed}`,
+    ...overrides,
+  };
+}
+
+function rotationInput(workerId: string, seed: string) {
+  return {
+    registryWorkspaceId: "default",
+    workerId,
+    workerGeneration: 1,
+    verifiedTransportReceiptSha256: D(`${seed}:rotation-transport`),
+    verifiedProofOfPossessionReceiptSha256: D(`${seed}:rotation-pop`),
+    credentialIssuanceProofSha256: D(`${seed}:rotation-issuance`),
+    expiresInSeconds: 600,
+    credentialTokenSha256: D(`${seed}:token-2`),
+    idempotencyKey: `rotate:${seed}:2`,
+  };
+}
+
+function controlInput(workerId: string, seed: string, action: "quarantine" | "revoke") {
+  return {
+    registryWorkspaceId: "default",
+    workerId,
+    workerGeneration: 1,
+    reasonCode: `operator.${action}`,
+    reasonSha256: D(`${seed}:${action}:private-reason`),
+    actorId: "operator-a",
+    idempotencyKey: `control:${seed}:${action}`,
+  };
+}
+
+type WorkerRequest =
+  | { operation: "create"; input: unknown }
+  | { operation: "finalize"; input: unknown }
+  | { operation: "rotate"; input: unknown }
+  | { operation: "quarantine"; input: unknown }
+  | { operation: "revoke"; input: unknown };
+
+type WorkerResult = { ok: true; value: Record<string, any> } | { ok: false; error: string };
+
+function runRepositoryWorker(
+  connectionString: string,
+  database: string,
+  applicationName: string,
+  request: WorkerRequest,
+): Promise<WorkerResult> {
+  const runtimeModuleExtension = import.meta.url.endsWith(".js") ? ".js" : ".ts";
+  const worker = new Worker(REPOSITORY_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      connectionOptions: {
+        connectionString,
+        database,
+        applicationName,
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      },
+      request,
+      repositoryModuleUrl: new URL(`./remote-worker-admission-repo${runtimeModuleExtension}`, import.meta.url).href,
+      postgresModuleUrl: new URL(`./postgres/sync${runtimeModuleExtension}`, import.meta.url).href,
+      tsxApiUrl: import.meta.resolve("tsx/esm/api"),
+    },
+  });
+  return new Promise((resolve, reject) => {
+    let received = false;
+    worker.once("message", (message: WorkerResult) => {
+      received = true;
+      resolve(message);
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (!received) reject(new Error(`HX-501 PostgreSQL worker exited before reporting (code ${code})`));
+    });
+  });
+}
+
+const REPOSITORY_WORKER_SOURCE = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+  void (async () => {
+    let db;
+    let result;
+    try {
+      const { tsImport } = await import(workerData.tsxApiUrl);
+      const { RemoteWorkerAdmissionRepository } = await tsImport(
+        workerData.repositoryModuleUrl,
+        workerData.repositoryModuleUrl,
+      );
+      const { PostgresSyncDatabaseClient } = await tsImport(
+        workerData.postgresModuleUrl,
+        workerData.postgresModuleUrl,
+      );
+      db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
+      const repo = new RemoteWorkerAdmissionRepository(db);
+      const { operation, input } = workerData.request;
+      const value = operation === "create"
+        ? repo.createBootstrap(input)
+        : operation === "finalize"
+          ? repo.finalizeBootstrapAdmission(input)
+          : operation === "rotate"
+            ? repo.rotateRuntimeCredential(input)
+            : operation === "quarantine"
+              ? repo.quarantineGeneration(input)
+              : repo.revokeGeneration(input);
+      result = { ok: true, value };
+    } catch (error) {
+      result = { ok: false, error: error instanceof Error ? error.message : "opaque remote worker failure" };
+    } finally {
+      if (db) db.close();
+    }
+    parentPort.postMessage(result);
+  })();
+`;

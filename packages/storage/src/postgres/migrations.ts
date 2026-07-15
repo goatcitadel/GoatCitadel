@@ -5899,4 +5899,612 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE TRIGGER trg_mesh_capability_node_admission_revocations_no_delete BEFORE DELETE ON mesh_capability_node_admission_revocations FOR EACH ROW EXECUTE FUNCTION gc_reject_mesh_capability_immutable_mutation();
     `,
   },
+  {
+    version: 112,
+    name: "remote_worker_admission_foundation",
+    sql: `
+      CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_requests (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        node_id TEXT NOT NULL CHECK(length(node_id) BETWEEN 1 AND 256),
+        target_worker_generation BIGINT NOT NULL CHECK(target_worker_generation > 0),
+        worker_label TEXT NOT NULL CHECK(length(worker_label) BETWEEN 1 AND 160),
+        platform TEXT NOT NULL CHECK(platform IN ('windows', 'linux', 'darwin')),
+        architecture TEXT NOT NULL CHECK(architecture IN ('x64', 'arm64')),
+        runtime_manifest_json TEXT NOT NULL CHECK(octet_length(runtime_manifest_json) <= 524288),
+        runtime_manifest_sha256 TEXT NOT NULL CHECK(runtime_manifest_sha256 ~ '^[0-9a-f]{64}$'),
+        allowed_workspace_count BIGINT NOT NULL CHECK(allowed_workspace_count BETWEEN 1 AND 16),
+        workspace_ceiling_sha256 TEXT NOT NULL CHECK(workspace_ceiling_sha256 ~ '^[0-9a-f]{64}$'),
+        capability_class_count BIGINT NOT NULL CHECK(capability_class_count BETWEEN 1 AND 9),
+        capability_ceiling_sha256 TEXT NOT NULL CHECK(capability_ceiling_sha256 ~ '^[0-9a-f]{64}$'),
+        bootstrap_secret_sha256 TEXT NOT NULL UNIQUE CHECK(bootstrap_secret_sha256 ~ '^[0-9a-f]{64}$'),
+        expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = expires_at
+        ),
+        created_by_actor_id TEXT NOT NULL CHECK(length(created_by_actor_id) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        PRIMARY KEY(registry_workspace_id, bootstrap_id),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        FOREIGN KEY(registry_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+        CHECK(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(expires_at) - gc_try_parse_timestamptz(created_at))) BETWEEN 1 AND 600),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb) = 'object'),
+        CHECK(runtime_manifest_json::jsonb ?& ARRAY[
+          'payload', 'payloadSha256', 'signatureAlgorithm', 'signerKeyId', 'signatureBase64Url'
+        ]::TEXT[]),
+        CHECK((runtime_manifest_json::jsonb - ARRAY[
+          'payload', 'payloadSha256', 'signatureAlgorithm', 'signerKeyId', 'signatureBase64Url'
+        ]::TEXT[]) = '{}'::JSONB),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb -> 'payload') = 'object'),
+        CHECK((runtime_manifest_json::jsonb -> 'payload') ?& ARRAY[
+          'schemaVersion', 'protocolVersion', 'bundleSha256', 'dependencyLockSha256',
+          'vendorTreeSha256', 'launcherSha256', 'installedTreeManifestSha256',
+          'installedTreeFileCount', 'platform', 'architecture'
+        ]::TEXT[]),
+        CHECK(((runtime_manifest_json::jsonb -> 'payload') - ARRAY[
+          'schemaVersion', 'protocolVersion', 'bundleSha256', 'dependencyLockSha256',
+          'vendorTreeSha256', 'launcherSha256', 'installedTreeManifestSha256',
+          'installedTreeFileCount', 'platform', 'architecture'
+        ]::TEXT[]) = '{}'::JSONB),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb -> 'payloadSha256') = 'string'),
+        CHECK(runtime_manifest_json::jsonb ->> 'payloadSha256' ~ '^[0-9a-f]{64}$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb -> 'signatureAlgorithm') = 'string'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb -> 'signerKeyId') = 'string'),
+        CHECK(length(runtime_manifest_json::jsonb ->> 'signerKeyId') BETWEEN 1 AND 256),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb -> 'signatureBase64Url') = 'string'),
+        CHECK(runtime_manifest_json::jsonb ->> 'signatureBase64Url' ~ '^[A-Za-z0-9_-]{85}[AQgw]$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,bundleSha256}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,bundleSha256}' ~ '^[0-9a-f]{64}$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,dependencyLockSha256}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,dependencyLockSha256}' ~ '^[0-9a-f]{64}$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,vendorTreeSha256}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,vendorTreeSha256}' ~ '^[0-9a-f]{64}$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,launcherSha256}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,launcherSha256}' ~ '^[0-9a-f]{64}$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,installedTreeManifestSha256}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,installedTreeManifestSha256}' ~ '^[0-9a-f]{64}$'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,schemaVersion}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,schemaVersion}' = 'goatcitadel.remote-worker-runtime-manifest.v1'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,protocolVersion}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,protocolVersion}' = 'goatcitadel.remote-worker.v1'),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,platform}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,platform}' = platform),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,architecture}') = 'string'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,architecture}' = architecture),
+        CHECK(jsonb_typeof(runtime_manifest_json::jsonb #> '{payload,installedTreeFileCount}') = 'number'),
+        CHECK(runtime_manifest_json::jsonb #>> '{payload,installedTreeFileCount}' ~ '^[0-9]+$'),
+        CHECK((runtime_manifest_json::jsonb #>> '{payload,installedTreeFileCount}')::NUMERIC BETWEEN 1 AND 10000),
+        CHECK(runtime_manifest_json::jsonb ->> 'signatureAlgorithm' = 'ed25519')
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_allowed_workspaces (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+        allowed_workspace_id TEXT NOT NULL CHECK(length(allowed_workspace_id) BETWEEN 1 AND 256),
+        PRIMARY KEY(registry_workspace_id, bootstrap_id, allowed_workspace_id),
+        FOREIGN KEY(registry_workspace_id, bootstrap_id)
+          REFERENCES remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id) ON DELETE RESTRICT,
+        FOREIGN KEY(allowed_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_capability_classes (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+        capability_class TEXT NOT NULL CHECK(capability_class IN (
+          'durable_compute', 'gateway_inference', 'governed_tool', 'governed_code',
+          'artifact_stage', 'trusted_verification', 'device_camera', 'device_location',
+          'device_notification'
+        )),
+        PRIMARY KEY(registry_workspace_id, bootstrap_id, capability_class),
+        FOREIGN KEY(registry_workspace_id, bootstrap_id)
+          REFERENCES remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_generations (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        node_id TEXT NOT NULL CHECK(length(node_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+        public_key_spki_sha256 TEXT NOT NULL CHECK(public_key_spki_sha256 ~ '^[0-9a-f]{64}$'),
+        client_certificate_sha256 TEXT NOT NULL CHECK(client_certificate_sha256 ~ '^[0-9a-f]{64}$'),
+        transport_identity_source TEXT NOT NULL CHECK(transport_identity_source IN ('native_mtls', 'trusted_terminator')),
+        transport_trust_anchor_sha256 TEXT NOT NULL CHECK(transport_trust_anchor_sha256 ~ '^[0-9a-f]{64}$'),
+        transport_verification_receipt_sha256 TEXT NOT NULL CHECK(transport_verification_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        proof_of_possession_receipt_sha256 TEXT NOT NULL CHECK(proof_of_possession_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        download_verification_receipt_sha256 TEXT NOT NULL CHECK(download_verification_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        installed_tree_attestation_sha256 TEXT NOT NULL CHECK(installed_tree_attestation_sha256 ~ '^[0-9a-f]{64}$'),
+        installed_tree_verification_receipt_sha256 TEXT NOT NULL CHECK(installed_tree_verification_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        runtime_manifest_sha256 TEXT NOT NULL CHECK(runtime_manifest_sha256 ~ '^[0-9a-f]{64}$'),
+        workspace_ceiling_sha256 TEXT NOT NULL CHECK(workspace_ceiling_sha256 ~ '^[0-9a-f]{64}$'),
+        capability_ceiling_sha256 TEXT NOT NULL CHECK(capability_ceiling_sha256 ~ '^[0-9a-f]{64}$'),
+        exchange_idempotency_key TEXT NOT NULL CHECK(length(exchange_idempotency_key) BETWEEN 1 AND 512),
+        exchange_request_sha256 TEXT NOT NULL CHECK(exchange_request_sha256 ~ '^[0-9a-f]{64}$'),
+        admitted_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(admitted_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(admitted_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = admitted_at
+        ),
+        PRIMARY KEY(registry_workspace_id, worker_id, worker_generation),
+        UNIQUE(registry_workspace_id, bootstrap_id),
+        UNIQUE(registry_workspace_id, exchange_idempotency_key),
+        FOREIGN KEY(registry_workspace_id, bootstrap_id)
+          REFERENCES remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_runtime_credentials (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        credential_generation BIGINT NOT NULL CHECK(credential_generation > 0),
+        credential_id TEXT NOT NULL CHECK(length(credential_id) BETWEEN 1 AND 256),
+        purpose TEXT NOT NULL CHECK(purpose = 'worker_runtime'),
+        token_sha256 TEXT NOT NULL UNIQUE CHECK(token_sha256 ~ '^[0-9a-f]{64}$'),
+        transport_verification_receipt_sha256 TEXT NOT NULL CHECK(transport_verification_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        proof_of_possession_receipt_sha256 TEXT NOT NULL CHECK(proof_of_possession_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        claims_json TEXT NOT NULL CHECK(octet_length(claims_json) <= 16384),
+        claims_sha256 TEXT NOT NULL CHECK(claims_sha256 ~ '^[0-9a-f]{64}$'),
+        issuance_proof_sha256 TEXT NOT NULL CHECK(issuance_proof_sha256 ~ '^[0-9a-f]{64}$'),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        issued_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(issued_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(issued_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = issued_at
+        ),
+        expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = expires_at
+        ),
+        PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, credential_generation),
+        UNIQUE(registry_workspace_id, credential_id),
+        UNIQUE(registry_workspace_id, worker_id, worker_generation, idempotency_key),
+        FOREIGN KEY(registry_workspace_id, worker_id, worker_generation)
+          REFERENCES remote_worker_generations(registry_workspace_id, worker_id, worker_generation) ON DELETE RESTRICT,
+        CHECK(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(expires_at) - gc_try_parse_timestamptz(issued_at))) BETWEEN 1 AND 900)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_generation_controls (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        control_revision BIGINT NOT NULL CHECK(control_revision BETWEEN 1 AND 2),
+        action TEXT NOT NULL CHECK(action IN ('quarantine', 'revoke')),
+        reason_code TEXT NOT NULL CHECK(reason_code ~ '^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$'),
+        reason_sha256 TEXT NOT NULL CHECK(reason_sha256 ~ '^[0-9a-f]{64}$'),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, control_revision),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        FOREIGN KEY(registry_workspace_id, worker_id, worker_generation)
+          REFERENCES remote_worker_generations(registry_workspace_id, worker_id, worker_generation) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_bootstraps_worker_target
+        ON remote_worker_bootstrap_requests(registry_workspace_id, worker_id, target_worker_generation, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_generations_current
+        ON remote_worker_generations(registry_workspace_id, worker_id, worker_generation DESC);
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_credentials_current
+        ON remote_worker_runtime_credentials(registry_workspace_id, worker_id, worker_generation, credential_generation DESC);
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_controls_current
+        ON remote_worker_generation_controls(registry_workspace_id, worker_id, worker_generation, control_revision DESC);
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_bootstrap_guard()
+      RETURNS trigger AS $$
+      DECLARE
+        prior_generation BIGINT;
+        database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || NEW.worker_id, 502));
+        IF gc_try_parse_timestamptz(NEW.created_at) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.created_at
+          OR gc_try_parse_timestamptz(NEW.expires_at) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.expires_at
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - database_now))) > 1
+          OR gc_try_parse_timestamptz(NEW.expires_at) <= database_now THEN
+          RAISE EXCEPTION 'remote worker bootstrap database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF (SELECT COUNT(*) FROM json_each(NEW.runtime_manifest_json::json)) <> 5
+          OR (SELECT COUNT(DISTINCT entry.key) FROM json_each(NEW.runtime_manifest_json::json) entry) <> 5
+          OR (SELECT COUNT(*) FROM json_each((NEW.runtime_manifest_json::json -> 'payload'))) <> 10
+          OR (
+            SELECT COUNT(DISTINCT entry.key)
+            FROM json_each((NEW.runtime_manifest_json::json -> 'payload')) entry
+          ) <> 10 THEN
+          RAISE EXCEPTION 'remote worker runtime manifest contains duplicate or missing fields' USING ERRCODE = '23514';
+        END IF;
+        SELECT COALESCE(MAX(generation.worker_generation), 0) INTO prior_generation
+        FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.worker_id = NEW.worker_id;
+        IF NEW.target_worker_generation <> prior_generation + 1 THEN
+          RAISE EXCEPTION 'remote worker bootstrap target generation is not monotonic' USING ERRCODE = '23514';
+        END IF;
+        IF prior_generation > 0 AND NOT EXISTS (
+          SELECT 1 FROM remote_worker_generation_controls control
+          WHERE control.registry_workspace_id = NEW.registry_workspace_id
+            AND control.worker_id = NEW.worker_id
+            AND control.worker_generation = prior_generation
+            AND control.action = 'revoke'
+        ) THEN
+          RAISE EXCEPTION 'remote worker prior generation is not revoked' USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM remote_worker_bootstrap_requests active
+          WHERE active.registry_workspace_id = NEW.registry_workspace_id
+            AND active.worker_id = NEW.worker_id
+            AND active.target_worker_generation = NEW.target_worker_generation
+            AND gc_try_parse_timestamptz(active.expires_at) > database_now
+            AND NOT EXISTS (
+              SELECT 1 FROM remote_worker_generations consumed
+              WHERE consumed.registry_workspace_id = active.registry_workspace_id
+                AND consumed.bootstrap_id = active.bootstrap_id
+            )
+        ) THEN
+          RAISE EXCEPTION 'remote worker target already has a fresh bootstrap' USING ERRCODE = '23514';
+        END IF;
+        IF prior_generation > 0 AND EXISTS (
+          SELECT 1 FROM remote_worker_generations prior
+          WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+            AND prior.worker_id = NEW.worker_id
+            AND prior.worker_generation = prior_generation
+            AND prior.node_id <> NEW.node_id
+        ) THEN
+          RAISE EXCEPTION 'remote worker readmission node identity changed' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_remote_worker_bootstrap_insert_guard
+        BEFORE INSERT ON remote_worker_bootstrap_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_bootstrap_guard();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_bootstrap_scope_guard()
+      RETURNS trigger AS $$
+      DECLARE worker TEXT; scope_count BIGINT;
+      BEGIN
+        SELECT bootstrap.worker_id INTO worker FROM remote_worker_bootstrap_requests bootstrap
+        WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+          AND bootstrap.bootstrap_id = NEW.bootstrap_id;
+        IF worker IS NULL THEN RAISE EXCEPTION 'remote worker bootstrap scope parent is unavailable' USING ERRCODE = '23514'; END IF;
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || worker, 502));
+        IF EXISTS (
+          SELECT 1 FROM remote_worker_generations generation
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.bootstrap_id = NEW.bootstrap_id
+        ) THEN RAISE EXCEPTION 'remote worker consumed bootstrap scope is immutable' USING ERRCODE = '23514'; END IF;
+        IF TG_TABLE_NAME = 'remote_worker_bootstrap_allowed_workspaces' THEN
+          SELECT COUNT(*) INTO scope_count FROM remote_worker_bootstrap_allowed_workspaces current
+          WHERE current.registry_workspace_id = NEW.registry_workspace_id AND current.bootstrap_id = NEW.bootstrap_id;
+          IF scope_count >= 16 THEN RAISE EXCEPTION 'remote worker workspace ceiling exceeded' USING ERRCODE = '23514'; END IF;
+          IF NEW.allowed_workspace_id <> NEW.registry_workspace_id AND NOT EXISTS (
+            SELECT 1 FROM remote_worker_bootstrap_allowed_workspaces registry_scope
+            WHERE registry_scope.registry_workspace_id = NEW.registry_workspace_id
+              AND registry_scope.bootstrap_id = NEW.bootstrap_id
+              AND registry_scope.allowed_workspace_id = NEW.registry_workspace_id
+          ) THEN RAISE EXCEPTION 'remote worker registry workspace must be the first scope row' USING ERRCODE = '23514'; END IF;
+        ELSE
+          SELECT COUNT(*) INTO scope_count FROM remote_worker_bootstrap_capability_classes current
+          WHERE current.registry_workspace_id = NEW.registry_workspace_id AND current.bootstrap_id = NEW.bootstrap_id;
+          IF scope_count >= 9 THEN RAISE EXCEPTION 'remote worker capability ceiling exceeded' USING ERRCODE = '23514'; END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_remote_worker_allowed_workspace_insert_guard
+        BEFORE INSERT ON remote_worker_bootstrap_allowed_workspaces
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_bootstrap_scope_guard();
+      CREATE TRIGGER trg_remote_worker_capability_class_insert_guard
+        BEFORE INSERT ON remote_worker_bootstrap_capability_classes
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_bootstrap_scope_guard();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_generation_guard()
+      RETURNS trigger AS $$
+      DECLARE
+        prior_generation BIGINT;
+        database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || NEW.worker_id, 502));
+        IF gc_try_parse_timestamptz(NEW.admitted_at) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.admitted_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.admitted_at
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.admitted_at) - database_now))) > 1 THEN
+          RAISE EXCEPTION 'remote worker generation database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+          WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+            AND bootstrap.bootstrap_id = NEW.bootstrap_id
+            AND bootstrap.worker_id = NEW.worker_id
+            AND bootstrap.node_id = NEW.node_id
+            AND bootstrap.target_worker_generation = NEW.worker_generation
+            AND bootstrap.runtime_manifest_sha256 = NEW.runtime_manifest_sha256
+            AND bootstrap.workspace_ceiling_sha256 = NEW.workspace_ceiling_sha256
+            AND bootstrap.capability_ceiling_sha256 = NEW.capability_ceiling_sha256
+            AND gc_try_parse_timestamptz(bootstrap.expires_at) > database_now
+            AND bootstrap.allowed_workspace_count = (
+              SELECT COUNT(*) FROM remote_worker_bootstrap_allowed_workspaces scope
+              WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                AND scope.bootstrap_id = bootstrap.bootstrap_id
+            )
+            AND EXISTS (
+              SELECT 1 FROM remote_worker_bootstrap_allowed_workspaces registry_scope
+              WHERE registry_scope.registry_workspace_id = bootstrap.registry_workspace_id
+                AND registry_scope.bootstrap_id = bootstrap.bootstrap_id
+                AND registry_scope.allowed_workspace_id = bootstrap.registry_workspace_id
+            )
+            AND bootstrap.capability_class_count = (
+              SELECT COUNT(*) FROM remote_worker_bootstrap_capability_classes scope
+              WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                AND scope.bootstrap_id = bootstrap.bootstrap_id
+            )
+        ) THEN RAISE EXCEPTION 'remote worker generation bootstrap binding is invalid' USING ERRCODE = '23514'; END IF;
+        SELECT COALESCE(MAX(current.worker_generation), 0) INTO prior_generation
+        FROM remote_worker_generations current
+        WHERE current.registry_workspace_id = NEW.registry_workspace_id AND current.worker_id = NEW.worker_id;
+        IF NEW.worker_generation <> prior_generation + 1 THEN
+          RAISE EXCEPTION 'remote worker generation is not monotonic' USING ERRCODE = '23514';
+        END IF;
+        IF prior_generation > 0 AND NOT EXISTS (
+          SELECT 1 FROM remote_worker_generation_controls control
+          WHERE control.registry_workspace_id = NEW.registry_workspace_id
+            AND control.worker_id = NEW.worker_id
+            AND control.worker_generation = prior_generation
+            AND control.action = 'revoke'
+        ) THEN RAISE EXCEPTION 'remote worker prior generation is not revoked' USING ERRCODE = '23514'; END IF;
+        IF prior_generation > 0 AND EXISTS (
+          SELECT 1 FROM remote_worker_generations prior
+          WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+            AND prior.worker_id = NEW.worker_id
+            AND prior.worker_generation = prior_generation
+            AND (
+              prior.public_key_spki_sha256 = NEW.public_key_spki_sha256
+              OR prior.client_certificate_sha256 = NEW.client_certificate_sha256
+              OR prior.installed_tree_attestation_sha256 = NEW.installed_tree_attestation_sha256
+            )
+        ) THEN RAISE EXCEPTION 'remote worker readmission evidence did not rotate' USING ERRCODE = '23514'; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_remote_worker_generation_insert_guard
+        BEFORE INSERT ON remote_worker_generations
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_generation_guard();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_credential_guard()
+      RETURNS trigger AS $$
+      DECLARE
+        prior_credential_generation BIGINT;
+        database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || NEW.worker_id, 502));
+        IF gc_try_parse_timestamptz(NEW.issued_at) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.issued_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.issued_at
+          OR gc_try_parse_timestamptz(NEW.expires_at) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.expires_at
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.issued_at) - database_now))) > 1
+          OR gc_try_parse_timestamptz(NEW.expires_at) <= database_now THEN
+          RAISE EXCEPTION 'remote worker credential database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF jsonb_typeof(NEW.claims_json::jsonb) <> 'object'
+          OR (SELECT COUNT(*) FROM json_each(NEW.claims_json::json)) <> 11
+          OR (SELECT COUNT(DISTINCT claim.key) FROM json_each(NEW.claims_json::json) claim) <> 11
+          OR (SELECT COUNT(*) FROM jsonb_object_keys(NEW.claims_json::jsonb)) <> 11
+          OR NOT (NEW.claims_json::jsonb ?& ARRAY[
+            'schemaVersion', 'protocolVersion', 'purpose', 'routeAccessClass',
+            'registryWorkspaceId', 'workerId', 'workerGeneration', 'allowedWorkspaceIds',
+            'workspaceCeilingSha256', 'capabilityClasses', 'capabilityCeilingSha256'
+          ]::TEXT[])
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'schemaVersion') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'schemaVersion' <> 'goatcitadel.remote-worker-runtime-credential-claims.v1'
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'protocolVersion') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'protocolVersion' <> 'goatcitadel.remote-worker.v1'
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'purpose') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'purpose' <> 'worker_runtime'
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'routeAccessClass') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'routeAccessClass' <> 'remote-worker'
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'registryWorkspaceId') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'registryWorkspaceId' <> NEW.registry_workspace_id
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'workerId') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'workerId' <> NEW.worker_id
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'workerGeneration') <> 'number'
+          OR NEW.claims_json::jsonb ->> 'workerGeneration' !~ '^[0-9]+$'
+          OR (NEW.claims_json::jsonb ->> 'workerGeneration')::BIGINT <> NEW.worker_generation
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'allowedWorkspaceIds') <> 'array'
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(NEW.claims_json::jsonb -> 'allowedWorkspaceIds') AS element(value)
+            WHERE jsonb_typeof(element.value) <> 'string'
+          )
+          OR jsonb_array_length(NEW.claims_json::jsonb -> 'allowedWorkspaceIds') <> (
+            SELECT COUNT(DISTINCT value) FROM jsonb_array_elements_text(NEW.claims_json::jsonb -> 'allowedWorkspaceIds')
+          )
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'workspaceCeilingSha256') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'workspaceCeilingSha256' !~ '^[0-9a-f]{64}$'
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'capabilityClasses') <> 'array'
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(NEW.claims_json::jsonb -> 'capabilityClasses') AS element(value)
+            WHERE jsonb_typeof(element.value) <> 'string'
+          )
+          OR jsonb_array_length(NEW.claims_json::jsonb -> 'capabilityClasses') <> (
+            SELECT COUNT(DISTINCT value) FROM jsonb_array_elements_text(NEW.claims_json::jsonb -> 'capabilityClasses')
+          )
+          OR jsonb_typeof(NEW.claims_json::jsonb -> 'capabilityCeilingSha256') <> 'string'
+          OR NEW.claims_json::jsonb ->> 'capabilityCeilingSha256' !~ '^[0-9a-f]{64}$' THEN
+          RAISE EXCEPTION 'remote worker credential claims shape is invalid' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM remote_worker_generations generation
+          JOIN remote_worker_bootstrap_requests bootstrap
+            ON bootstrap.registry_workspace_id = generation.registry_workspace_id
+           AND bootstrap.bootstrap_id = generation.bootstrap_id
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.worker_id = NEW.worker_id
+            AND generation.worker_generation = NEW.worker_generation
+            AND generation.workspace_ceiling_sha256 = NEW.claims_json::jsonb ->> 'workspaceCeilingSha256'
+            AND generation.capability_ceiling_sha256 = NEW.claims_json::jsonb ->> 'capabilityCeilingSha256'
+            AND jsonb_array_length(NEW.claims_json::jsonb -> 'allowedWorkspaceIds') = (
+              SELECT COUNT(*)
+              FROM remote_worker_bootstrap_allowed_workspaces scope
+              WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                AND scope.bootstrap_id = bootstrap.bootstrap_id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(NEW.claims_json::jsonb -> 'allowedWorkspaceIds') claim_workspace
+              WHERE NOT EXISTS (
+                SELECT 1 FROM remote_worker_bootstrap_allowed_workspaces scope
+                WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                  AND scope.bootstrap_id = bootstrap.bootstrap_id
+                  AND scope.allowed_workspace_id = claim_workspace.value
+              )
+            )
+            AND jsonb_array_length(NEW.claims_json::jsonb -> 'capabilityClasses') = (
+              SELECT COUNT(*)
+              FROM remote_worker_bootstrap_capability_classes scope
+              WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                AND scope.bootstrap_id = bootstrap.bootstrap_id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(NEW.claims_json::jsonb -> 'capabilityClasses') claim_capability
+              WHERE NOT EXISTS (
+                SELECT 1 FROM remote_worker_bootstrap_capability_classes scope
+                WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                  AND scope.bootstrap_id = bootstrap.bootstrap_id
+                  AND scope.capability_class = claim_capability.value
+              )
+            )
+            AND generation.worker_generation = (
+              SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+              WHERE current.registry_workspace_id = generation.registry_workspace_id
+                AND current.worker_id = generation.worker_id
+            )
+        ) OR EXISTS (
+          SELECT 1 FROM remote_worker_generation_controls control
+          WHERE control.registry_workspace_id = NEW.registry_workspace_id
+            AND control.worker_id = NEW.worker_id
+            AND control.worker_generation = NEW.worker_generation
+        ) THEN RAISE EXCEPTION 'remote worker credential generation authority is invalid' USING ERRCODE = '23514'; END IF;
+        IF NEW.credential_generation = 1 AND NOT EXISTS (
+          SELECT 1 FROM remote_worker_generations generation
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.worker_id = NEW.worker_id
+            AND generation.worker_generation = NEW.worker_generation
+            AND generation.exchange_idempotency_key = NEW.idempotency_key
+            AND generation.exchange_request_sha256 = NEW.request_sha256
+            AND generation.transport_verification_receipt_sha256 = NEW.transport_verification_receipt_sha256
+            AND generation.proof_of_possession_receipt_sha256 = NEW.proof_of_possession_receipt_sha256
+        ) THEN
+          RAISE EXCEPTION 'remote worker initial credential exchange binding is invalid' USING ERRCODE = '23514';
+        END IF;
+        SELECT COALESCE(MAX(current.credential_generation), 0) INTO prior_credential_generation
+        FROM remote_worker_runtime_credentials current
+        WHERE current.registry_workspace_id = NEW.registry_workspace_id
+          AND current.worker_id = NEW.worker_id
+          AND current.worker_generation = NEW.worker_generation;
+        IF NEW.credential_generation <> prior_credential_generation + 1 THEN
+          RAISE EXCEPTION 'remote worker credential generation is not monotonic' USING ERRCODE = '23514';
+        END IF;
+        IF prior_credential_generation > 0 AND NOT EXISTS (
+          SELECT 1 FROM remote_worker_runtime_credentials prior
+          WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+            AND prior.worker_id = NEW.worker_id
+            AND prior.worker_generation = NEW.worker_generation
+            AND prior.credential_generation = prior_credential_generation
+            AND gc_try_parse_timestamptz(prior.expires_at) > database_now
+            AND prior.claims_json = NEW.claims_json
+            AND prior.claims_sha256 = NEW.claims_sha256
+            AND prior.transport_verification_receipt_sha256 <> NEW.transport_verification_receipt_sha256
+            AND prior.proof_of_possession_receipt_sha256 <> NEW.proof_of_possession_receipt_sha256
+        ) THEN RAISE EXCEPTION 'remote worker current credential is not fresh or claims changed' USING ERRCODE = '23514'; END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_remote_worker_credential_insert_guard
+        BEFORE INSERT ON remote_worker_runtime_credentials
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_credential_guard();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_control_guard()
+      RETURNS trigger AS $$
+      DECLARE
+        prior_revision BIGINT;
+        prior_action TEXT;
+        database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || NEW.worker_id, 502));
+        IF gc_try_parse_timestamptz(NEW.created_at) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.created_at
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - database_now))) > 1 THEN
+          RAISE EXCEPTION 'remote worker control database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM remote_worker_generations generation
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.worker_id = NEW.worker_id
+            AND generation.worker_generation = NEW.worker_generation
+            AND generation.worker_generation = (
+              SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+              WHERE current.registry_workspace_id = generation.registry_workspace_id
+                AND current.worker_id = generation.worker_id
+            )
+        ) THEN RAISE EXCEPTION 'remote worker control generation is not current' USING ERRCODE = '23514'; END IF;
+        SELECT COALESCE(MAX(control.control_revision), 0) INTO prior_revision
+        FROM remote_worker_generation_controls control
+        WHERE control.registry_workspace_id = NEW.registry_workspace_id
+          AND control.worker_id = NEW.worker_id
+          AND control.worker_generation = NEW.worker_generation;
+        IF NEW.control_revision <> prior_revision + 1 OR NEW.control_revision > 2 THEN
+          RAISE EXCEPTION 'remote worker control revision is not monotonic' USING ERRCODE = '23514';
+        END IF;
+        IF prior_revision = 1 THEN
+          SELECT control.action INTO prior_action FROM remote_worker_generation_controls control
+          WHERE control.registry_workspace_id = NEW.registry_workspace_id
+            AND control.worker_id = NEW.worker_id
+            AND control.worker_generation = NEW.worker_generation
+            AND control.control_revision = 1;
+          IF prior_action <> 'quarantine' OR NEW.action <> 'revoke' THEN
+            RAISE EXCEPTION 'remote worker revoke is the only valid terminal transition' USING ERRCODE = '23514';
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_remote_worker_control_insert_guard
+        BEFORE INSERT ON remote_worker_generation_controls
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_control_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_immutable_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker admission records are immutable' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_remote_worker_bootstraps_no_update BEFORE UPDATE ON remote_worker_bootstrap_requests FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_bootstraps_no_delete BEFORE DELETE ON remote_worker_bootstrap_requests FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_allowed_workspaces_no_update BEFORE UPDATE ON remote_worker_bootstrap_allowed_workspaces FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_allowed_workspaces_no_delete BEFORE DELETE ON remote_worker_bootstrap_allowed_workspaces FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_capability_classes_no_update BEFORE UPDATE ON remote_worker_bootstrap_capability_classes FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_capability_classes_no_delete BEFORE DELETE ON remote_worker_bootstrap_capability_classes FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_generations_no_update BEFORE UPDATE ON remote_worker_generations FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_generations_no_delete BEFORE DELETE ON remote_worker_generations FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_credentials_no_update BEFORE UPDATE ON remote_worker_runtime_credentials FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_credentials_no_delete BEFORE DELETE ON remote_worker_runtime_credentials FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_controls_no_update BEFORE UPDATE ON remote_worker_generation_controls FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+      CREATE TRIGGER trg_remote_worker_controls_no_delete BEFORE DELETE ON remote_worker_generation_controls FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_immutable_mutation();
+    `,
+  },
 ];

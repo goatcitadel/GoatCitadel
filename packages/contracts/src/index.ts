@@ -52,6 +52,7 @@ export * from "./citadel-automation.js";
 export * from "./citadel-mason.js";
 export * from "./mesh.js";
 export * from "./mesh-capability-publication.js";
+export * from "./remote-worker-admission.js";
 export * from "./onboarding.js";
 export * from "./memory.js";
 export * from "./llama-cpp.js";

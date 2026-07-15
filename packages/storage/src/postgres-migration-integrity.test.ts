@@ -143,4 +143,50 @@ describe("protected Postgres migration integrity", () => {
     assert.doesNotMatch(sql, /mesh_capability_invocation_settlements/u);
     assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu);
   });
+
+  it("keeps HX-501 migration 112 additive, hash-only, immutable, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 112);
+    assert.equal(migration?.name, "remote_worker_admission_foundation");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "remote_worker_bootstrap_requests",
+      "remote_worker_bootstrap_allowed_workspaces",
+      "remote_worker_bootstrap_capability_classes",
+      "remote_worker_generations",
+      "remote_worker_runtime_credentials",
+      "remote_worker_generation_controls",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_/gu)?.length, 6);
+    assert.match(sql, /bootstrap_secret_sha256 TEXT NOT NULL UNIQUE/u);
+    assert.match(sql, /token_sha256 TEXT NOT NULL UNIQUE/u);
+    assert.doesNotMatch(
+      sql,
+      /(?:bootstrap_secret|credential_token|runtime_token)_(?:plaintext|value)|approved_token_plaintext/iu,
+    );
+    assert.match(sql, /purpose TEXT NOT NULL CHECK\(purpose = 'worker_runtime'\)/u);
+    assert.match(sql, /length\(registry_workspace_id\) BETWEEN 1 AND 256/u);
+    assert.match(sql, /length\(idempotency_key\) BETWEEN 1 AND 512/u);
+    assert.match(sql, /reason_code ~ '\^\[a-z0-9\]/u);
+    assert.match(sql, /runtime_manifest_json::jsonb - ARRAY\[[\s\S]*signatureBase64Url[\s\S]*= '\{\}'::JSONB/u);
+    assert.doesNotMatch(sql, /jsonb_object_length/u);
+    assert.match(sql, /signatureBase64Url' ~ '\^\[A-Za-z0-9_-\]\{85\}\[AQgw\]\$'/u);
+    assert.match(sql, /target_worker_generation/u);
+    assert.match(sql, /prior\.installed_tree_attestation_sha256 = NEW\.installed_tree_attestation_sha256/u);
+    assert.match(sql, /prior\.claims_sha256 = NEW\.claims_sha256/u);
+    assert.match(sql, /registry_scope\.allowed_workspace_id = NEW\.registry_workspace_id/u);
+    assert.match(sql, /registry_scope\.allowed_workspace_id = bootstrap\.registry_workspace_id/u);
+    assert.match(sql, /prior_action <> 'quarantine' OR NEW\.action <> 'revoke'/u);
+    assert.match(sql, /hashtextextended\(NEW\.registry_workspace_id, 501\)/u);
+    assert.match(sql, /hashtextextended\(NEW\.registry_workspace_id \|\| ':' \|\| NEW\.worker_id, 502\)/u);
+    assert.equal(sql.match(/database_now TIMESTAMPTZ := clock_timestamp\(\)/gu)?.length, 4);
+    assert.match(sql, /gc_try_parse_timestamptz\(NEW\.expires_at\) <= database_now/u);
+    assert.match(sql, /gc_try_parse_timestamptz\(prior\.expires_at\) > database_now/u);
+    assert.match(sql, /bootstraps_no_update/u);
+    assert.match(sql, /credentials_no_delete/u);
+    assert.doesNotMatch(sql, /mesh_capability_node_admissions|gateway_route|readiness|listener/iu);
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu);
+  });
 });
