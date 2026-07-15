@@ -16,6 +16,10 @@ import {
 import { setGoatcitadelTerminalTitle } from "./runtime-ux.js";
 import { env } from "./env.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./services/a2a-grpc-server.js";
+import {
+  createRemoteWorkerNativeRuntimeService,
+  type RemoteWorkerNativeRuntimeService,
+} from "./services/remote-worker-native-runtime-service.js";
 import { SharedHostAdmissionClosedError } from "./services/shared-host-lifecycle-service.js";
 
 setBootCheckpoint("main.ts:body-start");
@@ -42,6 +46,7 @@ const app = await buildApp().then(
 setBootCheckpoint("main.ts:buildApp-returned");
 let shuttingDown = false;
 let a2aGrpcServer: A2AGrpcServerHandle | undefined;
+let remoteWorkerNativeRuntime: RemoteWorkerNativeRuntimeService | undefined;
 
 process.on("warning", (warning) => {
   app.log.warn(
@@ -111,6 +116,21 @@ try {
       );
     }
   }
+  const remoteWorkerPhase = startupPhases.open("remote_worker_native", { owner: "gateway.main" });
+  try {
+    remoteWorkerNativeRuntime = createRemoteWorkerNativeRuntimeService({
+      sharedHostLifecycle: app.sharedHostLifecycle,
+    });
+    const remoteWorkerSnapshot = await remoteWorkerNativeRuntime.start();
+    remoteWorkerPhase.close(
+      remoteWorkerSnapshot.state === "listening_dark"
+        ? `listening_dark:${remoteWorkerSnapshot.address ?? "bound"}`
+        : remoteWorkerSnapshot.state,
+    );
+  } catch (error) {
+    remoteWorkerPhase.fail(formatStartupPhaseError(error));
+    throw error;
+  }
   setBootCheckpoint("main.ts:listen-starting");
   const listenPhase = startupPhases.open("listen", { owner: "gateway.main" });
   const listenerAdmission = app.sharedHostLifecycle.tryReserve("worker", "gateway:http-listener-startup");
@@ -162,6 +182,13 @@ try {
 
 async function stopNetworkListeners(): Promise<void> {
   const stops: Promise<void>[] = [];
+  if (remoteWorkerNativeRuntime !== undefined) {
+    stops.push(
+      remoteWorkerNativeRuntime.close().then(() => {
+        app.log.info("Remote worker native listener stopped");
+      }),
+    );
+  }
   if (a2aGrpcServer?.enabled) {
     stops.push(
       a2aGrpcServer.close().then(() => {

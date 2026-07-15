@@ -258,8 +258,9 @@ describe("remote worker native TLS listener", () => {
       const handle = await startRemoteWorkerNativeTlsListener(await config());
       openHandles.push(handle);
       const port = portOf(handle.address);
-      const response = await request(port);
-      expect(response).toEqual({ status: 503, body: '{"error":"REMOTE_WORKER_UNAVAILABLE"}\n' });
+      const [first, second] = await Promise.all([request(port), request(port)]);
+      expect(first).toEqual({ status: 503, body: '{"error":"REMOTE_WORKER_UNAVAILABLE"}\n' });
+      expect(second).toEqual(first);
       expect(Object.getPrototypeOf(handle)).toBeNull();
 
       await expect(request(port, { cert: undefined, key: undefined })).rejects.toThrow();

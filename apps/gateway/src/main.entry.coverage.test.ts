@@ -6,6 +6,14 @@ const resolveWarnMock = vi.fn();
 const resolveAllowMock = vi.fn();
 const startA2AGrpcServerMock = vi.fn();
 const performShutdownMock = vi.fn();
+const remoteWorkerStartMock = vi.fn();
+const remoteWorkerCloseMock = vi.fn();
+const createRemoteWorkerNativeRuntimeServiceMock = vi.fn(() => ({
+  close: remoteWorkerCloseMock,
+  reload: vi.fn(),
+  snapshot: vi.fn(),
+  start: remoteWorkerStartMock,
+}));
 
 vi.mock("./app.js", () => ({
   buildApp: buildAppMock,
@@ -19,6 +27,10 @@ vi.mock("./startup-guard.js", () => ({
 
 vi.mock("./services/a2a-grpc-server.js", () => ({
   startA2AGrpcServer: startA2AGrpcServerMock,
+}));
+
+vi.mock("./services/remote-worker-native-runtime-service.js", () => ({
+  createRemoteWorkerNativeRuntimeService: createRemoteWorkerNativeRuntimeServiceMock,
 }));
 
 vi.mock("./shutdown.js", () => ({
@@ -47,6 +59,11 @@ describe("gateway main entrypoint coverage", () => {
     resolveAllowMock.mockReset();
     startA2AGrpcServerMock.mockReset();
     performShutdownMock.mockReset();
+    createRemoteWorkerNativeRuntimeServiceMock.mockClear();
+    remoteWorkerStartMock.mockReset();
+    remoteWorkerCloseMock.mockReset();
+    remoteWorkerStartMock.mockResolvedValue({ enabled: false, state: "disabled" });
+    remoteWorkerCloseMock.mockResolvedValue(undefined);
     performShutdownMock.mockResolvedValue({ reached: "closed" });
     process.exitCode = undefined;
     startA2AGrpcServerMock.mockResolvedValue({
@@ -95,6 +112,13 @@ describe("gateway main entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(remoteWorkerStartMock).toHaveBeenCalledTimes(1);
+    expect(remoteWorkerStartMock.mock.invocationCallOrder[0]).toBeLessThan(
+      listenMock.mock.invocationCallOrder[0] as number,
+    );
+    expect(listenMock.mock.invocationCallOrder[0]).toBeLessThan(
+      startA2AGrpcServerMock.mock.invocationCallOrder[0] as number,
+    );
     expect(startA2AGrpcServerMock).toHaveBeenCalledTimes(1);
     expect(errorMock).not.toHaveBeenCalled();
   });
@@ -132,6 +156,7 @@ describe("gateway main entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(warnMock).toHaveBeenCalled();
+    expect(remoteWorkerStartMock).toHaveBeenCalledTimes(1);
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(startA2AGrpcServerMock).toHaveBeenCalledTimes(1);
   });
@@ -170,6 +195,7 @@ describe("gateway main entrypoint coverage", () => {
     expect(errorMock).toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
     expect(performShutdownMock).toHaveBeenCalledTimes(1);
+    expect(remoteWorkerStartMock).not.toHaveBeenCalled();
     expect(listenMock).not.toHaveBeenCalled();
   });
 
@@ -205,6 +231,7 @@ describe("gateway main entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(errorMock).toHaveBeenCalled();
+    expect(remoteWorkerStartMock).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
     expect(performShutdownMock).toHaveBeenCalledTimes(1);
   });

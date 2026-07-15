@@ -5,6 +5,10 @@ const gatewaySource = fs.readFileSync(new URL("./gateway-service.ts", import.met
 const appSource = fs.readFileSync(new URL("../app.ts", import.meta.url), "utf8");
 const storagePluginSource = fs.readFileSync(new URL("../plugins/storage.ts", import.meta.url), "utf8");
 const mainSource = fs.readFileSync(new URL("../main.ts", import.meta.url), "utf8");
+const remoteWorkerNativeRuntimeSource = fs.readFileSync(
+  new URL("./remote-worker-native-runtime-service.ts", import.meta.url),
+  "utf8",
+);
 
 describe("shared-host production admission wiring", () => {
   it("creates one app-owned lifecycle before runtime construction and reserves deferred init before scheduling", () => {
@@ -35,6 +39,34 @@ describe("shared-host production admission wiring", () => {
     expect(listenIndex).toBeGreaterThan(reservationIndex);
     expect(releaseIndex).toBeGreaterThan(listenIndex);
     expect(mainSource).toContain("sharedHostLifecycle: app.sharedHostLifecycle");
+  });
+
+  it("fences the production-dark remote-worker listener and starts it before other network listeners", () => {
+    const reservationIndex = remoteWorkerNativeRuntimeSource.indexOf(
+      'this.sharedHostLifecycle.tryReserve("worker", LISTENER_START_RESERVATION_ID)',
+    );
+    const startIndex = remoteWorkerNativeRuntimeSource.indexOf(
+      "startRemoteWorkerNativeTlsListener(config)",
+      reservationIndex,
+    );
+    const releaseIndex = remoteWorkerNativeRuntimeSource.indexOf("reservation.release()", startIndex);
+    expect(remoteWorkerNativeRuntimeSource).toContain(
+      'const LISTENER_START_RESERVATION_ID = "gateway:remote-worker-native-listener-startup"',
+    );
+    expect(reservationIndex).toBeGreaterThanOrEqual(0);
+    expect(startIndex).toBeGreaterThan(reservationIndex);
+    expect(releaseIndex).toBeGreaterThan(startIndex);
+
+    const guardIndex = mainSource.indexOf("shouldWarnUnauthNonLoopbackBind(");
+    const workerIndex = mainSource.indexOf("await remoteWorkerNativeRuntime.start()", guardIndex);
+    const httpIndex = mainSource.indexOf("await app.listen({ port, host })", workerIndex);
+    const a2aIndex = mainSource.indexOf("await startA2AGrpcServer({", httpIndex);
+    const readyIndex = mainSource.indexOf("startupPhases.markReady()", a2aIndex);
+    expect(workerIndex).toBeGreaterThan(guardIndex);
+    expect(httpIndex).toBeGreaterThan(workerIndex);
+    expect(a2aIndex).toBeGreaterThan(httpIndex);
+    expect(readyIndex).toBeGreaterThan(a2aIndex);
+    expect(mainSource).toContain("remoteWorkerNativeRuntime.close()");
   });
 
   it("routes every gateway-owned producer through the app lifecycle port", () => {
